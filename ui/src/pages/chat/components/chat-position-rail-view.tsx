@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For, Show, createMemo, onCleanup, untrack } from "solid-js";
+import { For, Show, createMemo, onSettled, untrack } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
@@ -45,15 +45,13 @@ export function syncPositionRailTabStop(
 export function syncPositionRailPreview(
   preview: HTMLElement | undefined,
   marker: HTMLElement | undefined,
+  description: string,
   center: number,
   viewportHeight: number,
 ): void {
   if (!preview || !marker) {
     return;
   }
-  const label = preview.querySelector(".chat-position-rail__preview-label")?.textContent?.trim();
-  const copy = preview.querySelector(".chat-position-rail__preview-copy")?.textContent?.trim();
-  const description = `${label ?? ""} ${copy ?? ""}. ${t("chat.thread.positionMarkerHint")}`;
   if (marker.getAttribute("aria-description") !== description) {
     marker.setAttribute("aria-description", description);
   }
@@ -77,9 +75,9 @@ export type PositionRailViewParams = {
   rovingId: string;
   previewId: string | null | undefined;
   hoveredId: string | null;
-  createMarkerRef: (id: string) => (element: HTMLButtonElement) => void;
+  bindMarker: (id: string, element?: HTMLButtonElement) => void;
   bindScroller: (element?: Element) => void;
-  bindPreview: (element?: Element) => void;
+  bindPreview: (element?: Element, description?: () => string) => void;
   onScroll: () => void;
   stopScrollInput: EventListenerObject & AddEventListenerOptions;
   onPointerLeave: () => void;
@@ -92,10 +90,6 @@ export type PositionRailViewParams = {
 
 /** Presentation only; the rail owner manages windowing, interaction, and DOM lifetime. */
 export function ChatPositionRailView(props: PositionRailViewParams) {
-  // Ref factories belong to the rail lifetime, independent of refreshed view snapshots.
-  const createMarkerRef = untrack(() => props.createMarkerRef);
-  const bindScroller = untrack(() => props.bindScroller);
-  const bindPreview = untrack(() => props.bindPreview);
   const assistantLabel = () =>
     props.assistant?.name.trim() || t("chat.thread.positionAssistantMessage");
   const markerLabel = (marker: ChatPositionIndex["markers"][number]) =>
@@ -136,17 +130,28 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
   const stopScrollInput = (event: Event) => props.stopScrollInput.handleEvent(event);
   let stopInput: (() => void)[] = [];
   const bindInputScroller = (element: HTMLDivElement) => {
-    bindScroller(element);
+    props.bindScroller(element);
     // Stop touch input here, before the transcript's native history listeners.
     stopInput = ["wheel", "touchstart", "touchmove"].map((type) =>
       listen(element, type, stopScrollInput, { passive: true }),
     );
   };
-  onCleanup(() => stopInput.forEach((stop) => stop()));
+  onSettled(() => () => stopInput.forEach((stop) => stop()));
   const Preview = () => {
-    onCleanup(() => bindPreview());
+    let label: HTMLElement | undefined;
+    let copy: HTMLElement | undefined;
+    const description = () =>
+      `${label?.textContent?.trim() ?? ""} ${copy?.textContent?.trim() ?? ""}. ${t("chat.thread.positionMarkerHint")}`;
+    onSettled(() => {
+      const bindPreview = props.bindPreview;
+      return () => bindPreview();
+    });
     return (
-      <div ref={bindPreview} class="chat-position-rail__preview" aria-hidden="true">
+      <div
+        ref={(element) => props.bindPreview(element, description)}
+        class="chat-position-rail__preview"
+        aria-hidden="true"
+      >
         <div class="chat-position-rail__preview-header">
           <Show
             when={previewMarker()?.role === "assistant" && props.assistant}
@@ -156,10 +161,12 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
               <AgentIdentityAvatar agent={props.assistant!} />
             </span>
           </Show>
-          <span class="chat-position-rail__preview-label">{previewLabel()}</span>
+          <span ref={(element) => (label = element)} class="chat-position-rail__preview-label">
+            {previewLabel()}
+          </span>
         </div>
         {/* Preview links stay inert; the marker owns keyboard navigation. */}
-        <div class="chat-position-rail__preview-copy" inert>
+        <div ref={(element) => (copy = element)} class="chat-position-rail__preview-copy" inert>
           <Show when={Boolean(previewHtml())} fallback={t("chat.attachments.previewUnavailable")}>
             <MarkdownContent content={previewHtml()} />
           </Show>
@@ -186,7 +193,11 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
             <For each={entries()} keyed={(entry) => entry.marker.id}>
               {(entry) => {
                 // The For key fixes this marker's identity for its owner.
-                const markerRef = createMarkerRef(untrack(() => entry().marker.id));
+                const initialMarkerId = untrack(() => entry().marker.id);
+                onSettled(() => {
+                  const bindMarker = props.bindMarker;
+                  return () => bindMarker(initialMarkerId);
+                });
                 return (
                   <>
                     <Show when={entry().separated}>
@@ -200,7 +211,7 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
                       aria-setsize={props.markers.length}
                     >
                       <button
-                        ref={markerRef}
+                        ref={(element) => props.bindMarker(initialMarkerId, element)}
                         class="chat-position-rail__marker"
                         style={{ top: `${entry().index * POSITION_RAIL_MARKER_HEIGHT}px` }}
                         type="button"

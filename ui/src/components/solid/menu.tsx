@@ -2,18 +2,21 @@ import { dynamic, type JSX } from "@solidjs/web";
 import {
   For,
   Show,
-  createEffect,
   createMemo,
   createSignal,
   flush,
+  onCleanup,
   onSettled,
   untrack,
   merge,
 } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
+import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
-import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
+import { registerMenuShortcuts } from "../menu-shortcuts.ts";
+import type { OverlayPlacement } from "../overlay-anchor.ts";
+import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
 import { MENU_FORM_CONTROL_SELECTOR, useMenuMachine, type MenuBinding } from "./menu-machine.ts";
 import { useOverlayControl } from "./overlay-control.ts";
@@ -73,7 +76,14 @@ export type MenuEntry =
   | { kind: "content"; id: string; content: JSX.Element }
   | { kind: "group"; id: string; class?: string; items: readonly MenuEntry[] };
 
-export type MenuHandle = { overlay: Overlay; open(): boolean; close(): boolean };
+export type MenuHandle = {
+  overlay: Overlay;
+  open(): boolean;
+  close(): boolean;
+  focusFirst(): void;
+  itemElements(): readonly HTMLElement[];
+  itemElement(id: string): HTMLElement | undefined;
+};
 
 /** Close through the owner even when a menu surface has moved into the top layer. */
 export function closeMenusWithin(root: Pick<Node, "contains"> & { ownerDocument: Document }): void {
@@ -88,11 +98,40 @@ export function closeMenusWithin(root: Pick<Node, "contains"> & { ownerDocument:
   }
 }
 
+export type MenuControls = {
+  readonly elements: ReadonlySet<HTMLElement>;
+  ref(this: void): (element: HTMLElement) => void;
+};
+
+/** One tree's embedded controls, registered by their rendering owners. */
+export function createMenuControls(): MenuControls {
+  const elements = new Set<HTMLElement>();
+  return {
+    elements,
+    ref() {
+      let current: HTMLElement | undefined;
+      onCleanup(() => {
+        if (current) {
+          elements.delete(current);
+        }
+      });
+      return (element) => {
+        if (current) {
+          elements.delete(current);
+        }
+        elements.add((current = element));
+      };
+    },
+  };
+}
+
 export type MenuProps = {
   /** Stable for this mount; remount the menu to change its identity. */
   id: string;
   label: string;
   items: readonly MenuEntry[];
+  /** Shared with this tree's branches; ordinary menu rows register through their item bindings. */
+  controls?: MenuControls;
   /** Defer until opened; "while-open" releases transient content after the exit. */
   lazy?: boolean | "while-open";
   /** Prepare a closed menu in idle slices after its page content has settled. */
@@ -149,10 +188,8 @@ function itemRole(type: MenuItem["type"]): "menuitem" | "menuitemcheckbox" | "me
 
 /** Menus share native visibility authority; Zag owns navigation and pointer intent. */
 export function Menu(props: BranchProps): JSX.Element {
-  let mounted = false;
   let trigger!: HTMLButtonElement;
   let surface!: HTMLDivElement;
-  let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const initialIdentity = untrack(() => ({
     id: props.id,
     triggerId: props.parent
@@ -169,37 +206,19 @@ export function Menu(props: BranchProps): JSX.Element {
   let renderedCount = 0;
   let extendBody: ((count: number) => void) | undefined;
   const prewarmEnabled = createMemo(() => props.prewarm === true && !props.disabled);
-  createEffect(prewarmEnabled, (enabled) => {
-    if (enabled && initialLazy === true && renderedCount !== Infinity) {
-      let frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(schedulePrewarm);
-      });
-      cancelPrewarm = () => cancelAnimationFrame(frame);
-    }
-    return () => cancelPrewarm?.();
-  });
   const overlay = createOverlay(initialIdentity.id, initialIdentity.parent, {
     exclusiveGroup: "menu",
-    isValid: (panel) =>
+    isValid: () =>
       (initialLazy && !control.bodyMounted()) ||
-      Boolean(
-        panel.querySelector(
+      registeredElements().some((element) =>
+        element.matches(
           '[role^="menuitem"], [data-form-control], [data-search], input, textarea, select, button, a[href]',
         ),
       ),
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
-    onInitialFocus(intent) {
-      const items = ownItems();
-      const initial = [
-        ...overlay.surface.querySelectorAll<HTMLElement>("[data-initial-focus], [autofocus]"),
-      ].find((node) => node.closest('[role="menu"]') === overlay.surface);
-      (intent === "last"
-        ? (items.at(-1) ?? formControls().at(-1))
-        : (initial ?? items[0] ?? formControls()[0])
-      )?.focus({ preventScroll: true });
-    },
+    onInitialFocus: (intent) => focusItem(intent),
     onEscape(event) {
       if (props.onEscape?.(event)) {
         return true;
@@ -217,9 +236,16 @@ export function Menu(props: BranchProps): JSX.Element {
       return false;
     },
   });
+  const registeredElements = (): HTMLElement[] =>
+    [...new Set([...binding.items(), ...(props.controls?.elements ?? [])])]
+      .filter((element) => overlay.surface.contains(element))
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
   const formControls = (): HTMLElement[] =>
-    [...overlay.surface.querySelectorAll<HTMLElement>(MENU_FORM_CONTROL_SELECTOR)].filter(
+    registeredElements().filter(
       (control) =>
+        control.matches(MENU_FORM_CONTROL_SELECTOR) &&
         control.closest('[role="menu"]') === overlay.surface &&
         ![...overlay.children].some(
           (child) => child.open && containsComposed(child.surface, control),
@@ -229,6 +255,18 @@ export function Menu(props: BranchProps): JSX.Element {
         !control.closest("[inert]") &&
         control.checkVisibility({ checkVisibilityCSS: true }),
     );
+  const focusItem = (intent: "first" | "last") => {
+    const items = ownItems();
+    const initial = registeredElements().find(
+      (node) =>
+        node.matches("[data-initial-focus], [autofocus]") &&
+        node.closest('[role="menu"]') === overlay.surface,
+    );
+    (intent === "last"
+      ? (items.at(-1) ?? formControls().at(-1))
+      : (initial ?? items[0] ?? formControls()[0])
+    )?.focus({ preventScroll: true });
+  };
   const menuRoot = initialIdentity.root ?? overlay;
   const placement = () =>
     props.placement ??
@@ -259,6 +297,11 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
+  onSettled(() =>
+    registerMenuShortcuts(overlay.surface, () =>
+      binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
+    ),
+  );
   const ownItems = () =>
     binding.items().filter((item) => !item.matches(':disabled, [aria-disabled="true"]'));
   const triggerItemRef = initialIdentity.binding?.itemRef();
@@ -276,11 +319,12 @@ export function Menu(props: BranchProps): JSX.Element {
     }),
     () => body(),
   );
-  createEffect(placement, (value) => {
-    if (mounted) {
-      anchorBinding?.update(trigger, value);
-    }
-  });
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => ({ placement: placement() }),
+    { sameRoot: true, parent: initialIdentity.parent },
+  );
   const keydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.isComposing) {
       return;
@@ -293,7 +337,12 @@ export function Menu(props: BranchProps): JSX.Element {
     ) {
       return;
     }
-    const search = overlay.surface.querySelector<HTMLInputElement>("input[data-search]");
+    const search = registeredElements().find(
+      (node): node is HTMLInputElement =>
+        node instanceof HTMLInputElement &&
+        node.hasAttribute("data-search") &&
+        node.closest('[role="menu"]') === overlay.surface,
+    );
     const first = ownItems().find(
       (item) =>
         !search || Boolean(search.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
@@ -347,24 +396,20 @@ export function Menu(props: BranchProps): JSX.Element {
     }
   };
   onSettled(() => {
-    mounted = true;
-    if (!initialIdentity.parent) {
-      overlay.setParent(findOverlayParent(trigger));
-    }
-    // This menu owns its trigger and surface in the same DOM root.
-    anchorBinding = createOverlayAnchor(overlay.surface, { sameRoot: true });
-    anchorBinding.update(trigger, placement());
+    const disconnectAnchor = anchor.connect();
     const disconnectControl = control.connect(() =>
       props.ref?.({
         overlay,
         open: () => overlay.request(true, "first"),
         close: () => overlay.request(false, "return"),
+        focusFirst: () => focusItem("first"),
+        itemElements: ownItems,
+        itemElement: (id) => ownItems().find((item) => item.dataset.value === id),
       }),
     );
     return () => {
-      mounted = false;
       disconnectControl();
-      anchorBinding?.dispose();
+      disconnectAnchor();
     };
   });
   const renderEntries = (entries: () => readonly MenuEntry[]): JSX.Element => (
@@ -472,6 +517,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         lazy={initialLazy}
                         prewarm={props.prewarm && item().prewarm}
                         items={childEntries()}
+                        controls={props.controls}
                         trigger={
                           item().trigger ?? (
                             <>
@@ -545,7 +591,7 @@ export function Menu(props: BranchProps): JSX.Element {
     }
   }
 
-  function schedulePrewarm() {
+  const Prewarm = () => {
     const slice = () => {
       prepareItems(renderedCount + 8);
       if (renderedCount < props.items.length) {
@@ -555,16 +601,33 @@ export function Menu(props: BranchProps): JSX.Element {
         extendBody?.(Infinity);
       }
     };
-    if (typeof requestIdleCallback === "function") {
-      const idle = requestIdleCallback(slice, { timeout: 3000 });
-      cancelPrewarm = () => cancelIdleCallback(idle);
-    } else {
-      const timer = setTimeout(slice, 50);
-      cancelPrewarm = () => clearTimeout(timer);
+    const fallback = createTimeout(slice, 50);
+    function schedulePrewarm() {
+      if (typeof requestIdleCallback === "function") {
+        const idle = requestIdleCallback(slice, { timeout: 3000 });
+        cancelPrewarm = () => cancelIdleCallback(idle);
+      } else {
+        fallback.schedule();
+        cancelPrewarm = fallback.cancel;
+      }
     }
-  }
+    onSettled(() => {
+      if (renderedCount === Infinity) {
+        return undefined;
+      }
+      let frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(schedulePrewarm);
+      });
+      cancelPrewarm = () => cancelAnimationFrame(frame);
+      return () => cancelPrewarm?.();
+    });
+    return undefined;
+  };
   return (
     <div class={props.class} dir={direction()}>
+      <Show when={initialLazy === true && prewarmEnabled()}>
+        <Prewarm />
+      </Show>
       <button
         {...binding.trigger(initialIdentity.binding, props.disabled)}
         {...props.triggerAttributes}

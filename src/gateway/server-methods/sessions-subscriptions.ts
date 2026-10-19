@@ -174,12 +174,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               mark?.("replayPreparation");
               prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               if (prepared && !prepared.isCurrent()) {
-                read?.assertCurrent();
-                sessionMutationAuthorization?.assertCurrent();
-                prepared.release();
-                prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
-              }
-              if (prepared && !prepared.isCurrent()) {
                 throw new Error("session approval replay changed during preparation");
               }
               mark?.("observerCommit");

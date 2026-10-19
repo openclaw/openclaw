@@ -40,16 +40,34 @@ function selectedCoreJob(selection: (typeof qualifiedCoreSelections)[number]) {
   return job;
 }
 
-it.each(qualifiedCoreSelections)(
-  "uses 16-class capacity for the qualified $family singleton with other serial selections",
-  (selection) => {
-    const job = selectedCoreJob(selection);
-    job.groups.push(...selectedCliJob().groups);
+it("right-sizes qualified serial selections while retaining parallel capacity and scope", () => {
+  const selections = [
+    {
+      family: "agents-embedded-agent",
+      target: "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
+    },
+    { family: "gateway-client", target: "src/gateway/client-callsites.guard.test.ts" },
+    ...qualifiedCoreSelections,
+  ];
+  const job = selectedCliJob();
+  job.groups = selections.map(({ family, target }) => {
+    const group = selectedCliJob().groups[0]!;
+    group.shard_name = family;
+    group.configs = [`test/vitest/vitest.${family}.config.ts`];
+    group.includePatterns = [target];
+    return group;
+  });
+  for (const planConcurrency of [1, 2]) {
+    job.planConcurrency = planConcurrency;
+    const before = structuredClone(job);
     for (const backend of [undefined, "blacksmith", "hybrid"]) {
-      expect(resolveSelectedNodeTestRunner(job, backend)).toBe("blacksmith-16vcpu-ubuntu-2404");
+      expect(resolveSelectedNodeTestRunner(job, backend)).toBe(
+        planConcurrency === 1 ? "blacksmith-16vcpu-ubuntu-2404" : "blacksmith-32vcpu-ubuntu-2404",
+      );
+      expect(job).toEqual(before);
     }
-  },
-);
+  }
+});
 
 it.each(qualifiedCoreSelections)(
   "retains 32-class capacity for unqualified $family siblings",

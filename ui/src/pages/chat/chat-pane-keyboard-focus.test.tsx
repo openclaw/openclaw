@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -8,6 +9,7 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
@@ -23,6 +25,7 @@ function createFocusedPane() {
   const composer = document.createElement("div");
   composer.className = "agent-chat__composer-combobox";
   const textarea = composer.appendChild(document.createElement("textarea"));
+  getChatComposerState(pane.presentationId).composerTextarea = textarea;
   pane.append(composer);
   return { pane, focus: vi.spyOn(textarea, "focus") };
 }
@@ -75,9 +78,11 @@ describe("chat pane keyboard focus", () => {
         <div onKeyDown={(event) => pane.handleTranscriptHistoryIntent(event)}>{content()}</div>
       ));
       const thread = container.querySelector("div")!;
-      thread.append(
-        Object.assign(document.createElement("div"), { className: "chat-history-sentinel" }),
-      );
+      const sentinel = Object.assign(document.createElement("div"), {
+        className: "chat-history-sentinel",
+      });
+      thread.append(sentinel);
+      pane.historySentinel = sentinel;
       vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
       const restorePlatform = configureNativeKeyTarget(thread.firstElementChild!, fixture);
       try {
@@ -177,12 +182,14 @@ describe("chat pane keyboard focus", () => {
     const { pane, focus } = createFocusedPane();
     const modal = document.body.appendChild(document.createElement("div"));
     modal.setAttribute("aria-modal", "true");
+    const releaseModal = registerModalSurface(modal);
 
     try {
       pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
 
       expect(focus).not.toHaveBeenCalled();
     } finally {
+      releaseModal();
       modal.remove();
     }
   });

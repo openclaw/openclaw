@@ -231,9 +231,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
-export function managedGatewayRestartCommandTimeoutMs(platform = process.platform) {
-  // The CLI performs its own restart health loop. Keep the outer release
-  // harness alive long enough to receive that result plus service-manager overhead.
+export function managedGatewayStartupCommandTimeoutMs(platform = process.platform) {
+  // Start and restart both wait for readiness. Share the existing bounded release
+  // startup allowance, including service-manager overhead, across both commands.
   return gatewayReadyDeadlineMs(platform) + 60_000;
 }
 const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
@@ -380,7 +380,7 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-15"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "xcode-27"),
       artifact_name: "macos",
     },
   ];

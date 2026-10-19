@@ -30,11 +30,8 @@ export type Marker = (typeof EXTRA_MARKERS)[number];
 
 type SystemdExecution = { path: string; programArguments: readonly string[] };
 
-export function classifyGatewayCommand(
-  programArguments: string[],
-): "run" | "maintenance" | "unknown" {
-  let args =
-    resolveCarrierCommandArgv(programArguments, 0, { includeExec: true }) ?? programArguments;
+function classifyGatewayCommand(programArguments: string[]): "run" | "maintenance" | "unknown" {
+  let args = resolveCarrierCommandArgv(programArguments) ?? programArguments;
   if (POSIX_SHELL_WRAPPERS.has(path.posix.basename(args[0] ?? "").toLowerCase())) {
     const { command } = resolveInlineCommandMatch(args, POSIX_INLINE_COMMAND_FLAGS, {
       allowCombinedC: true,
@@ -46,9 +43,9 @@ export function classifyGatewayCommand(
     while (inner.length > 0 && isEnvAssignmentToken(inner[0]!)) {
       inner.shift();
     }
-    args = resolveCarrierCommandArgv(inner, 0, { includeExec: true }) ?? inner;
+    args = resolveCarrierCommandArgv(inner) ?? inner;
   }
-  args = resolveCarrierCommandArgv(args, 0, { includeExec: true }) ?? args;
+  args = resolveCarrierCommandArgv(args) ?? args;
   const { position } = resolveRuntimeScriptPosition(args);
   if (typeof position !== "number" && position.kind !== "not-runtime") {
     return "unknown";

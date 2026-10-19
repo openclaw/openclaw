@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, onSettled, untrack } from "solid-js";
+import { Show, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
-import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
-import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
+import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
+import type { OverlayPlacement } from "../overlay-anchor.ts";
+import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
@@ -39,15 +40,13 @@ export interface PopoverProps {
 export function Popover(props: PopoverProps): JSX.Element {
   let trigger!: HTMLButtonElement;
   let surface!: HTMLDivElement;
-  let mounted = false;
-  let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   // Identity, lazy mounting, and root placement are fixed for this native overlay lifetime.
-  const initial = untrack(() => ({
+  const initialIdentity = untrack(() => ({
     id: props.id,
     lazy: props.lazy,
     sameRoot: props.sameRoot ?? false,
   }));
-  const overlay = createOverlay(initial.id, undefined, {
+  const overlay = createOverlay(initialIdentity.id, undefined, {
     get dismissOutsidePointer() {
       return props.dismissOutsidePointer;
     },
@@ -58,27 +57,16 @@ export function Popover(props: PopoverProps): JSX.Element {
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
   });
-  const control = useOverlayControl(overlay, initial.lazy, props, () => props.children);
-  createEffect(
-    () => [props.anchor, props.placement] as const,
-    ([anchor, placement]) => {
-      if (!mounted) {
-        return;
-      }
-      const target = anchor ?? trigger;
-      overlay.bindTrigger(target);
-      overlay.setParent(findOverlayParent(target));
-      anchorBinding?.update(target, placement);
-    },
+  const control = useOverlayControl(overlay, initialIdentity.lazy, props, () => props.children);
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => ({ anchor: props.anchor, placement: props.placement }),
+    { sameRoot: initialIdentity.sameRoot },
   );
   onSettled(() => {
     overlay.bindSurface(surface);
-    mounted = true;
-    const target = props.anchor ?? trigger;
-    overlay.bindTrigger(target);
-    overlay.setParent(findOverlayParent(target));
-    anchorBinding = createOverlayAnchor(overlay.surface, { sameRoot: initial.sameRoot });
-    anchorBinding.update(target, props.placement);
+    const disconnectAnchor = anchor.connect();
     const disconnectControl = control.connect(() =>
       props.ref?.({
         overlay,
@@ -87,8 +75,7 @@ export function Popover(props: PopoverProps): JSX.Element {
       }),
     );
     return () => {
-      mounted = false;
-      anchorBinding?.dispose();
+      disconnectAnchor();
       disconnectControl();
     };
   });
@@ -103,7 +90,7 @@ export function Popover(props: PopoverProps): JSX.Element {
           disabled={props.disabled}
           aria-label={props.label}
           aria-haspopup="dialog"
-          aria-controls={initial.id}
+          aria-controls={initialIdentity.id}
           onClick={() => overlay.request(!overlay.open)}
         >
           {props.trigger ?? props.label}
@@ -114,13 +101,13 @@ export function Popover(props: PopoverProps): JSX.Element {
           surface = node;
         }}
         class={["oc-overlay oc-popover", props.class]}
-        id={initial.id}
+        id={initialIdentity.id}
         popover="manual"
         role="dialog"
         aria-label={props.label}
         tabindex={-1}
       >
-        {initial.lazy ? undefined : props.children}
+        {initialIdentity.lazy ? undefined : props.children}
       </div>
     </>
   );

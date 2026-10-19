@@ -48,7 +48,7 @@ import { resolveAgentPortRoots } from "./database-engine/agent-port.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { listDatabaseEngineStores, selectDatabaseEngine } from "./database-engine/registry.js";
 import { sha256File } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath as ignoreMissingSource } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -72,12 +72,6 @@ type SqliteBackupAsset = {
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
 };
-
-function ignoreMissingSource(error: unknown): undefined {
-  if (!hasErrnoCode(error, "ENOENT")) {
-    throw error;
-  }
-}
 
 function findLegacyAuditBackupStateChange(
   error: unknown,

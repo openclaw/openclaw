@@ -1,6 +1,7 @@
 import { mountOpenClawApp } from "./app/app-root.tsx";
 import "./styles.css";
 import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
+import { bindControlUiDocumentHead } from "./app/control-ui-document-head.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
@@ -17,8 +18,32 @@ type ViteImportMeta = ImportMeta & {
 };
 
 if (!unsupportedControlUiBrowser) {
-  const root = document.querySelector<HTMLElement>("openclaw-app");
-  if (root) {
+  const themeColors: HTMLMetaElement[] = [];
+  for (const id of ["openclaw-theme-color-light", "openclaw-theme-color-dark"]) {
+    const meta = document.getElementById(id);
+    if (meta instanceof HTMLMetaElement) {
+      themeColors.push(meta);
+    }
+  }
+  const favicons: HTMLLinkElement[] = [];
+  for (const [id, asset] of [
+    ["openclaw-favicon-svg", "favicon.svg"],
+    ["openclaw-favicon-png", "favicon-32.png"],
+    ["openclaw-apple-touch-icon", "apple-touch-icon.png"],
+    ["openclaw-manifest", "manifest.webmanifest"],
+  ] as const) {
+    const link = document.getElementById(id);
+    if (link instanceof HTMLLinkElement) {
+      link.href = inferControlUiPublicAssetPath(asset);
+      if (link.rel === "icon") {
+        favicons.push(link);
+      }
+    }
+  }
+  bindControlUiDocumentHead({ themeColors, favicons });
+
+  const root = document.getElementsByTagName("openclaw-app").item(0);
+  if (root instanceof HTMLElement) {
     mountOpenClawApp(root);
   }
   const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
@@ -30,17 +55,6 @@ if (!unsupportedControlUiBrowser) {
   keyboardHintStyles.textContent = kbdStyles;
   document.head.append(keyboardHintStyles);
 
-  for (const [selector, asset] of [
-    ['link[rel="icon"][type="image/svg+xml"]', "favicon.svg"],
-    ['link[rel="icon"][type="image/png"]', "favicon-32.png"],
-    ['link[rel="apple-touch-icon"]', "apple-touch-icon.png"],
-    ['link[rel="manifest"]', "manifest.webmanifest"],
-  ] as const) {
-    const link = document.querySelector<HTMLLinkElement>(selector);
-    if (link) {
-      link.href = inferControlUiPublicAssetPath(asset);
-    }
-  }
   installStaleChunkReloadListener();
   installMissingStylesheetRecovery();
 

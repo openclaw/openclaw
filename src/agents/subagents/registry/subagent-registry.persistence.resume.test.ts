@@ -689,11 +689,20 @@ describe("subagent registry persistence resume", () => {
           completion: { required: false },
           delivery: { status: "not_required" },
         });
+        const finishedRun = createSubagentRunRecord({
+          runId: "run-hydrated-history",
+          childSessionKey: "agent:main:subagent:hydrated-history",
+          endedAt,
+          cleanupCompletedAt: endedAt,
+          completion: { required: true, resultText: "retained result" },
+          delivery: { status: "delivered", deliveredAt: endedAt },
+        });
         saveSubagentRegistryToSqlite(
           new Map([
             [yieldedRun.runId, yieldedRun],
             [queuedCollector.runId, queuedCollector],
             [runningRun.runId, runningRun],
+            [finishedRun.runId, finishedRun],
           ]),
         );
         await writeChildSession(stateDir, yieldedRun.childSessionKey, "sess-hydrated-yield");
@@ -734,7 +743,30 @@ describe("subagent registry persistence resume", () => {
           firstLifecycleOpen ? (gatewayContext as never) : undefined,
         );
         const resolveGatewayContext = vi.fn(() => gatewayContext as never);
-        await mod.activateSubagentRegistry(resolveGatewayContext);
+        const { createGatewayStartupTrace } =
+          await import("../../../gateway/server-startup-trace.js");
+        const { createSubsystemLogger } = await import("../../../logging/subsystem.js");
+        const startupLog = createSubsystemLogger("gateway/registry-activation-test");
+        const startupInfo = vi.spyOn(startupLog, "info");
+        const startupTrace = createGatewayStartupTrace(startupLog);
+        try {
+          await startupTrace.measure("sidecars.subagent-recovery", () =>
+            startupTrace.measure("sidecars.subagent-activation", () =>
+              mod.activateSubagentRegistry(resolveGatewayContext, startupTrace),
+            ),
+          );
+          const summary = startupInfo.mock.calls.find(([message]) =>
+            message.includes("registryActivationMs="),
+          )?.[0];
+          expect(summary).toContain("registryActivationRuns=3.0");
+          expect(summary).toContain("registryActivationActiveRuns=1.0");
+          expect(summary).toContain("registryActivationPublishedRuns=0.0");
+          expect(summary).toMatch(/registryActivationSessionReadMs=\d+\.\d/);
+          expect(summary).toContain("outcome=success");
+        } finally {
+          startupTrace.close();
+          startupInfo.mockRestore();
+        }
         await mod.activateSubagentRegistry(resolveGatewayContext);
         const restoredRun = mod.getSubagentRunByRunId(runningRun.runId);
         expect(restoredRun).toBeDefined();

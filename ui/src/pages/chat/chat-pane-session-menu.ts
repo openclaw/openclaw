@@ -9,7 +9,11 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
 import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
-import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
+import type {
+  SidebarSessionMutationResult,
+  SidebarSessionMutationScope,
+} from "../../components/app-sidebar-session-types.ts";
+import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
@@ -89,9 +93,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       !this.active ||
       !this.presented ||
       this.onboarding ||
-      document.openClawModalLayers?.size ||
-      // Shell modal DOM owns keyboard admission outside this pane.
-      document.querySelector(".shell-nav[aria-modal='true']")
+      hasModalSurface(this.element.ownerDocument)
     ) {
       return true;
     }
@@ -184,7 +186,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
   }
 
-  protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
+  protected async handleHeaderSessionAction(
+    action: HeaderMenuAction,
+    row: GatewaySessionRow,
+  ): Promise<SidebarSessionMutationResult | void> {
     if (action.kind === "delete" && isNativeCatalogAdoptionSessionKey(row.key)) {
       return;
     }
@@ -237,6 +242,31 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         return;
       }
       togglePinnedSession(this.context.navigation, current.key);
+      return;
+    }
+    if (action.kind === "new-group") {
+      const signal = this.headerSessionDraftAbortController.signal;
+      const gateway = this.context.gateway;
+      const { showInputDialog } = await import("../../components/input-dialog.ts");
+      await showInputDialog({
+        signal,
+        gateway,
+        title: t("sessionsView.newGroupTitle"),
+        label: t("sessionsView.newGroupPrompt"),
+        submitLabel: t("sessionsView.newGroupCreate"),
+        requireValue: true,
+        submit: async (name) => {
+          const result = await this.handleHeaderSessionAction(
+            { kind: "move-to-group", category: name },
+            row,
+          );
+          return result === "completed"
+            ? null
+            : result === "stale"
+              ? t("sessionsView.newGroupStale")
+              : (this.state?.chatError ?? t("sessionsView.newGroupFailed"));
+        },
+      });
       return;
     }
     const scope = this.captureHeaderSessionActionScope();
@@ -372,21 +402,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           await operations.promoteSession(host, session, scope);
           break;
         case "move-to-group":
-          await assignCategory(action.category);
-          break;
-        case "new-group": {
-          const { showInputDialog } = await import("../../components/input-dialog.ts");
-          const name = await showInputDialog({
-            title: t("sessionsView.newGroupTitle"),
-            label: t("sessionsView.newGroupPrompt"),
-            submitLabel: t("sessionsView.newGroupCreate"),
-            requireValue: true,
-          });
-          if (name && this.isHeaderSessionActionCurrent(scope, owner)) {
-            await assignCategory(name);
-          }
-          break;
-        }
+          return await assignCategory(action.category);
         case "snooze":
           await operations.snoozeSessionWithUndo(host, session, action, scope);
           break;
@@ -533,12 +549,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     header.renameSession = { key, sessionId, label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
     header.renameValue = this.headerRenameInitialValue;
-    void this.awaitDomCommit().then(() => {
-      // The native pane transfers focus into the independently rendered header.
-      const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
-      input?.focus();
-      input?.select();
-    });
   }
 
   protected cancelHeaderRename(): void {
@@ -548,6 +558,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   protected commitHeaderRename(): void {
     const session = this.headerPresentation.renameSession;
     if (!session) {
+      return;
+    }
+    if (this.context.gateway.snapshot.phase !== "connected") {
       return;
     }
     const patch = resolveSessionRenamePatch(

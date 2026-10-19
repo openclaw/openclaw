@@ -1,7 +1,7 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
-import type { GatewayStatusProps } from "../components/gateway-status.ts";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { registerModalSurface } from "../components/overlay-registry.ts";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
@@ -27,12 +27,7 @@ import {
   type ShellOwnedElements,
 } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
-import {
-  isOptionalElementDefined,
-  APP_SIDEBAR_ELEMENT,
-  MACOS_TITLEBAR_ELEMENT,
-  SIDEBAR_ATTENTION_ELEMENT,
-} from "./lazy-custom-element.ts";
+import { isOptionalElementDefined, APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -59,12 +54,16 @@ declare module "@solidjs/web" {
 
 export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   let content!: HTMLElement;
+  let releaseNavDrawer: (() => void) | undefined;
   onSettled(() => {
     const stops = [
       props.host.shellElement && registerToastContainer(props.host.shellElement, "shell"),
       props.host.navDrawerElement && registerToastContainer(props.host.navDrawerElement, "drawer"),
     ];
-    return () => stops.forEach((stop) => stop?.());
+    return () => {
+      stops.forEach((stop) => stop?.());
+      releaseNavDrawer?.();
+    };
   });
   const [navResizing, setNavResizing] = createSignal(false);
   const view = createMemo(() => {
@@ -72,36 +71,8 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
     return readShellView(props.host);
   });
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
-  const connectionKind = createMemo(
-    () =>
-      shellConnectionStatus() ??
-      (!view().nativeEmbed && view().gatewayConnected ? "connected" : null),
-  );
-  const [connectionRecovery, setConnectionRecovery] = createSignal(false);
-  const [connectionFlagVisible, setConnectionFlagVisible] = createSignal(false);
-  // Only status transitions restart the brief recovery row and avatar flag.
-  createEffect(connectionKind, (kind, previous) => {
-    const recovery = kind === "connected" && previous != null && previous !== "connected";
-    setConnectionRecovery(recovery);
-    setConnectionFlagVisible(Boolean(kind && (kind !== "connected" || recovery)));
-    const rowTimer = recovery ? setTimeout(() => setConnectionRecovery(false), 2_000) : undefined;
-    const flagTimer = setTimeout(() => setConnectionFlagVisible(false), 4_000);
-    return () => {
-      clearTimeout(rowTimer);
-      clearTimeout(flagTimer);
-    };
-  });
-  const gatewayStatus = createMemo<GatewayStatusProps>(() => ({
-    kind: connectionKind(),
-    lastError: shellConnectionStatus() ? view().gatewaySnapshot.lastError : null,
-    queuedCount: shellConnectionStatus() ? view().sidebarProperties.storedOutboxes?.total : 0,
-    onRetry: props.host.viewCallbacks.retryGateway,
-  }));
-  const mobileGatewayStatus = createMemo(() =>
-    view().mobileNavLayout && !view().navDrawerOpen && !view().nativeEmbed ? gatewayStatus() : null,
-  );
   const footerStatus = createMemo(() =>
-    shellConnectionStatus() || connectionRecovery() ? gatewayStatus() : null,
+    shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
   );
   const connectionAnnouncement = createMemo(() => {
     const kind = shellConnectionStatus();
@@ -115,41 +86,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
   // The web-chrome flag remains a reactive view read for the current host path.
   const legacyMacChrome = () =>
     !view().nativeWebChrome && document.documentElement.classList.contains("openclaw-native-macos");
-  // Lazy registrations and the native sidebar consume committed shell presentation.
-  createEffect(
-    () => ({
-      state: view(),
-      status: gatewayStatus(),
-      mobile: mobileGatewayStatus(),
-      recovery: connectionRecovery(),
-      flag: connectionFlagVisible(),
-    }),
-    ({ state, status, mobile, recovery, flag }) => {
-      props.host.mobileGatewayStatus = mobile;
-      const chatPage = props.host.routeOutlet?.renderedElement?.("openclaw-chat-page");
-      if (chatPage) {
-        chatPage.gatewayStatus = mobile;
-      }
-      props.host.lazyCustomElements.requestWhileActive(
-        props.host.onboardingMemoryImportElement,
-        state.memoryImportActive,
-      );
-      if (state.nativeWebChrome && !state.onboarding) {
-        props.host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
-      }
-      if (!state.nativeEmbed && (state.onboarding || state.floatingAttentionVisible)) {
-        props.host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
-      }
-      if (!state.settingsTakeover && !state.nativeEmbed) {
-        Object.assign(props.host.navigationSidebar, state.sidebarProperties, {
-          gatewayStatus: status,
-          connectionRecovery: recovery,
-          connectionFlagVisible: flag,
-          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
-        });
-      }
-    },
-  );
   const workspace = (
     <div style={{ display: "contents" }}>
       <ShellLazyOverlays
@@ -208,7 +144,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
-            prop:gatewayStatus={mobileGatewayStatus()}
+            prop:gatewayStatus={view().mobileGatewayStatus}
             prop:newSessionAction={() => (
               <Show
                 when={
@@ -294,7 +230,11 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             onClick={() => props.host.closeNavDrawer({ restoreFocus: true })}
           />
           <div
-            ref={(element) => (props.host.navDrawerElement = element)}
+            ref={(element) => {
+              releaseNavDrawer?.();
+              releaseNavDrawer = registerModalSurface(element);
+              props.host.navDrawerElement = element;
+            }}
             class={["shell-nav", { "nav-drawer": view().mobileNavLayout }]}
             role={view().mobileNavLayout ? "dialog" : undefined}
             aria-modal={view().mobileNavLayout && view().navDrawerOpen ? "true" : undefined}
@@ -445,6 +385,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
+          prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}
           prop:pageRouteId={view().activeRoute}
           prop:pageRouteFailed={
@@ -464,6 +405,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:props={{
               queue: view().overlaySnapshot.approvalQueue,
               busy: view().overlaySnapshot.approvalBusy,
+              connected: view().gatewayConnected,
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
               onDecision: (

@@ -55,6 +55,7 @@ export type CanvasWidgetViewProps = {
 
 export type OpenClawCanvasWidgetView = SolidBridgeElement<CanvasWidgetViewProps> & {
   readonly documentHtml: string | undefined;
+  readonly previewFrame: HTMLIFrameElement | undefined;
 };
 
 function createCanvasWidget(
@@ -98,6 +99,16 @@ function createCanvasWidget(
   let retryDelayMs = 1_000;
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((listener) => listener());
+  Object.defineProperties(element, {
+    documentHtml: {
+      configurable: true,
+      get: () => (sameOwner(ownerBinding) ? state.view?.html : undefined),
+    },
+    previewFrame: {
+      configurable: true,
+      get: () => (frameElement?.isConnected ? frameElement : undefined),
+    },
+  });
   function clearRetry(): void {
     window.clearTimeout(slowTimer);
     slowTimer = undefined;
@@ -535,14 +546,9 @@ function createCanvasWidget(
     setFrame: (frame: HTMLIFrameElement) => {
       frameElement = frame;
     },
-    get documentHtml() {
-      return sameOwner(ownerBinding) ? state.view?.html : undefined;
-    },
     subscribe(listener: () => void) {
       listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
+      return () => listeners.delete(listener);
     },
   };
 }
@@ -569,10 +575,6 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
       },
     });
     const read = projection.read;
-    Object.defineProperty(host, "documentHtml", {
-      configurable: true,
-      get: () => widget.documentHtml,
-    });
     // Admit authenticated reads and retire stale sandbox authority when external identity changes.
     createEffect(
       () => [

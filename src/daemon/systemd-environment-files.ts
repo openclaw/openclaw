@@ -1,8 +1,8 @@
-/** Native systemd environment-file serialization, reading, and effective file overlays. */
 import fs from "node:fs/promises";
 import { Minimatch } from "minimatch";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 
 export type SystemdEnvironmentFileSpec = [pathname: string, optional: boolean];
 export type SystemdEnvironmentFilesParams = {
@@ -123,13 +123,8 @@ async function expandSystemdEnvironmentFilePattern(pattern: string): Promise<str
   }
   const existing: string[] = [];
   for (const pathname of pathnames) {
-    try {
-      await fs.lstat(pathname);
+    if (await lstatIfExists(pathname)) {
       existing.push(pathname);
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
-        throw error;
-      }
     }
   }
   return existing;

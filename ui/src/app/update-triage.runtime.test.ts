@@ -563,7 +563,7 @@ describe("update triage presentation", () => {
     },
   );
 
-  it("bounds and redacts diagnostic facts", () => {
+  it("bounds and redacts diagnostic facts", async () => {
     const { context } = createContext(vi.fn());
     const run = createUpdateRunFixture({
       phase: "finished",
@@ -580,7 +580,7 @@ describe("update triage presentation", () => {
         },
       ],
     });
-    const failure = projectUpdateRunFailure(run);
+    const failure = await projectUpdateRunFailure(run);
     expect(failure).not.toBeNull();
     if (!failure) {
       throw new Error("Expected a failed run projection");

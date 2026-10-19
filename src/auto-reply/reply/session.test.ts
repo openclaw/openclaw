@@ -49,13 +49,13 @@ import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../../sessions/model-overr
 import {
   createReplyOperation,
   getSessionControllerOperation,
-  isSessionRunActiveForKey,
 } from "../../sessions/session-controller.js";
 import {
   beginSessionEffect,
   isSessionMutationActive,
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import {

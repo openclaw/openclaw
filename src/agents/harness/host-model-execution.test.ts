@@ -120,6 +120,8 @@ async function createHarness(mode: HarnessMode, restricted: boolean, exact: bool
         };
   return {
     execute: () => runAgentHarnessAttempt(attempt, native),
+    attempt,
+    native,
     finalize: () => runAgentHarnessSettledTurnFinalization(attempt, result, registration.harness),
     finalizeSettledTurn,
     runAttempt,
@@ -129,6 +131,26 @@ async function createHarness(mode: HarnessMode, restricted: boolean, exact: bool
 }
 
 type HarnessOperation = "execution" | "finalization";
+it.each([true, false])("prepares web search for a known native model (%s)", async (known) => {
+  const { execute, runAttempt, attempt, native } = await createHarness("native", false, true);
+  if (!native || native.auth !== "native") {
+    throw new Error("Expected native model ownership");
+  }
+  native.modelRef = known ? { provider: "native", model: "bound" } : undefined;
+  attempt.config = { tools: { byProvider: { native: { deny: ["web_search"] } } } };
+  await execute();
+  expect(runAttempt.mock.calls[0]?.[0].preparedWebSearchPolicy).toEqual(
+    known
+      ? {
+          allowed: false,
+          persistentAllowed: false,
+          modelRef: { provider: "native", model: "bound" },
+          requesterFacts: [],
+        }
+      : { allowed: false, persistentAllowed: false },
+  );
+});
+
 const admissionCases: Array<[HarnessOperation, HarnessMode, boolean, boolean]> = [
   ["execution", "fresh", true, false],
   ["execution", "native", true, false],

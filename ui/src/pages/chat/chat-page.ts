@@ -1,4 +1,4 @@
-import { createComponent, onSettled, untrack } from "solid-js";
+import { createComponent, onSettled } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerSessionSplitHost } from "../../lib/sessions/session-menu-navigation.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
@@ -8,7 +8,7 @@ import type { ChatPageHost, ChatPageProps } from "./chat-page-types.ts";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";
 
-export type ChatPage = ChatPageHost & {
+type ChatPageElement = ChatPageHost & {
   readonly sessionSplitAvailable: boolean;
 };
 
@@ -16,7 +16,7 @@ defineSolidBridge<ChatPageProps>(
   "openclaw-chat-page",
   (props, host) => {
     // The fallback application is lifetime-stable; page state follows replacement props.context.
-    const application = untrack(() => props.context ?? useApplication());
+    const application = host.context ?? useApplication();
     const state = createChatPageState(host, props, application);
     Object.defineProperty(host, "sessionSplitAvailable", {
       configurable: true,
@@ -44,11 +44,8 @@ defineSolidBridge<ChatPageProps>(
   },
 );
 
-// SAFETY: defineSolidBridge synchronously registers this exact host contract.
-export const ChatPage = customElements.get("openclaw-chat-page") as { new (): ChatPage };
-
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-chat-page": ChatPage;
+    "openclaw-chat-page": ChatPageElement;
   }
 }

@@ -56,7 +56,7 @@ export type GatewayServiceDefinitionTransactionHooks = {
 };
 type GatewayServiceFileState = z.infer<typeof fileState>;
 
-/** Rename can change ctime; the staged inode and payload identify the publication. */
+/** Publishing can settle timestamps; the staged inode, mode and payload identify it. */
 export function matchesServiceFilePublication(
   current: GatewayServiceFileState | null,
   prepared: GatewayServiceFileState,
@@ -75,7 +75,7 @@ export function matchesServiceFilePublication(
             : Number(BigInt.asUintN(64, BigInt(observed)))) === retained
         : observed === retained;
     }) &&
-    (["sha256", "mode", "size", "mtimeMs"] as const).every((key) => current[key] === prepared[key])
+    (["sha256", "mode", "size"] as const).every((key) => current[key] === prepared[key])
   );
 }
 
@@ -85,7 +85,9 @@ export function matchesServiceFileState(
 ): boolean {
   return retained === null
     ? current === null
-    : matchesServiceFilePublication(current, retained) && current.ctimeMs === retained.ctimeMs;
+    : matchesServiceFilePublication(current, retained) &&
+        current.mtimeMs === retained.mtimeMs &&
+        current.ctimeMs === retained.ctimeMs;
 }
 
 /** Keep the live file runnable until a complete replacement is ready. */

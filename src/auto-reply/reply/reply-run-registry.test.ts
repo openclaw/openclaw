@@ -18,26 +18,26 @@ import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
   hasCommittedReplyOperationOutcome,
-  isSessionRunActive,
   interruptReplyRunTarget,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   type ReplyBackendQueueMessageOptions,
   type ReplyOperation,
   markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
-  resolveActiveSessionRunId,
-  supersedeReplyRunByRunId,
   waitForReplyOperationOwnerSettlement,
-  waitForReplyRunSuccessorAdmission,
-  waitForReplyRunEndBySessionId,
   getSessionControllerOperation,
-  isSessionRunActiveForKey,
-  captureCurrentReplyMessageInjectionTarget,
-  captureCurrentSessionRunInterruptTarget,
 } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import * as controllerQueries from "../../sessions/session-controller.queries.js";
+import { waitForReplyRunEndBySessionId } from "../../sessions/session-controller.settlement.js";
 import { isReplyRunEvidenceStale } from "../../sessions/session-controller.state.js";
+import {
+  supersedeReplyRunByRunId,
+  captureCurrentSessionRunInterruptTarget,
+} from "../../sessions/session-controller.stop-runtime.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { SESSION_WATCHDOG_CLEANUP_MS } from "../../sessions/session-controller.watchdog-state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -79,9 +79,9 @@ describe("reply run registry", () => {
 
       operation.updateSessionId("session-new");
 
-      expect(isSessionRunActiveForKey("agent:main:main")).toBe(true);
-      expect(resolveActiveSessionRunId("agent:main:main")).toBe("session-new");
-      expect(isSessionRunActive("session-new")).toBe(true);
+      expect(controllerQueries.isSessionRunActiveForKey("agent:main:main")).toBe(true);
+      expect(controllerQueries.resolveActiveSessionRunId("agent:main:main")).toBe("session-new");
+      expect(controllerQueries.isSessionRunActive("session-new")).toBe(true);
 
       let settled = false;
       void oldWaitPromise.then(() => {
@@ -191,8 +191,8 @@ describe("reply run registry", () => {
       sessionId: "session-complete",
     });
     const afterClear = vi.fn(() => {
-      expect(isSessionRunActiveForKey("agent:main:main")).toBe(false);
-      expect(isSessionRunActive("session-complete")).toBe(false);
+      expect(controllerQueries.isSessionRunActiveForKey("agent:main:main")).toBe(false);
+      expect(controllerQueries.isSessionRunActive("session-complete")).toBe(false);
     });
 
     operation.completeThen(afterClear);
@@ -628,7 +628,7 @@ describe("reply run registry", () => {
 
     operation.complete();
 
-    expect(isSessionRunActiveForKey("agent:main:main")).toBe(false);
+    expect(controllerQueries.isSessionRunActiveForKey("agent:main:main")).toBe(false);
     expect(afterClear).toHaveBeenCalledTimes(1);
   });
 
@@ -683,7 +683,7 @@ describe("reply run registry", () => {
       expect(cancel).toHaveBeenLastCalledWith("superseded");
       expect(revokeWriter).toHaveBeenCalledOnce();
       operation.complete();
-      expect(isSessionRunActiveForKey(operation.key)).toBe(false);
+      expect(controllerQueries.isSessionRunActiveForKey(operation.key)).toBe(false);
       expect(afterClear).toHaveBeenCalledOnce();
     });
   });
@@ -850,7 +850,7 @@ describe("reply run registry", () => {
       operation.complete();
       await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_CLEANUP_MS);
 
-      expect(isSessionRunActiveForKey("agent:main:owner-clears")).toBe(false);
+      expect(controllerQueries.isSessionRunActiveForKey("agent:main:owner-clears")).toBe(false);
       expect(warnSpy).not.toHaveBeenCalled();
       expect(operation.watchdog.snapshot().current).toBe(false);
     });
@@ -865,7 +865,7 @@ describe("reply run registry", () => {
       reason: "retired",
     });
     expect(replacement.result).toBeNull();
-    expect(isSessionRunActive("session-reused")).toBe(true);
+    expect(controllerQueries.isSessionRunActive("session-reused")).toBe(true);
     replacement.complete();
   });
 
@@ -1411,7 +1411,7 @@ describe("reply run registry", () => {
     await expect(queueReplyMessageInjectionTarget(target, "last input")).resolves.toEqual({
       status: "accepted",
     });
-    expect(isSessionRunActiveForKey(operation.key)).toBe(false);
+    expect(controllerQueries.isSessionRunActiveForKey(operation.key)).toBe(false);
   });
 
   registerReplyOperationCompletionCases();

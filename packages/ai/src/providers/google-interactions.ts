@@ -11,8 +11,6 @@ import {
 } from "./google-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
-let toolCallCounter = 0;
-
 export const streamGoogleInteractions: StreamFunction<
   "google-interactions",
   GoogleProviderOptions
@@ -26,7 +24,6 @@ export const streamGoogleInteractions: StreamFunction<
     output,
     options,
     context,
-    nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
   });
 
   return stream;

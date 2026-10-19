@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { waitForGatewayActiveWork } from "../../infra/gateway-active-work.js";
 import {
   markGatewayRestartDraining,
@@ -27,6 +26,20 @@ import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 const unexpected = (): never => {
   throw new Error("Unexpected shutdown recovery operation");
 };
+const editPath = (workspace: string) => path.join(workspace, "restart-proof.txt");
+const readEdit = (workspace: string) => fs.readFile(editPath(workspace), "utf8");
+function shutdownEnvironments(
+  tunnel: WorkerTurnTunnelHandle,
+  environment = fixture.attachedEnvironment,
+) {
+  return fixture.workerTurnEnvironments(tunnel, {
+    get: environment,
+    acknowledgeCredentialDelivery: async () => true,
+    stopTunnel: vi.fn(async () => {}),
+    destroy: vi.fn(async () => environment()),
+  });
+}
+
 beforeEach(fixture.setupWorkerTurnLauncherTest);
 afterEach(async () => {
   resetGatewayWorkAdmission();
@@ -50,10 +63,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
   };
   const launchTurn = vi.fn<NonNullable<WorkerTurnTunnelHandle["launchTurn"]>>(async (request) => {
     request.onDispatchReady?.();
-    await fs.writeFile(
-      path.join(request.plan.assignment.workspaceDir, "restart-proof.txt"),
-      "slept-ok\n",
-    );
+    await fs.writeFile(editPath(request.plan.assignment.workspaceDir), "slept-ok\n");
     await (
       await fixture.openSessionManager()
     ).appendMessageAsync(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
@@ -68,11 +78,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       termination: "exit",
     };
   });
-  const tunnel: WorkerTurnTunnelHandle = {
-    environmentId: ENVIRONMENT_ID,
-    ownerEpoch: OWNER_EPOCH,
-    measureLaunchTurn: fixture.measureLaunchTurn,
-    readLaunchToolNames: fixture.readLaunchToolNames,
+  const tunnel = fixture.createWorkerTurnTunnel({
     launchTurn,
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,
@@ -107,16 +113,8 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
         ...staged,
       };
     },
-  };
-  const environments = {
-    ...fixture.unusedEnvironments(),
-    get: () => environment,
-    acquireTurnCredential: async () => fixture.credential(),
-    acknowledgeCredentialDelivery: async () => true,
-    startTunnel: async () => tunnel,
-    stopTunnel: vi.fn(async () => {}),
-    destroy: vi.fn(async () => environment),
-  };
+  });
+  const environments = shutdownEnvironments(tunnel, () => environment);
   const resolveWorkspace = async () => ({ kind: "local" as const, path: accepted });
   const execute = async (store: typeof placements, runId: string) => {
     const turn = fixture.turn(runId);
@@ -127,11 +125,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
           placements: store,
           resolveWorkspace,
         })
-        .executeTurn(
-          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-          turn,
-          unexpected,
-        );
+        .executeTurn(fixture.workerTurnRequest(runId), turn, unexpected);
     } finally {
       turn.preparedRunAdmission.close();
     }
@@ -148,9 +142,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       throw new Error("Expected live worker claim");
     }
     expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]); // No finishing ACK yet.
-    await expect(fs.readFile(path.join(accepted, "restart-proof.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(readEdit(accepted)).rejects.toMatchObject({ code: "ENOENT" });
     markGatewayRestartDraining("stop (SIGTERM)");
     finish.resolve();
     expect(isAgentRunRestartAbortReason(await attempt)).toBe(true);
@@ -192,9 +184,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       await recovered.listAsync(),
     );
     await recovery.reconcile("startup");
-    await expect(fs.readFile(path.join(accepted, "restart-proof.txt"), "utf8")).resolves.toBe(
-      "slept-ok\n",
-    );
+    await expect(readEdit(accepted)).resolves.toBe("slept-ok\n");
     expect(published).toHaveBeenCalledOnce();
     expect(await recovered.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(recovered.get(SESSION_ID)).toMatchObject({
@@ -207,9 +197,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     launchTurn.mockImplementationOnce(async (request) => {
       request.onDispatchReady?.();
       expect(request.turnClaim.claimId).not.toBe(claim.claimId);
-      await expect(
-        fs.readFile(path.join(request.plan.assignment.workspaceDir, "restart-proof.txt"), "utf8"),
-      ).resolves.toBe("slept-ok\n");
+      await expect(readEdit(request.plan.assignment.workspaceDir)).resolves.toBe("slept-ok\n");
       throw new WorkerTurnExecutionError("fresh turn read the retained edit");
     });
     await expect(execute(recovered, "next-turn")).rejects.toThrow(
@@ -234,39 +222,21 @@ it("lets a worker turn that committed its terminal outcome finish through restar
     workerSignal = request.signal;
     launched.resolve();
     await finish.promise;
-    const leafId = await (
-      await fixture.openSessionManager()
-    ).appendMessageAsync(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "finished during drain" }],
-        timestamp: 41,
-      }),
-    );
+    const leafId = await fixture.appendWorkerReply("finished during drain", 41);
     return fixture.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
   });
-  const environments = {
-    ...fixture.unusedEnvironments(),
-    get: () => fixture.attachedEnvironment(),
-    acquireTurnCredential: async () => fixture.credential(),
-    acknowledgeCredentialDelivery: async () => true,
-    startTunnel: async () =>
-      fixture.createWorkerTurnTunnel({
-        launchTurn,
-        reconcileWorkspace: fixture.reconcileUnchangedLocalWorkspace,
-      }),
-    stopTunnel: vi.fn(async () => {}),
-    destroy: vi.fn(async () => fixture.attachedEnvironment()),
-  };
+  const environments = shutdownEnvironments(
+    fixture.createWorkerTurnTunnel({
+      launchTurn,
+      reconcileWorkspace: fixture.reconcileUnchangedLocalWorkspace,
+    }),
+  );
   const runId = "finishing-turn";
   const turn = fixture.turn(runId);
   const attempt = runWithGatewayIndependentRootWorkAdmission(() =>
     fixture
       .createWorkerSessionTurnPlacementProvider({ environments, placements })
-      .executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-        turn,
-        unexpected,
-      ),
+      .executeTurn(fixture.workerTurnRequest(runId), turn, unexpected),
   ).catch((error: unknown) => error);
   try {
     await launched.promise;

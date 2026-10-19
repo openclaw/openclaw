@@ -1,6 +1,4 @@
 /**
- * Shared realtime voice controls for active OpenClaw agent runs.
- *
  * This module owns the provider-facing control tool, conservative intent
  * classifier, and user-visible status/queue/cancel messages used by Talk.
  */

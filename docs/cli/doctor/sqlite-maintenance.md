@@ -290,6 +290,15 @@ finding, run `openclaw doctor --session-sqlite dry-run --session-sqlite-all-agen
 This summary does not retire recovery references or make missing archives eligible
 for cleanup. Preserve the remaining originals and migration manifests for recovery.
 
+`openclaw update status` rechecks recorded transcript findings against the current
+files and the read-only session store. It omits resolved findings, including JSONL
+originals that no longer exist and missing transcripts now present in SQLite or
+whose canonical session row was pruned. Unreadable stores, uncertain legacy keys,
+and unresolved originals keep their warnings. Replayed JSONL findings recommend
+inspection before choosing recovery; they do not ask you to stop the Gateway
+based only on a historical report. Migration manifests remain unchanged as proof
+for recovery and `openclaw update cleanup`.
+
 ### Changed archived registry
 
 `historical_transcript_deferred` can report that an archived session registry no

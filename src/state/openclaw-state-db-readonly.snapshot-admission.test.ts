@@ -3,7 +3,10 @@ import path from "node:path";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import type {
   RetainedPreparedSqliteReadOnlyLocation,
@@ -20,6 +23,8 @@ import {
 import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 
 const mocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+  info: vi.fn(),
   capture: vi.fn(),
   assertFresh: vi.fn<() => void>(),
   prepare: vi.fn(),
@@ -32,6 +37,16 @@ const mocks = vi.hoisted(() => ({
     throw new Error("Native reads must not be reached by rejected admission");
   }),
 }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "state/db" ? { ...logger, warn: mocks.warn, info: mocks.info } : logger;
+    },
+  };
+});
 vi.mock("./openclaw-state-db-cache.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-db-cache.js")>();
   return {
@@ -94,6 +109,8 @@ let source: string;
 let options: { path: string };
 
 beforeEach(() => {
+  mocks.warn.mockClear();
+  mocks.info.mockClear();
   source = makeReadSource(directories, "state-snapshot-admission-").path;
   options = { path: source };
   mocks.forbiddenNative.mockClear();
@@ -453,31 +470,48 @@ it("bounds sync joining even when the async caller owns the deadline", async () 
   }
 });
 
-it("waits for temporary schema custody before admitting one discovery snapshot", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  try {
-    mocks.assertFresh.mockImplementation(() => {
-      if (performance.now() < 9_000) {
-        throw new StateDatabaseAdmissionPendingError(source, "temporary schema custody");
-      }
-    });
-    const operation = vi.fn(async () => "admitted");
-    const read = withSnapshot(operation, {
-      path: source,
-      admissionTimeoutMs: 300_000,
-    });
-    const outcome = settle(read);
-    expectCalls(0, mocks.capture, mocks.prepare, operation);
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(await outcome).toEqual({ value: "admitted" });
-    expectCalls(1, operation, mocks.cleanup);
-  } finally {
-    vi.useRealTimers();
-  }
-});
+it.each(["schema", "offline"] as const)(
+  "waits for %s custody before admitting one discovery snapshot",
+  async (kind) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const Refusal =
+        kind === "schema"
+          ? StateDatabaseAdmissionPendingError
+          : StateDatabaseOfflineMaintenanceError;
+      mocks.assertFresh.mockImplementation(() => {
+        if (performance.now() < 65_000) {
+          const pid = performance.now() < 30_000 ? 1234 : 5678;
+          throw new Refusal(
+            source,
+            `Offline maintenance by sqlite-maintenance process ${pid}; retry when it finishes.`,
+          );
+        }
+      });
+      const operation = vi.fn(async () => "admitted");
+      const read = withSnapshot(operation, {
+        path: source,
+        admissionTimeoutMs: 300_000,
+      });
+      const outcome = settle(read);
+      expectCalls(0, mocks.capture, mocks.prepare, operation);
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(await outcome).toEqual({ value: "admitted" });
+      expectCalls(1, mocks.capture, mocks.prepare, operation, mocks.cleanup);
+      expect(mocks.warn.mock.calls).toEqual([
+        [expect.stringMatching(/300 s remaining.*process 1234/)],
+        [expect.stringMatching(/270 s remaining.*process 5678/)],
+        [expect.stringMatching(/240 s remaining.*process 5678/)],
+      ]);
+      expect(mocks.info).toHaveBeenCalledWith(expect.stringContaining("admission acquired"));
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each([
-  "maintenance",
+  "unclassified",
   "other database",
   "default",
   "exhausted",
@@ -485,11 +519,11 @@ it.each([
   "shutdown",
 ] as const)("refuses %s before preparing discovery bytes", async (kind) => {
   const refusal =
-    kind === "maintenance"
-      ? new Error("genuine offline maintenance")
-      : new StateDatabaseAdmissionPendingError(
+    kind === "unclassified"
+      ? new Error("unclassified ownership refusal")
+      : new StateDatabaseOfflineMaintenanceError(
           kind === "other database" ? path.join(path.dirname(source), "other") : source,
-          "temporary schema custody",
+          "Offline maintenance by sqlite-maintenance process 1234; retry when it finishes.",
         );
   const caller = new AsyncWorkScope();
   const cancelled = new Error("caller closed while waiting for schema custody");
@@ -526,6 +560,11 @@ it.each([
           ? { name: "AbortError" }
           : refusal;
     expect(await outcome).toMatchObject({ error: { cause } });
+    if (kind === "exhausted") {
+      expect(mocks.warn).toHaveBeenLastCalledWith(
+        expect.stringMatching(/wait ended.*process 1234/),
+      );
+    }
     expectCalls(0, mocks.capture, mocks.prepare, operation, mocks.cleanup);
     expect(vi.getTimerCount()).toBe(0);
   } finally {

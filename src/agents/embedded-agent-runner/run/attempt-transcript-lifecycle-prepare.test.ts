@@ -12,6 +12,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
+import { capturePreparedTranscriptModelPromptProjection } from "../../../config/sessions/session-message-rewrite.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
@@ -46,7 +47,9 @@ import {
   createTestSession,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { sessionManagerReadMessageAnchor } from "../../sessions/session-manager-message-anchor.js";
 import { SessionMetadataCommittedError } from "../../sessions/session-manager-metadata-error.js";
+import { sessionManagerAppendInitialMetadata } from "../../sessions/session-manager-metadata.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../transcript-rewrite.js";
@@ -59,6 +62,7 @@ import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const userMessage = { role: "user" as const, content: "First user turn", timestamp: 1 };
 const initialWriteKinds = ["message", "model", "thinking"] as const;
+
 function observeCreation(
   sessionId: string,
   listener: Parameters<typeof onSessionIdentityMutation>[0],
@@ -378,6 +382,46 @@ it.each([false, true])(
       { existing },
     ),
 );
+
+it("appends after an unchanged prompt capture in one actor request without losing either record", () =>
+  withInitialWriter(async ({ manager, openManager, transcript }) => {
+    const userId = await manager.appendMessageAsync(userMessage);
+    const anchor = manager[sessionManagerReadMessageAnchor](userId);
+    if (!anchor) {
+      throw new Error("Expected the committed user message anchor");
+    }
+    await capturePreparedTranscriptModelPromptProjection(anchor, userMessage.content, () => {});
+    const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+    using append = vi.spyOn(actor, "appendTranscriptEvent");
+    using read = vi.spyOn(actor, "read");
+    const checkpoint = await manager.appendCustomEntryAsync("openclaw.tool-surface", {
+      tools: ["read"],
+    });
+    expect(append).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
+    const entries = [
+      {
+        id: userId,
+        type: "message",
+        message: userMessage,
+      },
+      {
+        id: checkpoint,
+        parentId: userId,
+        type: "custom",
+        customType: "openclaw.tool-surface",
+        data: { tools: ["read"] },
+      },
+    ];
+    expect(manager.getEntries()).toMatchObject(entries);
+    const persisted = (await openManager()).getEntries();
+    expect(persisted).toMatchObject(entries);
+    expect(persisted[0]).toMatchObject({
+      message: {
+        __openclaw: { modelPromptProjection: { version: 1, text: userMessage.content } },
+      },
+    });
+  }));
 
 it.each([false, true])("acknowledges only persisted tool results (incognito=%s)", (incognito) =>
   withInitialWriter(
@@ -802,7 +846,44 @@ it("publishes no initial claim or identity for a rolled-back outer transaction",
     }
   }));
 
-it.each(["message", "model"] as const)(
+it("commits the initial metadata pair in one actor append and adopts later metadata", () =>
+  withInitialWriter(async ({ manager, transcript, admission, target }) => {
+    const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+    using append = vi.spyOn(actor, "appendTranscriptEvent");
+    const { session } = await createTestSession({
+      model: { ...testModel, reasoning: true },
+      sessionManager: manager,
+      thinkingLevel: "high",
+    });
+    try {
+      expect(append).toHaveBeenCalledOnce();
+      const model = manager.getEntries()[0]?.id;
+      const thinking = manager.getEntries()[1]?.id;
+      expect(manager.getEntries()).toMatchObject([
+        { id: model, type: "model_change", parentId: null },
+        { id: thinking, type: "thinking_level_change", parentId: model, thinkingLevel: "high" },
+      ]);
+      expect(manager.getPersistedEntries()).toEqual(readEvents(target));
+
+      const changed = await manager.appendThinkingLevelChange("low");
+      expect(manager.getEntries().at(-1)).toMatchObject({
+        id: changed,
+        parentId: thinking,
+        thinkingLevel: "low",
+      });
+      expect(manager.getPersistedEntries()).toEqual(readEvents(target));
+      const before = readEvents(target);
+      admission.close();
+      await expect(
+        createTestSession({ sessionManager: manager, thinkingLevel: "off" }),
+      ).rejects.toThrow();
+      expect(readEvents(target)).toEqual(before);
+    } finally {
+      session.dispose();
+    }
+  }));
+
+it.each(["message", "model", "initial metadata"] as const)(
   "captures the committed claim before identity-observer cancellation stops the first %s append",
   (kind) =>
     withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
@@ -813,7 +894,11 @@ it.each(["message", "model"] as const)(
         controller.abort(callerError);
       });
       try {
-        const failure = await appendInitial(kind, manager).catch((error: unknown) => error);
+        const failure = await (
+          kind === "initial metadata"
+            ? manager[sessionManagerAppendInitialMetadata]("test-provider", "test-model", "high")
+            : appendInitial(kind, manager)
+        ).catch((error: unknown) => error);
         if (kind === "message") {
           expect(failure).toBe(callerError);
         } else {
@@ -836,6 +921,9 @@ it.each(["message", "model"] as const)(
           expect(events).toMatchObject([
             { type: "session" },
             { type: "model_change", provider: "test-provider", modelId: "test-model" },
+            ...(kind === "initial metadata"
+              ? [{ type: "thinking_level_change", thinkingLevel: "high" }]
+              : []),
           ]);
         }
       } finally {

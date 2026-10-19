@@ -1,7 +1,7 @@
 // Check Runtime Sidecar Loaders tests cover check runtime sidecar loaders script behavior.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   collectTsdownEntrySources,

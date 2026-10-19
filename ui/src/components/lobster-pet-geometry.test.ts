@@ -16,6 +16,60 @@ afterEach(async () => {
   localStorage.clear();
 });
 
+it("keeps the walking gap between supplied controls and releases removed obstacles", async () => {
+  vi.useFakeTimers();
+  const element = createPet(42, "offline");
+  const elements = element.composerElements()!;
+  const left = document.createElement("span");
+  const right = document.createElement("span");
+  left.getBoundingClientRect = () => new DOMRect(0, 45, 140, 45);
+  right.getBoundingClientRect = () => new DOMRect(560, 45, 160, 45);
+  element.composerElements = () => ({
+    ...elements,
+    obstacles: [left, right].filter((obstacle) => obstacle.isConnected),
+  });
+  elements.root.prepend(left, right);
+  await element.updateComplete;
+  await advancePetFrame(element);
+  const x = () =>
+    Number.parseFloat(
+      element.querySelector<HTMLElement>(".lobster-pet")!.style.getPropertyValue("--lob-x"),
+    );
+  const between = x();
+  expect(between).toBeGreaterThanOrEqual(178);
+  expect(between).toBeLessThanOrEqual(522);
+  left.remove();
+  await vi.advanceTimersByTimeAsync(0);
+  await advancePetFrame(element);
+  expect(x()).toBeLessThan(between);
+});
+
+it("observes the current composer after a retained pet reconnects", async () => {
+  vi.useFakeTimers();
+  const element = createPet(42, "offline");
+  await element.updateComplete;
+  await advancePetFrame(element);
+  element.remove();
+  await Promise.resolve();
+
+  const replacement = createPet(42, "offline");
+  await replacement.updateComplete;
+  const elements = replacement.composerElements()!;
+  replacement.remove();
+  await Promise.resolve();
+  element.composerElements = () => elements;
+  elements.composer.prepend(element);
+  await element.updateComplete;
+  await advancePetFrame(element);
+  expect(element.hasAttribute("data-scene-ready")).toBe(true);
+
+  elements.composer.getBoundingClientRect().width = 0;
+  elements.footer.append(document.createElement("span"));
+  await vi.advanceTimersByTimeAsync(0);
+  await advancePetFrame(element);
+  expect(element.hasAttribute("data-scene-ready")).toBe(false);
+});
+
 it("batches composer geometry reads before paint and retires detached work", async () => {
   vi.useFakeTimers();
   const element = createPet(42, "offline");

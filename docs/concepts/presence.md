@@ -217,6 +217,11 @@ the first pending change. Later changes do not postpone it. Hello snapshots and
 activity age can therefore lag the latest interaction by less than 30 seconds.
 Fresh snapshots and `system-presence` reads include the latest stored timestamp.
 
+The Control UI combines viewer declarations within one browser turn. Replacing a
+chat pane with another owner of the same session does not briefly clear and
+re-add its viewer presence. Leaving the session still publishes an empty
+declaration and waits for acknowledgment.
+
 ## Online and recent activity
 
 A connected person is **Online**. Activity is a separate, recent-interaction hint:

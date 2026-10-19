@@ -77,14 +77,12 @@ export {
   captureSessionControllerSettlement,
   isSessionControllerWorkActive,
   consumeSessionEffectHandoff,
-  cancelSessionEffectHandoff,
 } from "./session-controller.lifecycle-observation.js";
 export {
   withSessionControllerOwner,
   getCurrentSessionControllerOwner,
   getCurrentSessionControllerClaim,
   withSessionControllerClaim,
-  withSessionControllerSource,
   hasSessionControllerQueuedWork,
   isCompetingSessionControllerWorkActive,
 } from "./session-controller.context.js";
@@ -116,10 +114,8 @@ export {
   startSessionControllerInterruption,
   interruptSessionControllerEffects,
   captureSessionWorkRunInterruptions,
-  getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
-  captureGatewaySessionWorkAdmissionInterruption,
 } from "./session-controller.lifecycle-work.js";
 export { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "./session-controller.contracts.js";
 

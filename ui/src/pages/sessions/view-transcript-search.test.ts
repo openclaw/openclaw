@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -228,9 +229,12 @@ describe("Sessions query clearing", () => {
     "prevented",
     "unfocused",
     "modified",
+    "session menu",
     "menu",
+    "closed menu",
     "popover",
     "modal",
+    "shell modal",
   ])("leaves Escape to its existing owner when %s", (owner) => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -238,7 +242,11 @@ describe("Sessions query clearing", () => {
     const props = { ...buildProps(buildMultiResult([])), searchQuery: "keep me", onSearchChange };
     let overlay: HTMLElement | undefined;
     let overlayOwner: Overlay | undefined;
+    let releaseModal: (() => void) | undefined;
     try {
+      if (owner === "session menu") {
+        props.sessionMenu = { key: "agent:main:main" };
+      }
       renderSessionsView(props, container);
       container.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
       const input = container.querySelector<HTMLInputElement>(
@@ -247,9 +255,12 @@ describe("Sessions query clearing", () => {
       if (owner !== "unfocused") {
         input.focus();
       }
-      if (owner === "menu") {
+      if (owner === "menu" || owner === "closed menu") {
         overlay = document.createElement("openclaw-menu-surface");
         document.body.append(overlay);
+        if (owner === "closed menu") {
+          overlay.hidePopover();
+        }
       }
       if (owner === "popover") {
         overlay = document.createElement("div");
@@ -264,6 +275,14 @@ describe("Sessions query clearing", () => {
         overlay = document.createElement("dialog");
         overlay.setAttribute("open", "");
         document.body.append(overlay);
+        releaseModal = registerModalSurface(overlay);
+      }
+      if (owner === "shell modal") {
+        overlay = document.createElement("div");
+        overlay.className = "shell-nav";
+        overlay.setAttribute("aria-modal", "true");
+        document.body.append(overlay);
+        releaseModal = registerModalSurface(overlay);
       }
       const event = new KeyboardEvent("keydown", {
         key: "Escape",
@@ -284,6 +303,7 @@ describe("Sessions query clearing", () => {
       }
     } finally {
       overlayOwner?.dispose();
+      releaseModal?.();
       overlay?.removeAttribute("open");
       overlay?.remove();
       container.remove();

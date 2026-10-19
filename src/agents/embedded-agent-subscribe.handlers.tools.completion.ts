@@ -64,7 +64,6 @@ import {
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
   emitToolActivityEvent,
-  emitTrackedItemEvent,
   isExecToolName,
   toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
@@ -433,6 +432,9 @@ export async function prepareToolExecutionEnd(
     endedAt,
     ...(errorMessage ? { error: errorMessage } : {}),
   };
+  // Activity acceptance can suppress presentation, but the tool has settled.
+  ctx.state.itemActiveIds.delete(itemData.itemId);
+  ctx.state.itemCompletedCount += 1;
   const hideFromChannelProgress = explicitHideFromChannelProgress;
   const createResultData = () => ({
     phase: "result",
@@ -501,7 +503,7 @@ export async function prepareToolExecutionEnd(
         result: eventResult,
       },
     });
-    emitTrackedItemEvent(ctx, itemData);
+    emitToolActivityEvent(ctx, { stream: "item", data: itemData });
     emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: createResultData(),

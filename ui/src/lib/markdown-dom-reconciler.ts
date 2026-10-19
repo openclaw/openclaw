@@ -1,3 +1,5 @@
+import { SESSION_TITLE_TARGET_SELECTOR } from "../components/session-progress-hovercard-target.ts";
+
 /** A renderer supplies only the lifecycle of its retained media island. */
 export type MarkdownMediaRoot = {
   setConnected: (connected: boolean) => void;
@@ -8,6 +10,8 @@ export type MarkdownDomMedia = {
   prefix: string;
   render: (index: number, container: HTMLElement) => MarkdownMediaRoot | undefined;
 };
+
+type MarkdownSessionTitleRegistration = (target: HTMLElement, label: HTMLElement) => () => void;
 
 type CanonicalNode = {
   key: string | number;
@@ -32,6 +36,7 @@ type RenderedNode = DomRange & {
   element?: Element;
   content?: DomRange;
   opaque: boolean;
+  releaseSessionTitles?: () => void;
 };
 type Fragment = DomRange & {
   html: string;
@@ -85,7 +90,12 @@ function hasParagraphContent(node: Node): boolean {
   );
 }
 
-function parseCanonical(html: string, prefix: string, incremental: boolean): CanonicalNode[] {
+function parseCanonical(
+  html: string,
+  prefix: string,
+  incremental: boolean,
+  sessionTitles: boolean,
+): CanonicalNode[] {
   const template = document.createElement("template");
   template.innerHTML = html;
   const slots = new Map<Node, number>();
@@ -154,6 +164,7 @@ function parseCanonical(html: string, prefix: string, incremental: boolean): Can
       const opaque = Boolean(
         element &&
         ((!incremental && !hasMedia) ||
+          (sessionTitles && element.matches(SESSION_TITLE_TARGET_SELECTOR)) ||
           element.classList.contains("markdown-mermaid") ||
           element.localName.includes("-")),
       );
@@ -176,6 +187,22 @@ function parseCanonical(html: string, prefix: string, incremental: boolean): Can
   // Only strings and plain descriptors survive parsing. Retained parsed nodes
   // would keep obsolete trees alive through their parent pointers.
   return children(template.content);
+}
+
+function releaseSessionTitles(node: {
+  children: RenderedNode[];
+  releaseSessionTitles?: () => void;
+}): void {
+  node.releaseSessionTitles?.();
+  node.releaseSessionTitles = undefined;
+  for (const child of node.children) {
+    releaseSessionTitles(child);
+  }
+}
+
+function clearRenderedRange(node: RenderedNode): void {
+  releaseSessionTitles(node);
+  clearRange(node);
 }
 
 function patchAttributes(
@@ -227,7 +254,10 @@ export class MarkdownDomReconciler {
   >();
   private usedSlots = new Set<number>();
 
-  constructor(container: ParentNode) {
+  constructor(
+    container: ParentNode,
+    private readonly registerSessionTitle?: MarkdownSessionTitleRegistration,
+  ) {
     this.range = createRange(container);
   }
 
@@ -273,6 +303,7 @@ export class MarkdownDomReconciler {
         this.fragments.push(this.tail);
       }
     } else if (this.tail) {
+      releaseSessionTitles(this.tail);
       removeRange(this.tail);
       this.fragments.pop();
       this.tail = undefined;
@@ -302,6 +333,9 @@ export class MarkdownDomReconciler {
   }
 
   private reset(): void {
+    for (const fragment of this.fragments) {
+      releaseSessionTitles(fragment);
+    }
     clearRange(this.range);
     this.fragments = [];
     this.tail = undefined;
@@ -334,7 +368,12 @@ export class MarkdownDomReconciler {
       // detached DOM tree. Media policy still refreshes on every update.
       const canonical = `${prefix}\0${fragment.html}`;
       if (fragment.prefix !== canonical) {
-        fragment.canonical = parseCanonical(fragment.html, prefix, fragment.incremental);
+        fragment.canonical = parseCanonical(
+          fragment.html,
+          prefix,
+          fragment.incremental,
+          Boolean(this.registerSessionTitle),
+        );
         fragment.prefix = canonical;
       } else if (!media) {
         continue;
@@ -375,6 +414,7 @@ export class MarkdownDomReconciler {
       return node;
     });
     for (const node of remaining.values()) {
+      releaseSessionTitles(node);
       removeRange(node);
     }
     return next;
@@ -395,7 +435,7 @@ export class MarkdownDomReconciler {
         this.usedSlots.add(index);
       }
       if (node.start.nextSibling !== slot.element || !root) {
-        clearRange(node);
+        clearRenderedRange(node);
         if (root) {
           node.end.before(slot.element);
         }
@@ -417,7 +457,7 @@ export class MarkdownDomReconciler {
       if (first instanceof Text && first.nextSibling === node.end) {
         first.data = source.text;
       } else {
-        clearRange(node);
+        clearRenderedRange(node);
         node.end.before(document.createTextNode(source.text));
       }
       node.element = undefined;
@@ -427,7 +467,7 @@ export class MarkdownDomReconciler {
       node.children = [];
     } else if (source.tag && !source.opaque) {
       if (!node.element || node.tag !== source.tag || node.opaque) {
-        clearRange(node);
+        clearRenderedRange(node);
         node.element = document.createElementNS(source.namespace ?? null, source.tag);
         node.end.before(node.element);
         node.attributes = [];
@@ -439,14 +479,24 @@ export class MarkdownDomReconciler {
       node.children = this.reconcile(node.content!, node.children, source.children, media);
       node.tag = source.tag;
     } else {
-      clearRange(node);
+      clearRenderedRange(node);
       if (source.tag) {
         const template = document.createElement("template");
         // Serializing parsed HTML restores literal CRs; encode them before another parse.
         template.innerHTML = source.canonical
           .slice(source.canonical.indexOf(":") + 1)
           .replaceAll("\r", "&#13;");
+        const registerSessionTitle = this.registerSessionTitle;
+        const targets = registerSessionTitle
+          ? [...template.content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)]
+          : [];
         node.end.before(template.content);
+        if (registerSessionTitle && targets.length) {
+          const releases = targets.map((target) =>
+            registerSessionTitle(target, document.createElement("span")),
+          );
+          node.releaseSessionTitles = () => releases.forEach((release) => release());
+        }
       }
       node.element = undefined;
       node.content = undefined;

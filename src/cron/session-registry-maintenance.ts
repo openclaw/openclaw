@@ -9,6 +9,11 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -30,7 +35,10 @@ type SessionRegistryMaintenanceStoreSummary =
       nextSweepAtMs: number | null;
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
-      skippedReason: "agent-deletion-pending" | "agent-deletion-complete";
+      skippedReason:
+        | "agent-deletion-pending"
+        | "agent-deletion-complete"
+        | AgentDatabaseAdmissionRefusal["code"];
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
       skippedReason: "agent-store-held";
@@ -57,9 +65,9 @@ type RunningCronJobIds =
   | { ok: true; ids: Set<string>; count: number }
   | { ok: false; reason: string };
 
-async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
+async function readRunningCronJobIds(cronStorePath: string): Promise<RunningCronJobIds> {
   try {
-    const runningJobs = (await loadCronJobsStore()).jobs.filter(
+    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
     // A running detached job may have been retargeted after its session was created. Keep its
@@ -89,11 +97,12 @@ async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
 
 export async function runSessionRegistryMaintenance(params: {
   apply: boolean;
+  cronStorePath: string;
   assertCurrent?: () => void;
 }): Promise<SessionRegistryMaintenanceSummary> {
   params.assertCurrent?.();
   const cfg = getRuntimeConfig();
-  const runningCronJobs = await readRunningCronJobIds();
+  const runningCronJobs = await readRunningCronJobIds(params.cronStorePath);
   params.assertCurrent?.();
   if (!runningCronJobs.ok) {
     return {
@@ -109,7 +118,17 @@ export async function runSessionRegistryMaintenance(params: {
   const env = process.env;
   return await prepareAgentDatabaseDeletionSnapshotRead({ env }).withCurrentSnapshot(
     async (snapshot, assertSnapshotCurrent) => {
-      const stores: SessionRegistryMaintenanceStoreSummary[] = [];
+      const stores: SessionRegistryMaintenanceStoreSummary[] = listAgentDatabaseAdmissionRefusals({
+        env,
+      })
+        .filter((refusal) => readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }))
+        .flatMap((refusal) =>
+          refusal.paths.map((storePath) => ({
+            agentId: refusal.agentId,
+            storePath,
+            skippedReason: refusal.code,
+          })),
+        );
       const assertCurrent = () => {
         params.assertCurrent?.();
         assertSnapshotCurrent();
@@ -182,9 +201,10 @@ export async function runSessionRegistryMaintenance(params: {
           ? store.nextSweepAtMs === null
             ? []
             : [store.nextSweepAtMs]
-          : store.skippedReason === "agent-deletion-complete"
-            ? []
-            : [Date.now() + 60_000],
+          : store.skippedReason === "agent-deletion-pending" ||
+              store.skippedReason === "agent-store-held"
+            ? [Date.now() + 60_000]
+            : [],
       );
       return {
         nextSweepAtMs: deadlines.length > 0 ? Math.min(...deadlines) : null,

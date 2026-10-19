@@ -91,6 +91,40 @@ describe("session desktop connection", () => {
     return { panel, gateway, connect, disconnect };
   }
 
+  it("keeps a live source when a property burst restores the same connection inputs", async () => {
+    const request = requests({ "environments.status": () => desktopEnvironment });
+    const onFocusTargetChange = vi.fn();
+    const { panel, gateway, connect, disconnect } = await mount(request, {
+      sessionKey: null,
+      onFocusTargetChange,
+    });
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+    await panel.updateComplete;
+    const current = connect.mock.calls[0]![0];
+    const reads = request.mock.calls.length;
+    const replacementRequest = vi.fn();
+    const replacement = createGatewayClient(replacementRequest);
+
+    panel.client = replacement.client;
+    panel.available = false;
+    panel.requestedSource = "transient-source";
+    panel.client = gateway.client;
+    panel.available = true;
+    panel.requestedSource = desktopEnvironment.id;
+    await panel.updateComplete;
+
+    expect(current.isCurrent()).toBe(true);
+    expect(connect).toHaveBeenCalledOnce();
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(reads);
+    expect(replacementRequest).not.toHaveBeenCalled();
+    expect(onFocusTargetChange).toHaveBeenLastCalledWith({
+      kind: "desktop",
+      control: false,
+      source: desktopEnvironment.id,
+    });
+  });
+
   it.each([
     { phase: "connected", explicit: false },
     { phase: "connected", explicit: true },

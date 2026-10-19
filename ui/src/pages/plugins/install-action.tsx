@@ -12,7 +12,14 @@ import type { PluginInstallProgress } from "./install-progress.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
+export type PluginInstallActionHandle = {
+  readonly open: boolean;
+  dismiss(): void;
+};
+
 export type PluginInstallActionProps = {
+  registerInstallAction?: (action: PluginInstallActionHandle) => () => void;
+  onButtonRef?: (button: HTMLButtonElement) => void;
   progress?: PluginInstallProgress;
   busy?: boolean;
   disabled?: boolean;
@@ -41,8 +48,17 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
     setPinned(false);
     popover?.overlay.request(false, "return");
   };
-  onSettled(() => () => {
-    popover = undefined;
+  onSettled(() => {
+    const unregister = props.registerInstallAction?.({
+      get open() {
+        return open() && Boolean(props.progress);
+      },
+      dismiss,
+    });
+    return () => {
+      unregister?.();
+      popover = undefined;
+    };
   });
   const running = createMemo(() => props.progress && props.progress.finishedAt === undefined);
   createInterval(
@@ -99,7 +115,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
         }}
       >
         <button
-          ref={setButton}
+          ref={[setButton, props.onButtonRef]}
           type="button"
           class={[
             props.buttonClass,

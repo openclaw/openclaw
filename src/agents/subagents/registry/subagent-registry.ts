@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -446,13 +447,18 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
 const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
   getGatewayContextResolver: () => activeGatewayContextResolver,
-  bindGatewayOwners: async () => {
+  bindGatewayOwners: async (entries, startupTrace, onRecovered) => {
     if (
       !(await bindSubagentRunGatewayOwners({
         runs: subagentRuns,
+        entries,
+        startupTrace,
         resumedRuns,
         getGatewayContextResolver: () => activeGatewayContextResolver,
-        onRecovered: subagentLifecycleController.markRequesterSettleWakeRestored,
+        onRecovered: (entry) => {
+          onRecovered(entry);
+          subagentLifecycleController.markRequesterSettleWakeRestored(entry);
+        },
       }))
     ) {
       return false;
@@ -465,7 +471,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   scheduleSweep: scheduleSubagentRegistrySweep,
-  recoverInterruptedRuns: () => subagentSweeper.recoverInterruptedRuns(),
+  recoverInterruptedRuns: (entries) => subagentSweeper.recoverInterruptedRuns(entries),
   resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
   listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),
@@ -722,11 +728,14 @@ export async function prepareRequesterSettleWakeRecoverySource(
   });
   return captureRequesterSettleWakeRecoverySource({ ...params, storePath: physical.path, context });
 }
-export function activateSubagentRegistry(resolveGatewayContext: GatewayContextResolver) {
+export function activateSubagentRegistry(
+  resolveGatewayContext: GatewayContextResolver,
+  startupTrace?: GatewayStartupTrace,
+) {
   // Reuse the instance's own fenced closure so late-restored siblings share one
   // authority across repeated activation; the raw holder can outlive that instance.
   activeGatewayContextResolver = resolveGatewayContext()?.resolveGatewayContext;
-  return subagentRestorer.activate();
+  return subagentRestorer.activate(startupTrace);
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;

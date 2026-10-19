@@ -111,7 +111,7 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
       expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
       expect(() => getReplyOperationSessionTarget(operation)).toThrow();
       expect(
-        await withinTest(registry.waitForReplyRunSuccessorAdmission(key, null), signal),
+        await withinTest(controllerWait.waitForReplyRunSuccessorAdmission(key, null), signal),
       ).toMatchObject({ settled: true });
       expect(databaseClaim.isCurrent()).toBe(false);
       expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
@@ -120,7 +120,7 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
       expect(fs.existsSync(storePath)).toBe(false);
     } finally {
       complete(result);
-      await registry.waitForReplyRunSuccessorAdmission(key, null);
+      await controllerWait.waitForReplyRunSuccessorAdmission(key, null);
     }
   });
 });

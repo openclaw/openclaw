@@ -124,6 +124,7 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     collect: true,
     queued: true,
     queuedLaunch: {
+      requesterRecovery: {},
       request: { sessionKey: "agent:main:subagent:synthetic" },
       timeoutMs: 100,
       schedulerGroupKey: "group",

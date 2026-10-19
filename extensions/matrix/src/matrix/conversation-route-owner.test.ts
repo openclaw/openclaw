@@ -2,7 +2,7 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectConversationBindingAsync } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
-  registerSessionBindingAdapter,
+  registerSessionBindingAdapter as registerAdapter,
   type SessionBindingAdapter,
   type SessionBindingRecord,
   testing as sessionBindingTesting,
@@ -42,96 +42,97 @@ const prepareOwners = matrixPlugin.messaging?.prepareConversationRouteOwnersAsyn
 if (!prepareOwners) {
   throw new Error("Matrix conversation route owner is not registered");
 }
-async function resolveOwner(params: Parameters<NonNullable<typeof prepareOwners>>[0][number]) {
+type RouteParams = Parameters<NonNullable<typeof prepareOwners>>[0][number];
+async function resolveOwner(
+  cfg: OpenClawConfig,
+  accountId: string,
+  conversation: RouteParams["conversation"],
+) {
+  const params = { cfg, accountId, conversation };
   const [resolve] = await prepareOwners!([params], async (refs) => {
     const inspections = await Promise.all(refs.map(inspectConversationBindingAsync));
     return () => inspections;
   });
   return resolve!(params);
 }
-type Conversation = Parameters<typeof resolveOwner>[0]["conversation"];
+type Conversation = RouteParams["conversation"];
 type Owner = Awaited<ReturnType<typeof resolveOwner>>;
-type Case = {
-  name: string;
-  conversation: Conversation;
+type CaseOptions = {
+  conversation?: Conversation;
   target?: string;
   metadata?: SessionBindingRecord["metadata"];
   unavailable?: boolean;
   configuredAcp?: boolean;
-  expected: Owner;
 };
+type Case = [name: string, conversation: Conversation, expected: Owner, options?: CaseOptions];
 const dm: Conversation = {
   kind: "direct",
   peerId: "@alice:example.org",
   nativeChannelId: "!dm:example.org",
 };
+const channel = (peerId: string): Conversation => ({ kind: "channel", peerId });
+const adapterBase = { channel: "matrix", listBySession: () => [] };
+const agentIds = ["main", "ops-agent", "sender-agent", "room-agent", "acp-agent", "finance"];
+function agentBinding(
+  agentId: string,
+  accountId: string,
+  peer?: { kind: "channel" | "direct"; id: string },
+) {
+  return { agentId, match: { channel: "matrix", accountId, ...(peer ? { peer } : {}) } };
+}
+function routeCase(name: string, expected: Owner, options: CaseOptions = {}): Case {
+  return [name, options.conversation ?? dm, expected, options];
+}
+function agentCase(name: string, agentId: string, options: CaseOptions = {}): Case {
+  return routeCase(name, { kind: "agent", agentId }, options);
+}
+function resetRuntime(closeDatabase: boolean) {
+  resetPluginRuntimeStateForTest();
+  resetPluginStateStoreForTests({ closeDatabase });
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
+  );
+}
 const cases: Case[] = [
-  {
-    name: "native DM runtime agent",
-    conversation: dm,
+  agentCase("native DM runtime agent", "finance", { target: "agent:finance:bound" }),
+  agentCase("canonical channel runtime agent", "finance", {
+    conversation: channel("!Room:example.org"),
     target: "agent:finance:bound",
-    expected: { kind: "agent", agentId: "finance" },
-  },
-  {
-    name: "canonical channel runtime agent",
-    conversation: { kind: "channel", peerId: "!Room:example.org" },
-    target: "agent:finance:bound",
-    expected: { kind: "agent", agentId: "finance" },
-  },
-  {
-    name: "global session metadata owner",
-    conversation: dm,
+  }),
+  agentCase("global session metadata owner", "finance", {
     target: "global",
     metadata: { agentId: "finance" },
-    expected: { kind: "agent", agentId: "finance" },
-  },
-  {
-    name: "plugin thread owner and account fallback",
-    conversation: { ...dm, threadId: "$Thread:example.org" },
-    target: "plugin-thread-1",
-    metadata: {
-      pluginBindingOwner: "plugin",
-      pluginId: "demo-plugin",
-      pluginRoot: "/synthetic/demo-plugin",
+  }),
+  routeCase(
+    "plugin thread owner and account fallback",
+    { kind: "plugin", pluginId: "demo-plugin", fallbackAgentId: "sender-agent" },
+    {
+      conversation: { ...dm, threadId: "$Thread:example.org" },
+      target: "plugin-thread-1",
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "demo-plugin",
+        pluginRoot: "/synthetic/demo-plugin",
+      },
     },
-    expected: { kind: "plugin", pluginId: "demo-plugin", fallbackAgentId: "sender-agent" },
-  },
-  {
-    name: "unavailable binding owner",
-    conversation: dm,
-    unavailable: true,
-    expected: { kind: "unavailable" },
-  },
-  {
-    name: "DM without a native room",
+  ),
+  routeCase("unavailable binding owner", { kind: "unavailable" }, { unavailable: true }),
+  routeCase("DM without a native room", null, {
     conversation: { kind: "direct", peerId: "@alice:example.org" },
-    expected: null,
-  },
-  {
-    name: "sender binding before room fallback",
-    conversation: dm,
-    expected: { kind: "agent", agentId: "sender-agent" },
-  },
-  {
-    name: "room fallback before account binding",
+  }),
+  agentCase("sender binding before room fallback", "sender-agent"),
+  agentCase("room fallback before account binding", "room-agent", {
     conversation: { ...dm, peerId: "@bob:example.org" },
-    expected: { kind: "agent", agentId: "room-agent" },
-  },
-  {
-    name: "configured ACP before sender binding",
-    conversation: dm,
-    configuredAcp: true,
-    expected: { kind: "agent", agentId: "acp-agent" },
-  },
-  {
-    name: "thread retains the selected account agent",
+  }),
+  agentCase("configured ACP before sender binding", "acp-agent", { configuredAcp: true }),
+  agentCase("thread retains the selected account agent", "ops-agent", {
     conversation: {
       kind: "group",
       peerId: "!Unbound:example.org",
       threadId: "$Thread:example.org",
     },
-    expected: { kind: "agent", agentId: "ops-agent" },
-  },
+  }),
 ];
 
 describe.each(["per-user", "per-room"] as const)(
@@ -141,12 +142,7 @@ describe.each(["per-user", "per-room"] as const)(
     beforeEach(async () => {
       const stateDir = tempDirs.make("matrix-route-owner-");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      resetPluginRuntimeStateForTest();
-      resetPluginStateStoreForTests({ closeDatabase: false });
-      sessionBindingTesting.resetSessionBindingAdaptersForTests();
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
-      );
+      resetRuntime(false);
       cfg = {
         channels: {
           matrix: {
@@ -161,34 +157,13 @@ describe.each(["per-user", "per-room"] as const)(
         },
         agents: {
           ownership: "explicit",
-          entries: {
-            main: {},
-            "ops-agent": {},
-            "sender-agent": {},
-            "room-agent": {},
-            "acp-agent": {},
-            finance: {},
-          },
+          entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
         },
         bindings: [
-          { agentId: "main", match: { channel: "matrix", accountId: "default" } },
-          { agentId: "ops-agent", match: { channel: "matrix", accountId: "ops" } },
-          {
-            agentId: "room-agent",
-            match: {
-              channel: "matrix",
-              accountId: "ops",
-              peer: { kind: "channel", id: "!dm:example.org" },
-            },
-          },
-          {
-            agentId: "sender-agent",
-            match: {
-              channel: "matrix",
-              accountId: "ops",
-              peer: { kind: "direct", id: "@alice:example.org" },
-            },
-          },
+          agentBinding("main", "default"),
+          agentBinding("ops-agent", "ops"),
+          agentBinding("room-agent", "ops", { kind: "channel", id: "!dm:example.org" }),
+          agentBinding("sender-agent", "ops", { kind: "direct", id: "@alice:example.org" }),
         ],
       };
       installMatrixTestRuntime({ cfg, stateDir });
@@ -204,186 +179,109 @@ describe.each(["per-user", "per-room"] as const)(
       expect(loadMatrixCredentials(process.env, "ops")?.userId).toBe("@ops:example.org");
     });
 
-    it.each(cases)("preserves $name without credential SQL", async (testCase) => {
-      const touch = vi.fn();
-      const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(
-        (conversation) =>
-          testCase.target
-            ? {
-                bindingId: "synthetic-binding",
-                targetSessionKey: testCase.target,
-                targetKind: "session",
-                conversation,
-                status: "active",
-                boundAt: 1,
-                ...(testCase.metadata ? { metadata: testCase.metadata } : {}),
-              }
-            : null,
-      );
-      registerSessionBindingAdapter({
-        channel: "matrix",
-        accountId: "default",
-        listBySession: () => [],
-        resolveByConversation: () => {
-          throw new Error("Default account must not supply ops ownership");
-        },
-      });
-      if (!testCase.unavailable) {
-        registerSessionBindingAdapter({
-          channel: "matrix",
-          accountId: "ops",
-          listBySession: () => [],
-          resolveByConversation,
-          touch,
-        });
-      }
-      if (testCase.configuredAcp) {
-        cfg = {
-          ...cfg,
-          bindings: [
-            ...(cfg.bindings ?? []),
-            {
-              type: "acp",
-              agentId: "acp-agent",
-              match: {
-                channel: "matrix",
-                accountId: "ops",
-                peer: { kind: "channel", id: "!dm:example.org" },
-              },
-            },
-          ],
-        };
-      }
-      const counters = [
-        vi.spyOn(DatabaseSync.prototype, "prepare"),
-        vi.spyOn(DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        ),
-      ];
-      try {
-        const owner = await resolveOwner({
-          cfg,
-          accountId: "ops",
-          conversation: testCase.conversation,
-        });
-        const counts = counters.map((counter) => counter.mock.calls.length);
-        expect(owner).toEqual(testCase.expected);
-        expect(touch).not.toHaveBeenCalled();
-        if (testCase.conversation.kind !== "direct" || testCase.conversation.nativeChannelId) {
-          if (!testCase.unavailable) {
-            expect(resolveByConversation).toHaveBeenCalledWith({
-              channel: "matrix",
-              accountId: "ops",
-              conversationId:
-                testCase.conversation.threadId ??
-                testCase.conversation.nativeChannelId ??
-                testCase.conversation.peerId,
-              ...(testCase.conversation.threadId
-                ? {
-                    parentConversationId:
-                      testCase.conversation.nativeChannelId ?? testCase.conversation.peerId,
-                  }
-                : {}),
-            });
-          }
-        }
-        console.info(
-          "MATRIX_ROUTE_OWNER_SQL",
-          JSON.stringify({ case: testCase.name, sessionScope, counts, owner }),
+    it.each(cases)(
+      "preserves %s without credential SQL",
+      async (_name, conversation, expected, testCase = {}) => {
+        const touch = vi.fn();
+        const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(
+          (bindingConversation) =>
+            testCase.target
+              ? {
+                  bindingId: "synthetic-binding",
+                  targetSessionKey: testCase.target,
+                  targetKind: "session",
+                  conversation: bindingConversation,
+                  status: "active",
+                  boundAt: 1,
+                  ...(testCase.metadata ? { metadata: testCase.metadata } : {}),
+                }
+              : null,
         );
-        expect(counts).toEqual([0, 0, 0, 0, 0, 0]);
-      } finally {
-        counters.forEach((counter) => counter.mockRestore());
-      }
-    });
+        registerAdapter({
+          ...adapterBase,
+          accountId: "default",
+          resolveByConversation: () => {
+            throw new Error("Default account must not supply ops ownership");
+          },
+        });
+        if (!testCase.unavailable) {
+          registerAdapter({ ...adapterBase, accountId: "ops", resolveByConversation, touch });
+        }
+        if (testCase.configuredAcp) {
+          cfg = {
+            ...cfg,
+            bindings: [
+              ...(cfg.bindings ?? []),
+              {
+                type: "acp",
+                ...agentBinding("acp-agent", "ops", { kind: "channel", id: "!dm:example.org" }),
+              },
+            ],
+          };
+        }
+        const counters = [
+          vi.spyOn(DatabaseSync.prototype, "prepare"),
+          vi.spyOn(DatabaseSync.prototype, "exec"),
+          ...(["get", "all", "run", "iterate"] as const).map((method) =>
+            vi.spyOn(StatementSync.prototype, method),
+          ),
+        ];
+        expect(await resolveOwner(cfg, "ops", conversation)).toEqual(expected);
+        expect(touch).not.toHaveBeenCalled();
+        if (
+          !testCase.unavailable &&
+          (conversation.kind !== "direct" || conversation.nativeChannelId)
+        ) {
+          const roomId = conversation.nativeChannelId ?? conversation.peerId;
+          expect(resolveByConversation).toHaveBeenCalledWith({
+            channel: "matrix",
+            accountId: "ops",
+            conversationId: conversation.threadId ?? roomId,
+            ...(conversation.threadId ? { parentConversationId: roomId } : {}),
+          });
+        }
+        expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      },
+    );
   },
 );
 
+type MatrixConfig = NonNullable<OpenClawConfig["channels"]>["matrix"];
+type InactiveCase = [string, string, MatrixConfig, Owner?, boolean?];
 describe("inactive Matrix account scopes", () => {
   beforeEach(() => {
     for (const key of Object.keys(process.env).filter((name) => name.startsWith("MATRIX_"))) {
       vi.stubEnv(key, undefined);
     }
-    resetPluginRuntimeStateForTest();
-    resetPluginStateStoreForTests();
-    sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
-    );
+    resetRuntime(true);
   });
 
-  it.each([
-    {
-      name: "removed account",
-      accountId: "retired",
-      matrix: { accounts: { default: {} } },
-    },
-    {
-      name: "removed default account",
-      accountId: "default",
-      matrix: { enabled: true, accounts: { secondary: {} } },
-    },
-    {
-      name: "disabled account",
-      accountId: "default",
-      matrix: { accounts: { default: { enabled: false } } },
-    },
-    {
-      name: "disabled channel",
-      accountId: "default",
-      matrix: { enabled: false, accounts: { default: { enabled: true } } },
-    },
-  ] satisfies Array<{
-    name: string;
-    accountId: string;
-    matrix: NonNullable<OpenClawConfig["channels"]>["matrix"];
-  }>)(
-    "rejects a $name without requiring a runtime binding owner",
-    async ({ accountId, matrix }) => {
+  it.each<InactiveCase>([
+    ["removed account", "retired", { accounts: { default: {} } }],
+    ["removed default", "default", { enabled: true, accounts: { secondary: {} } }],
+    ["disabled account", "default", { accounts: { default: { enabled: false } } }],
+    ["disabled channel", "default", { enabled: false, accounts: { default: { enabled: true } } }],
+    [
+      "cached-credential-capable default",
+      "default",
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@proof:example.org",
+        accounts: { secondary: {} },
+      },
+      { kind: "unavailable" },
+    ],
+    ["empty scoped environment", "retired", { accounts: { secondary: {} } }, null, true],
+  ] satisfies InactiveCase[])(
+    "resolves %s without a runtime binding owner",
+    async (_name, accountId, matrix, expected = null, emptyEnv = false) => {
+      if (emptyEnv) {
+        vi.stubEnv("MATRIX_RETIRED_HOMESERVER", "");
+      }
       const cfg: OpenClawConfig = { channels: { matrix } };
       installMatrixTestRuntime({ cfg });
 
-      expect(
-        await resolveOwner({
-          cfg,
-          accountId,
-          conversation: { kind: "channel", peerId: "!room:example.org" },
-        }),
-      ).toBeNull();
+      expect(await resolveOwner(cfg, accountId, channel("!room:example.org"))).toEqual(expected);
     },
   );
-
-  it("keeps a cached-credential-capable default without reading credentials", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@proof:example.org",
-          accounts: { secondary: {} },
-        },
-      },
-    };
-    installMatrixTestRuntime({ cfg });
-    expect(
-      await resolveOwner({
-        cfg,
-        accountId: "default",
-        conversation: { kind: "channel", peerId: "!room:example.org" },
-      }),
-    ).toEqual({ kind: "unavailable" });
-  });
-
-  it("rejects an empty scoped environment account", async () => {
-    vi.stubEnv("MATRIX_RETIRED_HOMESERVER", "");
-    const cfg: OpenClawConfig = { channels: { matrix: { accounts: { secondary: {} } } } };
-    installMatrixTestRuntime({ cfg });
-    expect(
-      await resolveOwner({
-        cfg,
-        accountId: "retired",
-        conversation: { kind: "channel", peerId: "!room:example.org" },
-      }),
-    ).toBeNull();
-  });
 });

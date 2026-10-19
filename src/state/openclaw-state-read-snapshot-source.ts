@@ -2,7 +2,10 @@ import path from "node:path";
 import { sleepWithAbort } from "@openclaw/retry";
 import { mapRetainedOperation, type RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
-import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqlitePrivateSnapshotFamily } from "../infra/sqlite-private-snapshot-fork.js";
@@ -26,6 +29,7 @@ import {
   prepareSqliteReadOnlyLocation,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -37,6 +41,8 @@ import {
   maintenanceOwnerMayCopySourcesInProcess,
 } from "./openclaw-state-maintenance-context.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+
+const log = createSubsystemLogger("state/db");
 
 export type StateReadSnapshotSource = {
   location: string;
@@ -126,17 +132,39 @@ export async function prepareOpenClawStateReadSnapshotSource({
     return materialization;
   };
   if (!lazy) {
+    const admissionDeadline = performance.now() + (admissionTimeoutMs ?? 0);
+    let nextWaitLog = 0;
     try {
       // Wait only before capturing private bytes; callbacks and cleanup must never replay.
       admission = await acquireWithWait({
         acquire: capture,
-        shouldRetry: (error) =>
-          error instanceof StateDatabaseAdmissionPendingError && error.databasePath === pathname,
-        deadlineMs: performance.now() + (admissionTimeoutMs ?? 0),
+        shouldRetry: (error) => {
+          if (
+            !(error instanceof StateDatabaseAdmissionPendingError) &&
+            !(error instanceof StateDatabaseOfflineMaintenanceError)
+          ) {
+            return false;
+          }
+          if (error.databasePath !== pathname) {
+            return false;
+          }
+          const now = performance.now();
+          if (now >= nextWaitLog && now < admissionDeadline) {
+            log.warn(
+              `Waiting for shared-state admission (up to ${Math.ceil((admissionDeadline - now) / 1000)} s remaining). ${error.message}`,
+            );
+            nextWaitLog = now + 30_000;
+          }
+          return true;
+        },
+        deadlineMs: admissionDeadline,
         pollIntervalMs: 250,
         sleep: (ms) => sleepWithAbort(ms, admissionSignal),
       });
       admissionSignal.throwIfAborted();
+      if (nextWaitLog > 0) {
+        log.info(`Shared-state admission acquired: ${pathname}`);
+      }
       cleanClose = !postgres && reuseCleanClose === true && readSqliteDatabaseCleanClose(pathname);
       if (postgres) {
         const { openPostgresStateReadSnapshot } =
@@ -180,6 +208,9 @@ export async function prepareOpenClawStateReadSnapshotSource({
       }
       retainSource(prepared);
     } catch (error) {
+      if (nextWaitLog > 0) {
+        log.warn(`Shared-state admission wait ended without a snapshot. ${String(error)}`);
+      }
       try {
         releaseSource?.();
         if (preparation) {

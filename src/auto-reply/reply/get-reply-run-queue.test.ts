@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   interruptReplyRunTarget,
   createReplyOperation,
-  isSessionRunActiveForKey,
-  captureCurrentSessionRunInterruptTarget,
-  resolveActiveSessionRunId,
 } from "../../sessions/session-controller.js";
+import {
+  isSessionRunActiveForKey,
+  resolveActiveSessionRunId,
+} from "../../sessions/session-controller.queries.js";
+import { captureCurrentSessionRunInterruptTarget } from "../../sessions/session-controller.stop-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 

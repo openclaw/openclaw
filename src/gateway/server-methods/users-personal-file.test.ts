@@ -259,7 +259,10 @@ describe("personal USER.md self-service", () => {
   function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
     const { identity } = toolTurn();
     return withPersonalToolTurn(
-      { owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" } },
+      {
+        owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" },
+        allowCollaborativeSteering: true,
+      },
       (turn) =>
         withGatewayToolCallerIdentity(
           { ...identity, operationalRunInstance: undefined, operatorAuthority: undefined },

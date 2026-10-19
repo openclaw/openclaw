@@ -51,7 +51,13 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
   if (dispatched) {
     custody.accept();
   }
-  const track = (event: string) => vi.fn((_value: unknown) => record(event));
+  const completion = createDeferredCore<unknown>();
+  void completion.promise.catch(() => {});
+  const track = (event: string, settle: (value: unknown) => void) =>
+    vi.fn((value: unknown) => {
+      record(event);
+      settle(value);
+    });
   const admission = {
     get port() {
       return effects.forbidden();
@@ -72,13 +78,14 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
     observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
+    result: completion.promise,
     operationAdmission: {
       admission,
       releaseService: () => record("release-service"),
     },
     settleNative: vi.fn((_settlement: SqliteWorkerOperationSettlement) => record("settle-native")),
-    resolve: track("resolve"),
-    reject: track("reject"),
+    resolve: track("resolve", completion.resolve),
+    reject: track("reject", completion.reject),
     detach: () => record("detach"),
   } satisfies Job;
   const slot: Parameters<typeof failSqliteWorkerSlot>[0] = {

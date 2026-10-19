@@ -24,6 +24,7 @@ import {
 } from "./manager-publication-transfer.js";
 import {
   bindSqliteWorkerBackend,
+  createSqliteWorkerBackend,
   openExistingSqliteWorkerBackend,
 } from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
@@ -84,10 +85,7 @@ function publicationInput(owner: MemoryIndexDatabase) {
     fileIdentity: readMemoryShadowIdentity(filename),
     pragmas: {
       busy_timeout: readPragma("busy_timeout"),
-      synchronous: readPragma("synchronous"),
       foreign_keys: readPragma("foreign_keys"),
-      journal_size_limit: readPragma("journal_size_limit"),
-      checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
     },
   };
 }
@@ -176,6 +174,29 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("configures a fresh shadow once and retains only transaction restoration settings", async () => {
+    const databasePath = path.join(tempDirs.make("memory-publication-policy-"), "shadow.sqlite");
+    const observed = observeHostDataSql();
+    try {
+      const backend = await createSqliteWorkerBackend({ allowExtension: false }, { databasePath });
+      backends.push(backend);
+      expect(backend.execute({ type: "connection.inspect", input: undefined })).toEqual({
+        fileIdentity: readMemoryShadowIdentity(databasePath),
+        pragmas: { busy_timeout: 5000, foreign_keys: expect.any(Number) },
+      });
+      expect(
+        observed.queries.filter((sql) => /^PRAGMA journal_size_limit\s*=/i.test(sql)),
+      ).toHaveLength(1);
+      expect(
+        observed.queries.filter((sql) =>
+          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)\s*;?$/i.test(sql),
+        ),
+      ).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+
   it("avoids unused connection work for scalar publications", () => {
     const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
     const db = new DatabaseSync(filename);
@@ -204,10 +225,7 @@ describe("bounded memory publication transfer", () => {
         fileIdentity: readMemoryShadowIdentity(filename),
         pragmas: {
           busy_timeout: expect.any(Number),
-          synchronous: expect.any(Number),
           foreign_keys: expect.any(Number),
-          journal_size_limit: expect.any(Number),
-          checkpoint_fullfsync: expect.any(Number),
         },
       });
       scalar.close();
@@ -420,7 +438,7 @@ describe("bounded memory publication transfer", () => {
         sourceIdentity: readMemoryShadowIdentity(sourcePath),
         metaKey: "test-meta",
         expectedRevision: readMemoryDatabaseRevision(owner.db),
-        sourceHasVectors: false,
+        sourceSchema: shadow.searchSchema,
         vectorIndexComplete: false,
         extensionPath: owner.vector.extensionPath,
       },

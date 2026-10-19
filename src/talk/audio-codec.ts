@@ -1,7 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /**
- * PCM resampling and G.711 mu-law conversion helpers for Talk audio bridges.
- *
  * Telephony providers generally expect 8 kHz mu-law frames, while local audio
  * capture and realtime providers can produce higher-rate signed 16-bit PCM.
  */

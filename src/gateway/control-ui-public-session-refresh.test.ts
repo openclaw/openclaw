@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
 
@@ -26,11 +26,6 @@ function render(overrides: Partial<Parameters<typeof renderPublicSessionDocument
     ...overrides,
   });
 }
-const script = render().match(/<script>([\s\S]*)<\/script><\/body>/)?.[1];
-if (!script) {
-  throw new Error("rendered public session page has no entry script");
-}
-const entryScript: string = script;
 const dispose: (() => void)[] = [];
 afterEach(() => {
   for (const close of dispose.splice(0)) {
@@ -63,6 +58,9 @@ function fixture(
   // DOM behavior is real; only browser layout is deterministic in this Node test.
   let rowHeight = initialRowHeight;
   dom.window.Element.prototype.getBoundingClientRect = function () {
+    if (this.matches(".reader-controls")) {
+      return new dom.window.DOMRect(0, 528, 400, 56);
+    }
     const rows = Array.from(document.querySelectorAll(".transcript > *"));
     const index = rows.indexOf(this);
     const top = this.matches(".transcript") ? 300 : 300 + Math.max(0, index) * rowHeight;
@@ -84,7 +82,7 @@ function fixture(
     );
   fetch.mockResolvedValue(response(200));
   let resized: () => void = () => {};
-  runInNewContext(entryScript, {
+  runInNewContext(document.querySelector("script")!.textContent!, {
     document,
     window,
     fetch,
@@ -104,24 +102,22 @@ function fixture(
       disconnect() {}
     },
   });
-  const visibility = (value: boolean) => {
-    hidden = value;
-    document.dispatchEvent(new dom.window.Event("visibilitychange"));
-  };
   const event = (name: string) => dom.window.dispatchEvent(new dom.window.Event(name));
-  const scroll = (top: number) => {
-    window.scrollY = top;
-    event("scroll");
-  };
   return {
     document,
     window,
     fetch,
     response,
     replaceWith,
-    visibility,
     event,
-    scroll,
+    visibility: (value: boolean) => {
+      hidden = value;
+      document.dispatchEvent(new dom.window.Event("visibilitychange"));
+    },
+    scroll: (top: number) => {
+      window.scrollY = top;
+      event("scroll");
+    },
     resize: (height: number) => {
       rowHeight = height;
       resized();
@@ -129,156 +125,152 @@ function fixture(
   };
 }
 
-describe("public reader refresh lifecycle", () => {
-  it("jitters conditional reads, retains ETag manually, and catches up only when visible", async () => {
-    const f = fixture();
-    await vi.advanceTimersByTimeAsync(15000);
-    expect(f.fetch).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-    expect(f.document.title).toBe("updated · OpenClaw");
-    f.fetch.mockResolvedValue(f.response(304));
-    await vi.advanceTimersByTimeAsync(16500);
-    expect(f.fetch).toHaveBeenLastCalledWith(
-      "https://example.test/chat/main/topic",
-      expect.objectContaining({
-        cache: "no-store",
-        redirect: "error",
-        headers: { "If-None-Match": '"revision-1"' },
-      }),
-    );
-    expect(f.replaceWith).toHaveBeenCalledTimes(1);
-    f.visibility(true);
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(f.fetch).toHaveBeenCalledTimes(2);
-    f.visibility(false);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.fetch).toHaveBeenCalledTimes(3);
-  });
-  it("replaces a revoked publication with the generic login page and stops polling", async () => {
-    const f = fixture();
-    f.fetch.mockResolvedValue(f.response(404, "revoked"));
-    await vi.advanceTimersByTimeAsync(16500);
-    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
-    expect(f.document.querySelector("[data-entry-pending]")).toBeNull();
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-  });
-  it("does not publish a read that settles after the tab becomes hidden", async () => {
-    const f = fixture();
-    const pending = createDeferred<Response>();
-    f.fetch.mockReturnValue(pending.promise);
-    await vi.advanceTimersByTimeAsync(16500);
-    f.visibility(true);
-    pending.resolve(f.response(200));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.replaceWith).not.toHaveBeenCalled();
-    expect(f.document.title).toBe("Shared · OpenClaw");
-  });
-  it("honors Retry-After without replacing the readable transcript", async () => {
-    const f = fixture();
-    f.fetch.mockResolvedValue(
-      new Response("busy", { status: 429, headers: { "Retry-After": "60" } }),
-    );
-    await vi.advanceTimersByTimeAsync(16500);
-    f.visibility(true);
-    f.visibility(false);
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-    expect(f.document.title).toBe("Shared · OpenClaw");
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(f.fetch).toHaveBeenCalledTimes(2);
-  });
-  it("follows new messages and late layout only at the transcript end, not in the colophon", async () => {
-    const f = fixture();
-    f.scroll(1300);
-    await vi.advanceTimersByTimeAsync(16500);
-    expect(f.window.scrollY).toBe(1788);
-    f.resize(500);
-    expect(f.window.scrollY).toBe(2288);
-    f.scroll(3000);
-    f.window.scrollTo.mockClear();
-    f.fetch.mockResolvedValue(f.response(200, "more", '"revision-2"'));
-    await vi.advanceTimersByTimeAsync(16500);
-    expect(f.window.scrollTo).not.toHaveBeenCalled();
-  });
-  it.each([false, true])(
-    "follows a short visible conversation (explicit Latest: %s)",
-    async (explicitLatest) => {
-      const f = fixture({}, 40);
-      if (explicitLatest) {
-        f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
-        f.scroll(0);
-      }
-      await vi.advanceTimersByTimeAsync(16500);
-      f.resize(200);
-      expect(f.window.scrollY).toBe(788);
-    },
+it("jitters conditional reads, retains ETag manually, and catches up only when visible", async () => {
+  const f = fixture();
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(f.fetch).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  expect(f.document.title).toBe("updated · OpenClaw");
+  f.fetch.mockResolvedValue(f.response(304));
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.fetch).toHaveBeenLastCalledWith(
+    "https://example.test/chat/main/topic",
+    expect.objectContaining({
+      cache: "no-store",
+      redirect: "error",
+      headers: { "If-None-Match": '"revision-1"' },
+    }),
   );
-  it("keeps the visible message and expanded tools when the latest page rolls forward", async () => {
-    const f = fixture();
-    f.scroll(750);
-    f.document.querySelector("details")!.open = true;
-    const body = render({ messages: [...messages.slice(1), message("new")] });
-    f.fetch.mockResolvedValue(new Response(body, { status: 200 }));
+  expect(f.replaceWith).toHaveBeenCalledTimes(1);
+  f.visibility(true);
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(f.fetch).toHaveBeenCalledTimes(2);
+  f.visibility(false);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.fetch).toHaveBeenCalledTimes(3);
+});
+it("replaces a revoked publication with the generic login page and stops polling", async () => {
+  const f = fixture();
+  f.fetch.mockResolvedValue(f.response(404, "revoked"));
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+  expect(f.document.querySelector("[data-entry-pending]")).toBeNull();
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+});
+it("does not publish a read that settles after the tab becomes hidden", async () => {
+  const f = fixture();
+  const pending = createDeferred<Response>();
+  f.fetch.mockReturnValue(pending.promise);
+  await vi.advanceTimersByTimeAsync(16500);
+  f.visibility(true);
+  pending.resolve(f.response(200));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.replaceWith).not.toHaveBeenCalled();
+  expect(f.document.title).toBe("Shared · OpenClaw");
+});
+it("honors Retry-After without replacing the readable transcript", async () => {
+  const f = fixture();
+  f.fetch.mockResolvedValue(
+    new Response("busy", { status: 429, headers: { "Retry-After": "60" } }),
+  );
+  await vi.advanceTimersByTimeAsync(16500);
+  f.visibility(true);
+  f.visibility(false);
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  expect(f.document.title).toBe("Shared · OpenClaw");
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(f.fetch).toHaveBeenCalledTimes(2);
+});
+it("follows new messages and late layout only at the transcript end, not in the colophon", async () => {
+  const f = fixture();
+  f.scroll(1300);
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.window.scrollY).toBe(1788);
+  f.resize(500);
+  expect(f.window.scrollY).toBe(2288);
+  f.scroll(3000);
+  f.window.scrollTo.mockClear();
+  f.fetch.mockResolvedValue(f.response(200, "more", '"revision-2"'));
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.window.scrollTo).not.toHaveBeenCalled();
+});
+it.each([false, true])(
+  "follows a short visible conversation (explicit Latest: %s)",
+  async (explicitLatest) => {
+    const f = fixture({}, 40);
+    if (explicitLatest) {
+      f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
+      f.scroll(0);
+    }
     await vi.advanceTimersByTimeAsync(16500);
-    expect(f.window.scrollY).toBe(350);
-    expect(f.document.querySelector("details")!.open).toBe(true);
-  });
-  it("offers top/latest controls and refreshes manually without a navigation", async () => {
-    const f = fixture();
-    f.scroll(800);
-    const top = f.document.querySelector<HTMLButtonElement>("[data-public-top]");
-    expect(top).not.toBeNull();
-    top!.click();
-    expect(f.window.scrollY).toBe(0);
-    f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
-    expect(f.window.scrollY).toBe(1388);
-    f.document.querySelector<HTMLAnchorElement>("[data-public-refresh-now]")!.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-    expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toBe(
-      "Up to date",
-    );
-  });
-  it("refreshes legacy links in place and clears a plain revoked response", async () => {
-    const f = fixture({ entryUrl: undefined });
-    await vi.advanceTimersByTimeAsync(16500);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-    f.fetch.mockResolvedValue(new Response("This public session is unavailable.", { status: 404 }));
-    await vi.advanceTimersByTimeAsync(16500);
-    expect(f.document.querySelector(".transcript")).toBeNull();
-    expect(f.document.body.textContent).toContain("no longer publicly available");
-    expect(f.document.querySelector(".reader-controls")?.hasAttribute("hidden")).toBe(true);
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(f.fetch).toHaveBeenCalledTimes(2);
-  });
-  it("retains readable content and visibly recovers from a failed update", async () => {
-    const f = fixture();
-    f.fetch.mockRejectedValueOnce(new Error("offline"));
-    await vi.advanceTimersByTimeAsync(16500);
-    expect(f.document.querySelector(".transcript")?.textContent).toContain("first");
-    expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toContain(
-      "Could not refresh",
-    );
-    f.event("online");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.document.title).toBe("updated · OpenClaw");
-  });
-  it("catches up on reconnect without overlapping requests, and keeps older pages still", async () => {
-    const f = fixture();
-    const pending = createDeferred<Response>();
-    f.fetch.mockReturnValue(pending.promise);
-    f.event("online");
-    await vi.advanceTimersByTimeAsync(0);
-    f.event("online");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-    pending.resolve(f.response(200));
-    await vi.advanceTimersByTimeAsync(0);
-    const older = fixture({ isLatest: false });
-    older.event("online");
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(older.fetch).not.toHaveBeenCalled();
-  });
+    f.resize(200);
+    expect(f.window.scrollY).toBe(788);
+  },
+);
+it("keeps the visible message and expanded tools when the latest page rolls forward", async () => {
+  const f = fixture();
+  f.scroll(750);
+  f.document.querySelector("details")!.open = true;
+  const body = render({ messages: [...messages.slice(1), message("new")] });
+  f.fetch.mockResolvedValue(new Response(body, { status: 200 }));
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.window.scrollY).toBe(350);
+  expect(f.document.querySelector("details")!.open).toBe(true);
+});
+it("offers top/latest controls and refreshes manually without a navigation", async () => {
+  const f = fixture();
+  f.scroll(800);
+  const top = f.document.querySelector<HTMLButtonElement>("[data-public-top]");
+  expect(top).not.toBeNull();
+  top!.click();
+  expect(f.window.scrollY).toBe(0);
+  f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
+  expect(f.window.scrollY).toBe(1388);
+  f.document.querySelector<HTMLAnchorElement>("[data-public-refresh-now]")!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toBe("Up to date");
+});
+it("refreshes legacy links in place and clears a plain revoked response", async () => {
+  const f = fixture({ entryUrl: undefined });
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  f.fetch.mockResolvedValue(new Response("This public session is unavailable.", { status: 404 }));
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.document.querySelector(".transcript")).toBeNull();
+  expect(f.document.body.textContent).toContain("no longer publicly available");
+  expect(f.document.querySelector(".reader-controls")?.hasAttribute("hidden")).toBe(true);
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(f.fetch).toHaveBeenCalledTimes(2);
+});
+it("retains readable content and visibly recovers from a failed update", async () => {
+  const f = fixture();
+  f.fetch.mockRejectedValueOnce(new Error("offline"));
+  await vi.advanceTimersByTimeAsync(16500);
+  expect(f.document.querySelector(".transcript")?.textContent).toContain("first");
+  expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toContain(
+    "Could not refresh",
+  );
+  f.event("online");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.document.title).toBe("updated · OpenClaw");
+});
+it("catches up on reconnect without overlapping requests, and keeps older pages still", async () => {
+  const f = fixture();
+  const pending = createDeferred<Response>();
+  f.fetch.mockReturnValue(pending.promise);
+  f.event("online");
+  await vi.advanceTimersByTimeAsync(0);
+  f.event("online");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  pending.resolve(f.response(200));
+  await vi.advanceTimersByTimeAsync(0);
+  const older = fixture({ isLatest: false });
+  older.event("online");
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(older.fetch).not.toHaveBeenCalled();
 });

@@ -23,7 +23,7 @@ import {
   removeRemoteNodeInfoForConnection,
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
@@ -331,7 +331,7 @@ export async function prepareGatewayLifecycle(params: {
     prepareRead: async (connId, session) => {
       const client = clients.getByConnectionId(connId);
       return client
-        ? await prepareControlUiSessionPrRead({
+        ? createControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,
@@ -522,11 +522,8 @@ export async function prepareGatewayLifecycle(params: {
           });
         },
         cancelReceivedWork: (reason) => {
-          // Publish cancellation before retained principals lose their authority,
-          // so interrupted preparation observes the exact restart reason.
+          // Entry is fenced; retained principals still need their binding to settle.
           runtime.connectionWork.beginClose(reason);
-          kernel.setDispatchReady(false);
-          gatewayInstanceRuntimeRef.current?.close();
         },
         getPendingReplyCount: getTotalPendingReplies,
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
@@ -539,6 +536,9 @@ export async function prepareGatewayLifecycle(params: {
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.
     return async () => {
+      // The close plan has joined received execution and its finalizers.
+      kernel.setDispatchReady(false);
+      gatewayInstanceRuntimeRef.current?.close();
       const channelIds = listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map(
         (plugin) => plugin.id,
       );

@@ -29,6 +29,7 @@ import {
   type ChatAbortTargetState,
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -366,6 +367,10 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
+  chatOutboxOwner(host).admissions.cancelRequests(
+    host,
+    resolveUiConversationIdentity(host, host.sessionKey),
+  );
   const disconnectedIntent =
     !host.connected && host.client ? currentChatAbortIntent(host, host.client) : null;
   const pendingAbort =

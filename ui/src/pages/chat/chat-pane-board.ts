@@ -1,5 +1,6 @@
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
@@ -54,6 +55,7 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
+  private boardView: HTMLElementTagNameMap["openclaw-board-view"] | null = null;
   readonly dashboardPresentation: { defaultWrite: { owner: string } | undefined } = {
     defaultWrite: undefined,
   };
@@ -205,19 +207,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!layout.columns[0]?.browserWidthPending || !isSidebarSlotVisible(layout, "browser")) {
       return layout;
     }
-    // The composer owns this shell even when its textarea is hidden or replaced.
-    const composer = this.element.querySelector<HTMLElement>(".agent-chat__composer-shell");
-    if (!composer) {
+    const composer = this.composerShell;
+    if (!composer?.isConnected) {
       return layout;
     }
     const inset = Number.parseFloat(
       getComputedStyle(composer).getPropertyValue("--chat-composer-side-inset"),
     );
-    // The independently mounted sidebar region owns the width used for its initial layout.
     return initializeBrowserSidebarWidth(
       layout,
-      this.element.querySelector(".sidebar-region")?.getBoundingClientRect().width ??
-        this.paneWidth,
+      this.sidebarRegionElement?.getBoundingClientRect().width ?? this.paneWidth,
       composer.getBoundingClientRect().width + (Number.isFinite(inset) ? inset : 0),
     );
   }
@@ -284,7 +283,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           isGatewayMethodAdvertised(gateway, "board.widget.put") === true));
     const client = gateway?.client;
     if (this.boardProviderLifecycleConnected && client && available) {
-      const key = boardProviderCacheKey(session);
+      const presentationScope = this.context
+        ? gatewayPresentationScope(this.context.gateway)
+        : undefined;
+      const key = JSON.stringify([presentationScope?.key, boardProviderCacheKey(session)]);
       if (this.boardProviderLease?.cacheKey !== key) {
         this.releaseBoardProviderLease();
         this.boardProviderLease = {
@@ -296,6 +298,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             canPinMcpApps,
             canMutate,
             canGrant,
+            presentationScope,
           ),
           cacheKey: key,
         };
@@ -597,9 +600,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           return;
         }
         // The retained board owns actions and errors; the header only relocates its menu.
-        const view = this.element.querySelector("openclaw-board-view");
+        const view = this.boardView;
         if (
-          view?.snapshot?.sessionKey === board.snapshot.sessionKey &&
+          view?.isConnected &&
+          view.snapshot?.sessionKey === board.snapshot.sessionKey &&
           view.session.agentId === session.agentId &&
           view.session.sessionKey === session.sessionKey
         ) {
@@ -626,6 +630,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       error: error || undefined,
       elementReady: Boolean(customElements.get("openclaw-board-view")),
       surface: {
+        onViewRef: (element) => {
+          this.boardView = element;
+          return () => {
+            if (this.boardView === element) {
+              this.boardView = null;
+            }
+          };
+        },
         active: {
           owner: this.element,
           isPresented: () => isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented,

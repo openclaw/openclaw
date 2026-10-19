@@ -45,6 +45,12 @@ afterEach(() => vi.restoreAllMocks());
 const workers = createSqliteReadOnlyWorkerScope();
 afterAll(() => workers.close());
 
+async function expectNoSidecars(database: string) {
+  for (const suffix of ["-wal", "-shm"]) {
+    await expect(fs.stat(database + suffix)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
+
 it.each(["configured-owner", "profile"] as const)(
   "keeps %s requester authority live through maintenance and revocation",
   async (source) => {
@@ -123,13 +129,7 @@ it.each(["configured-owner", "profile"] as const)(
           options: { repair: true, nonInteractive: true },
           runtime: { log() {}, error() {}, exit() {} },
           assertCurrent,
-          beforeStateMutation: async () => {
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(databasePath + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
-          },
+          beforeStateMutation: () => expectNoSidecars(databasePath),
         });
         expect(maintenance).toBeDefined();
         const admissionWorkerLaunches = authorityWorkerLaunches.size;
@@ -140,11 +140,7 @@ it.each(["configured-owner", "profile"] as const)(
           }
           await maintenance!.run(async () => {
             expect(foreignRequester.isCurrent()).toBe(true);
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(foreignDatabase + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
+            await expectNoSidecars(foreignDatabase);
             const migration = await withLegacyMigrationStateLock({
               stateDir: state.stateDir,
               env: state.env,

@@ -291,6 +291,7 @@ it.each([true, false])(
       }
       store.jobs[0]!.declarationKey = "agent:main:callback-save";
       store.jobs.push({ ...store.jobs[0]!, id: "broken", name: "Broken metadata" });
+      store.jobs.push({ ...store.jobs[1]!, id: "legacy", name: "Legacy JSON name" });
       await saveCronJobsStore(storePath, store);
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
@@ -298,8 +299,14 @@ it.each([true, false])(
           storePath,
           "broken",
         );
+        db.prepare(
+          "UPDATE cron_jobs SET name = ?, job_json = json_set(job_json, '$.delivery', json(?)) WHERE store_key = ? AND job_id = ?",
+        ).run("  Legacy metadata  ", JSON.stringify({ mode: "unsupported" }), storePath, "legacy");
       });
-      const resolveName = await prepareCronJobNameResolver(["broken"], storePath);
+      const resolveName = await prepareCronJobNameResolver(
+        ["first", "second", "guarded", "captured-\ud800", "broken", "legacy"],
+        storePath,
+      );
       const service = new CronService({
         scheduler: createTestGatewayScheduler(),
         nowMs: () => Date.now(),
@@ -322,20 +329,32 @@ it.each([true, false])(
       const steps: {
         name: string;
         invoke: (callback: () => undefined) => Promise<unknown>;
+        expectedNames: [string, string | undefined][];
         singleUse?: boolean;
       }[] = [
         {
           name: "guarded add",
-          invoke: (callback) => service.add({ ...input, id: "guarded" }, { commitGuard: callback }),
+          expectedNames: [
+            ["guarded", "callback save"],
+            ["first", "first"],
+            ["second", "second"],
+          ],
+          invoke: (callback) =>
+            service.add({ ...input, id: " guarded " }, { commitGuard: callback }),
         },
         {
           name: "captured add",
+          expectedNames: [["captured-\ud800", "callback \ufffd"]],
           singleUse: true,
           invoke: (callback) =>
-            service.add({ ...input, id: "captured" }, { captureRuntimeAuthority: callback }),
+            service.add(
+              { ...input, id: "captured-\ud800", name: "callback \ud800" },
+              { captureRuntimeAuthority: callback },
+            ),
         },
         {
           name: "guarded convergence",
+          expectedNames: [["first", "first"]],
           invoke: (callback) =>
             service.add(
               { ...input, declarationKey: "agent:main:callback-save" },
@@ -344,11 +363,13 @@ it.each([true, false])(
         },
         {
           name: "guarded update",
+          expectedNames: [["first", "guarded update"]],
           invoke: (callback) =>
             service.update("first", { name: "guarded update" }, { commitGuard: callback }),
         },
         {
           name: "captured update",
+          expectedNames: [["first", "captured update"]],
           singleUse: true,
           invoke: (callback) =>
             service.update(
@@ -359,6 +380,7 @@ it.each([true, false])(
         },
         {
           name: "guarded owner update",
+          expectedNames: [["first", "captured update"]],
           invoke: (callback) =>
             service.update(
               "first",
@@ -372,18 +394,21 @@ it.each([true, false])(
         },
         {
           name: "captured owner update",
+          expectedNames: [["first", "captured update"]],
           singleUse: true,
           invoke: (callback) =>
             service.update("first", { agentId: "main" }, { captureRuntimeAuthority: callback }),
         },
         {
           name: "precondition update",
+          expectedNames: [["first", "precondition update"]],
           singleUse: true,
           invoke: (callback) =>
             service.updateWithPrecondition("first", { name: "precondition update" }, callback),
         },
         {
           name: "guarded remove",
+          expectedNames: [["second", undefined]],
           invoke: (callback) => service.remove("second", { commitGuard: callback }),
         },
       ];
@@ -401,6 +426,10 @@ it.each([true, false])(
           });
           await step.invoke(callback);
           expect(resolveName("broken")).toBe(cronEnabled ? undefined : "Broken metadata");
+          expect(resolveName("legacy")).toBe("Legacy metadata");
+          for (const [jobId, expectedName] of step.expectedNames) {
+            expect(resolveName(jobId), `${step.name}: ${jobId}`).toBe(expectedName);
+          }
           if (step.singleUse) {
             expect(callback, step.name).toHaveBeenCalledTimes(1);
           } else {
@@ -409,7 +438,12 @@ it.each([true, false])(
           expect.soft(sql.count(), step.name).toBe(0);
         }
         const persisted = (await loadCronJobsStoreWithConfigJobs(storePath)).store.jobs;
-        expect(persisted.map((job) => job.id).toSorted()).toEqual(["captured", "first", "guarded"]);
+        expect(persisted.map((job) => job.id).toSorted()).toEqual([
+          "captured-\ufffd",
+          "first",
+          "guarded",
+          "legacy",
+        ]);
         expect(persisted.find((job) => job.id === "first")?.name).toBe("precondition update");
         expect(persisted.every((job) => !job.enabled)).toBe(true);
       } finally {

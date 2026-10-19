@@ -1,4 +1,4 @@
-import { createEffect, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -22,7 +22,7 @@ function ownerFor(host: Host) {
   if (retained) {
     return retained;
   }
-  const owner = createBrowserPanelPresentation(host);
+  const owner = createBrowserPanelPresentation(host, onSettled);
   owners.set(host, owner);
   for (const key of ["hostedTabs", "activeHostedTabId"] as const) {
     Object.defineProperty(host, key, { configurable: true, get: () => owner[key] });
@@ -80,8 +80,6 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
 
 function browserPanelContent(owner: BrowserPanelPresentation) {
   const state = projectOwner(owner, (current) => current);
-  // Native presentation and viewport geometry follow the committed DOM.
-  createEffect(state.revision, () => owner.rendered());
   onSettled(() => {
     let disposed = false;
     let detach: (() => void) | undefined;

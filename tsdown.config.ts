@@ -22,6 +22,7 @@ import {
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
 import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
+import { createPublicSessionLocalesPlugin } from "./scripts/lib/public-session-locales.mts";
 import { isRecord } from "./scripts/lib/record-shared.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
@@ -248,6 +249,9 @@ function nodeBuildConfig(
         : createPublicSessionCardAssetsPlugin(),
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
+        : createPublicSessionLocalesPlugin(),
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
         : createSqliteSchemaAssetsPlugin(),
       config.plugins,
     ],
@@ -298,6 +302,7 @@ function workerDeployBuildConfig(entry: Record<string, string>, split = false): 
     },
     plugins: [
       createStateSchemaInlinePlugin(),
+      createPublicSessionLocalesPlugin(),
       createSqliteSchemaAssetsPlugin(undefined, undefined, { workerChunks: true }),
       createWorkerDeployBuildPlugin(),
     ],
@@ -996,6 +1001,8 @@ const configs: UserConfig[] = [
     {
       "worker/worker": "src/worker/worker-deploy-entry.ts",
       "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+      "worker/worker-chunk-fs-safe-watch-io":
+        "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
     },
     true,
   ),

@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { stableStringify } from "@openclaw/normalization-core";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -29,6 +31,43 @@ export function captureReplyToolAuthoritySession(
     sources: loaded.capturedReadSources,
     sessionId: loaded.entry?.sessionId,
     lifecycleRevision: loaded.entry?.lifecycleRevision,
+  };
+}
+
+/** Retain the captured file-backed classification while its published entry remains current. */
+export function retainReplyToolAuthorityClassification(
+  original: CapturedReplyToolAuthoritySession | undefined,
+  entry: SessionEntry | undefined,
+  assertCurrent: () => void,
+) {
+  if (!original?.source || typeof original.source.databaseIdentity !== "string") {
+    return undefined;
+  }
+  const classificationFacts = (candidate: SessionEntry | undefined) => ({
+    sessionId: candidate?.sessionId,
+    lifecycleRevision: candidate?.lifecycleRevision,
+    sandbox: candidate?.sandbox,
+    sandboxMode: candidate?.sandboxMode,
+    createdActor: candidate?.createdActor,
+  });
+  const predicate = retainPreparedSessionEntryPredicate({
+    databaseIdentity: `file:${original.source.databaseIdentity}`,
+    sessionKey: original.canonicalKey,
+    entry,
+    matches: (before, after) =>
+      stableStringify(classificationFacts(before)) === stableStringify(classificationFacts(after)),
+  });
+  return {
+    release: () => predicate.release(),
+    assertCurrent: () => {
+      assertCurrent();
+      if (!predicate.isCurrent()) {
+        const reason = predicate.canRefresh()
+          ? "entry predicate pending or unknown"
+          : "entry predicate changed or released";
+        throw new Error(`Tool authority classification session changed (${reason})`);
+      }
+    },
   };
 }
 

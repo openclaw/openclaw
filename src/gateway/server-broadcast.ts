@@ -59,8 +59,8 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "socket.drain",
 ]);
 
-type EncodedMessagePayload = { prefix: string; message: Buffer; suffix: string };
-type FramePayload = string | Buffer | EncodedMessagePayload;
+type EncodedSessionPayload = readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
+type FramePayload = string | Buffer | EncodedSessionPayload;
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string;
 function serializeFrameField(
@@ -68,13 +68,13 @@ function serializeFrameField(
   value: unknown,
   serializeSession: (() => string) | undefined,
   serializeMessage?: () => Buffer,
-): string | EncodedMessagePayload;
+): string | EncodedSessionPayload;
 function serializeFrameField(
   name: "payload" | "stateVersion",
   value: unknown,
   serializeSession?: () => string,
   serializeMessage?: () => Buffer,
-): string | EncodedMessagePayload {
+): string | EncodedSessionPayload {
   // The projection owns a fresh envelope; encode its large fields separately.
   // SAFETY: serializeSession certifies a fresh, mutable record envelope.
   const envelope = serializeSession ? (value as Record<string, unknown>) : undefined;
@@ -105,9 +105,13 @@ function serializeFrameField(
     const separator = fieldJSON.endsWith("{}}") ? "" : ",";
     const prefix = `,${fieldJSON.slice(1, -2)}${separator}`;
     const suffix = `"session":${sessionJSON}}`;
-    return messageBytes ? { prefix, message: messageBytes, suffix } : `${prefix}${suffix}`;
+    // Keep the message's byte identity so compression can reuse its deflated segment.
+    return messageBytes
+      ? [Buffer.from(prefix), messageBytes, Buffer.from(suffix)]
+      : [Buffer.from(`${prefix}${suffix}`)];
   }
-  return fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
+  const fragment = fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
+  return serializeSession ? [Buffer.from(fragment)] : fragment;
 }
 
 function resolveBroadcastSessionScope(
@@ -141,7 +145,7 @@ function resolveBroadcastSessionScope(
 }
 
 type FrameFields = {
-  eventJSON: string;
+  prefix: Buffer;
   stateVersionFragment: string;
 };
 type FrameBase = FrameFields & {
@@ -169,17 +173,20 @@ function frameWithSequence(
     recipientProfileId === undefined
       ? ""
       : `,"recipientProfileId":${JSON.stringify(recipientProfileId)}`;
-  let prefix = `{"type":"event","event":${base.eventJSON}`;
-  let suffix = `,"seq":${seq}${base.stateVersionFragment}${recipient}}`;
-  if (typeof payload === "string") {
-    return Buffer.from(`${prefix}${payload}${suffix}`);
+  const suffix = Buffer.from(`,"seq":${seq}${base.stateVersionFragment}${recipient}}`);
+  if (Buffer.isBuffer(payload)) {
+    return concatGatewayFrame([base.prefix, payload, suffix]);
   }
-  const bytes = Buffer.isBuffer(payload) ? payload : payload.message;
-  if (!Buffer.isBuffer(payload)) {
-    prefix += payload.prefix;
-    suffix = payload.suffix + suffix;
+  const chunks = typeof payload === "string" ? ([Buffer.from(payload)] as const) : payload;
+  if (chunks.length === 1) {
+    return Buffer.concat([base.prefix, chunks[0], suffix]);
   }
-  return concatGatewayFrame([Buffer.from(prefix), bytes, Buffer.from(suffix)]);
+  // Preserve compression boundaries while copying the already encoded recipient envelope.
+  return concatGatewayFrame([
+    Buffer.concat([base.prefix, chunks[0]]),
+    chunks[1],
+    Buffer.concat([chunks[2], suffix]),
+  ]);
 }
 
 export function createGatewayBroadcaster(params: {
@@ -210,6 +217,10 @@ export function createGatewayBroadcaster(params: {
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
+  const deliveryLost = (client: GatewayWsClient) => {
+    client.presenceSnapshot = undefined;
+    params.onSessionDeliveryLost?.(client);
+  };
   const delivery = createGatewayLiveTextDelivery(params);
   const narration = createGatewayNarrationDelivery({
     ...params,
@@ -301,7 +312,7 @@ export function createGatewayBroadcaster(params: {
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
-    let sessionFragments: Map<unknown, string | EncodedMessagePayload> | undefined;
+    let sessionFragments: Map<unknown, string | EncodedSessionPayload> | undefined;
     let projectSession:
       | ((client: GatewayWsClient) => SessionEventProjection | undefined)
       | undefined;
@@ -314,7 +325,7 @@ export function createGatewayBroadcaster(params: {
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
     const getFrameFields = (): FrameFields =>
       (frames.fields ??= {
-        eventJSON: JSON.stringify(event),
+        prefix: Buffer.from(`{"type":"event","event":${JSON.stringify(event)}`),
         stateVersionFragment:
           opts?.stateVersion === undefined
             ? ""
@@ -453,17 +464,14 @@ export function createGatewayBroadcaster(params: {
         });
       }
       if (slow && opts?.dropIfSlow) {
-        if (presencePayload) {
-          c.presenceSnapshot = undefined;
-        }
         // Consume the seq for the dropped frame so the client's gap detector
         // sees the loss instead of a silently thinner stream.
         clientSeq.set(c, nextSeq);
-        params.onSessionDeliveryLost?.(c);
+        deliveryLost(c);
         continue;
       }
       if (slow) {
-        params.onSessionDeliveryLost?.(c);
+        deliveryLost(c);
         delivery.retireDelivery(state);
         closeGatewayTransportWithGrace(state.socket, 1008, "slow consumer");
         continue;
@@ -540,6 +548,7 @@ export function createGatewayBroadcaster(params: {
             continue;
           }
         } catch (err) {
+          deliveryLost(c);
           log.error(
             `broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`,
           );
@@ -565,7 +574,7 @@ export function createGatewayBroadcaster(params: {
         useDelta && projection
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
           : (frames.snapshot ??= frameBaseFor(payload));
-      let frame: Buffer;
+      let frame: Buffer | undefined;
       let delivered: (() => void) | undefined;
       let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;
       try {
@@ -651,12 +660,10 @@ export function createGatewayBroadcaster(params: {
         if (!sequenceFrames) {
           audienceFrames.set(recipientProfileId, (sequenceFrames = new Map()));
         }
-        const cached = sequenceFrames.get(nextSeq);
-        if (cached === undefined) {
+        frame = sequenceFrames.get(nextSeq);
+        if (frame === undefined) {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
           sequenceFrames.set(nextSeq, frame);
-        } else {
-          frame = cached;
         }
         // Preserve frame snapshots before metrics inspect getter-backed payloads.
         if (sessionEventMetrics === null) {
@@ -668,7 +675,7 @@ export function createGatewayBroadcaster(params: {
           );
         }
       } catch (err) {
-        params.onSessionDeliveryLost?.(c);
+        deliveryLost(c);
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
         return;
       }
@@ -691,8 +698,7 @@ export function createGatewayBroadcaster(params: {
           return;
         }
         if (err) {
-          c.presenceSnapshot = undefined;
-          params.onSessionDeliveryLost?.(c);
+          deliveryLost(c);
           delivery.retireDelivery(state);
           log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
             event,

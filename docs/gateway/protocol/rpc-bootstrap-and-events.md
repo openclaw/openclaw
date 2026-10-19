@@ -73,6 +73,11 @@ Sidebar replies include an opaque `rowsRevision`. A client can send it as
 `sessions` array when the authorized rows are unchanged. Counts, defaults, and
 facets still describe the current full window.
 
+Compact and dashboard callers can opt into the same shared-fact and conditional
+row contract by sending `ifRowsRevision: ""` on the initial read. Subsequent reads
+send the returned revision, scoped to the same query and connection. Omitting
+`ifRowsRevision` preserves their ordinary full row arrays without shared facts.
+
 Clients that also accept row deltas send `ifRowsRevision: "delta:<revision>"`.
 When that query's previous row identities are still retained, `sessions` contains only
 changed or inserted rows, and `rowsDelta` contains `baseRevision` and `order`.
@@ -401,6 +406,7 @@ or protocol-version change.
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Ensuring an already-current recap does not announce an updating/current cycle.
   Held row updates preserve unfiltered and dashboard-filtered windows without
   refetching; title and preview enrichment flags do not change membership.
   Healthy row traffic retains one fallback read after at least 60 seconds.
@@ -414,8 +420,11 @@ or protocol-version change.
   archive, or uncertain filter changes still require an authoritative count read.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
-  snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
-  distinct. Publication rechecks row readiness after each yield. Accepted recap
+  snapshot within a 750 ms window, leaving headroom for delivery within one second.
+  The deadline stays fixed during continuous
+  activity; lifecycle, capacity, transcript, deletion, and clearing receipts remain
+  immediate and distinct. Live activity indicators use those separate events,
+  not recap delivery. Publication rechecks row readiness after each yield. Accepted recap
   notifications outlive the compaction or scheduler work that triggered them.
   Queued session-change notifications also survive completion or cancellation of
   the request that committed the change, so connected clients still receive the row.
@@ -479,6 +488,20 @@ connection, full `session` and `ancestorSessions` row slots in `sessions.changed
 and `session.message` use either `{ key, agentId?, version, full }` or
 `{ key, agentId?, base, version, set, remove }`. Other clients retain the existing
 payloads. Ancestor references, top-level receipts, and message bodies are unchanged.
+
+Web clients also advertise `session-event-field-refs`. Together with
+`session-row-deltas`, this allows duplicate envelope values to be replaced by
+`sessionFieldRefs`: an array of zero-based indexes into the decoded `session`
+row's own field names sorted in JavaScript's default string order. Undefined
+fields are omitted, just as in JSON. Each index restores the matching field and
+value to the envelope; only equal values are referenced. Fields with different
+values, including clearing receipts absent from the row, remain explicit.
+Routing keys remain explicit too. The decoder restores these fields and removes
+`sessionFieldRefs` before dispatch, preserving the same complete payload for all
+listeners. Invalid indexes or conflicts with explicit envelope fields discard
+the frame and use the same reconnect recovery as an invalid row patch. Clients
+without this additive capability continue receiving explicit envelope fields;
+the protocol version is unchanged.
 
 The decoder replaces changed top-level fields from `set` and deletes fields named
 by `remove`; nested objects and arrays replace whole. A patch requires the same

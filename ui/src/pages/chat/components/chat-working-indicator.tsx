@@ -225,7 +225,16 @@ export function ChatWorkingIndicator(props: WorkingProps) {
         </Show>
       }
     >
-      <ChatSubagentActivity {...props.options.subagentActivity!} />
+      <ChatSubagentActivity
+        {...props.options.subagentActivity!}
+        fallback={
+          <WorkingStatus
+            part={props.part}
+            options={{ ...props.options, subagentActivity: undefined }}
+            branding={branding.read()}
+          />
+        }
+      />
     </Show>
   );
 }

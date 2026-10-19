@@ -22,7 +22,6 @@ type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
-  /** Call ID for session tracking */
   callId: string;
   /** Persisted call session key */
   sessionKey?: string;

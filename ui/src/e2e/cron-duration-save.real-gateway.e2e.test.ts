@@ -107,7 +107,7 @@ const catalogSuite = createControlUiE2eSuite({
 });
 
 catalogSuite.define(() => {
-  it("keeps an open automation draft current through real catalog publication and read recovery", async () => {
+  it("keeps an open automation draft current after real catalog publication and read recovery", async () => {
     const owner = catalogInstance;
     if (!owner) {
       throw new Error("Catalog Gateway fixture was not started");
@@ -129,9 +129,18 @@ catalogSuite.define(() => {
     const commands: unknown[] = [];
     let rejectCatalogReplies = false;
     const rejected = new Set<string>();
+    let catalogDrained: (() => void) | undefined;
+    let awaitCatalogPublication = false;
+    const pendingNotifications: Array<() => void> = [];
     type PublicationPhase = "published" | "held" | "recovered";
     let publication: { phase: PublicationPhase; frameStart: number; logStart: number } | undefined;
     const publish = async (id: PublicationPhase) => {
+      if (catalogRequests.size) {
+        await new Promise<void>((resolve) => {
+          catalogDrained = resolve;
+        });
+      }
+      awaitCatalogPublication = true;
       const args = [
         "config",
         "set",
@@ -169,6 +178,12 @@ catalogSuite.define(() => {
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
               const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
+              if (catalogReply && typeof frame.id === "string") {
+                catalogRequests.delete(frame.id);
+                if (!catalogRequests.size) {
+                  catalogDrained?.();
+                }
+              }
               if (
                 catalogReply ||
                 frame.event === "config.changed" ||
@@ -179,6 +194,24 @@ catalogSuite.define(() => {
                   frame,
                   transportFailure: catalogReply && rejectCatalogReplies,
                 });
+              }
+              // Exercise reads after real publication, not config changes during an in-flight read.
+              // Keep the Gateway's notifications intact and in their original order.
+              if (
+                awaitCatalogPublication &&
+                (frame.event === "config.changed" || frame.event === "chat.metadata.changed")
+              ) {
+                pendingNotifications.push(() => socket.send(message));
+                if (
+                  frame.event === "chat.metadata.changed" &&
+                  requireRecord(frame.payload).modelCatalogChanged === true
+                ) {
+                  awaitCatalogPublication = false;
+                  for (const send of pendingNotifications.splice(0)) {
+                    send();
+                  }
+                }
+                return;
               }
               // Inject failure after observing the real reply. Notifications and recovery
               // still come from the Gateway; no synthetic catalog or event replaces them.

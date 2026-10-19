@@ -102,6 +102,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
+| `openclaw_gateway_rpc_client_requests_total`              | counter   | `method`, `client_kind`                                                                   |
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
 | `openclaw_sessions_list_response_bytes_total`             | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`, `rows_outcome`            |
@@ -335,6 +336,32 @@ for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
 Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
 
+`openclaw_gateway_rpc_client_requests_total` attributes all RPC methods using a
+coarse handshake `client_kind`: `control-ui` (Control UI, WebChat UI, browser
+copilot), `macos`, `ios` (including watchOS), `android`, `cli` (including TUI),
+`node` (node hosts and workers), or `other`. The eighth bucket, `plugin`, is
+reserved: generic `gateway-client` connections cannot reliably identify plugins,
+and in-process plugin dispatch inherits its authenticated caller's identity.
+Pre-authentication `connect` requests and other missing identities use `other`. This is diagnostic self-identification, never authorization.
+
+The counter includes server-dispatched requests on behalf of a connection, such
+as its initial model snapshot; use the dedicated list counters' `source` label
+below to separate those from wire requests. No device IDs, display names,
+platform strings, or request values become labels. There is no generic request
+reason in the current protocol, so no `trigger` label is emitted; `cron.list`'s
+`trigger` parameter filters job types and does not identify why a client fetched.
+
+The budget is at most **8 additional samples and scrape series per method**,
+created only for observed kinds and subject to the shared 2,048-sample cap.
+Existing method-only counters and timing histograms keep their labels and bucket
+counts. To attribute polling, use:
+
+```promql
+sum by (method, client_kind) (
+  rate(openclaw_gateway_rpc_client_requests_total{method=~"cron.list|models.list"}[5m])
+)
+```
+
 `openclaw_models_list_requests_total` separately attributes catalog reads to the
 handshake's canonical client kind, such as `openclaw-control-ui`, `openclaw-macos`,
 or `gateway-client`. `source="wire"` identifies client request frames;
@@ -364,10 +391,11 @@ tokens. Each observed combination uses one sample in the existing shared cap.
 
 `openclaw_sessions_list_response_bytes_total` reuses these labels and adds
 `rows_outcome`: `unchanged` for `rowsUnchanged`, `delta` for `rowsDelta`,
-`full-no-base` for full sidebar replies when the request omits `ifRowsRevision`,
-or `full-with-base` when it supplies a revision. `full-with-base` includes
+`full-no-base` for conditional replies when the request omits `ifRowsRevision`
+or supplies an empty opt-in token, or `full-with-base` when it supplies a revision.
+`full-with-base` includes
 stale or evicted bases and the rare case where every row changed.
-Non-sidebar row modes use `not-sidebar`. Diagnostics derives these labels from
+Non-sidebar row modes without the opt-in use `not-sidebar`. Diagnostics derives these labels from
 the request and existing response fields without changing the protocol payload.
 
 `openclaw_sessions_list_baseline_retirements_total{cause}` counts retirement
@@ -375,14 +403,14 @@ events, not rows or the number of views cleared. Causes are `projection-revision
 `config`, `identity`, `selection-reset`, `view-evicted` (the 512-slot or 32 MiB
 estimated-retention limit), and
 `history-evicted` (the 32-generation limit). Only clears or evictions retaining
-sidebar rows or history count, including empty sidebar row lists. Selection-only
-and non-sidebar views do not count. When a read observes multiple invalidations,
+conditional rows or history count, including empty row lists. Selection-only
+and non-conditional views do not count. When a read observes multiple invalidations,
 `config` takes precedence
 over `identity`, then `projection-revision`; an earlier selection reset already
 clears the cache and is counted separately at that point.
 
-`openclaw_sessions_list_base_misses_total{reason}` counts successful full sidebar
-replies with a supplied `ifRowsRevision`. `unknown-base` means no eligible history
+`openclaw_sessions_list_base_misses_total{reason}` counts successful full conditional
+replies with a nonempty `ifRowsRevision`. `unknown-base` means no eligible history
 base was found, including after restart, eviction, or a non-delta revision token.
 `all-rows-changed` means the base was found but the delta was not smaller than the
 full row list (also possible for an empty list). The existing `full-with-base`

@@ -77,6 +77,7 @@ it.each(["commit", "retirement"])(
     const paneSubscription = await sessions.subscribeMessages(key);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const [row, setRow] = createSignal("pending");
+    const onElement = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
     const root = mountSolid(
@@ -90,6 +91,7 @@ it.each(["commit", "retirement"])(
                 title="Shared widget"
                 allowScripts={false}
                 connectionGeneration={0}
+                onElement={onElement}
               />
             )}
           </Show>
@@ -101,11 +103,13 @@ it.each(["commit", "retirement"])(
     const widget = root.container.querySelector<OpenClawCanvasWidgetView>(
       "openclaw-canvas-widget-view",
     )!;
+    expect(onElement).toHaveBeenLastCalledWith(widget);
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(widget.textContent).toContain("Waiting for the widget result");
     setRow("");
     flush();
+    expect(onElement).toHaveBeenLastCalledWith(undefined);
     expect(widget.isConnected).toBe(true);
     expect(widget.presentationActive).toBe(false);
     await sessions.unsubscribeMessages(paneSubscription);
@@ -135,13 +139,25 @@ it.each(["commit", "retirement"])(
     expect(subscriptions.size).toBe(0);
     setRow("committed");
     flush();
+    expect(onElement.mock.calls).toEqual([[widget], [undefined], [widget]]);
     expect(root.container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget.querySelector("iframe")?.srcdoc).toBe(documentView.html);
+    const frame = widget.querySelector("iframe")!;
+    expect(frame.srcdoc).toBe(documentView.html);
     expect(request.mock.calls.filter(([method]) => method === "canvas.document.view")).toHaveLength(
       2,
     );
+    frame.style.width = "100%";
+    frame.style.boxSizing = "border-box";
+    const bounds = frame.getBoundingClientRect();
+    expect(bounds.width).toBeGreaterThan(0);
+    expect(bounds.height).toBeGreaterThan(0);
     root.unmount();
+    expect(onElement).toHaveBeenLastCalledWith(undefined);
+    expect(frame.isConnected).toBe(true);
+    expect(frame.getBoundingClientRect().width).toBe(bounds.width);
+    expect(frame.getBoundingClientRect().height).toBe(bounds.height);
     vi.advanceTimersByTime(1_001);
+    expect(frame.isConnected).toBe(false);
     sessions.dispose();
   },
 );

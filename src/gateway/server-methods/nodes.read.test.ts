@@ -7,7 +7,10 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { updateNodeRunnerInventory } from "../node-registry-private.js";
+import {
+  getNodeWorkerSupervisorTransport,
+  updateNodeRunnerInventory,
+} from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import { createDevicePairingNodeSnapshot, pairedNodeDevice } from "./environments.test-support.js";
 import { nodeEventHandlers } from "./nodes.event.js";
@@ -130,6 +133,10 @@ it("uses current node bindings when pairing publications replace historical role
 
 it("shares immutable catalog rows until pairing or live node facts change", async () => {
   const paired = createPairedNode("cached-node");
+  registry = new NodeRegistry({
+    resolveCurrentPairingState: async () =>
+      prepareDevicePairingBinding(paired.deviceId, paired).binding ?? undefined,
+  });
   const client = registerNode(paired);
   publishPairing([paired]);
   const admin = {
@@ -153,6 +160,51 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
   expect(stats.hostStats).toMatchObject({ memoryFreeBytes: 4096, updatedAtMs: 100 });
   expect(initial.hostStats).toBeUndefined();
   expect(await read()).toBe(stats);
+
+  const transport = getNodeWorkerSupervisorTransport(registry);
+  const publishCapacity = (available: number) => {
+    expect(
+      updateNodeRunnerInventory({
+        registry,
+        nodeId: paired.deviceId,
+        connId: client.connId,
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: {
+            enabled: true,
+            capacity: { total: 2, available },
+            bundleRetention: 1,
+            bundleStatus: 1,
+          },
+        },
+      }),
+    ).toEqual({ changed: true });
+  };
+  publishCapacity(1);
+  const proof = expectDefined(
+    await transport.getCurrentNode(paired.deviceId),
+    "current node proof",
+  );
+  expect(
+    transport.acceptBundleStatus?.(proof, {
+      bundleHash: "a".repeat(64),
+      status: { status: "installed", version: "1" },
+    }),
+  ).toBe(true);
+  const inventory = await read();
+  expect(inventory.workerSlots).toEqual({ total: 2, available: 1 });
+  expect(inventory.workerBundle).toEqual({ status: "installed", version: "1" });
+  expect(Object.isFrozen(inventory.workerSlots)).toBe(true);
+  expect(Object.isFrozen(inventory.workerBundle)).toBe(true);
+  expect(() => Object.assign(inventory.workerSlots!, { available: 0 })).toThrow();
+  expect(() => Object.assign(inventory.workerBundle!, { status: "missing" })).toThrow();
+  expect((await transport.getCurrentNode(paired.deviceId))?.workerHost.capacity.available).toBe(1);
+  expect(transport.getBundleStatus?.(paired.deviceId)?.status.status).toBe("installed");
+  publishCapacity(0);
+  const full = await read();
+  expect(full.workerSlots?.available).toBe(0);
+  expect(inventory.workerSlots?.available).toBe(1);
+  expect(await read()).toBe(full);
 
   paired.nodeSurface!.displayName = "Renamed node";
   publishPairing([paired]);

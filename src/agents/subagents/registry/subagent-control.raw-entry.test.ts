@@ -36,7 +36,15 @@ import {
 import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
 import type { EmbeddedAgentQueueHandle } from "../../embedded-agent-runner/run-state.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "../../openclaw-tools.sessions-steering.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "../../tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
@@ -427,7 +435,8 @@ it("numbers watched raw children independently and keeps their completion owner"
 });
 
 it("steers its watched raw child while another agent has a newer row", async () => {
-  const { send } = await prepareWatchedRawChildren();
+  const { cfg, children, send } = await prepareWatchedRawChildren();
+  const caller = createSessionsSendTestCaller(children.get("main")!.parentKey);
   const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async () => {});
   const handle: EmbeddedAgentQueueHandle = {
     ...createEmbeddedRunHandle({ runId: "main-1", queueMessage }),
@@ -440,9 +449,17 @@ it("steers its watched raw child while another agent has a newer row", async () 
       },
     },
   };
-  attachActiveEmbeddedRun("main-global", handle, "global", undefined, undefined, "main");
+  const close = await setSessionsSendTestActiveRun(
+    "main-global",
+    handle,
+    "global",
+    caller.sessionKey,
+    cfg,
+  );
   try {
-    const sent = await send("main", "main-turn", "steer");
+    const sent = await withoutGatewayToolCallerIdentity(() =>
+      withGatewayToolCallerIdentity(caller, () => send("main", "main-turn", "steer")),
+    );
     expect(sent.details, JSON.stringify(sent.details)).toMatchObject({
       status: "accepted",
       targetDisposition: "steered",
@@ -451,7 +468,7 @@ it("steers its watched raw child while another agent has a newer row", async () 
     expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");
     expect(getSubagentRunByRunId("research-2")?.requesterTurnRunId).toBe("research-turn");
   } finally {
-    await detachActiveEmbeddedRun("main-global", handle, "global");
+    await close();
   }
 });
 

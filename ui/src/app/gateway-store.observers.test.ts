@@ -138,7 +138,7 @@ describe("createApplicationGateway connection ownership", () => {
       expect(await loadModelCatalog(client, scope)).toEqual(catalog);
       expect(
         current().request.mock.calls.filter(([method]) => method === "models.list"),
-      ).toHaveLength(1);
+      ).toHaveLength(recovery === "refresh" ? 2 : 1);
     },
   );
 

@@ -84,9 +84,10 @@ function mountSkills(
     error: null,
   };
   const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
+  const [currentSurface, setCurrentSurface] = createSignal(surface);
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
-      <SkillsPage routeData={routeData()} surface={surface} />
+      <SkillsPage routeData={routeData()} surface={currentSurface()} />
     </ApplicationProvider>
   ));
   flush();
@@ -96,6 +97,14 @@ function mountSkills(
     connection,
     agents,
     context,
+    changeSurface(this: void, next: "discovery" | "settings") {
+      setCurrentSurface(next);
+      flush();
+    },
+    publishRouteData(this: void, patch: Partial<SkillsRouteData>) {
+      setRouteData({ ...initialRouteData, ...patch });
+      flush();
+    },
     refreshRouteData: () => {
       setRouteData({ ...initialRouteData });
       flush();
@@ -106,6 +115,7 @@ function mountSkills(
 afterEach(() => {
   cleanupSolid();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe("Skills discovery lifecycle", () => {
@@ -335,6 +345,54 @@ describe("Skills discovery lifecycle", () => {
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toEqual([
       ["skills.status", { agentId: "research" }],
     ]);
+  });
+
+  it("keeps each selection owner when a retained page changes surface", async () => {
+    const warnings = vi.spyOn(console, "warn");
+    const report = (agentId: string) => ({
+      workspaceDir: "/workspace",
+      managedSkillsDir: "/managed",
+      skills: [createSkill({ name: `${agentId}-only`, skillKey: `${agentId}-only` })],
+    });
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "skills.library.list") {
+        return { ...personalLibrary, defaultTarget: "workspace" };
+      }
+      if (method === "skills.search") {
+        return { results: [] };
+      }
+      if (method === "skills.status") {
+        // SAFETY: This fixture only reads the typed skills.status request payload.
+        return report((params as { agentId: string }).agentId);
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page, context, publishRouteData, changeSurface } = mountSkills(request);
+    context.agentSelection.set("research");
+    await waitForFast(() => expect(page.textContent).toContain("research-only"));
+    publishRouteData({
+      selectedAgentId: "research",
+      selectionIntentRevision: context.agentSelection.intentRevision,
+      report: report("research"),
+    });
+    // Independent owners can have equal intent revisions while selecting different agents.
+    context.settingsAgentSelection.set("main");
+    changeSurface("settings");
+    await waitForFast(() => expect(page.textContent).toContain("main-only"));
+    expect(context.settingsAgentSelection.state.selectedId).toBe("main");
+    expect(context.agentSelection.state.selectedId).toBe("research");
+    request.mockClear();
+    context.agentSelection.set("main");
+    flush();
+    expect(request).not.toHaveBeenCalled();
+    expect(
+      warnings.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" &&
+          message.includes("STRICT_READ_UNTRACKED") &&
+          message.includes("effect callback"),
+      ),
+    ).toEqual([]);
   });
 
   it("reloads empty-query results after a same-client reconnect and ignores the previous search", async () => {

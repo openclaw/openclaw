@@ -1,5 +1,5 @@
 import { resolveGlobalMap } from "../shared/global-singleton.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
+import { registerOpenClawStatePathCacheInvalidation } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { workspaceStatePublication } from "./workspace-state-publication.js";
 import type { WorkspaceStateSnapshot } from "./workspace-state-store.kernel.js";
@@ -30,15 +30,7 @@ workspaceStatePublication.subscribeFacts((change) => {
   }
 });
 
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
-    for (const [key, store] of stores) {
-      if (store.path === (event.identity?.canonicalPath ?? event.path)) {
-        stores.delete(key);
-      }
-    }
-  }
-});
+registerOpenClawStatePathCacheInvalidation(stores);
 
 /** A workspace write invalidates the whole small projection, including alias resolution. */
 export async function readCachedWorkspaceStateSnapshot(

@@ -143,6 +143,7 @@ describe("worker environment service", () => {
           os: "os-a",
           assertCurrent: expect.any(Function),
           reportStartStatus: expect.any(Function),
+          signal: expect.any(AbortSignal),
         });
         return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
       },
@@ -247,6 +248,7 @@ describe("worker environment service", () => {
         profileId: "development",
         assertCurrent: expect.any(Function),
         reportStartStatus: expect.any(Function),
+        signal: expect.any(AbortSignal),
       },
     );
   });

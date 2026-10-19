@@ -3,16 +3,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -167,6 +169,7 @@ describe("loadSessionDiff", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     for (const dir of tempDirs) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -294,19 +297,91 @@ describe("loadSessionDiff", () => {
     expect(trackedDiffCommands).toBeLessThanOrEqual(1);
   });
 
-  it("reports a failed tracked inventory instead of an empty diff", async () => {
+  it.each([
+    { kind: "tracked", flag: "--numstat" },
+    { kind: "untracked", flag: "ls-files" },
+  ])("reports a failed $kind inventory instead of an empty diff", async ({ kind, flag }) => {
     seedRepo({ "tracked.txt": "before\n" }, "init");
     write("tracked.txt", "after\n");
     const runCommand = execRunner.runCommandBuffersWithTimeout;
     vi.spyOn(execRunner, "runCommandBuffersWithTimeout").mockImplementation(
       async (argv, options) => {
         const result = await runCommand(argv, options);
-        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes("--numstat")
+        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes(flag)
           ? { ...result, code: 1, stdout: Buffer.alloc(0) }
           : result;
       },
     );
-    await expect(readDiff()).rejects.toThrow("Unable to read tracked Git changes");
+    await expect(readDiff()).rejects.toThrow("Unable to read " + kind + " Git changes");
+  });
+
+  it("returns session-filtered summary counts without patches or branch history", async () => {
+    initRepo(repoRoot);
+    for (const [name, content] of [
+      ["changed.txt", "before\n"],
+      ["deleted.txt", "remove\nthese\n"],
+      ["renamed.txt", "keep\nthese\nlines\n"],
+      ["preexisting.txt", "existing\n"],
+    ] as const) {
+      fs.writeFileSync(path.join(repoRoot, name), content);
+    }
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "base");
+    git(repoRoot, "checkout", "-qb", "feature");
+    fs.appendFileSync(path.join(repoRoot, "preexisting.txt"), "before session\n");
+    const summaryBaseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+    fs.writeFileSync(path.join(repoRoot, "committed.txt"), "branch\n");
+    git(repoRoot, "add", "committed.txt");
+    git(repoRoot, "commit", "-qm", "branch work");
+    fs.writeFileSync(path.join(repoRoot, "changed.txt"), "after\nmore\n");
+    git(repoRoot, "add", "changed.txt");
+    git(repoRoot, "mv", "renamed.txt", "renamed-next.txt");
+    fs.rmSync(path.join(repoRoot, "deleted.txt"));
+    fs.writeFileSync(path.join(repoRoot, "loose file.txt"), "new\nlines\n");
+    fs.writeFileSync(path.join(repoRoot, "binary.bin"), Buffer.from([0, 1, 2]));
+    mockSession(repoRoot, { sessionDiffBaseline: summaryBaseline });
+    const commands: string[][] = [];
+    const runCommand = execRunner.runCommandBuffersWithTimeout;
+    const observer = vi
+      .spyOn(execRunner, "runCommandBuffersWithTimeout")
+      .mockImplementation((argv, options) => {
+        if (argv[argv.indexOf("-C") + 1] === repoRoot) {
+          commands.push([...argv]);
+        }
+        return runCommand(argv, options);
+      });
+    onTestFinished(() => observer.mockRestore());
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1", summaryOnly: true });
+
+    expect(result.files).toEqual([
+      {
+        path: "binary.bin",
+        status: "added",
+        additions: 0,
+        deletions: 0,
+        untracked: true,
+        binary: true,
+      },
+      { path: "changed.txt", status: "modified", additions: 2, deletions: 1 },
+      { path: "committed.txt", status: "added", additions: 1, deletions: 0 },
+      { path: "deleted.txt", status: "deleted", additions: 0, deletions: 2 },
+      { path: "loose file.txt", status: "added", additions: 2, deletions: 0, untracked: true },
+      {
+        path: "renamed-next.txt",
+        oldPath: "renamed.txt",
+        status: "renamed",
+        additions: 0,
+        deletions: 0,
+      },
+    ]);
+    expect(result.additions).toBe(5);
+    expect(result.deletions).toBe(3);
+    expect(result.commits).toBeUndefined();
+    expect(result.mergeBase).toBeUndefined();
+    expect(result.truncated).toBeUndefined();
+    expect(commands.some((argv) => argv.includes("--numstat"))).toBe(true);
+    expect(commands.some((argv) => argv.includes("--patch") || argv.includes("log"))).toBe(false);
   });
 
   it("shows an unrelated root commit merged into the feature branch in a sha256 repository", async () => {
@@ -434,6 +509,12 @@ describe("loadSessionDiff", () => {
         deletions: 0,
         baseRef: acceptedBase,
       });
+      const summary = await loadSessionDiff({ sessionKey, summaryOnly: true });
+      expect(summary.files).toEqual([
+        { path: "task.txt", status: "added", additions: 1, deletions: 0, untracked: true },
+      ]);
+      expect(summary).toMatchObject({ additions: 1, deletions: 0, baseRef: acceptedBase });
+      expect(summary.commits).toBeUndefined();
       expect(
         (await loadSessionDiff({ sessionKey, scope: "uncommitted" })).files.map(
           (file) => file.path,
@@ -630,6 +711,33 @@ describe("loadSessionDiff", () => {
     expect(filePaths(result)).toEqual(["AGENTS.md"]);
   });
 
+  it.each([false, true])(
+    "reads uncommitted changes once when the baseline has no matching paths (prior changes: %s)",
+    async (priorChanges) => {
+      seedRepo({ "changed.txt": "before\n", "prior.txt": "before\n" });
+      if (priorChanges) {
+        append("prior.txt", "prior change\n");
+      }
+      await useBaseline();
+      if (priorChanges) {
+        commitFiles("save prior change");
+      }
+      append("changed.txt", "new change\n");
+
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+
+      const result = await readDiff({ scope: "uncommitted" });
+      expect(result.files).toEqual([
+        expect.objectContaining({ path: "changed.txt", additions: 1, deletions: 0 }),
+      ]);
+      expect(result.files[0]?.patch).toContain("+new change");
+      // One checkout read, base selection, tracked inventory/patch, and untracked listing.
+      expect(
+        commands.mock.calls.filter(([argv]) => argv[argv.indexOf("-C") + 1] === repoRoot).length,
+      ).toBeLessThanOrEqual(6);
+    },
+  );
+
   it("keeps exact large-file counts and later previews when untracked patches are omitted", async () => {
     initRepo(repoRoot);
     const additions = 140_000;
@@ -649,6 +757,194 @@ describe("loadSessionDiff", () => {
       truncated: true,
     });
   });
+
+  it.each([false, true])(
+    "batches untracked Git reads without changing native output (summary: %s)",
+    async (summaryOnly) => {
+      seedRepo({ "tracked.txt": "before\n", ".gitignore": "ignored.txt\n" });
+      append("tracked.txt", "after\n");
+      for (let index = 0; index < 40; index++) {
+        write(`loose-${index}.txt`, `line ${index}\nlast line`);
+      }
+      write("binary.bin", Buffer.from([0, 1, 2]));
+      write("empty.txt", "");
+      write("large.txt", "large line\n".repeat(20_000));
+      write("ignored.txt", "ignored\n");
+      if (process.platform !== "win32") {
+        fs.symlinkSync("tracked.txt", path.join(repoRoot, "link.txt"));
+      }
+      const indexBefore = fs.readFileSync(path.join(repoRoot, ".git", "index"));
+      const expectedPatches = new Map<string, string>();
+      if (!summaryOnly) {
+        for (const name of ["loose-0.txt", "empty.txt"]) {
+          const native = spawnSync(
+            "git",
+            ["-c", "core.quotePath=false", "diff", "--no-index", "--", "/dev/null", name],
+            { cwd: repoRoot, encoding: "utf8" },
+          );
+          expect([0, 1]).toContain(native.status);
+          expectedPatches.set(name, native.stdout);
+        }
+      }
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+      const textCommands = vi.spyOn(execRunner, "runCommandWithTimeout");
+      const result = await readDiff({ summaryOnly });
+      const findFile = (name: string) => result.files.find((file) => file.path === name);
+      expect(result.files).toHaveLength(process.platform === "win32" ? 44 : 45);
+      expect(findFile("binary.bin")).toEqual(addedFile("binary.bin", 0, { binary: true }));
+      expect(findFile("large.txt")).toEqual(
+        addedFile("large.txt", 20_000, summaryOnly ? {} : { truncated: true }),
+      );
+      if (process.platform !== "win32") {
+        expect(findFile("link.txt")).toEqual(addedFile("link.txt", 0, { truncated: true }));
+      }
+      for (const [name, patch] of expectedPatches) {
+        expect(result.files.find((file) => file.path === name)?.patch).toBe(patch);
+      }
+      expect(result.additions).toBe(20_081);
+      expect(fs.readFileSync(path.join(repoRoot, ".git", "index"))).toEqual(indexBefore);
+      const count = [...commands.mock.calls, ...textCommands.mock.calls].filter(
+        ([argv]) => argv[argv.indexOf("-C") + 1] === repoRoot,
+      ).length;
+      expect(count).toBeLessThanOrEqual(summaryOnly ? 10 : 11);
+    },
+  );
+
+  it("reads outside sparse cones without writing split-index backing files", async () => {
+    fs.mkdirSync(path.join(repoRoot, "kept"));
+    seedRepo({ "kept/tracked.txt": "kept\n" });
+    repoGit("sparse-checkout", "init", "--cone", "--no-sparse-index");
+    repoGit("sparse-checkout", "set", "kept");
+    repoGit("config", "core.splitIndex", "true");
+    repoGit("config", "splitIndex.maxPercentChange", "0");
+    repoGit("config", "splitIndex.sharedIndexExpire", "now");
+    repoGit("update-index", "--split-index");
+    const objects = path.join(tempDir("openclaw-diff-objects-"), "objects");
+    fs.renameSync(path.join(repoRoot, ".git", "objects"), objects);
+    fs.mkdirSync(path.join(repoRoot, ".git", "objects"));
+    vi.stubEnv("GIT_ALTERNATE_OBJECT_DIRECTORIES", objects);
+    fs.mkdirSync(path.join(repoRoot, "outside"), { recursive: true });
+    write("outside/loose.txt", "$Id: original $\n");
+    const indexFiles = () =>
+      fs
+        .readdirSync(path.join(repoRoot, ".git"))
+        .filter((name) => name === "index" || name.startsWith("sharedindex."))
+        .toSorted()
+        .map((name) => [name, fs.readFileSync(path.join(repoRoot, ".git", name)).toString("hex")]);
+    const before = indexFiles();
+    const result = await readDiff();
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({ path: "outside/loose.txt", additions: 1 });
+    expect(result.files[0]?.patch).toContain("+$Id: original $");
+    expect(indexFiles()).toEqual(before);
+    expect((await readDiff({ summaryOnly: true })).additions).toBe(1);
+    expect(indexFiles()).toEqual(before);
+  });
+
+  it("preserves no-index previews when tracked attributes are absent", async () => {
+    seedRepo({ ".gitattributes": "*.txt ident\n" });
+    fs.unlinkSync(path.join(repoRoot, ".gitattributes"));
+    write("loose.txt", "$Id: original $\n");
+    const preview = (await readDiff()).files.find((file) => file.path === "loose.txt");
+    expect(preview?.patch).toContain("+$Id: original $");
+  });
+
+  it.each([false, true])(
+    "keeps other untracked files when a required filter fails (summary: %s)",
+    async (summaryOnly) => {
+      seedRepo({ ".gitattributes": "bad.txt filter=broken\n" });
+      repoGit("config", "filter.broken.clean", "false");
+      repoGit("config", "filter.broken.required", "true");
+      write("bad.txt", "cannot convert\n");
+      write("good.txt", "valid addition\n");
+      const result = await readDiff({ summaryOnly });
+      expect(result.files[0]).toEqual(addedFile("bad.txt", 0, { truncated: true }));
+      expect(result.files[1]).toMatchObject(addedFile("good.txt", 1, {}));
+      if (!summaryOnly) {
+        expect(result.files[1]?.patch).toContain("+valid addition");
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reuses unchanged diffs and refreshes tracked, untracked, index, and ignore changes",
+    async () => {
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+      vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+      await drainGlobalSingletonLifecycleState("restart");
+      seedRepo({ "tracked.txt": "before\n", ".gitignore": "ignored.txt\n" });
+      append("tracked.txt", "after\n");
+      write("loose.txt", "new\n");
+      write("ignored.txt", "hidden\n");
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+      const full = await readDiff();
+      const summary = await readDiff({ summaryOnly: true });
+      commands.mockClear();
+      expect(await readDiff()).toEqual(full);
+      expect(await readDiff({ summaryOnly: true })).toEqual(summary);
+      expect(commands).not.toHaveBeenCalled();
+
+      write("loose.txt", "new\nsecond\n");
+      append("tracked.txt", "third\n");
+      expect((await readDiff({ summaryOnly: true })).additions).toBe(4);
+      expect((await readDiff()).files.find((file) => file.path === "loose.txt")?.patch).toContain(
+        "+second",
+      );
+      fs.mkdirSync(path.join(repoRoot, "nested", "empty"), { recursive: true });
+      await readDiff();
+      write("nested/empty/new.txt", "nested addition\n");
+      expect(filePaths(await readDiff())).toContain("nested/empty/new.txt");
+      repoGit("add", "loose.txt");
+      expect(
+        (await readDiff()).files.find((file) => file.path === "loose.txt")?.untracked,
+      ).toBeUndefined();
+      write(".gitignore", "");
+      expect(filePaths(await readDiff({ summaryOnly: true }))).toContain("ignored.txt");
+      commitFiles("save changes");
+      expect((await readDiff({ scope: "uncommitted" })).files).toEqual([]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "invalidates cached diffs when the Git installation's system configuration appears",
+    async () => {
+      const realGit = resolveExecutablePath("git", { cwd: repoRoot, useCache: false })!;
+      const installation = tempDir("openclaw-git-installation-");
+      const config = path.join(installation, "system.config");
+      const excludes = path.join(installation, "system.ignore");
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      fs.writeFileSync(
+        path.join(installation, "git"),
+        `#!/bin/sh
+if [ "$1" = "-C" ]; then
+  cd "$2" || exit 1
+  shift 2
+fi
+if [ "$1" = "var" ] && [ "$2" = "GIT_CONFIG_SYSTEM" ]; then
+  printf '%s\\n' ${quote(config)}
+else
+  GIT_CONFIG_SYSTEM=${quote(config)} exec ${quote(realGit)} "$@"
+fi
+`,
+        { mode: 0o755 },
+      );
+      vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+      vi.stubEnv("GIT_CONFIG_SYSTEM", undefined);
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "0");
+      vi.stubEnv("PATH", `${installation}${path.delimiter}${process.env.PATH ?? ""}`);
+      await drainGlobalSingletonLifecycleState("restart");
+      seedRepo({ "tracked.txt": "base\n" });
+      write("system-ignored.txt", "new\n");
+      expect(filePaths(await readDiff())).toContain("system-ignored.txt");
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+      expect(filePaths(await readDiff())).toContain("system-ignored.txt");
+      expect(commands).not.toHaveBeenCalled();
+
+      fs.writeFileSync(excludes, "system-ignored.txt\n");
+      execFileSync(realGit, ["config", "--file", config, "core.excludesFile", excludes]);
+      expect(filePaths(await readDiff())).not.toContain("system-ignored.txt");
+    },
+  );
 
   it("keeps tracked and untracked previews under oversized prefixes", async () => {
     const config = `srcPrefix = ${"x".repeat(220_000)}`;

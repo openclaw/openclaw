@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-// Gateway Protocol schema module defines session discussion validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SessionDiscussionStateSchema = stringLiteralUnion(["none", "available", "open"]);

@@ -45,7 +45,7 @@ import { readReplySourceInput } from "./reply-source-binding.js";
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.js").listActiveReplyRunSessionKeys;
+let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
 let getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
@@ -101,7 +101,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     const replyRunRegistryModule = await import("../../sessions/session-controller.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
-    listActiveReplyRunSessionKeys = replyRunRegistryModule.listActiveReplyRunSessionKeys;
+    ({ listActiveReplyRunSessionKeys } =
+      await import("../../sessions/session-controller.queries.js"));
     getSessionControllerOperation = replyRunRegistryModule.getSessionControllerOperation;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
     const { testing } = await import("../../sessions/session-controller.test-support.js");

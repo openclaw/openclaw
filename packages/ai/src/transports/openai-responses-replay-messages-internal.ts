@@ -257,7 +257,6 @@ export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from ".
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
-  replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
@@ -274,7 +273,6 @@ function convertResponsesMessagesWithStyle(
 ): ResponseInput {
   const messages: ResponseInput = [];
   const providerStyle = conversionStyle === "provider";
-  const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
@@ -458,7 +456,6 @@ function convertResponsesMessagesWithStyle(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (
-            shouldReplayReasoningItems &&
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
           ) {

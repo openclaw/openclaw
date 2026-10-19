@@ -20,9 +20,9 @@ describe("session observer audience", () => {
     const sessionListOnly = createHarness({ subscribe: false, broadSubscribe: true });
     const directlyWatched = createHarness({ broadSubscribe: true });
 
-    startAndAddToolNotes(sessionListOnly.observer);
-    startAndAddToolNotes(directlyWatched.observer);
-    sessionListOnly.observer.handleEvent(
+    await startAndAddToolNotes(sessionListOnly.observer);
+    await startAndAddToolNotes(directlyWatched.observer);
+    await sessionListOnly.observer.handleEventAsync(
       event({
         stream: "item",
         data: {
@@ -48,15 +48,15 @@ describe("session observer audience", () => {
     expect(directlyWatched.prepareModel).toHaveBeenCalledOnce();
     expect(directlyWatched.completeModel).toHaveBeenCalledOnce();
 
-    sessionListOnly.observer.dispose();
-    directlyWatched.observer.dispose();
+    await sessionListOnly.observer.disposeAsync();
+    await directlyWatched.observer.disposeAsync();
   });
 
   it("stops model work when only the broad session-list audience remains", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const harness = createHarness({ broadSubscribe: true });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
 
     harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
     await vi.advanceTimersByTimeAsync(12_000);
@@ -64,7 +64,7 @@ describe("session observer audience", () => {
     expect(harness.prepareModel).not.toHaveBeenCalled();
     expect(harness.completeModel).not.toHaveBeenCalled();
 
-    harness.observer.handleEvent(
+    await harness.observer.handleEventAsync(
       event({
         stream: "item",
         data: { kind: "preamble", phase: "update", progressText: "Still visible in the list" },
@@ -77,6 +77,6 @@ describe("session observer audience", () => {
       new Set(["conn-1"]),
       expect.objectContaining({ dropIfSlow: true }),
     );
-    harness.observer.dispose();
+    await harness.observer.disposeAsync();
   });
 });

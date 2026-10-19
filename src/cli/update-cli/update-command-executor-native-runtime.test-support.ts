@@ -92,6 +92,10 @@ export const updateExecutorNativeEntrypoints = {
     "test-support/update-include-delegated.js",
   ),
   configIO: entry("../../config/io.factory", "config/io.factory.js"),
+  directoryObservation: entry(
+    "../../infra/owned-directory-observation",
+    "infra/owned-directory-observation.js",
+  ),
   leaseFixture: entry(
     "update-command-lease.test-support",
     "cli/update-cli/update-command-lease.test-support.js",

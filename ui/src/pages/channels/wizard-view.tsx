@@ -2,10 +2,13 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import type { ChannelWizardState } from "./wizard-runner.ts";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;

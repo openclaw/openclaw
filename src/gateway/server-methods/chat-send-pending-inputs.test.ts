@@ -23,10 +23,8 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import {
-  isSessionRunActiveForKey,
-  captureCurrentReplyMessageInjectionTarget,
-} from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import {
   isRpcSourceActive,
   isRpcSourceQueued,
@@ -652,6 +650,7 @@ describe("ordinary chat input admission", () => {
         const legacyMessage = structuredClone(message);
         // Legacy receipts predate the admitted request identity.
         delete legacyMessage["__openclaw"]?.chatRequestIdentity;
+        delete legacyMessage["__openclaw"]?.requesterOrigin;
         if (!recordedClient) {
           // Shipped Gateway receipts predate transport.clients. Seed only after
           // collection, whose live owner still requires its exact accepted bytes.

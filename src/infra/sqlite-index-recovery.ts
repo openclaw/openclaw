@@ -61,13 +61,20 @@ export function backupDoctorSqliteRepair(
 export function repairDoctorSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: { label: string; assertCurrent: () => void; ftsSchemas?: readonly string[] },
+  options: {
+    label: string;
+    assertCurrent: () => void;
+    ftsSchemas?: readonly string[];
+    ftsOnly?: boolean;
+    describeRepair?: (indexes: readonly string[]) => string;
+  },
 ): string[] {
   let backupPath: string | undefined;
   let indexes: string[];
   try {
     indexes = repairSqliteIndexCorruption(database, pathname, {
       ftsSchemas: options.ftsSchemas,
+      ftsOnly: options.ftsOnly,
       assertCurrent: options.assertCurrent,
       backup: () => {
         options.assertCurrent();
@@ -85,7 +92,8 @@ export function repairDoctorSqliteIndexCorruption(
   return indexes.length > 0
     ? [
         `Saved pre-repair SQLite backup: ${backupPath}`,
-        `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
+        options.describeRepair?.(indexes) ??
+          `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
       ]
     : [];
 }

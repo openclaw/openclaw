@@ -666,12 +666,18 @@ function createRawOllamaStreamFn(
             });
           };
 
-          const flushVisibleText = (nextVisibleContent: string | undefined) => {
+          const flushVisibleText = (
+            nextVisibleContent: string | undefined,
+            knownDelta?: string,
+          ) => {
             if (nextVisibleContent === undefined) {
               return;
             }
             const previousVisibleContent = accumulatedVisibleContent;
-            const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
+            const delta =
+              knownDelta === undefined
+                ? resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent)
+                : knownDelta;
             if (!delta) {
               return;
             }
@@ -740,7 +746,10 @@ function createRawOllamaStreamFn(
             if (chunk.message?.content) {
               const rawDelta = chunk.message.content;
               accumulatedRawContent += rawDelta;
-              flushVisibleText(resolveVisibleContent(false));
+              flushVisibleText(
+                resolveVisibleContent(false),
+                visibleContentSanitizer.preservesStreamText ? rawDelta : undefined,
+              );
             }
             if (chunk.message?.tool_calls?.length) {
               // Kimi holds short visible prefixes until a terminal boundary;

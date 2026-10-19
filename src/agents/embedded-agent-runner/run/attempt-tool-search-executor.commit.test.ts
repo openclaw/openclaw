@@ -4,6 +4,7 @@ import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.j
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "../../sessions/index.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -57,6 +58,7 @@ describe("nested tool terminal acceptance", () => {
         execute,
       };
       let current = true;
+      const nestedToolActivityState = { scopeId: "scope", successfulToolNames: new Set<string>() };
       const executor = createSubscribedToolSearchExecutor({
         attempt: { runId: "nested-commit-" + outcome, sessionKey: "key" },
         runSignal: new AbortController().signal,
@@ -64,7 +66,7 @@ describe("nested tool terminal acceptance", () => {
         subscription,
         isCurrent: () => current,
         isReplaySafeTool: () => false,
-        nestedToolActivityState: { scopeId: "scope", successfulToolNames: new Set() },
+        nestedToolActivityState,
       });
       try {
         const completion = executor({
@@ -111,6 +113,19 @@ describe("nested tool terminal acceptance", () => {
             { stream: "tool", committed: true },
           ]);
         }
+        expect(subscription.getItemLifecycle()).toEqual({
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        });
+        expect(await readAttemptNestedToolActivity(manager, nestedToolActivityState)).toMatchObject(
+          outcome === "rejected"
+            ? []
+            : [{ details: { toolCallId: "nested-write", toolName: "write" } }],
+        );
+        expect([...nestedToolActivityState.successfulToolNames]).toEqual(
+          outcome === "rejected" ? [] : ["write"],
+        );
         expect(execute).toHaveBeenCalledTimes(1);
       } finally {
         releaseAppend.resolve();

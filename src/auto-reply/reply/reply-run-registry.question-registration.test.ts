@@ -8,10 +8,8 @@ import {
 } from "../../agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../../agents/harness/gateway-question.test-support.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import {
-  beginReplyMessageInjectionTarget,
-  captureCurrentReplyMessageInjectionTarget,
-} from "../../sessions/session-controller.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
 

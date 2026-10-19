@@ -14,6 +14,7 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { ChatCommentController } from "./chat-comment-controller.ts";
 import { ChatSelectionAnnotations, type ChatCommentAction } from "./chat-selection-annotations.tsx";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
+import { removeChatSelectionPopup } from "./chat-selection-popup.tsx";
 
 const payloads = new Set<string>();
 type CommentControllerElement = InstanceType<typeof ChatCommentController.Element>;
@@ -30,6 +31,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  removeChatSelectionPopup();
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -136,6 +138,9 @@ describe("comment actions outside the transcript", () => {
     )!;
     const focus = vi.spyOn(textarea, "focus");
     container.querySelector(".chat-thread")!.remove();
+    await waitForSolid(() =>
+      expect(container.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
+    );
     container.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });

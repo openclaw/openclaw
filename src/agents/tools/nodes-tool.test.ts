@@ -36,15 +36,6 @@ const nodesCameraMocks = vi.hoisted(() => ({
       ? { artifactFacing: "unknown" }
       : { requestFacing: params.facing, artifactFacing: params.facing },
   ),
-  resolveCameraSnapTargets: vi.fn(
-    (params: { facing: "front" | "back" | "both"; platform?: string; deviceId?: string }) => {
-      if (params.platform === "linux") {
-        return [{ artifactFacing: "unknown" }];
-      }
-      const facings = params.facing === "both" ? (["front", "back"] as const) : [params.facing];
-      return facings.map((facing) => ({ requestFacing: facing, artifactFacing: facing }));
-    },
-  ),
   writeCameraClipPayloadToFile: vi.fn(async ({ facing }: { facing?: string }) =>
     facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
   ),
@@ -82,7 +73,11 @@ vi.mock("./gateway.js", () => gatewayMocks);
 // mock-isolation: Supply deterministic node identity and Gateway responses without a live connection.
 vi.mock("./nodes-utils.js", () => nodeUtilsMocks);
 // mock-isolation: Keep host camera and screen capture outside node-tool dispatch proof.
-vi.mock("../../cli/nodes-camera.js", () => nodesCameraMocks);
+vi.mock("../../cli/nodes-camera.js", async (importOriginal) => ({
+  ...nodesCameraMocks,
+  resolveCameraSnapTargets: (await importOriginal<typeof import("../../cli/nodes-camera.js")>())
+    .resolveCameraSnapTargets,
+}));
 // mock-isolation: Keep host camera and screen capture outside node-tool dispatch proof.
 vi.mock("../../cli/nodes-screen.js", () => screenMocks);
 
@@ -371,6 +366,13 @@ it("refuses to write snapshot bytes that contradict the outPath extension", asyn
     onNode("screen_snapshot", { node: "miniclaw", outPath: "/workspace/shot.png" }),
   ).rejects.toThrow("screen.snapshot returned jpg; outPath must use a matching extension");
   expect(screenMocks.writeScreenSnapshotToFile).not.toHaveBeenCalled();
+});
+
+it("rejects a positioned camera device with both facings before invoking the node", async () => {
+  await expect(
+    onNode("camera_snap", { facing: "both", deviceId: "camera-device" }),
+  ).rejects.toThrow("facing=both is not allowed when deviceId is set");
+  expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
 });
 
 it("captures one unknown-position snap for Linux facing requests", async () => {

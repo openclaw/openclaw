@@ -586,3 +586,16 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     webSearchThreadConfigFingerprint,
   };
 }
+
+/** Refresh async requester facts after lifecycle preparation, before binding write admission. */
+export async function withCodexThreadWriteCurrent(
+  params: CodexStartOrResumeThreadParams,
+  write: () => void,
+): Promise<void> {
+  await params.assertCurrentAsync?.();
+  if (params.authority) {
+    await params.authority.withCurrent(write);
+  } else {
+    write();
+  }
+}

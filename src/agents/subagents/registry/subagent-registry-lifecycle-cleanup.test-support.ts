@@ -568,12 +568,7 @@ export function registerDeliveryRetryOwnerTests({
     },
   );
 
-  it.each([
-    "delivered",
-    "expired",
-    "expired during preparation",
-    "expired during failure recovery",
-  ] as const)(
+  it.each(["delivered", "expired", "expired during preparation"] as const)(
     "keeps a required final scheduled after detached cleanup failures (%s)",
     async (outcome) => {
       await useRetryTimers();
@@ -598,15 +593,6 @@ export function registerDeliveryRetryOwnerTests({
         entry,
         countPendingDescendantRuns,
         runSubagentAnnounceFlow,
-        beforeWrite: ({ postimages }) => {
-          if (
-            outcome === "expired during failure recovery" &&
-            countPendingDescendantRuns.mock.calls.length === 5 &&
-            postimages.get(entry.runId)?.cleanupHandled === false
-          ) {
-            vi.setSystemTime(entry.delivery!.deadlineAt!);
-          }
-        },
         resumeSubagentRun: () =>
           controller.startSubagentAnnounceCleanupFlow(readLifecycleRun(entry)),
       });

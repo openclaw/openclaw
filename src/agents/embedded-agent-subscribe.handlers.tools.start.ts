@@ -135,9 +135,6 @@ export function emitTrackedItemEvent(
   if (itemData.phase === "start") {
     ctx.state.itemActiveIds.add(itemData.itemId);
     ctx.state.itemStartedCount += 1;
-  } else if (itemData.phase === "end") {
-    ctx.state.itemActiveIds.delete(itemData.itemId);
-    ctx.state.itemCompletedCount += 1;
   }
   // Reply liveness and channel delivery still consume every original callback.
   if (itemData.phase !== "update" || emitLiveUpdate) {

@@ -74,11 +74,10 @@ export function withSqliteMutationWorkerLifetime<T>(
   let unregisterState: () => void;
   try {
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
-      close: async (identity) => {
-        if (!identity || identity.key === state.identity.key) {
-          revoke();
-          await completion.promise;
-        }
+      admission: state,
+      close: async () => {
+        revoke();
+        await completion.promise;
       },
     });
   } catch (error) {

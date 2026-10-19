@@ -4,6 +4,7 @@ import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { MessageGroup as NativeMessageGroup } from "./chat-message-group-view.tsx";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
@@ -19,10 +20,82 @@ const prompt = {
 const turnSource = { replyTurnSource: { key: "prompt-render-key", message: prompt } };
 let container: HTMLDivElement;
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   if (container) {
     cleanupSolid();
     container.remove();
   }
+});
+
+it("redraws the reply connector from the current avatar after its presentation changes", async () => {
+  const resizes: Array<() => void> = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        resizes.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    if (this.classList.contains("chat-avatar-slot")) {
+      return new DOMRect(30, 50, 40, 40);
+    }
+    if (this.classList.contains("chat-avatar")) {
+      return new DOMRect(10, 30, 20, 20);
+    }
+    if (this.classList.contains("chat-reply-attribution")) {
+      return new DOMRect(100, 20, 60, 20);
+    }
+    if (this.classList.contains("chat-reply-attribution__label")) {
+      return new DOMRect(100, 20, 40, 20);
+    }
+    return new DOMRect(0, 0, 400, 200);
+  });
+  container = document.body.appendChild(document.createElement("div"));
+  const harness = createMessageGroupHarness(container);
+  const group: MessageGroup = {
+    kind: "group",
+    key: "connector",
+    role: "assistant",
+    timestamp: 1,
+    isStreaming: false,
+    visibleContent: "text",
+    replyToSender: alice,
+    replyToMessage: { key: "prompt", message: prompt },
+    messages: [
+      { key: "answer", message: { role: "assistant", content: "Answer" }, hasVisibleContent: true },
+    ],
+  };
+  const options = {
+    avatarPlacement: "gutter" as const,
+    showToolCalls: false,
+    showReasoning: false,
+  };
+  harness.render(group, options);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-reply-connector path")).not.toBeNull(),
+  );
+  for (const resize of resizes) {
+    resize();
+  }
+  const path = container.querySelector(".chat-reply-connector path")!;
+  expect(path.getAttribute("d")).toMatch(/^M 20 30 /);
+
+  harness.render(group, { ...options, assistantAvatar: "blob:reply-avatar" });
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-group > .chat-avatar-slot")).not.toBeNull(),
+  );
+  for (const resize of resizes) {
+    resize();
+  }
+  expect(container.querySelector(".chat-reply-connector path")).toBe(path);
+  expect(path.getAttribute("d")).toMatch(/^M 50 50 /);
 });
 
 function draw(

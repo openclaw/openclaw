@@ -295,6 +295,12 @@ merging a nested value such as voice settings.
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
 
+    Search tools limited to ten results can spread
+    `WEB_SEARCH_QUERY_COUNT_PROPERTIES` from
+    `openclaw/plugin-sdk/provider-web-search-contract` (or its config-only
+    companion) into their schema's `properties`. Providers retain their own
+    required fields, additional-property policy, and optional filters.
+
     Search providers can declare `configPath` as a path relative to their own
     plugin configuration for the Search settings page. It defaults to
     `["webSearch"]`; use `null` when the provider has no inline settings.

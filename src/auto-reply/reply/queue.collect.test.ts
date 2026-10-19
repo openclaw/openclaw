@@ -2081,15 +2081,10 @@ describe("followup queue collect routing", () => {
     const guest = { senderId: "user-1", senderName: "Guest", senderIsOwner: false };
     q.slack("dropped guest message", guest);
     q.slack("guest message", guest);
-    q.slack("owner message", {
-      senderId: "owner-1",
-      senderName: "Owner",
-      senderIsOwner: true,
-    });
-
+    const owner = { senderId: "owner-1", senderName: "Owner", senderIsOwner: true };
+    q.slack("owner message", owner);
     await q.drain(runFollowup);
-
-    expect(q.calls).toHaveLength(3);
+    expect(q.calls).toMatchObject([{ run: guest }, { run: guest }, { run: owner }]);
     expect(q.calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(q.calls[0]?.prompt).toContain("- dropped guest message");
     expect(q.calls[1]?.prompt).not.toContain("[Queue overflow]");

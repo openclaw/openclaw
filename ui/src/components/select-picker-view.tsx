@@ -1,20 +1,12 @@
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { createOverlayAnchor } from "./overlay-anchor.ts";
-import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
+import { createScrollPosition, createScrollStateRef } from "../lib/reactive/scroll-state.ts";
+import type { OverlayPlacement } from "./overlay-anchor.ts";
+import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
-import { revealInScrollRegion } from "./scroll-state.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
@@ -46,7 +38,26 @@ export function PickerContent<Option extends PickerOption>(props: {
   let input: HTMLInputElement | undefined;
   let back: HTMLButtonElement | undefined;
   const optionElements = new Map<string, HTMLDivElement>();
-  let anchor: ReturnType<typeof createOverlayAnchor> | undefined;
+  const groupButtons = new Set<HTMLButtonElement>();
+  const groupButtonRef = () => {
+    let button!: HTMLButtonElement;
+    onSettled(() => {
+      groupButtons.add(button);
+      return () => groupButtons.delete(button);
+    });
+    return (element: HTMLButtonElement) => (button = element);
+  };
+  const focusElements = () => [
+    trigger,
+    ...(back ? [back] : []),
+    ...(input ? [input] : []),
+    list,
+    ...groupButtons,
+    ...optionElements.values(),
+  ];
+  onSettled(() => {
+    props.params.focusRef?.({ trigger, elements: focusElements });
+  });
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
@@ -55,18 +66,15 @@ export function PickerContent<Option extends PickerOption>(props: {
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
-  const updateAnchor = (
+  const resolvePlacement = (
     placement: PickerParams<Option>["placement"],
     variant: PickerParams<Option>["variant"],
-  ) =>
-    anchor?.update(
-      trigger,
-      variant === "submenu"
-        ? direction() === "rtl"
-          ? "left-start"
-          : "right-start"
-        : `${placement ?? "bottom"}-start`,
-    );
+  ): OverlayPlacement =>
+    variant === "submenu"
+      ? direction() === "rtl"
+        ? "left-start"
+        : "right-start"
+      : `${placement ?? "bottom"}-start`;
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -156,6 +164,15 @@ export function PickerContent<Option extends PickerOption>(props: {
       return props.params.disabled;
     },
   });
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => {
+      const { placement, variant } = props.params;
+      return { placement: () => resolvePlacement(placement, variant) };
+    },
+    { anchored: !initialSheet, paused: () => !overlay.open },
+  );
   onSettled(() => overlay.bindSurface(surface));
   // The menu refreshes direction on accepted open; closed pickers need no style read.
   const menuDirection: typeof direction = () => (overlay.open ? direction() : "ltr");
@@ -197,7 +214,9 @@ export function PickerContent<Option extends PickerOption>(props: {
       if (!props.host.isConnected) {
         return;
       }
-      updateAnchor(props.params.placement, props.params.variant);
+      if (!initialSheet) {
+        anchor.update(trigger, resolvePlacement(props.params.placement, props.params.variant));
+      }
       if (!overlay.request(true, focus ? (last ? "last" : "first") : "none")) {
         return;
       }
@@ -214,12 +233,16 @@ export function PickerContent<Option extends PickerOption>(props: {
   }
 
   function scrollFade() {
+    if (!overlay.open) {
+      return;
+    }
     list.toggleAttribute("data-fade-start", list.scrollTop > 0);
     list.toggleAttribute(
       "data-fade-end",
       list.scrollTop + list.clientHeight < list.scrollHeight - 1,
     );
   }
+  const scrollRef = createScrollStateRef(scrollFade, { presented: opened, content: rows });
   function handleKeydown(event: KeyboardEvent) {
     if (event.isComposing || props.params.disabled) {
       return;
@@ -297,25 +320,19 @@ export function PickerContent<Option extends PickerOption>(props: {
   onCleanup(() => {
     clearTimeout(hoverTimer);
   });
-  createEffect(
-    () => [props.params.placement, props.params.variant] as const,
-    ([placement, variant]) => {
-      if (overlay.open) {
-        updateAnchor(placement, variant);
-      }
-    },
-  );
-  createEffect(
-    () => [opened(), active(), query(), rows()] as const,
-    ([isOpen, highlighted]) => {
-      if (list) {
-        const node = optionElements.get(highlighted ?? "");
-        if (isOpen && node) {
-          revealInScrollRegion(list, node);
-        }
-        scrollFade();
-      }
-    },
+  createScrollPosition(
+    () => ({
+      reveal: opened()
+        ? {
+            identity: [opened(), active(), query(), rows()],
+            target: () =>
+              overlay.open
+                ? optionElements.get(menu.service.context.get("highlightedValue") ?? "")
+                : undefined,
+          }
+        : undefined,
+    }),
+    { region: () => list, revealTiming: "animation-frame" },
   );
   function onOpenChange(next: boolean) {
     if (next) {
@@ -338,15 +355,11 @@ export function PickerContent<Option extends PickerOption>(props: {
     }
   }
   onSettled(() => {
-    overlay.bindTrigger(trigger);
-    overlay.setParent(findOverlayParent(trigger));
-    if (!props.params.sheet) {
-      anchor = createOverlayAnchor(surface);
-    }
+    const disconnectAnchor = anchor.connect();
     const stop = control.connect(() => {}, onOpenChange);
     return () => {
       stop();
-      anchor?.dispose();
+      disconnectAnchor();
     };
   });
   const Leading = (row: { option?: Option }) => {
@@ -521,10 +534,9 @@ export function PickerContent<Option extends PickerOption>(props: {
           />
         </Show>
         <div
-          ref={(element) => (list = element)}
+          ref={[(element) => (list = element), scrollRef]}
           class="picker-select__options"
           role={props.params.groupBy ? undefined : "listbox"}
-          onScroll={scrollFade}
           id={props.params.groupBy ? undefined : id}
           aria-label={props.params.groupBy ? undefined : props.params.label}
           data-picker-focus={!searching() ? "" : undefined}
@@ -555,6 +567,7 @@ export function PickerContent<Option extends PickerOption>(props: {
                 {(group) => (
                   <div class="picker-select__group" role="group" aria-label={group().label}>
                     <button
+                      ref={groupButtonRef()}
                       class="picker-select__group-toggle"
                       type="button"
                       tabindex={opened() ? 0 : -1}

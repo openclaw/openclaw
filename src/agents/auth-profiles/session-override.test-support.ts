@@ -74,7 +74,7 @@ vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));
 
-export const { resolveSessionAuthSelection } = await import("./session-override.js");
+const { resolveSessionAuthSelection } = await import("./session-override.js");
 afterEach(() => authStoreMocks.reset());
 
 export async function withAuthState<T>(run: (state: OpenClawTestState) => Promise<T>): Promise<T> {

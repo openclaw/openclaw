@@ -177,7 +177,15 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     await Promise.resolve();
   }
 
-  waitForSessionSync = () => this.pendingSyncWork;
+  async waitForSessionSync(): Promise<void> {
+    await this.pendingSyncWork;
+    // Retry scheduling belongs to the outer operation, including overridden sync methods.
+    if (this.activeManagerOperations > 0) {
+      await new Promise<void>((resolve) => {
+        this.managerIdleWaiters.add(resolve);
+      });
+    }
+  }
 
   afterNextCorpusListForTest(callback: () => Promise<void>): void {
     this.afterNextCorpusList = callback;

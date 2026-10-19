@@ -594,13 +594,6 @@ it.each([
               channels: [],
               getChannel: () => undefined,
             },
-            getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-            resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-              resolvedConfig: config,
-              diagnostics: [],
-              targetStatesByPath: {},
-              hadUnresolvedTargets: false,
-            }),
           });
           const result = await message.execute("source-race-send", {
             action: "send",

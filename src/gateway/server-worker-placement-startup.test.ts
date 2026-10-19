@@ -7,6 +7,7 @@ const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupM
 
 import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
@@ -25,6 +26,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
   createEnvironments,
@@ -144,13 +146,21 @@ describe("worker placement startup health lifetime", () => {
       environments: environments as never,
       warn,
     });
+    const log = createSubsystemLogger("worker-startup-test");
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+    const startupTrace = createGatewayStartupTrace(log);
     let sidecar: Awaited<ReturnType<typeof runtime.startRuntime>> | undefined;
     let scheduledWake: void | Promise<void> = undefined;
 
     try {
-      sidecar = await startRuntime(runtime);
+      sidecar = await startRuntime(runtime, { startupTrace });
 
       expect(sidecar).not.toBeNull();
+      const completedPhases = info.mock.calls.flatMap(([line]) => {
+        const match = /sidecars\.worker-environments\.([\w-]+) [\d.]+ms/.exec(line);
+        return match ? [match[1]] : [];
+      });
+      expect(completedPhases).toEqual(["github-ready", "workspaces", "active", "publications"]);
       expect(reconcileActive).not.toHaveBeenCalled();
       expect(diskSpace.sweep).toHaveBeenCalledOnce();
       // Settle the background startup sweep before advancing its next deadline.
@@ -188,6 +198,8 @@ describe("worker placement startup health lifetime", () => {
       releaseScheduledCleanup.resolve();
       await sidecar?.stop();
       await scheduledWake;
+      startupTrace.close();
+      info.mockRestore();
       retentionFactory.mockRestore();
     }
   });
