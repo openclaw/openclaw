@@ -446,6 +446,11 @@ it("reads all projection facts off the host SQLite thread", async () => {
     nodeDeviceId: null,
     attachedSessionIds: ["pending"],
   });
+  const cancelled = new AbortController();
+  cancelled.abort(new Error("Worker environment reconciliation stopped"));
+  await expect(
+    store.readEnvironmentOwner(placement.environmentId, cancelled.signal),
+  ).rejects.toThrow("Worker environment reconciliation stopped");
   expect(await store.readEnvironmentOwner(placement.environmentId)).toMatchObject({
     sessionId: "pending",
     state: "draining",

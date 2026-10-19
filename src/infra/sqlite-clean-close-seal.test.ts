@@ -28,24 +28,26 @@ function fixture() {
   // The seal's file-state contract does not require a native SQLite connection.
   fs.writeFileSync(pathname, "synthetic database bytes");
   const stat = () => fs.statSync(pathname, { bigint: true });
-  const read = () => readSqliteCleanCloseSeal(pathname, stat());
+  const refusal = vi.fn();
+  const read = () => readSqliteCleanCloseSeal(pathname, stat(), refusal);
   expect(writeSqliteCleanCloseSeal(pathname, "state:20", stat(), proof)).toBe(true);
-  return { pathname, stat, read };
+  return { pathname, stat, read, refusal };
 }
 
 describe("SQLite clean-close seals", () => {
   it("persists validated facts until the first write invalidates them", () => {
-    const { pathname, read } = fixture();
+    const { pathname, read, refusal } = fixture();
     expect(read()).toEqual(proof);
     invalidateSqliteCleanCloseSeal(pathname);
     expect(read()).toBeUndefined();
+    expect(refusal).toHaveBeenLastCalledWith("no-proof");
     expect(() => invalidateSqliteCleanCloseSeal(pathname)).not.toThrow();
   });
 
   it.each(["truncated", "changed-payload", "invalid-envelope"])(
     "falls back to full validation after a %s seal",
     (damage) => {
-      const { pathname, read } = fixture();
+      const { pathname, read, refusal } = fixture();
       const contents = fs.readFileSync(`${pathname}.seal`, "utf8");
       fs.writeFileSync(
         `${pathname}.seal`,
@@ -56,11 +58,12 @@ describe("SQLite clean-close seals", () => {
             : "[]",
       );
       expect(read()).toBeUndefined();
+      expect(refusal).toHaveBeenLastCalledWith("malformed-proof");
     },
   );
 
   it.each(["contents", "timestamp", "replacement"])("rejects external %s changes", (change) => {
-    const { pathname, read } = fixture();
+    const { pathname, read, refusal } = fixture();
     if (change === "contents") {
       fs.appendFileSync(pathname, " changed");
     } else if (change === "timestamp") {
@@ -71,25 +74,28 @@ describe("SQLite clean-close seals", () => {
       fs.copyFileSync(displaced, pathname);
     }
     expect(read()).toBeUndefined();
+    expect(refusal).toHaveBeenLastCalledWith("file-mismatch");
   });
 
   it.each(["-wal", "-journal"])("requires absent or empty %s files", (suffix) => {
-    const { pathname, stat, read } = fixture();
+    const { pathname, stat, read, refusal } = fixture();
     fs.writeFileSync(`${pathname}${suffix}`, "");
     expect(read()).toEqual(proof);
     fs.writeFileSync(`${pathname}${suffix}`, "uncheckpointed pages");
     expect(read()).toBeUndefined();
+    expect(refusal).toHaveBeenLastCalledWith("journal-present");
     expect(writeSqliteCleanCloseSeal(pathname, "state:20", stat(), proof)).toBe(false);
     expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
   });
 
   it("returns the identity for admission and requires periodic full verification", () => {
-    const { read } = fixture();
+    const { read, refusal } = fixture();
     expect(read()?.schemaIdentity).toBe("state:20");
     vi.mocked(Date.now).mockReturnValue(verifiedAt + 7 * 24 * 60 * 60 * 1_000);
     expect(read()).toEqual(proof);
     vi.mocked(Date.now).mockReturnValue(verifiedAt + 7 * 24 * 60 * 60 * 1_000 + 1);
     expect(read()).toBeUndefined();
+    expect(refusal).toHaveBeenLastCalledWith("expired-proof");
     vi.mocked(Date.now).mockReturnValue(verifiedAt - 1);
     expect(read()).toBeUndefined();
   });

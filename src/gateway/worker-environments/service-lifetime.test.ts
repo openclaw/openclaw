@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
@@ -14,6 +17,44 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("cancels an idle reconciliation's owner lookup before joining the guard", async () => {
+    const environment = await support.seedReady("shutdown-owner-read");
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const entered = createDeferred();
+    const release = createDeferred<undefined>();
+    vi.spyOn(placements, "readEnvironmentOwner").mockImplementation(async (_id, signal) => {
+      entered.resolve();
+      return racePromiseWithAbortSignal(release.promise, signal);
+    });
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const service = support.createService(support.createProvider({ inspect }));
+    installWorkerPlacementReconcileGuard({
+      placements,
+      environments: service,
+      dispatch: {
+        resumeProvisioning: async () => {
+          throw new Error("Idle environment must not provision");
+        },
+        hasPendingPlacementLifecycleOperation: () => false,
+      },
+      isStopping: service.isStopping,
+    });
+    const reconciliation = service.reconcileEnvironment(environment.environmentId);
+    await entered.promise;
+    let stopped = false;
+    const stopping = service.stop().then(() => {
+      stopped = true;
+    });
+    try {
+      await support.waitForFast(() => expect(stopped).toBe(true));
+      expect(inspect).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
+    } finally {
+      release.resolve(undefined);
+      await Promise.all([reconciliation, stopping]);
+    }
+  });
 
   it.each([false, true])(
     "withdraws dedicated access before persistence settles (rejected=%s)",

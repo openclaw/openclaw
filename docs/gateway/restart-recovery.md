@@ -426,7 +426,10 @@ pending placement subphase, such as
 database available until accepted effects have recorded their outcomes.
 
 Worker-environment shutdown also names its computer, inference, transfer, tunnel,
-and accepted-operation joins. For an attached worker, shutdown stops the exact
+and accepted-operation joins. Closing the service cancels a pending reconciliation
+owner lookup through the database reader before joining the guard; an idle lookup
+does not wait for the process shutdown deadline. Admitted recovery effects still
+settle before their owners close. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop, drain, and active-turn
 cancellation acknowledgments share at most five seconds after shutdown begins,
