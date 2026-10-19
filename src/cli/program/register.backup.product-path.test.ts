@@ -12,27 +12,30 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { cliRecoveryEntrypoints } from "../cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
-function runBackupCli(params: {
-  env: NodeJS.ProcessEnv;
-  outputPath: string;
-  includeWorkspace?: boolean;
-}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runBackupCli(
+  state: OpenClawTestState,
+  includeWorkspace = false,
+  env: NodeJS.ProcessEnv = {},
+) {
   return runCliProcessChild({
     nodeArgs: [
       ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       "backup",
       "create",
       "--output",
-      params.outputPath,
-      ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
+      state.path("backup.tar.gz"),
+      ...(includeWorkspace ? [] : ["--no-include-workspace"]),
       "--verify",
       "--json",
     ],
-    env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
+    env: { ...process.env, ...state.env, ...env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
   });
 }
 
@@ -41,12 +44,7 @@ describe("backup create CLI", () => {
     "backup create retains workspace-discovered owners under state write load (includeWorkspace=%s)",
     async (includeWorkspace) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const pluginRoot = path.join(
-          state.workspaceDir,
-          ".openclaw",
-          "extensions",
-          "backup-fixture",
-        );
+        const pluginRoot = path.join(state.workspaceDir, ".openclaw/extensions/backup-fixture");
         await fs.mkdir(pluginRoot, { recursive: true });
         await fs.writeFile(path.join(state.workspaceDir, "workspace-only-marker.txt"), "workspace");
         await fs.writeFile(
@@ -112,11 +110,7 @@ describe("backup create CLI", () => {
             writer.once("error", reject);
           });
           const outputPath = state.path("backup.tar.gz");
-          const result = await runBackupCli({
-            env: { ...process.env, ...state.env },
-            outputPath,
-            includeWorkspace,
-          });
+          const result = await runBackupCli(state, includeWorkspace);
           expect(result.code, result.stderr).toBe(0);
           const archive = JSON.parse(result.stdout);
           expect(archive.agentRoots).toEqual([expect.objectContaining({ agentId: "main" })]);
@@ -147,7 +141,7 @@ describe("backup create CLI", () => {
       await fs.mkdir(state.statePath("state"));
       await fs.writeFile(state.statePath("state/openclaw.sqlite"), "unreadable database");
       const outputPath = state.path("backup.tar.gz");
-      const result = await runBackupCli({ env: { ...process.env, ...state.env }, outputPath });
+      const result = await runBackupCli(state);
       expect(result.code).toBe(1);
       expect(result.stderr).not.toContain("Config invalid");
       expect(result.stderr).toContain("[openclaw] The CLI command failed.");
@@ -212,22 +206,15 @@ describe("backup create CLI", () => {
             syncBuiltinESMExports();
           `,
         );
-        const outputPath = state.path("backup.tar.gz");
-
-        const result = await runBackupCli({
-          env: {
-            ...process.env,
-            ...state.env,
-            ...sqliteWorkerPreloadEnv(preloadPath),
-            OPENCLAW_TEST_CONSOLE: "1",
-            PROOF_SNAPSHOT_MARKER: markerPath,
-          },
-          outputPath,
+        const result = await runBackupCli(state, false, {
+          ...sqliteWorkerPreloadEnv(preloadPath),
+          OPENCLAW_TEST_CONSOLE: "1",
+          PROOF_SNAPSHOT_MARKER: markerPath,
         });
 
         expect(result.code, result.stderr).toBe(0);
         expect(await fs.readFile(markerPath, "utf8")).toBe("entered\n");
-        expect((await fs.stat(outputPath)).size).toBeGreaterThan(0);
+        expect((await fs.stat(state.path("backup.tar.gz"))).size).toBeGreaterThan(0);
       },
     );
   });

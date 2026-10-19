@@ -76,17 +76,16 @@ async function expectRejection(
   expect(mocks.runtime.error).not.toHaveBeenCalled();
   expect(mocks.runtime.exit).not.toHaveBeenCalled();
 }
+function expectLifecycle(operation: string, options: Record<string, unknown>) {
+  expect(mocks.sessionsLifecycleCommand).toHaveBeenCalledExactlyOnceWith(
+    operation,
+    expect.objectContaining(options),
+    mocks.runtime,
+  );
+}
 const key = "agent:work:main";
 const blankStore = ["--store", ""];
-const selection = ["--agent", "work", "--all-agents", "--active", "120", "--limit", "25"];
-const listOptions = {
-  json: true,
-  store: "",
-  agent: "work",
-  allAgents: true,
-  active: "120",
-  limit: "25",
-};
+const request = "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ";
 
 describe("registerStatusHealthSessionsCommands", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -153,60 +152,60 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(mocks.statusCommand).not.toHaveBeenCalled();
   });
 
-  it("list preserves parent options and blank store", async () => {
-    const options = [...blankStore, "--json", "--verbose", ...selection];
-    await runSession("list", options);
-    expect(mocks.setVerbose).toHaveBeenCalledWith(true);
-    expectOptions(mocks.sessionsCommand, listOptions);
-  });
-  it("cleanup preserves parent options and blank store", async () => {
-    const options = [...blankStore, "--all-agents", "--json"];
-    await runSession(
-      "cleanup",
-      options,
-      `--dry-run --enforce --fix-missing --fix-dm-scope --active-key ${key}`,
-    );
-    expectOptions(mocks.sessionsCleanupCommand, {
-      store: "",
-      agent: undefined,
-      allAgents: true,
-      dryRun: true,
-      enforce: true,
-      fixMissing: true,
-      fixDmScope: true,
-      activeKey: key,
-      json: true,
-    });
-  });
-  it("tail preserves parent options and blank store", async () => {
-    const options = [...blankStore, "--agent", "work"];
-    await runSession("tail", options, `--session-key ${key} --tail 5 --follow`);
-    expectOptions(mocks.sessionsTailCommand, {
-      sessionKey: key,
-      store: "",
-      agent: "work",
-      allAgents: false,
-      follow: true,
-      tail: "5",
-    });
-  });
-  it("export preserves parent options and blank store", async () => {
-    const options = [...blankStore, "--json"];
-    const request = "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ";
-    await runSession(
-      "export-trajectory",
-      options,
-      `--session-key ${key} --workspace /workspace --output bug-123 --request-json-base64 ${request}`,
-    );
-    expectOptions(mocks.exportTrajectoryCommand, {
-      sessionKey: key,
-      output: "bug-123",
-      workspace: "/workspace",
-      store: "",
-      json: true,
-      requestJsonBase64: request,
-    });
-  });
+  it.each([
+    {
+      command: "list",
+      owner: mocks.sessionsCommand,
+      parent: "--json --verbose --agent work --all-agents --active 120 --limit 25",
+      extra: "",
+      expected: { json: true, agent: "work", allAgents: true, active: "120", limit: "25" },
+    },
+    {
+      command: "cleanup",
+      owner: mocks.sessionsCleanupCommand,
+      parent: "--all-agents --json",
+      extra: `--dry-run --enforce --fix-missing --fix-dm-scope --active-key ${key}`,
+      expected: {
+        agent: undefined,
+        allAgents: true,
+        dryRun: true,
+        enforce: true,
+        fixMissing: true,
+        fixDmScope: true,
+        activeKey: key,
+        json: true,
+      },
+    },
+    {
+      command: "tail",
+      owner: mocks.sessionsTailCommand,
+      parent: "--agent work",
+      extra: `--session-key ${key} --tail 5 --follow`,
+      expected: { sessionKey: key, agent: "work", allAgents: false, follow: true, tail: "5" },
+    },
+    {
+      command: "export-trajectory",
+      owner: mocks.exportTrajectoryCommand,
+      parent: "--json",
+      extra: `--session-key ${key} --workspace /workspace --output bug-123 --request-json-base64 ${request}`,
+      expected: {
+        sessionKey: key,
+        output: "bug-123",
+        workspace: "/workspace",
+        json: true,
+        requestJsonBase64: request,
+      },
+    },
+  ])(
+    "$command preserves parent options and blank store",
+    async ({ command, owner, parent, extra, expected }) => {
+      await runSession(command, [...blankStore, ...parent.split(" ")], extra);
+      expectOptions(owner, { store: "", ...expected });
+      if (command === "list") {
+        expect(mocks.setVerbose).toHaveBeenCalledWith(true);
+      }
+    },
+  );
 
   it("compact inherits parent agent and JSON options (#91378)", async () => {
     await run(`sessions --agent work --json compact ${key}`);
@@ -216,34 +215,26 @@ describe("registerStatusHealthSessionsCommands", () => {
     await run(
       `sessions --agent work --json archive ${key} agent:work:scratch --dry-run --url ws://gateway.test --token test-token --password test-password --timeout 45000`,
     );
-    expect(mocks.sessionsLifecycleCommand).toHaveBeenCalledExactlyOnceWith(
-      "archive",
-      expect.objectContaining({
-        keys: [key, "agent:work:scratch"],
-        agent: "work",
-        dryRun: true,
-        url: "ws://gateway.test",
-        token: "test-token",
-        password: "test-password",
-        timeout: "45000",
-        json: true,
-      }),
-      mocks.runtime,
-    );
+    expectLifecycle("archive", {
+      keys: [key, "agent:work:scratch"],
+      agent: "work",
+      dryRun: true,
+      url: "ws://gateway.test",
+      token: "test-token",
+      password: "test-password",
+      timeout: "45000",
+      json: true,
+    });
   });
   it("forwards delete keys with leaf scope and confirmation", async () => {
     await run(`sessions --agent main delete ${key} agent:work:scratch --agent work --yes --json`);
-    expect(mocks.sessionsLifecycleCommand).toHaveBeenCalledExactlyOnceWith(
-      "delete",
-      expect.objectContaining({
-        keys: [key, "agent:work:scratch"],
-        agent: "work",
-        dryRun: false,
-        yes: true,
-        json: true,
-      }),
-      mocks.runtime,
-    );
+    expectLifecycle("delete", {
+      keys: [key, "agent:work:scratch"],
+      agent: "work",
+      dryRun: false,
+      yes: true,
+      json: true,
+    });
   });
   it("documents retained delete archives and local memory cleanup", () => {
     const sessions = program().commands.find((command) => command.name() === "sessions");
