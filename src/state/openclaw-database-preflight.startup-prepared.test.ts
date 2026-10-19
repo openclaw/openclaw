@@ -117,7 +117,7 @@ it.each(["openclaw", "crestodian", "worker"])(
     await withImmediateAdmission(async () => {
       await expect(fleet.ready(config)).resolves.toBeUndefined();
       expect(readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env })).toMatchObject({
-        code: "agent-database-recovery-held",
+        code: "agent-database-inspection-failed",
         paths: [heldPath],
         repairHint: expect.stringContaining("openclaw doctor --fix"),
       });

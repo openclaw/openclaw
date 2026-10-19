@@ -29,7 +29,10 @@ import type {
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
 } from "./agent-deletion-journal.types.js";
-import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "./artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { isSameOpenClawAgentDatabasePath } from "./openclaw-agent-db.paths.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
@@ -80,6 +83,9 @@ export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-prefli
 
 // Public readiness rows stay serializable; their original failures belong to this inspection.
 const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>();
+
+// Keep this startup disposition private; clients receive the existing unavailable response.
+class AgentDatabaseRecoveryHeldError extends Error {}
 
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
@@ -134,15 +140,16 @@ export async function assertOpenClawDatabasesReady(
   );
   const failures: unknown[] = [];
   for (const refusal of schemas.agentRefusals ?? []) {
+    const error = new AgentDatabaseAdmissionError(refusal);
     if (
-      refusal.code !== "agent-database-recovery-held" &&
+      !(error.cause instanceof AgentDatabaseRecoveryHeldError) &&
       (!options.config ||
         ((refusal.code === "agent-database-ownership-mismatch" ||
           (options.operation === "gateway-startup" &&
             refusal.code !== "agent-database-inspection-pending")) &&
           !canIsolateAgentDatabase(options.config, refusal.agentId)))
     ) {
-      failures.push(new AgentDatabaseAdmissionError(refusal));
+      failures.push(error);
     }
   }
   if (schemas.incompatible.length > 0) {
@@ -573,23 +580,24 @@ export async function preflightOpenClawDatabaseSchemas(
             purpose === "runtime" &&
             row.agentId &&
             (
-              await (recoveryHolds ??= readAgentDeletionRecoveryHoldsInWorker({
-                env: options.env,
-              }))
+              await (recoveryHolds ??= withArtifactPreservingStateReads(() =>
+                readAgentDeletionRecoveryHoldsInWorker({ env: options.env }),
+              ))
             ).some(
               (held) =>
                 held.agentId === row.agentId &&
                 isSameOpenClawAgentDatabasePath(held.path, realAgentPath),
             )
           ) {
-            const refusal = {
-              ...createAgentDatabaseInspectionRefusal({
-                agentId: row.agentId,
-                paths: [agentPath],
-                reason: `Agent ${row.agentId} database is held for deletion recovery at schema ${agentVersion}; migration to schema ${supportedVersions.agent} requires Doctor.`,
-              }),
-              code: "agent-database-recovery-held" as const,
-            };
+            const cause = new AgentDatabaseRecoveryHeldError(
+              `Agent ${row.agentId} database is held for deletion recovery at schema ${agentVersion}; migration to schema ${supportedVersions.agent} requires Doctor.`,
+            );
+            const refusal = createAgentDatabaseInspectionRefusal({
+              agentId: row.agentId,
+              paths: [agentPath],
+              reason: cause.message,
+              cause,
+            });
             (inspection.agentRefusals ??= []).push(refusal);
             createSubsystemLogger("state/agent-admission").warn(
               `${refusal.reason} ${refusal.repairHint}`,
