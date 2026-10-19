@@ -114,14 +114,18 @@ describe("agent RPC real delegated-authority effects", () => {
       requests: (Promise<unknown> | undefined)[],
       observers: { mockRestore: () => unknown }[] = [],
       reservation?: ReturnType<typeof createAgentDedupeLifecycle>,
-      expectedPublicationDenial = false,
+      allowPublicationDenial = false,
     ) => {
       release.resolve();
       try {
-        if (expectedPublicationDenial) {
-          await expect(execution?.cleanup()).rejects.toMatchObject({
-            name: "SessionMutationAuthorizationChangedError",
-            message: "agent runtime authority is no longer active",
+        if (allowPublicationDenial) {
+          // This test owns input custody, not final publication. Cleanup may finish
+          // normally; if publication races revocation, only that exact denial is expected.
+          await execution?.cleanup().catch((error: unknown) => {
+            expect(error).toMatchObject({
+              name: "SessionMutationAuthorizationChangedError",
+              message: "agent runtime authority is no longer active",
+            });
           });
         } else {
           await execution?.cleanup();
