@@ -135,11 +135,13 @@ function reply(respond: Awaited<ReturnType<typeof runRequest>>["respond"]) {
   return expectDefined(respond.mock.calls[0], "browser response");
 }
 function invalid(respond: Awaited<ReturnType<typeof runRequest>>["respond"]) {
-  expect(reply(respond)).toEqual([
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  ]);
+  expectFailure(respond, { code: "INVALID_REQUEST" });
+}
+function expectFailure(respond: Awaited<ReturnType<typeof runRequest>>["respond"], error: object) {
+  expect(reply(respond)).toEqual([false, undefined, expect.objectContaining(error)]);
+}
+function expectDispatch(request: object) {
+  expect(m.dispatch).toHaveBeenCalledWith(expect.objectContaining(request));
 }
 
 beforeEach(() => {
@@ -196,11 +198,9 @@ describe("browser.request profile selection", () => {
       dashboard: { sessionKey: "agent:main:browser-dashboard-proof", name: "service" },
     });
     expect(reply(respond)[0]).toBe(true);
-    expect(m.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({ targetId: "dashboard-tab", profile: "openclaw" }),
-      }),
-    );
+    expectDispatch({
+      body: expect.objectContaining({ targetId: "dashboard-tab", profile: "openclaw" }),
+    });
   });
 
   it("normalizes uploads before selecting their node command and preparing files", async () => {
@@ -424,10 +424,7 @@ describe("browser.request profile selection", () => {
 
     m.hostAvailable.mockReturnValue(true);
     const { respond, nodeRegistry } = await runRequest(
-      {
-        method: "GET",
-        path: "/profiles",
-      },
+      { method: "GET", path: "/profiles" },
       undefined,
       [
         browserNode("cafe-node", { displayName: "Cafe\u0301 01" }),
@@ -435,30 +432,19 @@ describe("browser.request profile selection", () => {
       ],
     );
 
-    const invoke = nodeInvocation(nodeRegistry);
-    expect(invoke.nodeId).toBe("cafe-node");
-    expect(invoke.command).toBe("browser.proxy");
-    expect(invoke.params).toMatchObject({ method: "GET", path: "/profiles" });
+    expect(nodeInvocation(nodeRegistry)).toMatchObject({
+      nodeId: "cafe-node",
+      command: "browser.proxy",
+      params: { method: "GET", path: "/profiles" },
+    });
     expect(reply(respond)[0]).toBe(true);
   });
 
   it.each([
-    {
-      method: "DELETE",
-      path: "/profiles/poc",
-      body: undefined,
-    },
-    {
-      method: "POST",
-      path: "/reset-profile",
-      body: { profile: "poc", name: "poc" },
-    },
+    { method: "DELETE", path: "/profiles/poc", body: undefined },
+    { method: "POST", path: "/reset-profile", body: { profile: "poc", name: "poc" } },
   ])("blocks persistent profile mutations for $method $path", async ({ method, path, body }) => {
-    const { respond, nodeRegistry } = await runRequest({
-      method,
-      path,
-      body,
-    });
+    const { respond, nodeRegistry } = await runRequest({ method, path, body });
 
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     const [ok, payload, error] = reply(respond);
@@ -484,23 +470,13 @@ describe("browser.request profile selection", () => {
     dispatchLocally({ ok: true });
 
     const { respond, nodeRegistry } = await runRequest(
-      {
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: uploadBody,
-      },
+      { method: "POST", path: "/hooks/file-chooser", body: uploadBody },
       undefined,
       [browserNode()],
     );
 
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(m.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: uploadBody,
-      }),
-    );
+    expectDispatch({ method: "POST", path: "/hooks/file-chooser", body: uploadBody });
     expect(reply(respond)).toEqual([true, { ok: true }]);
     expect(m.prepareUpload).not.toHaveBeenCalled();
   });
@@ -530,10 +506,7 @@ describe("browser.request profile selection", () => {
   it("preserves ambiguous auto-selected node failures", async () => {
     const { respond } = await runRequest(
       { method: "GET", path: "/" },
-      {
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "node invoke timed out" },
-      },
+      { ok: false, error: { code: "UNAVAILABLE", message: "node invoke timed out" } },
     );
 
     expect(m.start).not.toHaveBeenCalled();
@@ -556,10 +529,7 @@ describe("browser.request profile selection", () => {
       { ok: true, payload: { error: { status: 409, body: errorBody } } },
     );
 
-    const [ok, payload, error] = reply(respond);
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    expect(error).toMatchObject({
+    expectFailure(respond, {
       code: "INVALID_REQUEST",
       message: "headed mode needs a display",
       details: errorBody,
@@ -569,16 +539,10 @@ describe("browser.request profile selection", () => {
   it("returns UNAVAILABLE for an incomplete node file envelope", async () => {
     const { respond } = await runRequest(
       { method: "POST", path: "/screenshot" },
-      {
-        ok: true,
-        payload: { result: { path: "/node/browser/screenshot.png" } },
-      },
+      { ok: true, payload: { result: { path: "/node/browser/screenshot.png" } } },
     );
 
-    const [ok, payload, error] = reply(respond);
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    expect(error).toMatchObject({
+    expectFailure(respond, {
       code: "UNAVAILABLE",
       message: "browser proxy file transfer failed",
     });
@@ -670,13 +634,9 @@ describe("session tab scope", () => {
       body: { url: "https://example.com" },
       tabScope: { sessionKey },
     });
-    expect(reply(respond)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("Browser state runtime not initialized"),
-      }),
-    ]);
+    expectFailure(respond, {
+      message: expect.stringContaining("Browser state runtime not initialized"),
+    });
     expect(m.dispatch).toHaveBeenCalledTimes(2);
     expect(m.dispatch).toHaveBeenLastCalledWith(
       expect.objectContaining({

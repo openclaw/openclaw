@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -6,36 +5,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteContext, type BrowserRouteContext } from "../browser/server-context.js";
 import { makeBrowserServerState } from "../browser/server-context.test-harness.js";
 
-const {
-  createBrowserControlContextMock,
-  createBrowserRouteDispatcherMock,
-  loadConfigMock,
-  startBrowserControlServiceFromConfigMock,
-  withTimeoutMock,
-} = vi.hoisted(() => ({
-  createBrowserControlContextMock: vi.fn<() => BrowserRouteContext>(),
-  createBrowserRouteDispatcherMock: vi.fn(),
-  loadConfigMock: vi.fn(),
-  startBrowserControlServiceFromConfigMock: vi.fn(),
-  withTimeoutMock: vi.fn(),
+const m = vi.hoisted(() => ({
+  context: vi.fn<() => BrowserRouteContext>(),
+  dispatcher: vi.fn(),
+  config: vi.fn(),
+  start: vi.fn(),
+  timeout: vi.fn(),
 }));
 
-vi.mock("../browser-control-state.js", () => ({
-  createBrowserControlContext: createBrowserControlContextMock,
-}));
+vi.mock("../browser-control-state.js", () => ({ createBrowserControlContext: m.context }));
 vi.mock("../browser/routes/dispatcher.js", () => ({
-  createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
+  createBrowserRouteDispatcher: m.dispatcher,
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  readRuntimeConfig: loadConfigMock,
+  readRuntimeConfig: m.config,
 }));
-vi.mock("../control-service.js", () => ({
-  startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
-}));
+vi.mock("../control-service.js", () => ({ startBrowserControlServiceFromConfig: m.start }));
 vi.mock("../sdk-node-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../sdk-node-runtime.js")>()),
-  withTimeout: withTimeoutMock,
+  withTimeout: m.timeout,
 }));
 
 const { createBrowserRouteDispatcher } = await vi.importActual<
@@ -46,17 +35,28 @@ const { withTimeout } =
 
 import { browserHandlers } from "./browser-request.js";
 
+type Request = Parameters<GatewayRequestHandlers[string]>[0];
+function request(params: Request["params"], options: Partial<Request> = {}) {
+  return browserHandlers["browser.request"]({
+    params,
+    respond: vi.fn(),
+    context: { nodeRegistry: { listConnected: () => [] } } as never,
+    client: null,
+    req: { type: "req", id: "local-authority", method: "browser.request" },
+    isWebchatConnect: () => false,
+    ...options,
+  });
+}
+
 describe("browser.request local timeout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "off" } } },
-    });
-    startBrowserControlServiceFromConfigMock.mockResolvedValue(true);
-    createBrowserRouteDispatcherMock.mockReturnValue({
+    m.config.mockReturnValue({ gateway: { nodes: { browser: { mode: "off" } } } });
+    m.start.mockResolvedValue(true);
+    m.dispatcher.mockReturnValue({
       dispatch: vi.fn(async () => ({ status: 200, body: { ok: true } })),
     });
-    withTimeoutMock.mockImplementation(async () => {
+    m.timeout.mockImplementation(async () => {
       throw new Error("browser request timed out");
     });
   });
@@ -77,16 +77,14 @@ describe("browser.request local timeout", () => {
         admission.resolve();
         await releaseAdmission.promise;
       });
-      const openTab = vi.spyOn(profile, "openTab").mockResolvedValue({
-        targetId: "unwanted-tab",
-        title: "",
-        url: "about:blank",
-      });
-      createBrowserControlContextMock.mockReturnValue(context);
-      createBrowserRouteDispatcherMock.mockImplementation(createBrowserRouteDispatcher);
-      withTimeoutMock.mockImplementation(withTimeout);
+      const openTab = vi
+        .spyOn(profile, "openTab")
+        .mockResolvedValue({ targetId: "unwanted-tab", title: "", url: "about:blank" });
+      m.context.mockReturnValue(context);
+      m.dispatcher.mockImplementation(createBrowserRouteDispatcher);
+      m.timeout.mockImplementation(withTimeout);
       const connection = new AbortController();
-      const client: NonNullable<Parameters<GatewayRequestHandlers[string]>[0]["client"]> = {
+      const client: NonNullable<Request["client"]> = {
         connId: "browser-requester",
         connectionSignal: connection.signal,
         connect: {
@@ -97,24 +95,16 @@ describe("browser.request local timeout", () => {
       };
       let current = true;
       const respond = vi.fn();
-      const pending = expectDefined(
-        browserHandlers["browser.request"],
-        "browser request handler",
-      )({
-        params: {
+      const pending = request(
+        {
           target: "host",
           method: "POST",
           path: "/tabs/open",
           body: { url: "about:blank" },
           timeoutMs,
         },
-        respond,
-        context: {} as never,
-        client,
-        hasCurrentClientAuthority: () => current,
-        req: { type: "req", id: "local-authority", method: "browser.request" },
-        isWebchatConnect: () => false,
-      });
+        { respond, context: {} as never, client, hasCurrentClientAuthority: () => current },
+      );
       await admission.promise;
       if (revocation === "client") {
         client.invalidated = true;
@@ -175,26 +165,17 @@ describe("browser.request local timeout", () => {
   it("caps timeoutMs before local browser dispatches", async () => {
     const respond = vi.fn();
 
-    await expectDefined(
-      browserHandlers["browser.request"],
-      "browser request handler",
-    )({
-      params: {
+    await request(
+      {
         method: "POST",
         path: "/tabs/open",
         body: { url: "https://example.com" },
         timeoutMs: Number.MAX_SAFE_INTEGER,
       },
-      respond: respond as never,
-      context: {
-        nodeRegistry: { listConnected: () => [] },
-      } as never,
-      client: null,
-      req: { type: "req", id: "req-1", method: "browser.request" },
-      isWebchatConnect: () => false,
-    });
+      { respond },
+    );
 
-    expect(withTimeoutMock).toHaveBeenCalledExactlyOnceWith(
+    expect(m.timeout).toHaveBeenCalledExactlyOnceWith(
       expect.any(Function),
       MAX_TIMER_TIMEOUT_MS,
       "browser request",

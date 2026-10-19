@@ -63,6 +63,11 @@ const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.j
 const { browserHandlers } = await import("./browser-request.js");
 
 const controlPort = 18_791;
+const activePlugins = {
+  allow: ["telegram", "browser"],
+  entries: { browser: { enabled: true } },
+};
+const browserStatus = { enabled: true, profile: "openclaw" };
 function browserConfig(browser: OpenClawConfig["browser"] = {}): OpenClawConfig {
   return {
     gateway: { port: controlPort - 2 },
@@ -75,33 +80,24 @@ function browserConfig(browser: OpenClawConfig["browser"] = {}): OpenClawConfig 
   };
 }
 
+function setConfig(source: OpenClawConfig, runtime = source) {
+  mocks.runtimeSourceConfig = source;
+  mocks.runtimeConfig = runtime;
+}
+
 async function browserRequestStatus(): Promise<unknown> {
   const respond = vi.fn();
-  await expectDefined(
-    browserHandlers["browser.request"],
-    "browser request handler",
-  )({
-    params: {
-      method: "GET",
-      path: "/",
-      query: { profile: "openclaw" },
-    },
+  await browserHandlers["browser.request"]({
+    params: { method: "GET", path: "/", query: { profile: "openclaw" } },
     respond: respond as never,
-    context: {
-      nodeRegistry: {
-        listConnected: () => [],
-      },
-    } as never,
+    context: { nodeRegistry: { listConnected: () => [] } } as never,
     client: null,
     req: { type: "req", id: "req-1", method: "browser.request" },
     isWebchatConnect: () => false,
   });
-  const [call] = respond.mock.calls;
-  if (!call) {
-    throw new Error("expected browser request response");
-  }
-  expect(call[0]).toBe(true);
-  return call[1];
+  const [ok, result] = expectDefined(respond.mock.calls[0], "browser response");
+  expect(ok).toBe(true);
+  return result;
 }
 
 describe("browser.request local control state", () => {
@@ -122,57 +118,36 @@ describe("browser.request local control state", () => {
       plugins: { allow: ["telegram"] },
     };
     const originalSource = structuredClone(source);
-    mocks.runtimeSourceConfig = source;
-    mocks.runtimeConfig = {
-      ...source,
-      plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
-    };
+    setConfig(source, { ...source, plugins: activePlugins });
     const httpState = await startBrowserControlServerFromConfig();
-    expect(httpState?.resolved.executablePath).toBe("/usr/bin/google-chrome");
-    expect(httpState?.resolved.noSandbox).toBe(true);
+    expect(httpState?.resolved).toMatchObject({
+      executablePath: "/usr/bin/google-chrome",
+      noSandbox: true,
+    });
 
     // The runtime snapshot can lag behind source config after gateway startup;
     // browser.request must not fork a second stale control state from it.
-    mocks.runtimeConfig = browserConfig({
-      headless: false,
-      noSandbox: false,
-    });
+    mocks.runtimeConfig = browserConfig({ headless: false, noSandbox: false });
 
-    const status = (await browserRequestStatus()) as {
-      executablePath?: unknown;
-      headless?: unknown;
-      noSandbox?: unknown;
-    };
-    expect(status.executablePath).toBe("/usr/bin/google-chrome");
-    expect(status.headless).toBe(true);
-    expect(status.noSandbox).toBe(true);
+    expect(await browserRequestStatus()).toMatchObject({
+      executablePath: "/usr/bin/google-chrome",
+      headless: true,
+      noSandbox: true,
+    });
     expect(source).toEqual(originalSource);
   });
 
   it("honors runtime plugin activation on a cold gateway request while retaining fresh browser options", async () => {
-    const source = {
-      ...browserConfig({ headless: true }),
-      plugins: { allow: ["telegram"] },
-    };
+    const source = { ...browserConfig({ headless: true }), plugins: { allow: ["telegram"] } };
     const originalSource = structuredClone(source);
-    mocks.runtimeSourceConfig = source;
-    mocks.runtimeConfig = {
-      ...browserConfig({ headless: false }),
-      plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
-    };
-
-    expect(await browserRequestStatus()).toMatchObject({
-      enabled: true,
-      profile: "openclaw",
-      headless: true,
-    });
+    setConfig(source, { ...browserConfig({ headless: false }), plugins: activePlugins });
+    expect(await browserRequestStatus()).toMatchObject({ ...browserStatus, headless: true });
     expect(source).toEqual(originalSource);
   });
 
   it("retains effective plugin disablement at both cold entrypoints", async () => {
     const source = browserConfig();
-    mocks.runtimeSourceConfig = source;
-    mocks.runtimeConfig = { ...source, plugins: { allow: ["telegram"] } };
+    setConfig(source, { ...source, plugins: { allow: ["telegram"] } });
     expect(await startBrowserControlServiceFromConfig()).toBeNull();
     expect(await startBrowserControlServerFromConfig()).toBeNull();
     expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
@@ -180,19 +155,15 @@ describe("browser.request local control state", () => {
   });
 
   it("retains a fresh browser disable even when the activated runtime options lag", async () => {
-    mocks.runtimeConfig = {
-      ...browserConfig(),
-      plugins: { allow: ["browser"], entries: { browser: { enabled: true } } },
-    };
-    mocks.runtimeSourceConfig = { ...mocks.runtimeConfig, browser: { enabled: false } };
+    const runtime = { ...browserConfig(), plugins: { ...activePlugins, allow: ["browser"] } };
+    setConfig({ ...runtime, browser: { enabled: false } }, runtime);
     expect(await startBrowserControlServiceFromConfig()).toBeNull();
     expect(await startBrowserControlServerFromConfig()).toBeNull();
     expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
   });
 
   it("retains port auth until a failed stop is retried successfully", async () => {
-    mocks.runtimeConfig = browserConfig();
-    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    setConfig(browserConfig());
     mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
     const state = await startBrowserControlServerFromConfig();
     expect(state?.port).toBe(controlPort);
@@ -207,8 +178,7 @@ describe("browser.request local control state", () => {
   });
 
   it("clears auth when a stop queues behind cold startup", async () => {
-    mocks.runtimeConfig = browserConfig();
-    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    setConfig(browserConfig());
     const authStarted = createDeferred<void>();
     const authGate = createDeferred<void>();
     mocks.ensureBrowserControlAuth.mockImplementationOnce(async () => {
@@ -228,36 +198,33 @@ describe("browser.request local control state", () => {
 
   it("restarts node proxy control after the shared service stops", async () => {
     const setEnabled = (enabled: boolean) => {
-      const cfg = browserConfig();
-      mocks.runtimeConfig = { ...cfg, browser: { ...cfg.browser, enabled } };
-      mocks.runtimeSourceConfig = mocks.runtimeConfig;
+      setConfig(browserConfig({ enabled }));
     };
     const request = JSON.stringify({ method: "GET", path: "/", profile: "openclaw" });
+    const proxy = () => runBrowserProxyCommand(request);
+    const expectStatus = async () => {
+      expect(JSON.parse(await proxy()).result).toMatchObject(browserStatus);
+    };
     setEnabled(false);
-    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+    await expect(proxy()).rejects.toThrow("browser control disabled");
     setEnabled(true);
     await startBrowserControlServiceFromConfig();
     setEnabled(false);
-    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+    await expect(proxy()).rejects.toThrow("browser control disabled");
 
     setEnabled(true);
-    const first = JSON.parse(await runBrowserProxyCommand(request));
-    expect(first.result).toMatchObject({ enabled: true, profile: "openclaw" });
+    await expectStatus();
     const previous = getBrowserControlState();
     expect(previous).not.toBeNull();
     setEnabled(false);
-    expect(JSON.parse(await runBrowserProxyCommand(request)).result).toMatchObject({
-      enabled: true,
-      profile: "openclaw",
-    });
+    await expectStatus();
     expect(getBrowserControlState()).toBe(previous);
 
     await stopBrowserControlService();
     expect(getBrowserControlState()).toBeNull();
 
     setEnabled(true);
-    const restarted = JSON.parse(await runBrowserProxyCommand(request));
-    expect(restarted.result).toMatchObject({ enabled: true, profile: "openclaw" });
+    await expectStatus();
     expect(getBrowserControlState()).not.toBe(previous);
     expect(getBrowserControlState()).not.toBeNull();
 
@@ -269,12 +236,12 @@ describe("browser.request local control state", () => {
     });
     const stopping = stopBrowserControlService();
     await stopStarted.promise;
-    const duringStop = expect(runBrowserProxyCommand(request)).rejects.toThrow("stopping");
+    const duringStop = expect(proxy()).rejects.toThrow("stopping");
     stopGate.resolve();
     await stopping;
     await duringStop;
     expect(getBrowserControlState()).toBeNull();
     setEnabled(false);
-    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+    await expect(proxy()).rejects.toThrow("browser control disabled");
   });
 });

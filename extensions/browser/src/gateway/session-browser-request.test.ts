@@ -19,18 +19,24 @@ vi.mock("../browser/routes/dispatcher.js", () => ({
 }));
 const sessionKey = "agent:main:dashboard:one";
 const target = { target: "host", profile: "openclaw", targetId: "isolated-tab" };
+const tabs = [
+  { targetId: "admin-tab", title: "Private" },
+  { targetId: "isolated-tab", title: "Review" },
+];
 const current = () => {
   if (!mocked.current) {
     throw new Error("access revoked");
   }
 };
-async function request(params: Record<string, unknown>) {
+async function request(path: string, params: Record<string, unknown> = {}) {
   const respond = vi.fn();
   await handleSessionBrowserGatewayRequest({
     params: {
       sessionKey,
       agentId: "main",
       dashboard: { name: "review", instanceId: "widget" },
+      method: "POST",
+      path,
       ...params,
     },
     respond,
@@ -46,8 +52,12 @@ async function request(params: Record<string, unknown>) {
   } as unknown as Parameters<GatewayRequestHandlers[string]>[0]);
   return respond;
 }
-async function rejectedRequest(params: Record<string, unknown>, message: string) {
-  const respond = await request(params);
+async function rejectedRequest(
+  path: string,
+  message: string,
+  params: Record<string, unknown> = {},
+) {
+  const respond = await request(path, params);
   expect(respond).toHaveBeenCalledWith(
     false,
     undefined,
@@ -59,26 +69,15 @@ beforeEach(() => {
   mocked.current = true;
   mocked.access.mockResolvedValue({
     response: { browserTab: target, paused: false },
-    resource: {
-      assertCurrent: current,
-      signal: new AbortController().signal,
-    },
+    resource: { assertCurrent: current, signal: new AbortController().signal },
   });
   mocked.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
-  mocked.tabs.mockResolvedValue([
-    { targetId: "admin-tab", title: "Private" },
-    { targetId: "isolated-tab", title: "Review" },
-  ]);
+  mocked.tabs.mockResolvedValue(tabs);
 });
 
 describe("closed session browser route", () => {
   it("accepts the Control UI dashboard envelope and carries its timeout into startup", async () => {
-    const respond = await request({
-      method: "POST",
-      path: "/dashboard",
-      body: {},
-      timeoutMs: 120_000,
-    });
+    const respond = await request("/dashboard", { body: {}, timeoutMs: 120_000 });
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ browserTab: target }));
     expect(mocked.access).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey, name: "review", instanceId: "widget" }),
@@ -89,20 +88,15 @@ describe("closed session browser route", () => {
 
   it("aborts the UI action deadline without publishing a late successful result", async () => {
     vi.useFakeTimers();
-    let finish!: (result: unknown) => void;
-    mocked.dispatch.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
+    const action = Promise.withResolvers<unknown>();
+    mocked.dispatch.mockImplementationOnce(() => action.promise);
     try {
-      const pending = request({ method: "POST", path: "/screenshot", body: {}, timeoutMs: 100 });
+      const pending = request("/screenshot", { body: {}, timeoutMs: 100 });
       await vi.advanceTimersByTimeAsync(100);
       const respond = await pending;
       expect(respond.mock.calls[0]?.[0]).toBe(false);
       expect(mocked.dispatch.mock.calls[0]?.[0].signal.aborted).toBe(true);
-      finish({ status: 200, body: { private: true } });
+      action.resolve({ status: 200, body: { private: true } });
       await Promise.resolve();
       expect(respond).toHaveBeenCalledOnce();
     } finally {
@@ -110,7 +104,7 @@ describe("closed session browser route", () => {
     }
   });
   it("does not forward tab administration", async () => {
-    await rejectedRequest({ method: "POST", path: "/tabs/open", body: {} }, "unavailable");
+    await rejectedRequest("/tabs/open", "unavailable", { body: {} });
     expect(mocked.access).not.toHaveBeenCalled();
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });
@@ -118,28 +112,18 @@ describe("closed session browser route", () => {
   it.each(["profile", "targetId", "node", "target"])(
     "rejects caller-selected %s before binding",
     async (selector) => {
-      await rejectedRequest(
-        {
-          method: "POST",
-          path: "/navigate",
-          body: { [selector]: "other", url: "https://example.test" },
-        },
-        "cannot select",
-      );
+      await rejectedRequest("/navigate", "cannot select", {
+        body: { [selector]: "other", url: "https://example.test" },
+      });
       expect(mocked.dispatch).not.toHaveBeenCalled();
     },
   );
 
   it("rejects batch and close actions that could escape the single-tab operation contract", async () => {
     for (const kind of ["batch", "close"]) {
-      await rejectedRequest(
-        {
-          method: "POST",
-          path: "/act",
-          body: { kind, actions: [{ kind: "click", targetId: "admin-tab" }] },
-        },
-        "unavailable",
-      );
+      await rejectedRequest("/act", "unavailable", {
+        body: { kind, actions: [{ kind: "click", targetId: "admin-tab" }] },
+      });
     }
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });
@@ -161,7 +145,7 @@ describe("closed session browser route", () => {
     const path = "/act";
     const body = { kind: "evaluate", fn: "() => location.href" };
     // Exercise the allowed-action gate as well as the synchronous effect fence.
-    await request({ method: "POST", path, body });
+    await request(path, { body });
     expect(events).toEqual(["authorized effect", "revoked"]);
     expect(mocked.dispatch).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -181,7 +165,7 @@ describe("closed session browser route", () => {
       mocked.current = false;
       return { status: 200, body: { private: true } };
     });
-    const respond = await request({ method: "POST", path: "/screenshot", body: {} });
+    const respond = await request("/screenshot", { body: {} });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -201,16 +185,9 @@ describe("closed session browser route", () => {
       entered.resolve();
       return completed.promise;
     });
-    const pending = request(params);
+    const pending = request(params.path, params);
     await entered.promise;
-    completed.resolve(
-      params.path === "/tabs"
-        ? [
-            { targetId: "admin-tab", title: "Private" },
-            { targetId: "isolated-tab", title: "Review" },
-          ]
-        : { status: 200, body: { private: true } },
-    );
+    completed.resolve(params.path === "/tabs" ? tabs : { status: 200, body: { private: true } });
     const revoke = vi.fn(() => {
       mocked.current = false;
     });
@@ -228,14 +205,9 @@ describe("closed session browser route", () => {
   });
 
   it("rejects conflicting nested and canonical session identities", async () => {
-    await rejectedRequest(
-      {
-        method: "POST",
-        path: "/dashboard",
-        dashboard: { name: "review", sessionKey: "agent:main:foreign" },
-      },
-      "match the admitted session",
-    );
+    await rejectedRequest("/dashboard", "match the admitted session", {
+      dashboard: { name: "review", sessionKey: "agent:main:foreign" },
+    });
     expect(mocked.access).not.toHaveBeenCalled();
   });
 });
