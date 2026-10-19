@@ -43,7 +43,7 @@ import type {
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
-  GATEWAY_SERVICE_INSPECTION_WARNING,
+  serviceInspectionWarningMessage,
   GatewayServiceUpdateOwnershipError,
   isUpdateServiceManagerAvailable,
   observedSystemdManagerUid,
@@ -385,15 +385,16 @@ async function stopManagedServiceBeforeMutableUpdate(
         };
       }
     }
+    const warning = await serviceInspectionWarningMessage(undefined, serviceEnv);
     const verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }> = {
       kind: "unavailable",
       message:
         err instanceof ServiceInspectionError && err.reason === "windows-task-inspection-failed"
-          ? `${err.message} ${GATEWAY_SERVICE_INSPECTION_WARNING}`
+          ? `${err.message} ${warning}`
           : err instanceof ServiceInspectionError ||
               err instanceof GatewayServiceUpdateOwnershipError
-            ? `${err.message}\n${GATEWAY_SERVICE_INSPECTION_WARNING}`
-            : GATEWAY_SERVICE_INSPECTION_WARNING,
+            ? `${err.message}\n${warning}`
+            : warning,
       ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
     };
     assertGatewayServiceAdmissionUnchanged(params.expectedService, verdict);

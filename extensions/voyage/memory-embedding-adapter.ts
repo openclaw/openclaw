@@ -36,17 +36,12 @@ export const voyageMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
         },
         batchEmbed: async (batch) => {
           const byCustomId = await runVoyageEmbeddingBatches({
+            ...batch,
             client,
-            agentId: batch.agentId,
             requests: batch.chunks.map((chunk, index) => ({
               custom_id: String(index),
               body: { input: chunk.text },
             })),
-            wait: batch.wait,
-            concurrency: batch.concurrency,
-            pollIntervalMs: batch.pollIntervalMs,
-            timeoutMs: batch.timeoutMs,
-            debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
         },

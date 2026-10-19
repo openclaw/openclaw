@@ -446,10 +446,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     ) {
       this.cancelHeaderRename();
     }
-    const metadataOwnerChanged =
-      draftOwnerChanged ||
+    const reactionOwnerChanged =
+      pairingOwnerChanged ||
       snapshot.client?.offlineRecoveryRetired === true ||
       (snapshot.phase === "connected" && !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null));
+    const metadataOwnerChanged = state.client !== snapshot.client || reactionOwnerChanged;
     if (sourceChanged || metadataOwnerChanged) {
       retireChatMetadataRequests(state, { keepPresentation: !metadataOwnerChanged });
     }
@@ -474,7 +475,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.assistantIdentityRequestVersion += 1;
       this.taskSuggestionsRequestVersion += 1;
       this.resetSessionSuggestions();
-      this.resetSessionReactions();
+      if (reactionOwnerChanged) {
+        this.resetSessionReactions();
+      }
       this.clearTypingActors();
       this.sessionDiscussion.clear();
       this.sessionDiscussionPanels.clear();

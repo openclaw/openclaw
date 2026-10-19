@@ -1,12 +1,5 @@
-import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.ts";
 
-export const page = definePage({
-  ...routePageSpec("about"),
-  component: () =>
-    import("./about-page.tsx").then((module) => ({
-      header: true,
-      renderSolid: () => createComponent(module.AboutPage, {}),
-    })),
-});
+export const page = defineSolidPage("about", () =>
+  import("./about-page.tsx").then((module) => module.AboutPage),
+);

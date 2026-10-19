@@ -148,11 +148,3 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
     </Show>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-sources": HTMLAttributes<HTMLElement>;
-    }
-  }
-}

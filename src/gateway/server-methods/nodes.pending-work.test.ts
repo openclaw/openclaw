@@ -139,6 +139,29 @@ describe("node.pending handlers", () => {
     },
   );
 
+  it.each([999, 86_400_001, 1_000.5, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
+    "rejects invalid pending-work TTL %s before queueing",
+    async (expiresInMs) => {
+      expect(await request("enqueue", { expiresInMs, wake: false })).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+      expect(work.enqueueNodePendingWork).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([1_000, 86_400_000])("forwards admitted pending-work TTL %s", async (expiresInMs) => {
+    expect(await request("enqueue", { expiresInMs, wake: false })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ queued: item }),
+      undefined,
+    );
+    expect(work.enqueueNodePendingWork).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInMs }),
+    );
+  });
+
   it("normalizes the target identity before queueing and waking a disconnected node", async () => {
     let connected = false;
     const context = makeContext(() => (connected ? { connId: "conn-1" } : undefined));

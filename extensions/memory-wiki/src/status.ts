@@ -36,12 +36,9 @@ export type MemoryWikiStatus = Awaited<ReturnType<typeof resolveMemoryWikiStatus
 
 export type MemoryWikiDoctorReport = ReturnType<typeof buildMemoryWikiDoctorReport>;
 
-type ResolveMemoryWikiStatusDeps = {
+type MemoryWikiStatusOptions = {
   appConfig?: OpenClawConfig;
   callerAgentId?: string;
-  pathExists?: (inputPath: string) => Promise<boolean>;
-  listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
-  resolveCommand?: (command: string) => Promise<string | null>;
 };
 
 function createEmptyVaultCounts() {
@@ -155,25 +152,24 @@ function buildWarnings(params: {
 
 export async function resolveMemoryWikiStatus(
   config: ResolvedMemoryWikiConfig,
-  deps?: ResolveMemoryWikiStatusDeps,
+  options?: MemoryWikiStatusOptions,
 ) {
   const agentId = resolveMemoryWikiVaultAgentId(config);
-  const exists = deps?.pathExists ?? pathExists;
-  const vaultExists = await exists(config.vault.path);
+  const vaultExists = await pathExists(config.vault.path);
   const bridgePublicArtifactCount =
-    deps?.appConfig &&
+    options?.appConfig &&
     config.vaultMode === "bridge" &&
     config.bridge.enabled &&
     config.bridge.readMemoryArtifacts
       ? filterMemoryWikiBridgeArtifacts({
           config,
-          callerAgentId: deps.callerAgentId,
-          artifacts: await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
-            cfg: deps.appConfig,
+          callerAgentId: options.callerAgentId,
+          artifacts: await listActiveMemoryPublicArtifacts({
+            cfg: options.appConfig,
           }),
         }).length
       : null;
-  const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
+  const obsidianProbe = await probeObsidianCli();
   const counts = vaultExists
     ? await collectVaultCounts(config.vault.path)
     : createEmptyVaultCounts();

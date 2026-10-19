@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchZaiUsage } from "./provider-usage.fetch.zai.js";
 import { formatUsageWindowSummary } from "./provider-usage.format.js";
@@ -11,6 +11,8 @@ const fetchUsage = (body: unknown, status = 200) =>
   );
 
 describe("fetchZaiUsage", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("reports HTTP failures", async () => {
     const result = await fetchUsage("unavailable", 503);
     expect(result.error).toBe("HTTP 503");
@@ -65,13 +67,10 @@ describe("fetchZaiUsage", () => {
       { label: "Tokens (5h)", usedPercent: 1, resetAt: 1_778_753_640_304 },
       { label: "Monthly", usedPercent: 0, resetAt: 1_781_345_721_976 },
     ]);
-    expect(
-      formatUsageWindowSummary(result, {
-        now: 1_778_750_040_304,
-        maxWindows: 1,
-        includeResets: true,
-      }),
-    ).toBe("Tokens (5h) 99% left ⏱1h");
+    vi.spyOn(Date, "now").mockReturnValue(1_778_750_040_304);
+    expect(formatUsageWindowSummary({ ...result, windows: result.windows.slice(0, 1) })).toBe(
+      "Tokens (5h) 99% left ⏱1h",
+    );
   });
 
   it("identifies weekly token quotas even when their optional reset is absent", async () => {

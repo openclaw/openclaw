@@ -19,7 +19,6 @@ import {
 import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import {
   affectsPlacementObservation,
-  applyPlacementReadPublication,
   hasPendingPublication,
   prepareCachedPlacementPreservationRead,
   preparePlacementRead,
@@ -84,7 +83,6 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   } else if (!newerPlacement && change.kind === "workspace-result" && change.facts) {
     owner.placements.set(change.sessionId, { placement: change.facts.placement, sequence });
   }
-  applyPlacementReadPublication(owner, change, sequence);
   if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
     owner.recoveryCandidatesEmpty = undefined;
@@ -301,9 +299,9 @@ export async function prepareSessionPlacementRead(
 ) {
   const captured = capturePlacementObservation(pathname, sessionId);
   try {
-    const placement = await read();
+    await read();
     captured.assertUsable();
-    return retainSessionPlacementRead(sessionId, placement, captured);
+    return retainSessionPlacementRead(sessionId, captured);
   } catch (error) {
     captured.authority.release();
     throw error;

@@ -90,7 +90,6 @@ export function createPluginReloadCleanup({
   const drainInstances = async (
     registry: PluginRegistry,
     pluginIds: ReadonlySet<string>,
-    includeConsumers = true,
     signal?: AbortSignal,
   ) => {
     for (const record of registry.plugins) {
@@ -98,7 +97,7 @@ export function createPluginReloadCleanup({
         continue;
       }
       signal?.throwIfAborted();
-      const drain = () => getPluginInstance(record)?.drain({ includeConsumers, signal });
+      const drain = () => getPluginInstance(record)?.drain({ includeConsumers: true, signal });
       const result = signal
         ? await drain()
         : await withPluginHostCleanupTimeout(`plugin ${record.id} admitted work`, drain);
@@ -124,38 +123,30 @@ export function createPluginReloadCleanup({
         Math.max(0, deadlineAtMs - Date.now()),
       );
     } finally {
-      // Remove pending observers before rollback; late settlement cannot quiesce another owner.
+      // Detach observers when the wait ends; admitted work keeps its own lifetime.
       observation.abort();
     }
   };
-  const drainWithDeadline = async (
-    pluginIds: ReadonlySet<string>,
+  const drainForRecovery = async (
     signal: AbortSignal,
     reportStatus: (status: GatewayPluginReloadStatus) => void,
-    phase: "reloading" | "recovering",
   ) => {
-    const deadlineAtMs =
-      phase === "reloading"
-        ? admittedWorkDeadline()
-        : Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
+    const deadlineAtMs = Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
     reportStatus({
-      phase,
+      phase: "recovering",
       pluginIds: [...changedPluginIds],
       deadlineAtMs,
-      reason:
-        phase === "recovering"
-          ? "Waiting for cleanup and admitted work before restoring the previous plugin runtime."
-          : `Waiting for admitted work of plugin ${[...pluginIds].join(", ")} before replacing it.`,
+      reason: "Waiting for cleanup and admitted work before restoring the previous plugin runtime.",
     });
     try {
       await observeDrain("previous plugin admitted work", signal, deadlineAtMs, async (current) => {
-        if (phase === "recovering" && pendingServiceCleanup) {
+        if (pendingServiceCleanup) {
           await racePromiseWithAbortSignal(pendingServiceCleanup.settled, current);
         }
-        await drainInstances(previousRegistry, pluginIds, phase === "recovering", current);
+        await drainInstances(previousRegistry, changedPluginIds, current);
       });
     } catch (error) {
-      if (phase === "recovering" && error instanceof PluginHostCleanupTimeoutError) {
+      if (error instanceof PluginHostCleanupTimeoutError) {
         throw new Error("Previous plugin work did not settle before the recovery deadline", {
           cause: error,
         });
@@ -322,19 +313,23 @@ export function createPluginReloadCleanup({
         total + instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
       0,
     );
-    if (!count) {
+    if (!instances.length || (!count && !includeConsumers)) {
       return;
     }
-    retainedWorkQueued = true;
+    retainedWorkQueued ||= count > 0;
     const deadlineAtMs = admittedWorkDeadline();
-    const reason = `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`;
+    const reason = count
+      ? `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`
+      : "Waiting for admitted plugin cleanup before replacing it.";
     reportStatus({ phase: "reloading", pluginIds: [...changedPluginIds], deadlineAtMs, reason });
     log.info(reason);
     try {
       await observeDrain("retained plugin work", signal, deadlineAtMs, (current) =>
         Promise.all(
           instances.map((instance) =>
-            instance.waitForRetainedWork(current, { includeConsumers, includeCalls }),
+            includeConsumers
+              ? instance.waitForIdle(current)
+              : instance.waitForRetainedWork(current, { includeConsumers: false, includeCalls }),
           ),
         ),
       );
@@ -472,40 +467,18 @@ export function createPluginReloadCleanup({
       pluginIds: ReadonlySet<string>,
       signal: AbortSignal,
       reportStatus: (status: GatewayPluginReloadStatus) => void,
-      checkpoint: () => Promise<void>,
     ) => {
-      // Sidecars release their capability consumers before finite work and callbacks drain.
+      // Admission is closed and sidecars drained; observe without quiescing again.
       await drainRetainedWork(pluginIds, signal, reportStatus, {
         includeConsumers: true,
         includeCalls: true,
       });
-      await checkpoint();
       if (retainedWorkQueued) {
         recordWarning("Plugin replacement waited for retained work to finish.");
       }
-      try {
-        if (pluginIds.size) {
-          await drainWithDeadline(pluginIds, signal, reportStatus, "reloading");
-        }
-      } catch (error) {
-        if (error instanceof PluginHostCleanupTimeoutError) {
-          throw new PluginAdmittedWorkTimeoutError(
-            pluginIds,
-            previousInstances(pluginIds),
-            error,
-            admittedWorkTimeoutMs,
-          );
-        }
-        throw error;
-      }
     },
     resumeInstances: () => quiescedInstances.forEach((instance) => instance.resume()),
-    drainForRecovery: async (
-      signal: AbortSignal,
-      reportStatus: (status: GatewayPluginReloadStatus) => void,
-    ) => {
-      await drainWithDeadline(changedPluginIds, signal, reportStatus, "recovering");
-    },
+    drainForRecovery,
     disposeInstances,
     runLifecycleHooks,
     prepareRegistrationFailureCleanup,

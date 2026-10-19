@@ -1,19 +1,20 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
-
 export type ChatErrorState = ReturnType<typeof createChatErrorState>;
 
 export function createChatErrorState() {
   let lastError: { message: string | null } = { message: null };
   let chatError: { message: string | null } = { message: null };
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
   };
   return {
     readErrors: () => ({ lastError: lastError.message, chatError: chatError.message }),
-    subscribeErrors: (listener: () => void) => registerListener(listeners, listener),
+    subscribeErrors(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     get lastError() {
       return lastError.message;
     },

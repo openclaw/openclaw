@@ -31,6 +31,19 @@ or dispose the authoritative owner.
 Event consumers subscribe directly to their owners, preserving each channel's
 delivery order, replay behavior, and completion contract.
 
+`observeState(initial)` adapts page-local synchronous request state through the
+same projection contract. Top-level assignments publish automatically; use
+`edit()` for nested changes and `invalidate()` for external owner receipts.
+Reads remain synchronous, and disposal retires notifications without changing
+the state or owning its requests. Existing domain owners still use `projectOwner()`.
+
+For a private leaf owner created with its view, `projectCallbackOwner(create, read)`
+from `callback-owner.ts`
+supplies its sole notification callback and returns `{ owner, view }`. The view
+uses the same lazy observation and disposal contract, without requiring a
+subscription API on the leaf. Retained owners that outlive a view still need a
+rebindable subscription; use `projectOwner` for those lifetimes.
+
 ## Adapter families
 
 | Module                   | Owners                                                            |

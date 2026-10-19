@@ -164,6 +164,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   });
   onSettled(() => {
     let previous = liveSnapshot();
+    // Ordered append/reset receipts preserve stream-follow intent across each publication.
     return pageProps.page.liveActivity.subscribe(() => {
       const current = liveSnapshot();
       if (current.revision !== previous.revision) {

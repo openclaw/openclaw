@@ -288,6 +288,11 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
         placement.state,
       );
       try {
+        sessionRead.placement!.agentId = "caller-agent";
+        sessionRead.placement!.turnClaim!.claimId = "caller-claim";
+        expect(
+          (await store.readProjection([session.sessionId])).placements.get(session.sessionId),
+        ).toMatchObject({ agentId: session.agentId, turnClaim: { claimId: "settling-claim" } });
         expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
         publication[settlement]();
         if (settlement === "rollback") {

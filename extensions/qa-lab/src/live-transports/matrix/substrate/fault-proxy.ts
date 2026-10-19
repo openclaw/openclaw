@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -163,56 +164,27 @@ async function readRequestBody(req: IncomingMessage, maxBytes: number) {
     }
   }
 
-  return await new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-
-    const cleanup = () => {
-      req.off("data", onData);
-      req.off("end", onEnd);
-      req.off("error", onError);
-      req.off("aborted", onAborted);
-      req.off("close", onClose);
-    };
-    const settleReject = (error: Error, options?: { drain?: boolean }) => {
-      cleanup();
-      if (options?.drain) {
-        drainRejectedRequestBody(req);
-      }
-      reject(error);
-    };
-    const onData = (chunk: string | Buffer) => {
-      const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      const nextTotal = total + buffer.byteLength;
-      if (nextTotal > maxBytes) {
-        settleReject(rejectOversizedRequestBody(maxBytes, nextTotal), { drain: true });
-        return;
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    // Keep the socket open so an oversized upload can receive its 413 response.
+    for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.byteLength;
+      if (total > maxBytes) {
+        throw rejectOversizedRequestBody(maxBytes, total);
       }
       chunks.push(buffer);
-      total = nextTotal;
-    };
-    const onEnd = () => {
-      cleanup();
-      resolve(Buffer.concat(chunks, total));
-    };
-    const onError = (error: Error) => settleReject(error);
-    const onAborted = () => {
-      settleReject(rejectAbortedRequestBody());
-    };
-    const onClose = () => {
-      if (!req.complete) {
-        settleReject(rejectAbortedRequestBody());
-        return;
-      }
-      cleanup();
-    };
-
-    req.on("data", onData);
-    req.once("end", onEnd);
-    req.once("error", onError);
-    req.once("aborted", onAborted);
-    req.once("close", onClose);
-  });
+    }
+  } catch (error) {
+    if (error instanceof MatrixQaFaultProxyHttpError) {
+      drainRejectedRequestBody(req);
+    } else if (req.aborted) {
+      throw rejectAbortedRequestBody();
+    }
+    throw error;
+  }
+  return Buffer.concat(chunks, total);
 }
 
 function bufferToArrayBuffer(buffer: Buffer) {
@@ -429,13 +401,7 @@ export async function startMatrixQaFaultProxy(
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
 
   const address = server.address();
   if (!address || typeof address === "string") {

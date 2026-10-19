@@ -1574,6 +1574,9 @@ update_candidate() {
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
   local update_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY:-}" ]; then
+    update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"
+  fi
   if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
     update_node_options+=" --import=$ARTIFACT_ROOT/sibling-refusal-preload.mjs"
   fi
@@ -1932,6 +1935,10 @@ NODE
       "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
       "$fixture_dir/registry" restart_registry_pid \
       "${registry_args[@]}" || return "$?"
+  # Product diagnostics deliberately resolve official packages from public npm.
+  # Project those reads onto this survivor-only synthetic future cohort without
+  # weakening the production registry trust boundary.
+  export OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY="$NPM_CONFIG_REGISTRY"
 }
 
 repair_update_restart_auth() {

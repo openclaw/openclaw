@@ -3,6 +3,7 @@ import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import {
   markdownSessionPublicOrigin,
   navigateMarkdownSession,
@@ -37,9 +38,7 @@ import {
   readChatPublicationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
-import { resolveChatPaneUserPresentation } from "./chat-pane-session-presentation.ts";
 import {
-  chatWidgetRenderOptions,
   createSidebarFullMessageLoader,
   resolveSidebarLayoutForBoard,
 } from "./chat-pane-sidebar-layout.ts";
@@ -67,6 +66,7 @@ import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { createChatWidgetLayout } from "./session-message-cache.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -212,13 +212,18 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       setObserverVisibility: this.setSessionObserverVisibility,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
     });
-    const { selfUser, ...userPresentation } = resolveChatPaneUserPresentation({
-      gatewaySnapshot,
-      presencePayload: this.presence.snapshot,
-      previousUserId: this.presentationUserId,
-      state,
-      selectedSession,
+    const selfUser = resolveCurrentSelfUser({
+      snapshotUser: gatewaySnapshot.selfUser,
+      presenceEntries: readPresenceEntries(this.presence.snapshot),
+      presenceInstanceId: gatewaySnapshot.client?.instanceId,
     });
+    const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
+    const userPresentation = {
+      userId: selfProfileId ?? this.presentationUserId,
+      userName: selfUser?.name ?? state.userName,
+      userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
+      channelAvatar: selectedSession ?? undefined,
+    };
     this.presentationUserId = userPresentation.userId;
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
@@ -352,7 +357,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       disabledBanner:
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
     };
-    const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
     const { gatewayQuestionPrompts, inlineApproval } = this.projectConversationAttention(
       state,
@@ -601,15 +605,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
-      onDismissError: () => {
-        dismissChatError(state);
-      },
-      onDismissRealtimeTalkError: () => {
-        dismissRealtimeTalkError(state);
-      },
-      onDismissRealtimeTalkInputNotice: () => {
-        state.realtimeTalk.update({ realtimeTalkInputNotice: null });
-      },
+      onDismissError: () => dismissChatError(state),
+      onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
+      onDismissRealtimeTalkInputNotice: () =>
+        state.realtimeTalk.update({ realtimeTalkInputNotice: null }),
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
@@ -645,7 +644,12 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
       loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
-      ...chatWidgetRenderOptions(state, board.provider),
+      canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
+      boardProvider: board.provider,
+      widgetLayout: createChatWidgetLayout(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+        ...scopedAgentParamsForSession(state, state.sessionKey),
+      }),
       onOpenSidebar: state.handleOpenSidebar,
       onRequestOpenImage: state.beginImageOpen,
       onOpenImage: state.handleOpenImage,

@@ -1,20 +1,34 @@
-import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  createReplyPrefixContext,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
+import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import { buildFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import {
   resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
 import { resolveFeishuDmIngressAccess } from "./policy.js";
+import { buildFeishuPresentationFallback, resolveFeishuRichReply } from "./presentation-card.js";
+import {
+  createFeishuPartialReplyDeliveryError,
+  createFeishuReplyDeliveryResult,
+  noVisibleFeishuReplyDelivery,
+  type FeishuReplyDeliverySource,
+} from "./reply-delivery-result.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 type HandleFeishuCommentEventParams = {
@@ -75,7 +89,7 @@ export async function handleFeishuCommentEvent(
       cfg: candidateCfg,
       accountId: account.accountId,
     });
-    const candidateDmPolicy = candidateAccount.config.dmPolicy ?? "pairing";
+    const candidateDmPolicy = candidateAccount.config.dmPolicy;
     const ingress = await resolveFeishuDmIngressAccess({
       cfg: candidateCfg,
       accountId: candidateAccount.accountId,
@@ -230,19 +244,99 @@ export async function handleFeishuCommentEvent(
     },
   });
 
-  const { dispatcherOptions, delivery, cleanupTypingReaction } = createFeishuCommentReplyDispatcher(
-    {
-      cfg: effectiveCfg,
-      agentId: route.agentId,
-      runtime,
-      accountId: account.accountId,
-      fileToken: turn.fileToken,
-      fileType: turn.fileType,
-      commentId: turn.commentId,
-      replyId: turn.replyId,
-      isWholeComment: turn.isWholeComment,
-    },
+  const prefixContext = createReplyPrefixContext({
+    cfg: effectiveCfg,
+    agentId: route.agentId,
+    channel: "feishu",
+    accountId: account.accountId,
+  });
+  const client = createFeishuClient(
+    resolveFeishuRuntimeAccount({ cfg: effectiveCfg, accountId: account.accountId }),
   );
+  const textChunkLimit = core.channel.text.resolveTextChunkLimit(
+    effectiveCfg,
+    "feishu",
+    account.accountId,
+    { fallbackLimit: 4000 },
+  );
+  const chunkMode = core.channel.text.resolveChunkMode(effectiveCfg, "feishu", account.accountId);
+  const typingReaction = createCommentTypingReactionLifecycle({
+    cfg: effectiveCfg,
+    accountId: account.accountId,
+    runtime,
+    fileToken: turn.fileToken,
+    fileType: turn.fileType,
+    replyId: turn.replyId,
+  });
+  const dispatcherOptions: ChannelInboundTurnPlan["dispatcherOptions"] = {
+    responsePrefix: prefixContext.responsePrefix,
+    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+    humanDelay: resolveHumanDelayConfig(effectiveCfg, route.agentId),
+    onReplyStart: typingReaction.start,
+    onCleanup: () => {
+      void typingReaction.cleanup();
+    },
+  };
+  const delivery: ChannelInboundTurnPlan["delivery"] = {
+    observeMessageSent: true,
+    deliver: async (payload, info) => {
+      if (info.kind !== "final") {
+        return noVisibleFeishuReplyDelivery;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      const { presentation } = resolveFeishuRichReply(payload);
+      let { commentText: text } = buildFeishuPresentationFallback({
+        text: reply.text,
+        presentation,
+      });
+      for (const mediaUrl of reply.mediaUrls) {
+        text = await buildFeishuMediaFallbackText({ text, mediaUrl, mediaLinkStyle: "plain" });
+      }
+      if (!text.trim()) {
+        return noVisibleFeishuReplyDelivery;
+      }
+      const chunks = core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode);
+      const results: FeishuReplyDeliverySource[] = [];
+      const acceptedChunks: string[] = [];
+      for (const chunk of chunks) {
+        try {
+          const result = await deliverCommentThreadText(client, {
+            file_token: turn.fileToken,
+            file_type: turn.fileType,
+            comment_id: turn.commentId,
+            content: chunk,
+            is_whole_comment: turn.isWholeComment,
+          });
+          results.push({
+            messageId:
+              result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id,
+          });
+          acceptedChunks.push(chunk);
+        } catch (deliveryError: unknown) {
+          throw createFeishuPartialReplyDeliveryError(
+            deliveryError,
+            createFeishuReplyDeliveryResult({
+              results,
+              visibleReplySent: results.length > 0,
+              content: acceptedChunks.join(""),
+              kind: "text",
+            }),
+          );
+        }
+      }
+      return createFeishuReplyDeliveryResult({
+        results,
+        visibleReplySent: results.length > 0,
+        content: text,
+        kind: "text",
+      });
+    },
+    onError: (err, info) => {
+      runtime.error?.(
+        `feishu[${account.accountId}]: comment dispatcher failed kind=${info.kind} comment=${turn.commentId}: ${String(err)}`,
+      );
+    },
+  };
 
   try {
     await core.channel.inbound.run({
@@ -280,6 +374,6 @@ export async function handleFeishuCommentEvent(
       },
     });
   } finally {
-    void cleanupTypingReaction();
+    void typingReaction.cleanup();
   }
 }

@@ -8,6 +8,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
@@ -273,6 +276,46 @@ describe("command selection with configured model facts", () => {
     const selected = await fixture.unchanged({ opts: fixture.opts });
     expect(selected).toMatchObject({ provider: "custom", model: "manual" });
     expect(selected.sessionEntryForAttempt?.authProfileOverride).toBeUndefined();
+  });
+
+  it("preserves a prepared missing personal account pin without main-thread SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = createFixture();
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
+      const owner = ensureProfileForEmail("missing-model-pin@example.test");
+      const profileId = `personal:${owner.id}:00000000-0000-4000-8000-000000000001`;
+      fixture.userSelection("child", "custom", {
+        authProfileOverride: profileId,
+        authProfileOverrideSource: "user",
+      });
+      const sql = observeMainThreadSql();
+      sql.calibrate();
+      const ensureStore = authProfiles.ensureAuthProfileStoreAsync;
+      const prepared = vi
+        .spyOn(authProfiles, "ensureAuthProfileStoreAsync")
+        .mockImplementation(async (...args) => {
+          const store = await ensureStore(...args);
+          // Shared-store preparation retains native compatibility reads; selection uses its facts.
+          sql.clear();
+          return store;
+        });
+      try {
+        const selected = await fixture.unchanged();
+        expect(prepared).toHaveBeenCalledOnce();
+        expect(selected).toMatchObject({
+          ...expectedRoute("child"),
+          sessionEntryForAttempt: {
+            authProfileOverride: profileId,
+            authProfileOverrideSource: "user",
+          },
+        });
+        sql.expectIdle();
+      } finally {
+        prepared.mockRestore();
+        sql.restore();
+      }
+    });
   });
 
   it.each(["custom/child", "blocked", "locked"])(
