@@ -30,59 +30,61 @@ let lookupStarted: (() => void) | undefined;
 let lookupResume: Promise<void> | undefined;
 
 beforeAll(async () => {
-  server = createServer(async (request, response) => {
-    try {
-      expect(request.headers.authorization).toBe(`Bot ${token}`);
-      const body = JSON.parse((await readText(request)) || "{}") as Record<string, unknown>;
-      const method = request.method ?? "";
-      const path = request.url ?? "";
-      requests.push({ method, path, body });
-      if (method === "GET" && path === `/v10/channels/${channelId}`) {
-        lookupStarted?.();
-        await lookupResume;
-      }
-      if (method === "DELETE") {
-        response.writeHead(204).end();
-        return;
-      }
-      if (method === "PATCH") {
-        current = { ...current, ...body };
-      }
-      let result: Record<string, unknown> =
-        method === "GET"
-          ? path.startsWith("/v10/guilds/")
-            ? { id: guildId, name: "synthetic-guild" }
-            : {
-                id: channelId,
-                type: parentChannelType,
-                ...(parentChannelType === 1 ? {} : { guild_id: guildId }),
-                name: "synthetic-channel",
-              }
-          : { id: messageId, channel_id: channelId, ...current, ...body };
-      if (method === "POST" && path.endsWith("/threads")) {
-        result = {
-          id: threadId,
-          type: 11,
-          name: body.name,
-          message_count: 0,
-          total_message_sent: 0,
-          last_message_id: null,
-        };
-        if (body.message) {
-          threadMessageIds.push(messageId);
-          result.message = { id: messageId, channel_id: threadId };
+  server = createServer((request, response) => {
+    void (async () => {
+      try {
+        expect(request.headers.authorization).toBe(`Bot ${token}`);
+        const body = JSON.parse((await readText(request)) || "{}") as Record<string, unknown>;
+        const method = request.method ?? "";
+        const path = request.url ?? "";
+        requests.push({ method, path, body });
+        if (method === "GET" && path === `/v10/channels/${channelId}`) {
+          lookupStarted?.();
+          await lookupResume;
         }
-      } else if (method === "POST" && path === `/v10/channels/${threadId}/messages`) {
-        const id = String(BigInt(messageId) + BigInt(threadMessageIds.length));
-        threadMessageIds.push(id);
-        result = { id, channel_id: threadId, ...body };
+        if (method === "DELETE") {
+          response.writeHead(204).end();
+          return;
+        }
+        if (method === "PATCH") {
+          current = { ...current, ...body };
+        }
+        let result: Record<string, unknown> =
+          method === "GET"
+            ? path.startsWith("/v10/guilds/")
+              ? { id: guildId, name: "synthetic-guild" }
+              : {
+                  id: channelId,
+                  type: parentChannelType,
+                  ...(parentChannelType === 1 ? {} : { guild_id: guildId }),
+                  name: "synthetic-channel",
+                }
+            : { id: messageId, channel_id: channelId, ...current, ...body };
+        if (method === "POST" && path.endsWith("/threads")) {
+          result = {
+            id: threadId,
+            type: 11,
+            name: body.name,
+            message_count: 0,
+            total_message_sent: 0,
+            last_message_id: null,
+          };
+          if (body.message) {
+            threadMessageIds.push(messageId);
+            result.message = { id: messageId, channel_id: threadId };
+          }
+        } else if (method === "POST" && path === `/v10/channels/${threadId}/messages`) {
+          const id = String(BigInt(messageId) + BigInt(threadMessageIds.length));
+          threadMessageIds.push(id);
+          result = { id, channel_id: threadId, ...body };
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(result));
+      } catch (error) {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
       }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(result));
-    } catch (error) {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: String(error) }));
-    }
+    })();
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);

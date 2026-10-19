@@ -9,7 +9,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 const mocks = vi.hoisted(() => ({
   fetchClawHubPromotion: vi.fn(),
   hasAvailableAuthForProvider: vi.fn(),
-  applyAuth: vi.fn(),
+  applyAuthChoiceLoadedPluginProvider: vi.fn(),
   resolveManifestProviderAuthChoice: vi.fn(),
   resolveProviderInstallCatalogEntry: vi.fn(),
   loadManifestMetadataSnapshot: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock("../../agents/model-auth.js", () => ({
   hasAvailableAuthForProvider: mocks.hasAvailableAuthForProvider,
 }));
 vi.mock("../../plugins/provider-auth-choice.js", () => ({
-  applyAuthChoiceLoadedPluginProvider: mocks.applyAuth,
+  applyAuthChoiceLoadedPluginProvider: mocks.applyAuthChoiceLoadedPluginProvider,
 }));
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice: mocks.resolveManifestProviderAuthChoice,
@@ -71,7 +71,9 @@ vi.mock("../../config/config.js", async () => {
     },
   };
 });
-vi.mock("../../cli/prompt.js", () => ({ promptYesNo: mocks.promptYesNo }));
+vi.mock("../../cli/prompt.js", () => ({
+  promptYesNo: mocks.promptYesNo,
+}));
 vi.mock("../../plugins/enable.js", () => ({
   enablePluginWithCapabilityConsent: mocks.enablePluginInConfig,
 }));
@@ -215,7 +217,7 @@ describe("promosClaimCommand", () => {
     const next = writtenModels();
     expect(next.models[modelRef]).toEqual({ alias: "model-alpha" });
     expect(next.model).toBeUndefined();
-    expect(mocks.applyAuth).not.toHaveBeenCalled();
+    expect(mocks.applyAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
     expect(mocks.recordPromotionClaim).toHaveBeenCalledWith(
       expect.objectContaining({
         slug: "spring-models",
@@ -253,11 +255,11 @@ describe("promosClaimCommand", () => {
   });
 
   it("uses the supplied API key instead of reusing existing credentials", async () => {
-    mocks.applyAuth.mockResolvedValue({
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({
       config: { plugins: { entries: { openrouter: { enabled: true } } } },
     });
     await runClaim({ apiKey: "sk-test" });
-    expect(mocks.applyAuth).toHaveBeenCalledWith(
+    expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         authChoice: "openrouter-api-key",
         setDefaultModel: false,
@@ -269,13 +271,16 @@ describe("promosClaimCommand", () => {
 
   it("aborts when the auth flow asks for retry instead of completing", async () => {
     mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
-    mocks.applyAuth.mockResolvedValue({ config: {}, retrySelection: true });
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({
+      config: {},
+      retrySelection: true,
+    });
     await rejectClaim(/not completed/, { apiKey: "sk-test" });
   });
 
   it("aborts when auth is still unavailable after the flow returns", async () => {
     mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
-    mocks.applyAuth.mockResolvedValue({ config: {} });
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
     await rejectClaim(/not completed/, { apiKey: "sk-test" });
   });
 
@@ -346,15 +351,17 @@ describe("promosClaimCommand", () => {
         mocks.fetchClawHubPromotion
           .mockResolvedValueOnce(promotion)
           .mockResolvedValueOnce({ ...promotion, active: false });
-        mocks.applyAuth.mockImplementation(async ({ config }: { config: OpenClawConfig }) => {
-          expect(config.messages?.responsePrefix).toBe("before-auth");
-          await Promise.resolve();
-          process.env.OPENCLAW_TEST_PROMO_PREFIX = "after-auth";
-          expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
-          return { config: { ...config, logging: { level: "debug" } } };
-        });
+        mocks.applyAuthChoiceLoadedPluginProvider.mockImplementation(
+          async ({ config }: { config: OpenClawConfig }) => {
+            expect(config.messages?.responsePrefix).toBe("before-auth");
+            await Promise.resolve();
+            process.env.OPENCLAW_TEST_PROMO_PREFIX = "after-auth";
+            expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
+            return { config: { ...config, logging: { level: "debug" } } };
+          },
+        );
         await expect(runClaim({ apiKey: "synthetic-promo-input" })).rejects.toThrow(/not live yet/);
-        expect(mocks.applyAuth).toHaveBeenCalledOnce();
+        expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledOnce();
         expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
         expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
         expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
@@ -387,9 +394,9 @@ describe("promosClaimCommand", () => {
       installSource: { npm: { packageName: providerPackage } },
     });
     offer({ pluginNames: [providerPackage] });
-    mocks.applyAuth.mockResolvedValue({ config: {} });
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
     await runClaim();
-    expect(mocks.applyAuth).toHaveBeenCalledWith(
+    expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
       expect.objectContaining({ authChoice: "openrouter-api-key" }),
     );
   });
