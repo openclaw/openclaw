@@ -50,9 +50,9 @@ import { createChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { publishChatRunState } from "./chat-state-render.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
@@ -141,7 +141,7 @@ export abstract class ChatPaneStateOwner {
     }
     if (state.chatStreamRenderFrame != null) {
       // Publish before the browser suspends animation frames; the hidden view stays parked.
-      publishChatRunState(state);
+      chatRunPresentation(state).publish();
     }
     const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
