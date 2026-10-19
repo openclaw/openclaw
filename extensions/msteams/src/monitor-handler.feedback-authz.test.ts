@@ -39,15 +39,6 @@ function createDeps(cfg: OpenClawConfig): MSTeamsMessageHandlerDeps {
     logging: { shouldLogVerbose: () => false },
     channel: {
       inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: () => ({
-          enqueue: async () => {},
-          flushKey: async () => {},
-          cancelKey: () => false,
-          drain: async () => {},
-        }),
-      },
       pairing: {
         readAllowFromStore: vi.fn(async () => []),
         upsertPairingRequest: vi.fn(async () => null),
@@ -58,7 +49,6 @@ function createDeps(cfg: OpenClawConfig): MSTeamsMessageHandlerDeps {
           agentId: "default",
         }),
       },
-      session: { resolveStorePath: (storePath?: string) => storePath ?? "/tmp" },
     },
   } as unknown as PluginRuntime);
   return createMSTeamsMessageHandlerDeps({ cfg });
@@ -155,51 +145,43 @@ describe("msteams feedback invoke authz", () => {
     });
   });
 
-  it("does not record feedback when personal scope contradicts team metadata", async () => {
-    await runMSTeamsFeedbackInvokeHandler(
-      createFeedbackInvokeContext({ teamId: "unexpected-team", comment: "must not cross scope" }),
-      createDeps(dmConfig()),
-    );
-    expectFeedbackBlocked();
-  });
-
-  it("does not record feedback for a DM sender outside allowFrom", async () => {
-    await runMSTeamsFeedbackInvokeHandler(
-      createFeedbackInvokeContext({
-        senderId: "attacker-aad",
-        senderName: "Attacker",
-        comment: "blocked feedback",
-      }),
-      createDeps(dmConfig()),
-    );
-    expectFeedbackBlocked();
-  });
-
-  it("does not trigger reflection for a group sender outside groupAllowFrom", async () => {
-    const deps = createDeps({
-      channels: {
-        msteams: {
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["owner-aad"],
-          feedbackReflection: true,
+  it.each([
+    {
+      reason: "personal scope contradicts team metadata",
+      cfg: dmConfig(),
+      context: { teamId: "unexpected-team" },
+    },
+    {
+      reason: "DM sender outside allowFrom",
+      cfg: dmConfig(),
+      context: { senderId: "attacker-aad" },
+    },
+    {
+      reason: "group sender outside groupAllowFrom",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["owner-aad"],
+            feedbackReflection: true,
+          },
         },
       },
-    });
-
-    await runMSTeamsFeedbackInvokeHandler(
-      createFeedbackInvokeContext({
+      context: {
         reaction: "dislike",
         conversationId: "19:group@thread.tacv2;messageid=bot-msg-1",
         conversationType: "groupChat",
         senderId: "attacker-aad",
-        senderName: "Attacker",
         teamId: "team-1",
         channelName: "General",
-        comment: "blocked reflection",
-      }),
-      deps,
-    );
-
+      },
+    },
+  ] satisfies Array<{
+    reason: string;
+    cfg: OpenClawConfig;
+    context: Parameters<typeof createFeedbackInvokeContext>[0];
+  }>)("blocks feedback and reflection: $reason", async ({ cfg, context }) => {
+    await runMSTeamsFeedbackInvokeHandler(createFeedbackInvokeContext(context), createDeps(cfg));
     expectFeedbackBlocked();
   });
 });

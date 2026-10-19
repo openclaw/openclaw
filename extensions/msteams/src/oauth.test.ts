@@ -19,10 +19,6 @@ import { loginMSTeamsDelegated } from "./oauth.js";
 import { MSTEAMS_OAUTH_REDIRECT_URI, buildMSTeamsTokenEndpoint } from "./oauth.shared.js";
 import { exchangeMSTeamsCodeForTokens, refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 
-function responseJson(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
-}
-
 function firstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string, RequestInit] {
   const [call] = fetchMock.mock.calls;
   if (!call) {
@@ -44,7 +40,7 @@ describe("manual delegated sign-in", () => {
     "exchanges the code only for a %s callback state",
     async (stateKind) => {
       fetchSpy.mockImplementation(async () =>
-        responseJson({ access_token: "access", refresh_token: "refresh", expires_in: 3600 }),
+        Response.json({ access_token: "access", refresh_token: "refresh", expires_in: 3600 }),
       );
       let authUrl: URL | undefined;
       const login = loginMSTeamsDelegated(
@@ -111,33 +107,31 @@ describe("manual delegated sign-in", () => {
 });
 
 describe("exchangeMSTeamsCodeForTokens", () => {
-  it("throws on a 400 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
-
+  it.each([
+    [
+      "bad-code",
+      () => Response.json({ error: "invalid_grant" }, { status: 400 }),
+      /MSTeams token exchange failed \(400\)/,
+    ],
+    [
+      "unsafe-expiry",
+      () =>
+        new Response(
+          '{"access_token":"at-unsafe","refresh_token":"rt-unsafe","expires_in":1e309}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      "MSTeams token exchange failed: invalid token response fields",
+    ],
+    [
+      "invalid-shape",
+      () => Response.json(null),
+      "MSTeams token exchange failed: invalid token response fields",
+    ],
+  ] as const)("rejects token exchange: %s", async (code, response, error) => {
+    fetchSpy.mockResolvedValueOnce(response());
     await expect(
-      exchangeMSTeamsCodeForTokens({ ...credentials, code: "bad-code", verifier: "v" }),
-    ).rejects.toThrow(/MSTeams token exchange failed \(400\)/);
-  });
-
-  it("rejects unsafe token exchange expiry values", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response('{"access_token":"at-unsafe","refresh_token":"rt-unsafe","expires_in":1e309}', {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
-    await expect(
-      exchangeMSTeamsCodeForTokens({ ...credentials, code: "unsafe-expiry", verifier: "v" }),
-    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
-  });
-
-  it("rejects a top-level null token exchange response", async () => {
-    fetchSpy.mockResolvedValueOnce(responseJson(null));
-
-    await expect(
-      exchangeMSTeamsCodeForTokens({ ...credentials, code: "invalid-shape", verifier: "v" }),
-    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
+      exchangeMSTeamsCodeForTokens({ ...credentials, code, verifier: "v" }),
+    ).rejects.toThrow(error);
   });
 });
 
@@ -145,7 +139,7 @@ describe("refreshMSTeamsDelegatedTokens", () => {
   it("refreshes tokens using refresh_token grant and keeps old refresh token when Azure omits it", async () => {
     const now = Date.now();
     fetchSpy.mockResolvedValueOnce(
-      responseJson({
+      Response.json({
         access_token: "new-at",
         expires_in: 3600,
         scope: "ChatMessage.Send offline_access",
@@ -177,7 +171,7 @@ describe("refreshMSTeamsDelegatedTokens", () => {
 
   it("uses new refresh token when Azure returns one", async () => {
     fetchSpy.mockResolvedValueOnce(
-      responseJson({ access_token: "new-at", refresh_token: "new-rt", expires_in: 3600 }),
+      Response.json({ access_token: "new-at", refresh_token: "new-rt", expires_in: 3600 }),
     );
 
     const tokens = await refreshMSTeamsDelegatedTokens({ ...credentials, refreshToken: "old-rt" });

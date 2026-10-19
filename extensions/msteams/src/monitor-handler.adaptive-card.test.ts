@@ -68,10 +68,6 @@ function cardContext(type: "invoke" | "message", value: unknown): MSTeamsTurnCon
   } as unknown as MSTeamsTurnContext;
 }
 
-async function runAdaptiveCardInvoke(value: unknown) {
-  await createMSTeamsActivityHandler(createDeps())(cardContext("invoke", value));
-}
-
 function lastDispatchedCtxPayload(): Record<string, unknown> {
   const dispatched = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls.at(
     -1,
@@ -90,15 +86,7 @@ it("uses account-specific welcome card config", async () => {
       channels: {
         msteams: {
           welcomeCard: true,
-          accounts: {
-            support: {
-              appId: "support-app",
-              appPassword: "support-secret",
-              tenantId: "tenant-id",
-              webhook: { path: "/api/messages/support" },
-              welcomeCard: false,
-            },
-          },
+          accounts: { support: { welcomeCard: false } },
         },
       },
     } as OpenClawConfig,
@@ -124,33 +112,43 @@ describe("msteams adaptive card action invoke", () => {
     runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
-  it("routes Teams imBack actions as the submitted message text", async () => {
-    await runAdaptiveCardInvoke({
-      action: {
-        type: "Action.Submit",
-        data: { msteams: { type: "imBack", value: "Summarize my last meeting" } },
+  it.each([
+    {
+      kind: "imBack",
+      activity: "invoke",
+      text: "Summarize my last meeting",
+      value: {
+        action: {
+          type: "Action.Submit",
+          data: { msteams: { type: "imBack", value: "Summarize my last meeting" } },
+        },
       },
+    },
+    {
+      kind: "command",
+      activity: "invoke",
+      text: "/codex plugins menu",
+      value: { action: { type: "Action.Submit", data: "/codex plugins menu" } },
+    },
+    {
+      kind: "message submit",
+      activity: "message",
+      text: '{"value":"button-submit-value","label":"Submit action"}',
+      value: { value: "button-submit-value", label: "Submit action" },
+    },
+  ] as const)("routes $kind as submitted message text", async ({ kind, activity, text, value }) => {
+    await createMSTeamsActivityHandler(createDeps())(cardContext(activity, value));
+    expect(lastDispatchedCtxPayload()).toMatchObject({
+      BodyForAgent: text,
+      CommandBody: text,
+      ...(kind === "command"
+        ? {}
+        : { SessionKey: "msteams:direct:user-aad", SenderId: "user-aad" }),
+      ...(kind === "imBack" ? { RawBody: text } : {}),
     });
-
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    expect(ctxPayload).toMatchObject({
-      RawBody: "Summarize my last meeting",
-      SessionKey: "msteams:direct:user-aad",
-      SenderId: "user-aad",
-      BodyForAgent: "Summarize my last meeting",
-      CommandBody: "Summarize my last meeting",
-    });
-  });
-
-  it("routes typed command submit actions as command text", async () => {
-    await runAdaptiveCardInvoke({
-      action: { type: "Action.Submit", data: "/codex plugins menu" },
-    });
-
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.BodyForAgent).toBe("/codex plugins menu");
-    expect(ctxPayload.CommandBody).toBe("/codex plugins menu");
+    if (kind === "imBack") {
+      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("preserves legacy presentation submit values as structured data", async () => {
@@ -207,16 +205,4 @@ describe("msteams adaptive card action invoke", () => {
       });
     },
   );
-
-  it("routes message activities with submitted card values as message text", async () => {
-    const data = { value: "button-submit-value", label: "Submit action" };
-
-    await createMSTeamsActivityHandler(createDeps())(cardContext("message", data));
-
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(data));
-    expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
-    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
-    expect(ctxPayload.SenderId).toBe("user-aad");
-  });
 });
