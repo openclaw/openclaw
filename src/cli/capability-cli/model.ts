@@ -435,18 +435,12 @@ export function registerModelCapabilityCommands(capability: Command): void {
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
         const prompt = opts.prompt;
-        if (typeof prompt !== "string" || normalizeOptionalString(prompt) === undefined) {
+        if (normalizeOptionalString(prompt) === undefined) {
           throw new Error("--prompt cannot be empty or whitespace-only.");
         }
-        let thinking: ThinkLevel | undefined;
-        if (opts.thinking !== undefined) {
-          if (typeof opts.thinking !== "string") {
-            throw new Error("--thinking must be a string.");
-          }
-          thinking = normalizeThinkLevel(opts.thinking);
-          if (!thinking) {
-            throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
-          }
+        const thinking = normalizeThinkLevel(opts.thinking);
+        if (opts.thinking !== undefined && !thinking) {
+          throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
         }
         const transport = resolveTransport({
           local: Boolean(opts.local),

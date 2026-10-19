@@ -76,22 +76,86 @@ reference time. Generate a fresh fixture for each startup comparison. Cron jobs,
 heartbeats, channels, plugins, browser automation and network discovery are
 disabled so this workload does not call models or external integrations.
 
+## Shared writer contention from audit retention
+
+`scripts/bench-channel-ingress-writer.ts` measures the real audit FIFO, ingress
+queue, and interactive machine-state writer against synthetic retained audit rows:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-channel-ingress-writer.ts \
+  --state-dir /tmp/writer-bench --seed-only
+node --import ./scripts/tsx.mjs scripts/bench-channel-ingress-writer.ts \
+  --state-dir /tmp/writer-bench --seconds 60 --output /tmp/writer-bench.json
+```
+
+Seed requires a new database. Defaults populate 100,000 execution contexts and
+250,000 decision facts, then offer three audit items, one inbound message, one
+idle-drain poll, and one interactive write per second. Audit work alternates
+identity and decision inserts; this models enabled identity collection at its
+retention caps, not the ordinary run/tool-only audit mix. Reports include worker
+queue/service timing, ingress and interactive latency, and persisted-work checks.
+This exercises storage owners, not Gateway transport, external channels, or a model.
+Use `--help` for smaller fixtures and synchronized concurrent A/B start times.
+Prepare fixtures separately from measurement and compare paired differences on
+the authorized benchmark host, swapping CPU allocations between pairs.
+
 ## Measure the real list endpoint
 
-With the fixture Gateway running, use a second terminal:
+Build runtime artifacts on the authorized benchmark host, generate an offline
+fixture, then let the measurement driver own its loopback Gateway:
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/team-shape-measure.ts \
-  --port 40967 --samples 100 --limit 100
+  --state-dir /path/to/team-shape --port 40967 --clients 35 \
+  --samples 5 --limit 100 --poll-ms 5000 --revision <commit-sha>
 ```
 
-This uses the real `sessions.list` WebSocket RPC, compact rows and all archived
-states. It reports the first call separately, then mean/p50/p95/p99 after five
-warmups, plus response size. It uses one operator connection: production's
-multiple viewers, mutations, background work and page-cache pressure can be more
-expensive. Matching database size alone does not prove production equivalence.
-Compare a small fixture and the default fixture on the same checkout and host;
-record counts, database bytes, exact revision and request shape with the timings.
+This replaces the former external one-socket timing mode. `--state-dir` must
+contain a generated fixture; the driver stops its own child on completion or
+interruption. Startup recovery settles for ten seconds before clients connect.
+Clients close and reconnect in cohorts of at most 30, below the per-IP pending
+handshake budget. After this one reconnect wave, each variant gets its first
+full-response cohort in turn, followed by separate blocks of the requested
+steady cohorts. The variants are sidebar,
+general, compact, explicit profile involvement, the sidebar ownership summary, and
+children. Setup creates one shared dashboard parent and four children through
+the real RPC, adding five rows to the seeded inventory. Persistent dashboard
+lineage keeps this query independent of terminal-run link expiry. Every variant must return nonempty rows;
+the owner query must also return nonempty owner counts. Seed `--now` near the
+measurement time so retained child lineage has not expired.
+The ownership summary matches `sidebar-owner-session-counts.ts`: one row,
+unarchived state, all human owners, and the sidebar's automation/system exclusions.
+
+The driver measures one variant at a time, with all clients issuing the same
+query concurrently and one request in flight per socket. Cohorts begin no faster
+than `--poll-ms`; 35 clients at five seconds produces about 420 list calls per
+minute during steady blocks. Requests use the normal conditional/delta revision
+handshake. `--mutation-ms 1000` adds one synthetic label edit per second through
+`sessions.patch` during steady blocks, including that work in CPU totals. Each
+block schedules only the ticks strictly before its nominal final cohort (19
+edits for five cohorts at five seconds and one-second mutations), waits up to
+five extra seconds for delayed ticks, and rejects an incomplete mutation count.
+This keeps the recorded workload independent of response speed. This is a
+controlled shared-query workload, not a complete browser scheduler replay.
+
+Results in `list-measure-*/result.json` include per-variant reconnect/steady
+latency p50/p95/p99, response sizes and full/unchanged/delta counts, row work
+counts, raw RPC admission/queue observations, and main-thread/process CPU.
+The existing private IPC profiler writes CPU profiles and numeric handler-phase
+diagnostics alongside the report. Selection/preparation, row projection,
+decoration and response phases are separate. Decoration includes delta/fact
+sharing and defaults; response CPU includes serialization and transport enqueue.
+The existing probes do not split delta encoding from other decoration work.
+Handler wall time includes yielded/awaited time and must not be read as CPU.
+The profiler affects both sides equally; no inspector listener is exposed.
+
+Use identical fresh fixtures and options for A/B. `--start-at <epoch-ms>` waits
+after readiness and fails if the deadline has already passed, allowing both
+sides of a concurrent pair to begin together. Apply the current host policy:
+hold the shared measurement lock, place A and B on their separate 16-core halves,
+then swap halves for the next pair. Record the exact revision, fixture counts
+and physical database bytes; a 64 MiB text fixture preserves roster/run shape
+but does not reproduce multi-GB transcript page-cache pressure.
 
 ## Measure transcript broadcast fanout
 

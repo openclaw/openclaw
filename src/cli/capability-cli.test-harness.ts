@@ -3,6 +3,17 @@ import { Command } from "commander";
 import "../infra/runtime-process-entrypoints.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 
+export const invalidModelRunOptionCases = [
+  { args: ["--prompt", "\n\t"], error: "--prompt cannot be empty or whitespace-only." },
+  {
+    args: ["--model", "not-a-provider/"],
+    error: "Model overrides must use the form <provider/model>.",
+  },
+  { args: ["--thinking", "turbo-mode"], error: "Invalid thinking level." },
+  { args: ["--thinking", ""], error: "Invalid thinking level." },
+  { args: ["--thinking", " \t"], error: "Invalid thinking level." },
+];
+
 export async function runCap(...argv: string[]): Promise<void> {
   const program = new Command();
   await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
