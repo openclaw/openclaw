@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";
 
 const { dispatchGatewayMethod } = vi.hoisted(() => ({ dispatchGatewayMethod: vi.fn() }));
+// mock-isolation: Exercise HTTP handling with synthetic dispatch results, without a live Gateway.
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod }));
 
 vi.mock("node:timers", async (importOriginal) => {

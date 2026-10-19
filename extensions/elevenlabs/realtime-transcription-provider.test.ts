@@ -9,6 +9,7 @@ import { WebSocketServer } from "ws";
 
 const { resolveApiKeyMock } = vi.hoisted(() => ({ resolveApiKeyMock: vi.fn() }));
 
+// mock-isolation: Credential fallback is fixture-owned; never read real provider credentials.
 vi.mock("./config-api.js", () => ({
   resolveElevenLabsApiKeyWithProfileFallback: resolveApiKeyMock,
 }));

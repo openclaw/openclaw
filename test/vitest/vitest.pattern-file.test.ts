@@ -190,7 +190,7 @@ it("preserves native non-browser TS and TSX discovery through directory selectio
   const owner = ["ui/src", "extensions/*/browser"].map(
     (dir) => `${dir}/**/${cliPatterns.nonBrowserTestBasenamePattern}`,
   );
-  const check = (requested: string[], expected: string[]) => {
+  const check = (requested: string[], expected: readonly string[]) => {
     const selected = intersect(owner, requested);
     expect(filterFiles(files, selected!).toSorted()).toEqual(expected.toSorted());
     expect(

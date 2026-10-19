@@ -87,14 +87,16 @@ const channelMessage = {
 it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans up", async () => {
   const lab = vi.fn<RequestListener>((_request, response) => response.writeHead(404).end());
   const labUrl = await listenOnLoopback(lab);
-  let inboundActivity: Record<string, unknown> | undefined;
+  let inboundActivity: unknown;
   let inboundAuthorization: string | undefined;
   let inboundPath: string | undefined;
-  const webhookUrl = await listenOnLoopback(async (request, response) => {
+  const webhookUrl = await listenOnLoopback((request, response) => {
     inboundAuthorization = request.headers.authorization;
     inboundPath = request.url;
-    inboundActivity = await json(request);
-    response.writeHead(202).end();
+    void (async () => {
+      inboundActivity = await json(request);
+      response.writeHead(202).end();
+    })();
   });
   const { adapter, outputDir, addInboundMessage, addOutboundMessage, cleanup } =
     await createAdapter(true);
@@ -200,7 +202,7 @@ it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans 
     });
     expect(inboundActivity).toMatchObject({ conversation: { conversationType } });
     // Team/channel markers make a personal chat fail the Gateway's scope admission.
-    expect(inboundActivity?.channelData).toEqual({ tenant: { id: "qa-msteams-tenant" } });
+    expect(inboundActivity).toHaveProperty("channelData", { tenant: { id: "qa-msteams-tenant" } });
   }
   expect(lab).not.toHaveBeenCalled();
   await cleanup();

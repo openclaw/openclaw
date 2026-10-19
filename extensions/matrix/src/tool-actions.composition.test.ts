@@ -106,7 +106,7 @@ it("carries only trusted read context and retains undefined context properties",
     currentChannelId: "!untrusted:example",
     conversationReadOrigin: "untrusted",
   };
-  const context = {
+  const context: ActionArgs[3] = {
     accountId: "ops",
     requesterAccountId: "requester",
     toolContext: {

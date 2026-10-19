@@ -47,6 +47,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 
+// mock-isolation: Session routing uses a synthetic agent inventory and fixture-selected default.
 vi.mock("../../agents/agent-scope.js", async () => {
   const { normalizeAgentId } = await vi.importActual<typeof import("../../routing/session-key.js")>(
     "../../routing/session-key.js",

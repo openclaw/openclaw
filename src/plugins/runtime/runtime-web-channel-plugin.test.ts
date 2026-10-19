@@ -7,7 +7,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { resetFacadeLoaderStateForTest } from "../../plugin-sdk/facade-loader.js";
+import {
+  loadFacadeModuleAtLocationSync,
+  resetFacadeLoaderStateForTest,
+} from "../../plugin-sdk/facade-loader.js";
 import { createPluginModuleLoader } from "../loader-module-runtime.js";
 import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "../plugin-cache.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
@@ -40,16 +43,20 @@ beforeEach(() => {
 });
 afterEach(async () => {
   vi.restoreAllMocks();
-  const failures: unknown[] = [];
+  const disposals = await Promise.allSettled(
+    records.splice(0).map(async (record) => await getPluginInstance(record)?.dispose()),
+  );
+  const failures: unknown[] = disposals.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
   for (const cleanup of [
-    ...records.splice(0).map((record) => () => getPluginInstance(record)?.dispose()),
     resetPluginRuntimeStateForTest,
     resetFacadeLoaderStateForTest,
     clearRuntimeConfigSnapshot,
     temp.cleanup,
   ]) {
     try {
-      await cleanup();
+      cleanup();
     } catch (error) {
       failures.push(error);
     }
@@ -128,7 +135,6 @@ it("forwards library monitor calls lazily with exact arguments and runtime recei
     "runtime-api.js": `require("node:fs").writeFileSync(${JSON.stringify(initialized)}, "loaded");
       const runtime = {
         async monitorWebChannel(...args) {
-          if (this !== runtime) throw new Error("Incorrect runtime receiver");
           return Reflect.apply(args[1], this, args);
         }
       };
@@ -144,6 +150,15 @@ it("forwards library monitor calls lazily with exact arguments and runtime recei
   await expect(library.monitorWebChannel(...args)).resolves.toBe(result);
   expect(fs.readFileSync(initialized, "utf8")).toBe("loaded");
   expect(monitor).toHaveBeenCalledOnce();
+  expect(monitor.mock.contexts[0]).toBe(
+    loadFacadeModuleAtLocationSync({
+      location: {
+        modulePath: path.join(root, "runtime-api.js"),
+        boundaryRoot: root,
+        pluginId: "library-owner",
+      },
+    }),
+  );
   const [receivedArgs] = monitor.mock.calls;
   expect(receivedArgs).toHaveLength(args.length);
   for (const [index, arg] of args.entries()) {
