@@ -46,106 +46,84 @@ describe("buildDraftSessionCreateParams", () => {
     baseRef: "old-branch",
     worktreeName: "old-name",
   };
-  it("creates a device folder without leaking another workspace source", () => {
-    expectParams(
+  const attachments = [
+    { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },
+  ];
+  const overrides = {
+    model: "anthropic/claude-sonnet-4-6",
+    contextWindow: "200k",
+    thinkingLevel: "high",
+    fastMode: true,
+  };
+  const toolOverrides = {
+    mcpServers: { github: false },
+    skills: { release: false },
+    webSearch: false,
+  };
+  it.each([
+    [
+      "creates a device folder without leaking another workspace source",
       {
+        ...checkout,
+        repository,
         message: "Work here",
         deferInitialTurn: true,
         deviceFolder: { deviceId: "runner", path: " /srv/existing project " },
         worktree: true,
         worktreeSource: "empty",
-        ...checkout,
-        repository,
       },
       {
         message: "",
         titleSource: "Work here",
         deviceFolder: { deviceId: "runner", path: "/srv/existing project" },
       },
-    );
-  });
-  it("creates an empty workspace without carrying a previous checkout source", () => {
-    expectParams(
+    ],
+    [
+      "creates an empty workspace without carrying a previous checkout source",
       {
+        ...checkout,
+        repository,
         message: "Start a new project",
         deferInitialTurn: true,
         worktree: true,
         worktreeSource: "empty",
-        repository,
+      },
+      { message: "", titleSource: "Start a new project", worktree: true, worktreeSource: "empty" },
+    ],
+    [
+      "retains a cloud repository without sending local checkout options",
+      {
         ...checkout,
-      },
-      {
-        message: "",
-        titleSource: "Start a new project",
-        worktree: true,
-        worktreeSource: "empty",
-      },
-    );
-  });
-
-  it("retains a cloud repository through the empty create without sending local checkout options", () => {
-    expectParams(
-      {
+        repository,
         message: `${"x".repeat(999)}🦞 longer prompt`,
         deferInitialTurn: true,
-        repository,
-        ...checkout,
         worktree: true,
       },
-      {
-        message: "",
-        titleSource: "x".repeat(999),
-        repository,
-      },
-    );
-  });
-
-  it("keeps incognito prompts out of early naming", () => {
-    expectParams(
+      { message: "", titleSource: "x".repeat(999), repository },
+    ],
+    [
+      "keeps incognito prompts out of early naming",
       {
         message: "private task",
         deferInitialTurn: true,
         visibility: "incognito",
       },
-      {
-        message: "",
-        incognito: true,
-      },
-    );
-  });
-
-  it("adds draft visibility only when selected", () => {
-    expectParams({ visibility: "draft" }, { visibility: "draft" });
-  });
-
-  it("includes initial-message attachments", () => {
-    const attachments = [
-      { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },
-    ];
-    expectParams({ message: "", attachments }, { message: "", attachments });
-  });
-
-  it("includes selected model, context-window, thinking, and fast overrides for a plain session", () => {
-    const overrides = {
-      model: "anthropic/claude-sonnet-4-6",
-      contextWindow: "200k",
-      thinkingLevel: "high",
-      fastMode: true,
-    };
-    expectParams(overrides, overrides);
-  });
-
-  it("includes selected capability overrides in the atomic create request", () => {
-    const toolOverrides = {
-      mcpServers: { github: false },
-      skills: { release: false },
-      webSearch: false,
-    };
-    expectParams({ toolOverrides }, { toolOverrides });
-  });
-
-  it("does not combine a catalog target with a draft model override", () => {
-    expectParams(
+      { message: "", incognito: true },
+    ],
+    ["adds draft visibility only when selected", { visibility: "draft" }, { visibility: "draft" }],
+    [
+      "includes initial-message attachments",
+      { message: "", attachments },
+      { message: "", attachments },
+    ],
+    ["includes model, context-window, thinking, and fast overrides", overrides, overrides],
+    [
+      "includes capability overrides in the atomic create request",
+      { toolOverrides },
+      { toolOverrides },
+    ],
+    [
+      "does not combine a catalog target with a draft model override",
       {
         model: "openai/gpt-5.5",
         contextWindow: "200k",
@@ -153,14 +131,10 @@ describe("buildDraftSessionCreateParams", () => {
         fastMode: true,
         catalogId: "claude",
       },
-      {
-        catalogId: "claude",
-      },
-    );
-  });
-
-  it("maps worktree selections onto additive create params", () => {
-    expectParams(
+      { catalogId: "claude" },
+    ],
+    [
+      "maps worktree selections onto additive create params",
       {
         worktree: true,
         baseRef: "origin/main",
@@ -168,42 +142,29 @@ describe("buildDraftSessionCreateParams", () => {
         cwd: "/workspace",
         workspace: "/workspace",
       },
-      {
-        worktree: true,
-        worktreeBaseRef: "origin/main",
-        worktreeName: "bug-fix",
-      },
-    );
-  });
-
-  it("assigns a session created from a custom group", () => {
-    expectParams(
+      { worktree: true, worktreeBaseRef: "origin/main", worktreeName: "bug-fix" },
+    ],
+    [
+      "assigns a session created from a custom group",
       {
         worktree: true,
         cwd: "/repos/client",
         workspace: "/workspace",
         category: " Client work ",
       },
-      {
-        category: "Client work",
-        cwd: "/repos/client",
-        worktree: true,
-      },
-    );
-  });
-
-  it("submits a selected project by id without leaking its host path", () => {
-    expectParams(
+      { category: "Client work", cwd: "/repos/client", worktree: true },
+    ],
+    [
+      "submits a selected project by id without leaking its host path",
       {
         projectId: "openclaw",
         worktree: true,
         cwd: "/recorded/openclaw",
         workspace: "/workspace",
       },
-      {
-        projectId: "openclaw",
-        worktree: true,
-      },
-    );
-  });
+      { projectId: "openclaw", worktree: true },
+    ],
+  ] satisfies [string, Partial<Draft>, object][])("%s", (_, input, output) =>
+    expectParams(input, output),
+  );
 });

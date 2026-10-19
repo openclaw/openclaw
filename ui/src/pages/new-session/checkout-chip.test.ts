@@ -55,6 +55,8 @@ function mountCheckout(initial: CheckoutChipOptions) {
   );
   return {
     container: mounted.container,
+    query: <T extends Element = HTMLElement>(selector: string) =>
+      mounted.container.querySelector<T>(selector),
     update: (next: CheckoutChipOptions) => {
       setParams(next);
       flush();
@@ -119,54 +121,44 @@ describe("Checkout chip state", () => {
       emptyBranches,
       currentCheckoutUnavailableReason,
     }) => {
-      const onSelectWorktree = vi.fn();
-      const onBaseRefInput = vi.fn();
-      const onWorktreeNameInput = vi.fn();
-      const onConfirm = vi.fn();
-      const { container } = mountCheckout(
-        checkoutOptions({
-          state: { label: worktree ? "New worktree from main" : "feature" },
-          remotePlacement,
-          currentCheckoutUnavailableReason,
-          repository,
-          worktree,
-          branches: {
-            repoRoot: "/repo",
-            branches: emptyBranches
-              ? []
-              : [
-                  { name: "main", kind: "local" },
-                  { name: "release/next", kind: "local" },
-                ],
-            headBranch: "feature",
-          },
-          baseRef: "main",
-          onSelectWorktree,
-          onBaseRefInput,
-          onWorktreeNameInput,
-          onConfirm,
-        }),
-      );
+      const params = checkoutOptions({
+        state: { label: worktree ? "New worktree from main" : "feature" },
+        remotePlacement,
+        currentCheckoutUnavailableReason,
+        repository,
+        worktree,
+        branches: {
+          repoRoot: "/repo",
+          branches: emptyBranches
+            ? []
+            : [
+                { name: "main", kind: "local" },
+                { name: "release/next", kind: "local" },
+              ],
+          headBranch: "feature",
+        },
+      });
+      const { onSelectWorktree, onBaseRefInput, onWorktreeNameInput, onConfirm } =
+        vi.mocked(params);
+      const { container, query } = mountCheckout(params);
 
       await expectOpen(container);
 
       if (worktree || repository) {
-        const baseRef = container.querySelector("input")!;
+        const baseRef = query("input")!;
         if (emptyBranches) {
           expect(baseRef.hasAttribute("role")).toBe(false);
           expect(baseRef.hasAttribute("aria-expanded")).toBe(false);
-          expect(container.querySelector('[role="listbox"]')).toBeNull();
+          expect(query('[role="listbox"]')).toBeNull();
         } else {
           expect(baseRef.getAttribute("role")).toBe("combobox");
-          expect(container.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe(
-            "From",
-          );
+          expect(query('[role="listbox"]')?.getAttribute("aria-label")).toBe("From");
         }
       }
 
       if (repository) {
-        expect(container.querySelector('[data-value="checkout"]')).toBeNull();
-        expect(container.querySelector('[data-value="worktree"]')).toBeNull();
+        expect(query('[data-value="checkout"]')).toBeNull();
+        expect(query('[data-value="worktree"]')).toBeNull();
         const inputs = container.querySelectorAll<HTMLInputElement>("input");
         expect(inputs).toHaveLength(1);
         inputs[0]!.value = "release/next";
@@ -181,8 +173,8 @@ describe("Checkout chip state", () => {
         return;
       }
 
-      const current = container.querySelector<HTMLButtonElement>('[data-value="checkout"]')!;
-      const isolated = container.querySelector<HTMLButtonElement>('[data-value="worktree"]')!;
+      const current = query<HTMLButtonElement>('[data-value="checkout"]')!;
+      const isolated = query<HTMLButtonElement>('[data-value="worktree"]')!;
       expect(current.textContent).toContain("Current checkout");
       expect(current.querySelector(".session-menu__sub")?.textContent).toBe("feature");
       expect(current.querySelector(".session-menu__description")?.textContent).toBe(
@@ -249,7 +241,7 @@ describe("Checkout chip state", () => {
         keydown(name, "Enter");
         afterHide(container);
         expect(onConfirm).toHaveBeenCalledOnce();
-        container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!.click();
+        query<HTMLButtonElement>("#new-session-checkout-trigger")!.click();
         await expectOpen(container);
         keydown(baseRef, "ArrowDown");
         const branchWrites = onBaseRefInput.mock.calls.length;
@@ -263,7 +255,7 @@ describe("Checkout chip state", () => {
           "Creates a branch from the session title in a separate checkout.",
         );
       } else {
-        expect(container.querySelector(".new-session-page__menu-note")).toBeNull();
+        expect(query(".new-session-page__menu-note")).toBeNull();
       }
       expect(container.textContent?.includes("Syncs OpenClaw to the selected runner")).toBe(
         remotePlacement,
@@ -272,23 +264,14 @@ describe("Checkout chip state", () => {
   );
 
   it("keeps suggestion identities current and only confirms valid input", async () => {
-    const onConfirm = vi.fn();
-    const onPopoverShow = vi.fn();
-    const onPopoverHide = vi.fn();
-    const onPopoverAfterHide = vi.fn();
-    const params = checkoutOptions({
-      worktreeName: "picker-fixes",
-      onPopoverShow,
-      onPopoverHide,
-      onPopoverAfterHide,
-      onConfirm,
-    });
-    const { container, update } = mountCheckout(params);
+    const params = checkoutOptions({ worktreeName: "picker-fixes" });
+    const { onConfirm, onPopoverShow, onPopoverHide, onPopoverAfterHide } = vi.mocked(params);
+    const { container, query, update } = mountCheckout(params);
     const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
     await expectOpen(container);
     onPopoverShow.mockClear();
 
-    const trigger = container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!;
+    const trigger = query<HTMLButtonElement>("#new-session-checkout-trigger")!;
     expect(trigger.getAttribute("aria-controls")).toBe("new-session-checkout-popover");
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     trigger.click();
@@ -307,16 +290,14 @@ describe("Checkout chip state", () => {
     expect(container.textContent).toContain(
       "Creates branch openclaw/picker-fixes in a separate checkout.",
     );
-    const suggestionPopup = container.querySelector(".new-session-page__branch-popup")!;
+    const suggestionPopup = query(".new-session-page__branch-popup")!;
     for (const type of ["overlay-show", "overlay-hide", "overlay-after-hide"]) {
       suggestionPopup.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
     }
     expect(onPopoverShow).not.toHaveBeenCalled();
     expect(onPopoverHide).not.toHaveBeenCalled();
     expect(onPopoverAfterHide).not.toHaveBeenCalled();
-    container
-      .querySelectorAll("input")[1]!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    keydown(container.querySelectorAll("input")[1]!, "Enter");
     suggestionPopup.dispatchEvent(
       new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
     );
@@ -325,9 +306,7 @@ describe("Checkout chip state", () => {
     expect(onConfirm).toHaveBeenCalledOnce();
 
     renderNamed("Not Valid");
-    container
-      .querySelectorAll("input")[1]!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    keydown(container.querySelectorAll("input")[1]!, "Enter");
     expect(onConfirm).toHaveBeenCalledOnce();
 
     const renderBranches = (names: string[]) =>
@@ -338,7 +317,7 @@ describe("Checkout chip state", () => {
           branches: names.map((name) => ({ name, kind: "local" })),
         },
       });
-    const baseRef = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
+    const baseRef = query<HTMLInputElement>("#new-session-worktree-base-ref")!;
     renderBranches(["main", "release"]);
     keydown(baseRef, "ArrowDown");
     renderBranches(["release", "main"]);
@@ -346,9 +325,7 @@ describe("Checkout chip state", () => {
     expect(params.onBaseRefInput).toHaveBeenLastCalledWith("main");
 
     keydown(baseRef, "ArrowDown");
-    const retired = container.querySelector<HTMLButtonElement>(
-      '[data-worktree-suggestion="release"]',
-    )!;
+    const retired = query<HTMLButtonElement>('[data-worktree-suggestion="release"]')!;
     renderBranches(["main", "next"]);
     expect(baseRef.hasAttribute("aria-activedescendant")).toBe(false);
     vi.mocked(params.onBaseRefInput).mockClear();

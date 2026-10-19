@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -63,12 +64,9 @@ describe("creation-owned follow-up input", () => {
 
     setCurrent(next);
     flush();
-    const nextInput = container.querySelector("textarea");
+    const nextInput = expectDefined(container.querySelector("textarea"), "next creation input");
     expect(nextInput).not.toBe(firstInput);
     expect(nextInput?.value).toBe("next creation");
-    if (!nextInput) {
-      throw new Error("Expected the next creation input");
-    }
     nextInput.value = "edited next creation";
     next.flushInput?.();
     expect(next.message).toBe("edited next creation");
@@ -119,16 +117,17 @@ describe("creation-owned follow-up input", () => {
     create.resolve(null);
     await first;
     expect(flow.message).toBe("original prompt");
-    expect(composer.inputs[0]!.id).toBe(id);
-    expect(composer.message).toBe("unfinished follower");
+    expect(composer).toMatchObject({ inputs: [{ id }], message: "unfinished follower" });
     vi.mocked(context.sessions.createResult).mockResolvedValue(accepted);
     flow.setVisibility("incognito");
     await flow.submit();
     expect(flow.message).toBe("");
     const transfer = take(context);
-    expect(transfer?.inputs[0]?.id).toBe(id);
-    expect(transfer?.draft).toBe("unfinished follower");
-    expect(transfer?.incognito).toBe(true);
+    expect(transfer).toMatchObject({
+      inputs: [{ id }],
+      draft: "unfinished follower",
+      incognito: true,
+    });
     expect(transfer?.claimDraft()).toBe(true);
     expect(transfer?.claimDraft()).toBe(false);
     expect(canReloadControlUiDocument()).toBe(false);
@@ -152,7 +151,7 @@ describe("creation-owned follow-up input", () => {
     const next = createTestGatewayClient(request);
     vi.spyOn(next, "recoveryScope", "get").mockReturnValue(original.recoveryScope);
     context.gateway.snapshot.client = next;
-    Object.defineProperty(context.gateway.snapshot.client!, "recoveryScopeReady", {
+    Object.defineProperty(next, "recoveryScopeReady", {
       value: false,
       configurable: true,
     });
@@ -214,8 +213,7 @@ describe("creation-owned follow-up input", () => {
     entry!.destination!.onAttachmentsChange([file]);
     entry!.destination!.onPendingReadsChange?.(-1);
     expect(attachments).toEqual([file]);
-    expect(transfer.reads.readSignal.aborted).toBe(false);
-    expect(transfer.reads.pendingReads).toBe(0);
+    expect(transfer.reads).toMatchObject({ readSignal: { aborted: false }, pendingReads: 0 });
     expect(transfer.incognito).toBe(true);
   });
 

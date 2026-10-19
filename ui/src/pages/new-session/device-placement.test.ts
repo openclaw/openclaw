@@ -29,9 +29,7 @@ function node(overrides: Partial<DraftEnvironment>): DraftEnvironment {
 }
 
 describe("device placement projection", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
+  beforeEach(() => i18n.setLocale("en"));
 
   it.each([
     [
@@ -97,7 +95,6 @@ describe("device placement projection", () => {
     const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
     const environments = [
       node({
-        status: "available",
         sessionHost: false,
         workerSlots: undefined,
         issues: [{ code: "worker-host-unavailable", message }],
@@ -157,11 +154,7 @@ describe("device placement projection", () => {
     (state) => {
       const message = "Enable the codex plugin on this node with openclaw plugins enable codex.";
       const [device] = projectDevicePlacements(
-        [
-          node({
-            requiredNodeCommand: { command, state, message },
-          }),
-        ],
+        [node({ requiredNodeCommand: { command, state, message } })],
         requirement,
       );
 
