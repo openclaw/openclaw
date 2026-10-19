@@ -420,7 +420,8 @@ or protocol-version change.
   archive, or uncertain filter changes still require an authoritative count read.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
-  snapshot within a one-second window. The deadline stays fixed during continuous
+  snapshot within a 750 ms window, leaving headroom for delivery within one second.
+  The deadline stays fixed during continuous
   activity; lifecycle, capacity, transcript, deletion, and clearing receipts remain
   immediate and distinct. Live activity indicators use those separate events,
   not recap delivery. Publication rechecks row readiness after each yield. Accepted recap

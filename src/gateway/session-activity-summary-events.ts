@@ -60,9 +60,9 @@ export async function broadcastSessionActivitySummary(
   if (projection) {
     const publications = sessionEventPublicationRows(projection);
     const work = publications.track(
-      // Keep a fixed deadline: a busy session publishes its latest recap every second.
+      // Leave publication/transport headroom within the one-second delivery budget.
       new Promise<void>((resolve) => {
-        setTimeout(resolve, 1_000);
+        setTimeout(resolve, 750);
       }).then(() => publications.withReadyRows(() => [query], publish, { includeAncestors: true })),
     );
     if (captured && key) {

@@ -76,13 +76,13 @@ function summaryFixture() {
   return { target, other, initial, projection, preparation, entered, ready, broadcast, publish };
 }
 
-it("publishes the latest recap once per second without extending a busy session's deadline", async () => {
+it("publishes the latest recap once per window without extending a busy session's deadline", async () => {
   const f = summaryFixture();
   f.ready.resolve();
   for (let index = 0; index < 20; index++) {
     f.projection.setEntry("first", { ...f.initial, label: `recap-${index}` });
     void f.publish();
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(75);
     expect(f.broadcast).toHaveBeenCalledTimes(Math.floor((index + 1) / 10));
   }
   expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject([
