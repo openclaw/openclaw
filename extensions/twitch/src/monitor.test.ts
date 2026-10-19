@@ -8,6 +8,7 @@ import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-test
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TwitchConfigSchema } from "./config-schema.js";
 import { BASE_TWITCH_TEST_ACCOUNT } from "./test-fixtures.js";
+import type { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchChatMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,9 +25,7 @@ const mocks = vi.hoisted(() => ({
   unregister: vi.fn(),
 }));
 
-vi.mock("./access-control.js", () => ({
-  checkTwitchAccessControl: mocks.checkAccess,
-}));
+vi.mock("./access-control.js", () => ({ checkTwitchAccessControl: mocks.checkAccess }));
 
 vi.mock("./client-manager-registry.js", () => ({
   getOrCreateClientManager: () => ({
@@ -36,13 +35,9 @@ vi.mock("./client-manager-registry.js", () => ({
   }),
 }));
 
-vi.mock("./runtime.js", () => ({
-  getTwitchRuntime: mocks.getRuntime,
-}));
+vi.mock("./runtime.js", () => ({ getTwitchRuntime: mocks.getRuntime }));
 
-vi.mock("./twitch-ingress.js", () => ({
-  createTwitchIngress: mocks.createIngress,
-}));
+vi.mock("./twitch-ingress.js", () => ({ createTwitchIngress: mocks.createIngress }));
 
 import { monitorTwitchProvider } from "./monitor.js";
 
@@ -65,6 +60,39 @@ type InboundRunInput = {
 
 describe("monitorTwitchProvider", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "twitch-prefix-");
+  const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
+
+  async function startMonitor(
+    config: OpenClawConfig,
+    statusSink?: Parameters<typeof monitorTwitchProvider>[0]["statusSink"],
+  ) {
+    const runtimeError = vi.fn();
+    mocks.onMessage.mockReturnValue(mocks.unregister);
+    const monitor = await monitorTwitchProvider({
+      account,
+      accountId: "default",
+      config,
+      channelRuntime: mocks.getRuntime().channel,
+      runtime: { error: runtimeError },
+      abortSignal: new AbortController().signal,
+      statusSink,
+    });
+    return { monitor, runtimeError };
+  }
+
+  async function dispatchMessage(id: string) {
+    mocks.onMessage.mock.calls[0]?.[0]({
+      id,
+      username: "viewer",
+      userId: "viewer-1",
+      message: "hello bot",
+      channel: "testchannel",
+    });
+    expect(mocks.ingressAccept).toHaveBeenCalledOnce();
+    // Join native delivery, including cold dispatcher startup.
+    await mocks.ingressAccept.mock.results[0]?.value;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getClient.mockResolvedValue({});
@@ -73,18 +101,7 @@ describe("monitorTwitchProvider", () => {
       await Promise.allSettled(mocks.ingressAccept.mock.results.map((result) => result.value));
     });
     mocks.createIngress.mockImplementation(
-      (options: {
-        deliver: (
-          message: TwitchChatMessage,
-          lifecycle: {
-            admission: "exclusive";
-            abortSignal: AbortSignal;
-            onAdopted: () => Promise<void>;
-            onDeferred: () => void;
-            onAbandoned: () => Promise<void>;
-          },
-        ) => Promise<void>;
-      }) => ({
+      (options: Parameters<typeof createTwitchIngress>[0]) => ({
         accept: mocks.ingressAccept.mockImplementation(async (message: TwitchChatMessage) => {
           await options.deliver(message, {
             admission: "exclusive",
@@ -100,12 +117,7 @@ describe("monitorTwitchProvider", () => {
     );
     mocks.getRuntime.mockReturnValue({
       logging: {
-        getChildLogger: () => ({
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        }),
+        getChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
         shouldLogVerbose: () => false,
       },
       channel: {
@@ -141,7 +153,6 @@ describe("monitorTwitchProvider", () => {
   ])(
     "delivers $name prefixes through the shared dispatcher",
     async ({ name, multi, override, expected }) => {
-      const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
       const channelConfig = multi
         ? {
             responsePrefix: "[root]",
@@ -186,28 +197,9 @@ describe("monitorTwitchProvider", () => {
             },
           }),
       );
-      mocks.onMessage.mockReturnValue(mocks.unregister);
-      const runtimeError = vi.fn();
-      const monitor = await monitorTwitchProvider({
-        account,
-        accountId: "default",
-        config,
-        channelRuntime: mocks.getRuntime().channel,
-        runtime: { error: runtimeError },
-        abortSignal: new AbortController().signal,
-      });
+      const { monitor, runtimeError } = await startMonitor(config);
       try {
-        const onMessage = mocks.onMessage.mock.calls[0]?.[0];
-        onMessage({
-          id: `prefix-${name}`,
-          username: "viewer",
-          userId: "viewer-1",
-          message: "hello bot",
-          channel: "testchannel",
-        });
-        expect(mocks.ingressAccept).toHaveBeenCalledOnce();
-        // Await the owning delivery task, including cold shared-dispatcher startup.
-        await mocks.ingressAccept.mock.results[0]?.value;
+        await dispatchMessage(`prefix-${name}`);
         expect(mocks.sendMessage).toHaveBeenCalledOnce();
         expect(mocks.sendMessage).toHaveBeenCalledWith(
           account,
@@ -223,61 +215,52 @@ describe("monitorTwitchProvider", () => {
     },
   );
 
-  it.each<{
-    name: string;
-    payload: ReplyPayload;
-    expectedText?: string;
-    expectedVisible: boolean;
-    providerError?: string;
-    expectedError?: string;
-  }>([
-    {
-      name: "plain Markdown text",
-      payload: { text: "**Hello** Twitch" },
-      expectedText: "Hello Twitch",
-      expectedVisible: true,
-    },
-    {
-      name: "caption with a legacy media URL",
-      payload: { text: "Check this:", mediaUrl: "https://example.com/image.png" },
-      expectedText: "Check this: https://example.com/image.png",
-      expectedVisible: true,
-    },
-    {
-      name: "caption with every attachment URL",
-      payload: {
+  it.each<
+    [
+      name: string,
+      payload: ReplyPayload,
+      expectedText: string | undefined,
+      expectedVisible: boolean,
+      providerError?: string,
+      expectedError?: string,
+    ]
+  >([
+    ["plain Markdown text", { text: "**Hello** Twitch" }, "Hello Twitch", true],
+    [
+      "caption with a legacy media URL",
+      { text: "Check this:", mediaUrl: "https://example.com/image.png" },
+      "Check this: https://example.com/image.png",
+      true,
+    ],
+    [
+      "caption with every attachment URL",
+      {
         text: "Files attached:",
         mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
       },
-      expectedText: "Files attached: https://example.com/one.png https://example.com/two.png",
-      expectedVisible: true,
-    },
-    {
-      name: "media-only reply",
-      payload: { mediaUrl: "https://example.com/image.png" },
-      expectedText: "https://example.com/image.png",
-      expectedVisible: true,
-    },
-    {
-      name: "empty reply",
-      payload: { text: "" },
-      expectedVisible: false,
-      expectedError: "No text to send in reply payload",
-    },
-    {
-      name: "provider send failure",
-      payload: { text: "Hello Twitch" },
-      expectedText: "Hello Twitch",
-      expectedVisible: false,
-      providerError: "provider unavailable",
-      expectedError: "Failed to send reply: Error: provider unavailable",
-    },
+      "Files attached: https://example.com/one.png https://example.com/two.png",
+      true,
+    ],
+    [
+      "media-only reply",
+      { mediaUrl: "https://example.com/image.png" },
+      "https://example.com/image.png",
+      true,
+    ],
+    ["empty reply", { text: "" }, undefined, false, undefined, "No text to send in reply payload"],
+    [
+      "provider send failure",
+      { text: "Hello Twitch" },
+      "Hello Twitch",
+      false,
+      "provider unavailable",
+      "Failed to send reply: Error: provider unavailable",
+    ],
   ])(
-    "handles $name through the public monitor boundary",
-    async ({ payload, expectedText, expectedVisible, providerError, expectedError }) => {
+    "handles %s through the public monitor boundary",
+    async (_name, payload, expectedText, expectedVisible, providerError, expectedError) => {
       const settled = vi.fn();
       const statusSink = vi.fn();
-      const runtimeError = vi.fn();
       if (providerError) {
         mocks.sendMessage.mockResolvedValueOnce({ ok: false, error: providerError });
       }
@@ -287,35 +270,11 @@ describe("monitorTwitchProvider", () => {
         settled(result);
         turn.delivery.onDelivered(payload, { kind: "final" }, result);
       });
-      let onMessage: ((message: TwitchChatMessage) => void) | undefined;
-      mocks.onMessage.mockImplementation((handler: (message: TwitchChatMessage) => void) => {
-        onMessage = handler;
-        return mocks.unregister;
-      });
-      const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
       const config: OpenClawConfig = {
         session: { store: join(sessionDirs.make(), "sessions.json") },
       };
-      const monitor = await monitorTwitchProvider({
-        account,
-        accountId: "default",
-        config,
-        channelRuntime: mocks.getRuntime().channel,
-        runtime: { error: runtimeError },
-        abortSignal: new AbortController().signal,
-        statusSink,
-      });
-
-      onMessage?.({
-        id: "message-1",
-        username: "viewer",
-        userId: "viewer-1",
-        message: "hello bot",
-        channel: "testchannel",
-      });
-
-      expect(mocks.ingressAccept).toHaveBeenCalledOnce();
-      await mocks.ingressAccept.mock.results[0]?.value;
+      const { monitor, runtimeError } = await startMonitor(config, statusSink);
+      await dispatchMessage("message-1");
       expect(settled).toHaveBeenCalledOnce();
       expect(settled).toHaveBeenCalledWith({ visibleReplySent: expectedVisible });
       if (expectedText) {

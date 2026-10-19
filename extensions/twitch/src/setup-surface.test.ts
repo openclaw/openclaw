@@ -14,9 +14,8 @@ import {
 } from "./setup-surface.js";
 import type { TwitchAccountConfig } from "./types.js";
 
-// Mock the helpers we're testing
-const mockPromptText = vi.fn();
-const mockPromptConfirm = vi.fn();
+const mockPromptText = vi.fn<WizardPrompter["text"]>();
+const mockPromptConfirm = vi.fn<WizardPrompter["confirm"]>();
 const mockPromptNote = vi.fn();
 const mockPrompter: WizardPrompter = {
   text: mockPromptText,
@@ -46,22 +45,28 @@ function configuredAccount(id: string): TwitchAccountConfig {
   };
 }
 
-function requireFirstTextPromptArgs(): {
-  message?: string;
-  initialValue?: string;
-  sensitive?: boolean;
-  validate?: (value: string) => string | undefined;
-} {
-  const [call] = mockPromptText.mock.calls;
-  if (!call || typeof call[0] !== "object" || call[0] === null || Array.isArray(call[0])) {
+function requireFirstTextPromptArgs() {
+  const prompt = mockPromptText.mock.calls[0]?.[0];
+  if (!prompt) {
     throw new Error("expected Twitch text prompt args");
   }
-  return call[0] as {
-    message?: string;
-    initialValue?: string;
-    sensitive?: boolean;
-    validate?: (value: string) => string | undefined;
-  };
+  return prompt;
+}
+
+type SetupConfig = Parameters<typeof setTwitchAccount>[0];
+type TwitchConfig = NonNullable<NonNullable<SetupConfig["channels"]>["twitch"]>;
+function configWithAccounts(
+  accounts: TwitchConfig["accounts"],
+  extra: TwitchConfig = {},
+): SetupConfig {
+  return { channels: { twitch: { ...extra, accounts } } };
+}
+
+function answerText(...answers: string[]) {
+  mockPromptText.mockReset();
+  for (const answer of answers) {
+    mockPromptText.mockResolvedValueOnce(answer);
+  }
 }
 
 describe("setup surface helpers", () => {
@@ -124,24 +129,11 @@ describe("setup surface helpers", () => {
 
       const result = await promptRefreshTokenSetup(mockPrompter, mockRefreshAccount);
 
-      expect(result).toEqual({
-        clientSecret: "secret123",
-        refreshToken: "refresh123",
-      });
-      expect(mockPromptText).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          sensitive: true,
-        }),
-      );
-      expect(mockPromptText.mock.calls[0]?.[0]).not.toHaveProperty("initialValue");
-      expect(mockPromptText).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          sensitive: true,
-        }),
-      );
-      expect(mockPromptText.mock.calls[1]?.[0]).not.toHaveProperty("initialValue");
+      expect(result).toEqual({ clientSecret: "secret123", refreshToken: "refresh123" });
+      for (const index of [0, 1]) {
+        expect(mockPromptText.mock.calls[index]?.[0]).toMatchObject({ sensitive: true });
+        expect(mockPromptText.mock.calls[index]?.[0]).not.toHaveProperty("initialValue");
+      }
     });
 
     it("should keep existing credentials without opening masked replacement prompts", async () => {
@@ -157,18 +149,13 @@ describe("setup surface helpers", () => {
 
   describe("configureWithEnvToken", () => {
     it("skips env-token shortcut for non-default accounts", async () => {
-      mockPromptConfirm.mockReset().mockResolvedValue(true as never);
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("secondary-bot" as never)
-        .mockResolvedValueOnce("secondary-client" as never);
+      mockPromptConfirm.mockReset().mockResolvedValue(true);
+      answerText("secondary-bot", "secondary-client");
 
       const result = await configureWithEnvToken(
         {
           channels: {
-            twitch: {
-              defaultAccount: "secondary",
-            },
+            twitch: { defaultAccount: "secondary" },
           },
         } as Parameters<typeof configureWithEnvToken>[0],
         mockPrompter,
@@ -187,16 +174,10 @@ describe("setup surface helpers", () => {
   describe("defaultAccount setup resolution", () => {
     it("reports status for the requested account override", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
-        cfg: {
-          channels: {
-            twitch: {
-              accounts: {
-                default: configuredAccount("default"),
-                secondary: configuredAccount("secondary"),
-              },
-            },
-          },
-        },
+        cfg: configWithAccounts({
+          default: configuredAccount("default"),
+          secondary: configuredAccount("secondary"),
+        }),
         accountId: "secondary",
         configured: true,
       } as never);
@@ -207,20 +188,9 @@ describe("setup surface helpers", () => {
     it("reports env-token default account setup as configured", async () => {
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:fromenv";
 
-      const cfg = {
-        channels: {
-          twitch: {
-            accounts: {
-              default: {
-                username: "env-bot",
-                accessToken: "",
-                clientId: "env-client",
-                channel: "#env",
-              },
-            },
-          },
-        },
-      } as Parameters<NonNullable<typeof twitchSetupWizard.status>["resolveConfigured"]>[0]["cfg"];
+      const cfg = configWithAccounts({
+        default: { username: "env-bot", accessToken: "", clientId: "env-client", channel: "#env" },
+      });
 
       expect(twitchSetupWizard.status?.resolveConfigured({ cfg })).toBe(true);
       const account = twitchSetupPlugin.config.resolveAccount(cfg, "default");
@@ -246,11 +216,8 @@ describe("setup surface helpers", () => {
     it("uses an environment-only token without sending it to wizard prompts", async () => {
       const envToken = "oauth:environment-only";
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = envToken;
-      mockPromptConfirm.mockReset().mockResolvedValueOnce(true as never);
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("env-bot" as never)
-        .mockResolvedValueOnce("env-client" as never);
+      mockPromptConfirm.mockReset().mockResolvedValueOnce(true);
+      answerText("env-bot", "env-client");
 
       const result = await finalizeTwitchSetup({}, "default");
 
@@ -269,18 +236,9 @@ describe("setup surface helpers", () => {
     });
 
     it("rejects reserved account ids before using them as config keys", () => {
-      expect(() =>
-        setTwitchAccount(
-          {} as Parameters<typeof setTwitchAccount>[0],
-          {
-            username: "reserved-bot",
-            accessToken: "oauth:reserved",
-            clientId: "reserved-client",
-            channel: "#reserved",
-          },
-          "__proto__",
-        ),
-      ).toThrow("Invalid Twitch account id");
+      expect(() => setTwitchAccount({}, configuredAccount("reserved"), "__proto__")).toThrow(
+        "Invalid Twitch account id",
+      );
 
       expect(Object.prototype).not.toHaveProperty("username");
     });
@@ -300,9 +258,7 @@ describe("setup surface helpers", () => {
         twitchSetupWizard.dmPolicy?.resolveConfigKeys?.(
           {
             channels: {
-              twitch: {
-                defaultAccount: "secondary",
-              },
+              twitch: { defaultAccount: "secondary" },
             },
           } as Parameters<
             NonNullable<NonNullable<typeof twitchSetupWizard.dmPolicy>["resolveConfigKeys"]>
@@ -321,58 +277,37 @@ describe("setup surface helpers", () => {
     });
 
     it("writes to the requested account when defaultAccount is not created yet", async () => {
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("secondary-bot" as never)
-        .mockResolvedValueOnce("oauth:secondary" as never)
-        .mockResolvedValueOnce("secondary-client" as never)
-        .mockResolvedValueOnce("#secondary" as never);
-      mockPromptConfirm.mockReset().mockResolvedValue(false as never);
+      answerText("secondary-bot", "oauth:secondary", "secondary-client", "#secondary");
+      mockPromptConfirm.mockReset().mockResolvedValue(false);
 
       const result = await finalizeTwitchSetup(
-        {
-          channels: {
-            twitch: {
-              defaultAccount: "secondary",
-              accounts: {
-                default: configuredAccount("default"),
-              },
-            },
-          },
-        } as FinalizeArgs["cfg"],
+        configWithAccounts(
+          { default: configuredAccount("default") },
+          { defaultAccount: "secondary" },
+        ),
         "secondary",
       );
 
       const twitch = result?.cfg?.channels?.twitch;
-      expect(twitch?.accounts?.secondary?.username).toBe("secondary-bot");
-      expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:secondary");
-      expect(twitch?.accounts?.default?.username).toBe("default-bot");
-      const channelPrompt = mockPromptText.mock.calls[3]?.[0];
-      expect(channelPrompt?.validate("")).toBe("Required");
-      expect(channelPrompt?.validate("   ")).toBe("Required");
-      expect(channelPrompt?.validate("#chan")).toBeUndefined();
+      expect(twitch?.accounts).toMatchObject({
+        secondary: { username: "secondary-bot", accessToken: "oauth:secondary" },
+        default: { username: "default-bot" },
+      });
+      const validate = mockPromptText.mock.calls[3]?.[0].validate;
+      if (!validate) {
+        throw new Error("expected channel prompt validator");
+      }
+      expect(validate("")).toBe("Required");
+      expect(validate("   ")).toBe("Required");
+      expect(validate("#chan")).toBeUndefined();
     });
 
     it("persists a token instead of using env-token shortcut for non-default finalize", async () => {
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:fromenv";
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("secondary-bot" as never)
-        .mockResolvedValueOnce("oauth:persisted" as never)
-        .mockResolvedValueOnce("secondary-client" as never)
-        .mockResolvedValueOnce("#secondary" as never);
-      mockPromptConfirm.mockReset().mockResolvedValue(false as never);
+      answerText("secondary-bot", "oauth:persisted", "secondary-client", "#secondary");
+      mockPromptConfirm.mockReset().mockResolvedValue(false);
 
-      const result = await finalizeTwitchSetup(
-        {
-          channels: {
-            twitch: {
-              accounts: {},
-            },
-          },
-        } as FinalizeArgs["cfg"],
-        "secondary",
-      );
+      const result = await finalizeTwitchSetup(configWithAccounts({}), "secondary");
 
       const twitch = result?.cfg?.channels?.twitch;
       expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:persisted");
@@ -483,18 +418,7 @@ describe("setup surface helpers", () => {
     );
 
     it("reports empty roles as open without prompting for an update", () => {
-      const cfg = {
-        channels: {
-          twitch: {
-            accounts: {
-              secondary: {
-                ...mockAccount,
-                allowedRoles: [],
-              },
-            },
-          },
-        },
-      };
+      const cfg = configWithAccounts({ secondary: { ...mockAccount, allowedRoles: [] } });
       expect(groupAccess.currentPolicy({ cfg, accountId: "secondary" })).toBe("open");
       expect(groupAccess.updatePrompt?.({ cfg, accountId: "secondary" })).toBe(false);
     });

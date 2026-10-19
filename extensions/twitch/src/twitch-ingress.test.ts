@@ -16,7 +16,20 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return { ...actual, createChannelIngressMonitor: vi.fn(actual.createChannelIngressMonitor) };
 });
 
-const withTwitchIngressTestQueue = useTwitchIngressTestQueue();
+const withIngressQueue = useTwitchIngressTestQueue();
+type CreateIngress = Parameters<Parameters<typeof withIngressQueue>[0]>[1];
+type IngressOptions = Parameters<CreateIngress>[0];
+
+function withTwitchIngressTestQueue(
+  run: (
+    queue: ChannelIngressQueue<TwitchIngressTestPayload>,
+    create: (options: Omit<IngressOptions, "accountId" | "runtime">) => ReturnType<CreateIngress>,
+  ) => Promise<void>,
+) {
+  return withIngressQueue((queue, create) =>
+    run(queue, (options) => create({ accountId: "default", runtime: runtime(), ...options })),
+  );
+}
 
 function latestMonitor() {
   const result = vi.mocked(createChannelIngressMonitor).mock.results.at(-1);
@@ -51,14 +64,11 @@ describe("Twitch durable ingress", () => {
     await withTwitchIngressTestQueue(async (queue, createIngress) => {
       const realEnqueue = queue.enqueue.bind(queue);
       const appendEntered = Promise.withResolvers<void>();
-      let releaseAppend = () => {};
-      const appendGate = new Promise<void>((resolve) => {
-        releaseAppend = resolve;
-      });
+      const appendGate = Promise.withResolvers<void>();
       const enqueue: typeof queue.enqueue = vi.fn(
         async (...args: Parameters<typeof queue.enqueue>) => {
           appendEntered.resolve();
-          await appendGate;
+          await appendGate.promise;
           return await realEnqueue(...args);
         },
       );
@@ -66,25 +76,19 @@ describe("Twitch durable ingress", () => {
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const ingress = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue: gatedQueue,
-        deliver,
-        pollIntervalMs: 5,
-      });
+      const ingress = createIngress({ queue: gatedQueue, deliver, pollIntervalMs: 5 });
       ingress.start();
       try {
         const admission = ingress.accept(createTwitchIngressTestMessage({ id: "durable-first" }));
         await appendEntered.promise;
         expect(enqueue).toHaveBeenCalledOnce();
         expect(deliver).not.toHaveBeenCalled();
-        releaseAppend();
+        appendGate.resolve();
         await admission;
         await expectSettledIngressVerdict(queue, "durable-first", "completed");
         expect(deliver).toHaveBeenCalledOnce();
       } finally {
-        releaseAppend();
+        appendGate.resolve();
         await ingress.stop();
       }
     });
@@ -92,25 +96,14 @@ describe("Twitch durable ingress", () => {
 
   it("recovers an uncompleted event with a fresh drain and dispatches exactly once", async () => {
     await withTwitchIngressTestQueue(async (queue, createIngress) => {
-      const interrupted = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: vi.fn(),
-      });
+      const interrupted = createIngress({ queue, deliver: vi.fn() });
       await interrupted.accept(createTwitchIngressTestMessage({ id: "restart" }));
       await interrupted.stop();
 
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const recovered = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-        pollIntervalMs: 5,
-      });
+      const recovered = createIngress({ queue, deliver, pollIntervalMs: 5 });
       recovered.start();
       try {
         await expectSettledIngressVerdict(queue, "restart", "completed");
@@ -129,13 +122,7 @@ describe("Twitch durable ingress", () => {
         { laneKey: "channel:testchannel" },
       );
       const deliver = vi.fn();
-      const ingress = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-        pollIntervalMs: 5,
-      });
+      const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
       ingress.start();
       try {
         await expectSettledIngressVerdict(queue, "malformed", "failed");
@@ -160,8 +147,6 @@ describe("Twitch durable ingress", () => {
         return result;
       };
       const ingress = createIngress({
-        accountId: "default",
-        runtime: runtime(),
         queue: { ...queue, enqueue },
         deliver: vi.fn(),
       });
@@ -200,13 +185,7 @@ describe("Twitch durable ingress", () => {
         adopted.resolve();
         await deliveryGate.promise;
       });
-      const ingress = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-        pollIntervalMs: 5,
-      });
+      const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
       try {
         ingress.start();
         await ingress.accept(createTwitchIngressTestMessage({ id: "active-stop" }));
@@ -248,13 +227,7 @@ describe("Twitch durable ingress", () => {
         }
         await lifecycle.onAdopted();
       });
-      const ingress = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-        pollIntervalMs: 5,
-      });
+      const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
       try {
         ingress.start();
         await ingress.accept(createTwitchIngressTestMessage({ id: "deferred-stop" }));
@@ -302,13 +275,7 @@ describe("Twitch durable ingress", () => {
             listeningForAbort.resolve();
           }),
       );
-      const ingress = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-        pollIntervalMs: 5,
-      });
+      const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
       try {
         ingress.start();
         await ingress.accept(createTwitchIngressTestMessage({ id: "abort-on-stop" }));
@@ -335,13 +302,7 @@ describe("Twitch durable ingress", () => {
         deliveryStarted.resolve();
         await deliveryGate.promise;
       });
-      const ingress = createIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-        pollIntervalMs: 5,
-      });
+      const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
       try {
         ingress.start();
         await ingress.accept(createTwitchIngressTestMessage({ id: "shutdown-retry" }));
