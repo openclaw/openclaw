@@ -3583,8 +3583,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               ? [...gatewayFiles, ...infraFiles]
               : [],
     }));
-    vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
-      ...testTimings,
+    vi.doMock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
       readCompactGroupTimings: () => ({
         "agentic-gateway-core-1": 128,
         "agentic-gateway-core-2": 128,
