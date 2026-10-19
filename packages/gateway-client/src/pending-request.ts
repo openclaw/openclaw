@@ -321,6 +321,13 @@ export class GatewayPendingRequests {
     if (startupRefusal && !pending.acceptedNotified) {
       if (pending.prepareRetry()) {
         pending.retryStartup?.(frame.error?.retryAfterMs);
+        if (
+          this.bootstrapPause?.probe?.pending === pending &&
+          this.bootstrapPause.probe.revision === this.bootstrapPause.revision
+        ) {
+          // Agent-local preparation no longer needs the Gateway-wide recovery fence.
+          this.resumeBootstrapRequests();
+        }
       }
       return;
     }

@@ -27,6 +27,72 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("GatewayPendingRequests", () => {
+  it.each([false, true])(
+    "releases a ready agent after a recovery probe reaches startup refusal, newer pause=%s",
+    async (newerPause) => {
+      let sequence = 0;
+      const requests = new GatewayPendingRequests({
+        createRequestId: () => `${sequence++}`,
+        nowMs: () => Date.now(),
+      });
+      const frames: string[] = [];
+      const sender = { send: (raw: string) => frames.push(raw) };
+      const controller = new AbortController();
+      const slow = requests
+        .request(
+          sender,
+          "chat.send",
+          { agentId: "slow" },
+          {
+            timeoutMs: 10_000,
+            signal: controller.signal,
+          },
+        )
+        .catch((error: unknown) => error);
+      const ready = requests.request(
+        sender,
+        "chat.send",
+        { agentId: "ready" },
+        {
+          timeoutMs: 10_000,
+        },
+      );
+      const slowRaw = frames[0];
+      const readyRaw = frames[1];
+      assert(slowRaw && readyRaw);
+      const slowFrame = JSON.parse(slowRaw) as RequestFrame;
+      const readyFrame = JSON.parse(readyRaw) as RequestFrame;
+      refuse(requests, slowFrame, "startup-sidecars", 100);
+      refuse(requests, readyFrame, "startup-sidecars", 200);
+      await vi.advanceTimersByTimeAsync(100);
+      refuse(requests, slowFrame, "gateway-suspending", 250);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(frames).toEqual([slowRaw, readyRaw, slowRaw, slowRaw]);
+      if (newerPause) {
+        requests.setSuspensionPhase("draining");
+      }
+      refuse(requests, slowFrame, "startup-sidecars");
+      if (newerPause) {
+        expect(frames).toEqual([slowRaw, readyRaw, slowRaw, slowRaw]);
+        requests.setSuspensionPhase("accepting");
+      }
+      expect(frames).toEqual([slowRaw, readyRaw, slowRaw, slowRaw, readyRaw]);
+      requests.handleResponse({
+        type: "res",
+        id: readyFrame.id,
+        ok: true,
+        payload: { runId: "ready" },
+      });
+      await expect(ready).resolves.toEqual({ runId: "ready" });
+      controller.abort();
+      await expect(slow).resolves.toBeInstanceOf(Error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(frames).toHaveLength(5);
+      expect(requests.hasPending).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it.each(["announced", "gateway-suspending", "gateway-restarting"])(
     "resumes a startup-refused write after %s without changing its frame",
     async (pause) => {
