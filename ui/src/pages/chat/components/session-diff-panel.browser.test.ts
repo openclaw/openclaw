@@ -134,4 +134,62 @@ describe.runIf(browserMode)("Review header layout", () => {
       expect(document.activeElement).toBe(copyPath);
     }
   });
+  it("keeps mobile Review menus reachable inside a translated dock and restores the real trigger", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(390, 800);
+    const openPage = vi.fn();
+    let panel!: HTMLElementTagNameMap["openclaw-session-diff"];
+    mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: true,
+        onOpenMobilePage: openPage,
+        ref: (element) => {
+          panel = element;
+        },
+      }),
+    );
+    // The sheet's resting translate establishes a fixed-position containing block.
+    panel.style.cssText =
+      "display:block;position:fixed;left:0;top:400px;width:390px;height:400px;translate:0 0";
+    panel.loader = async () => ({
+      sessionKey: "main",
+      root,
+      branch,
+      baseRef: "main",
+      additions: 1,
+      deletions: 0,
+      files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
+    });
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff-mobile__rail")).not.toBeNull(),
+    );
+    const view = panel.querySelector<HTMLButtonElement>(
+      ".session-diff-mobile__rail .session-diff__toolbar-icon",
+    )!;
+    await userEvent.click(view);
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    const bounds = surface.getBoundingClientRect();
+    expect(bounds.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    await userEvent.keyboard("{Escape}");
+    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    expect(document.activeElement).toBe(view);
+    await userEvent.click(view);
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    await userEvent.click(panel.querySelector<HTMLButtonElement>('[data-value="sync"]')!);
+    await waitForSolid(() => expect(openPage).toHaveBeenCalledTimes(1));
+    expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
+    expect(view.style.getPropertyValue("anchor-name")).toBe("");
+  });
 });

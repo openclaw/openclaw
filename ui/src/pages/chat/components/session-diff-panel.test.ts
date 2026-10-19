@@ -89,7 +89,9 @@ function setupDesktopResizeObserver() {
       disconnect() {}
     },
   );
-  onTestFinished(() => vi.unstubAllGlobals());
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
 }
 
 function result(branch: string): SessionsDiffResult {
