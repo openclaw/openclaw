@@ -199,13 +199,18 @@ export async function createGatewayChatMetadataLifecycle(params: {
       // Publications that complete before listener registration would otherwise be missed.
       // During ordinary startup the owner is published after attachment, so an unavailable
       // snapshot here is expected and the publication listener performs the first refresh.
+      // Catch-up must not overwrite availability established by an observed publication.
       await runtime.refresh().then(
         () => {
-          preparedModelRuntimeState = "available";
+          if (preparedModelRuntimeState === "unobserved") {
+            preparedModelRuntimeState = "available";
+          }
         },
         (error: unknown) => {
           if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
-            preparedModelRuntimeState = "available";
+            if (preparedModelRuntimeState === "unobserved") {
+              preparedModelRuntimeState = "available";
+            }
             params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
           }
         },
