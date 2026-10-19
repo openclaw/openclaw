@@ -9,33 +9,23 @@ import { createWorkboardCard } from "../lib/workboard/test/index-helpers.ts";
 import type { WorkboardCard } from "../lib/workboard/types.ts";
 import { workboardTestHost } from "../test/host.setup.ts";
 import { createViewContext } from "../test/host.ts";
-import { afterWorkboardUpdate } from "../test/settle.ts";
+import { afterWorkboardUpdate as settle } from "../test/settle.ts";
 import { createWorkboardWidget } from "../widgets.tsx";
 import { acquireWidgetRuntime } from "./runtime.ts";
 
-const cards = [
+const cards = (["ready", "running", "done"] as const).map((status, index) =>
   createWorkboardCard({
-    id: "ready",
-    title: "Ready card",
-    status: "ready",
-    agentId: "agent-a",
+    id: status,
+    title: `${status.charAt(0).toUpperCase()}${status.slice(1)} card`,
+    status,
+    position: (index + 1) * 1000,
+    ...(index === 0 ? { agentId: "agent-a" } : {}),
     metadata: { automation: { boardId: "ops" } },
   }),
-  createWorkboardCard({
-    id: "running",
-    title: "Running card",
-    status: "running",
-    position: 2000,
-    metadata: { automation: { boardId: "ops" } },
-  }),
-  createWorkboardCard({
-    id: "done",
-    title: "Done card",
-    status: "done",
-    position: 3000,
-    metadata: { automation: { boardId: "ops" } },
-  }),
-];
+);
+const movedCard = () => createWorkboardCard({ ...cards[0], status: "running", position: 3000 });
+const moveParams = { id: "ready", status: "running", position: 3000 };
+const moveError = "Move temporarily unavailable";
 const snapshot = (listedCards: WorkboardCard[] = cards) => ({
   cards: listedCards,
   statuses: ["ready", "running", "done"],
@@ -92,6 +82,16 @@ function setup(
     disposers.push(dispose);
     return {
       container,
+      query: <E extends Element = HTMLElement>(selector: string) =>
+        container.querySelector<E>(selector),
+      get select() {
+        return container.querySelector("select");
+      },
+      texts: (selector: string) =>
+        [...container.querySelectorAll(selector)].map((el) => el.textContent),
+      get text() {
+        return container.textContent;
+      },
       scopedRequest,
       signal: abort.signal,
       dispose,
@@ -101,7 +101,34 @@ function setup(
       },
     };
   };
-  return { fixture, request, mount };
+  const lease = () => {
+    const acquired = acquireWidgetRuntime(fixture.host, () => {});
+    disposers.push(() => acquired.release());
+    return acquired.runtime;
+  };
+  const reconnect = () => {
+    fixture.connection.connected = false;
+    fixture.notify();
+    fixture.connection.connected = true;
+    fixture.notify();
+  };
+  return { fixture, request, mount, lease, reconnect };
+}
+
+type Widget = ReturnType<ReturnType<typeof setup>["mount"]>;
+function setupMove(move: () => unknown, list: () => unknown = snapshot) {
+  return setup(
+    vi.fn(async (method: string) => (method === "workboard.cards.move" ? move() : list())),
+  );
+}
+const expectLoaded = (widget: Widget) => settle(() => expect(widget.select).not.toBeNull());
+const expectStatus = (widget: Widget, value: string) =>
+  settle(() => expect(widget.select?.value).toBe(value));
+function expectText(widgets: Widget[], text: string, present = true) {
+  for (const widget of widgets) {
+    const assertion = expect(widget.text);
+    (present ? assertion : assertion.not).toContain(text);
+  }
 }
 
 function changeStatus(container: HTMLElement, status = "running") {
@@ -124,21 +151,15 @@ it("discloses incomplete widget data and loads an absent card on demand for read
   const mini = mount("mini", {}, false);
   const card = mount("card", { cardId: "running" }, false);
   const widgets = [mini, card, mount("board", {}, false)];
-  await afterWorkboardUpdate(() => {
-    for (const widget of widgets) {
-      expect(widget.container.textContent).toContain(
-        "Counts and results include loaded cards only",
-      );
-    }
-    expect(card.container.textContent).toContain("This card is not loaded yet");
-    expect(card.container.textContent).not.toContain("no longer available");
+  await settle(() => {
+    expectText(widgets, "Counts and results include loaded cards only");
+    expect(card.text).toContain("This card is not loaded yet");
+    expect(card.text).not.toContain("no longer available");
   });
-  card.container.querySelector<HTMLButtonElement>("button")!.click();
-  await afterWorkboardUpdate(() => {
-    expect(card.container.textContent).toContain("Running card");
-    for (const widget of widgets) {
-      expect(widget.container.textContent).not.toContain("Load more cards");
-    }
+  card.query<HTMLButtonElement>("button")!.click();
+  await settle(() => {
+    expect(card.text).toContain("Running card");
+    expectText(widgets, "Load more cards", false);
   });
   expect(request).toHaveBeenLastCalledWith("workboard.cards.list", { after: cursor });
 });
@@ -155,37 +176,31 @@ it.each([false, true])(
     fixture.connection.connected = previouslyLoaded;
     const widgets = [mount("mini", {}), mount("card", { cardId: "ready" }), mount("board", {})];
     if (previouslyLoaded) {
-      await afterWorkboardUpdate(() => {
-        for (const widget of widgets) {
-          expect(widget.container.textContent).toContain("Ready card");
-        }
-      });
+      await settle(() => expectText(widgets, "Ready card"));
       fixture.connection.connected = false;
       fixture.notify();
       flush();
     }
 
     for (const widget of widgets) {
-      expect(widget.container.querySelector('[role="status"]')?.textContent).toContain(
+      expect(widget.query('[role="status"]')?.textContent).toContain(
         "Connect to the Gateway to load Workboard.",
       );
-      expect(widget.container.textContent).not.toContain("no longer available");
-      expect(widget.container.querySelector("select")).toBeNull();
-      expect(widget.container.querySelector("[data-test-id]")).toBeNull();
+      expect(widget.text).not.toContain("no longer available");
+      expect(widget.select).toBeNull();
+      expect(widget.query("[data-test-id]")).toBeNull();
     }
     expect(request).toHaveBeenCalledTimes(previouslyLoaded ? 1 : 0);
 
     fixture.connection.connected = true;
     fixture.notify();
     flush();
-    for (const widget of widgets) {
-      expect(widget.container.textContent).toContain("Loading Workboard");
-    }
+    expectText(widgets, "Loading Workboard");
     reconnected.resolve(snapshot());
-    await afterWorkboardUpdate(() => {
+    await settle(() => {
       for (const widget of widgets) {
-        expect(widget.container.textContent).toContain("Ready card");
-        expect(widget.container.querySelector('[role="status"]')).toBeNull();
+        expect(widget.text).toContain("Ready card");
+        expect(widget.query('[role="status"]')).toBeNull();
       }
     });
     expect(request).toHaveBeenCalledTimes(previouslyLoaded ? 2 : 1);
@@ -196,9 +211,9 @@ it("shares reads across distinct scoped hosts and releases the subscription with
   const { fixture, request, mount } = setup();
   const mini = mount("mini", { boardId: "ops" });
   const card = mount("card", { cardId: "ready" });
-  await afterWorkboardUpdate(() => {
-    expect(mini.container.textContent).toContain("Running card");
-    expect(card.container.textContent).toContain("Ready card");
+  await settle(() => {
+    expect(mini.text).toContain("Running card");
+    expect(card.text).toContain("Ready card");
   });
   expect(request).toHaveBeenCalledTimes(1);
   expect(mini.scopedRequest).not.toHaveBeenCalled();
@@ -211,61 +226,44 @@ it("shares reads across distinct scoped hosts and releases the subscription with
 
 it("deduplicates moves across widgets while issuing the mutation through the invoking view", async () => {
   const move = createDeferred<unknown>();
-  const request = vi.fn(async (method: string) =>
-    method === "workboard.cards.move" ? move.promise : snapshot(),
-  );
-  const { mount } = setup(request);
+  const { mount, request } = setupMove(() => move.promise);
   const first = mount("card", { cardId: "ready" });
   const second = mount("card", { cardId: "ready" });
-  await afterWorkboardUpdate(() => expect(second.container.querySelector("select")).not.toBeNull());
+  await expectLoaded(second);
   changeStatus(first.container);
   changeStatus(second.container);
   expect(request.mock.calls.filter(([method]) => method === "workboard.cards.move")).toHaveLength(
     1,
   );
-  expect(first.scopedRequest).toHaveBeenCalledWith("workboard.cards.move", {
-    id: "ready",
-    status: "running",
-    position: 3000,
-  });
+  expect(first.scopedRequest).toHaveBeenCalledWith("workboard.cards.move", moveParams);
   expect(second.scopedRequest).not.toHaveBeenCalled();
-  move.resolve({ card: { ...cards[0], status: "running", position: 3000 } });
-  await afterWorkboardUpdate(() =>
-    expect(second.container.querySelector("select")?.value).toBe("running"),
-  );
+  move.resolve({ card: movedCard() });
+  await expectStatus(second, "running");
 });
 
 it("recovers every shared widget after a failed move when the operator retries", async () => {
   const move = vi
     .fn()
-    .mockRejectedValueOnce(new Error("Move temporarily unavailable"))
-    .mockResolvedValueOnce({ card: { ...cards[0], status: "running", position: 3000 } });
-  const { mount } = setup(
-    vi.fn(async (method: string) => (method === "workboard.cards.move" ? move() : snapshot())),
-  );
+    .mockRejectedValueOnce(new Error(moveError))
+    .mockResolvedValueOnce({ card: movedCard() });
+  const { mount } = setupMove(move);
   const card = mount("card", { cardId: "ready" });
   const mini = mount("mini", {});
   const board = mount("board", {});
   const widgets = [card, mini, board];
-  await afterWorkboardUpdate(() => expect(card.container.querySelector("select")).not.toBeNull());
+  await expectLoaded(card);
   changeStatus(card.container);
-  await afterWorkboardUpdate(() => {
-    for (const widget of widgets) {
-      expect(widget.container.textContent).toContain("Move temporarily unavailable");
-    }
-  });
+  await settle(() => expectText(widgets, moveError));
 
-  mini.container.querySelector<HTMLButtonElement>("button")!.click();
-  await afterWorkboardUpdate(() => {
+  mini.query<HTMLButtonElement>("button")!.click();
+  await settle(() => {
     for (const widget of widgets) {
-      expect(widget.container.textContent).toContain("Ready card");
-      expect(widget.container.querySelector('[role="alert"]')).toBeNull();
+      expect(widget.text).toContain("Ready card");
+      expect(widget.query('[role="alert"]')).toBeNull();
     }
   });
   changeStatus(card.container);
-  await afterWorkboardUpdate(() =>
-    expect(card.container.querySelector("select")?.value).toBe("running"),
-  );
+  await expectStatus(card, "running");
   expect(move).toHaveBeenCalledTimes(2);
 });
 
@@ -282,7 +280,7 @@ it.each([
     const move = createDeferred<unknown>();
     let persistedCards = cards;
     let listCount = 0;
-    const { fixture, mount, request } = setup(
+    const { mount, request, lease } = setup(
       vi.fn(async (method: string) => {
         if (method === "workboard.cards.move") {
           return move.promise;
@@ -294,111 +292,87 @@ it.each([
       }),
     );
     const card = mount("card", { cardId: "ready" });
-    await afterWorkboardUpdate(() => expect(card.container.querySelector("select")).not.toBeNull());
+    await expectLoaded(card);
     // Recovery uses the invoking view's host; shared refreshes retain their own response.
     card.scopedRequest.mockImplementation((method, params) =>
       method === "workboard.cards.list" ? reconciled.promise : request(method, params),
     );
-    const lease = acquireWidgetRuntime(fixture.host, () => {});
-    disposers.push(() => lease.release());
-    const refresh = refreshDuringMove ? null : lease.runtime.refresh();
+    const runtime = lease();
+    const refresh = refreshDuringMove ? null : runtime.refresh();
     changeStatus(card.container);
-    const duringMoveRefresh = refreshDuringMove ? lease.runtime.refresh() : null;
-    persistedCards = [
-      createWorkboardCard({ ...cards[0], status: "running", position: 3000 }),
-      ...cards.slice(1),
-    ];
-    move.reject(new Error("Move temporarily unavailable"));
-    await afterWorkboardUpdate(() =>
-      expect(card.scopedRequest).toHaveBeenCalledWith("workboard.cards.list", {}),
-    );
-    expect(card.container.textContent).toContain("Move temporarily unavailable");
-    expect(getWorkboardState(lease.runtime.owner).mutationReadiness).toBe(
-      "canonical_reload_required",
-    );
+    const duringMoveRefresh = refreshDuringMove ? runtime.refresh() : null;
+    persistedCards = [movedCard(), ...cards.slice(1)];
+    move.reject(new Error(moveError));
+    await settle(() => expect(card.scopedRequest).toHaveBeenCalledWith("workboard.cards.list", {}));
+    expect(card.text).toContain(moveError);
+    expect(getWorkboardState(runtime.owner).mutationReadiness).toBe("canonical_reload_required");
     if (refreshFails) {
       refreshed.reject(new Error("List temporarily unavailable"));
     } else {
       refreshed.resolve(snapshot());
     }
     await Promise.all([refresh, duringMoveRefresh]);
-    expect(card.container.textContent).toContain("Move temporarily unavailable");
-    expect(card.container.querySelector("select")).toBeNull();
+    expect(card.text).toContain(moveError);
+    expect(card.select).toBeNull();
 
     reconciled.resolve(snapshot(persistedCards));
-    await afterWorkboardUpdate(() =>
-      expect(getWorkboardState(lease.runtime.owner).mutationReadiness).toBe("ready"),
-    );
-    expect(card.container.textContent).toContain("Move temporarily unavailable");
-    expect(card.container.querySelector("select")).toBeNull();
-    card.container.querySelector<HTMLButtonElement>("button")!.click();
-    await afterWorkboardUpdate(() =>
-      expect(card.container.querySelector("select")?.value).toBe("running"),
-    );
-    expect(card.container.querySelector('[role="alert"]')).toBeNull();
+    await settle(() => expect(getWorkboardState(runtime.owner).mutationReadiness).toBe("ready"));
+    expect(card.text).toContain(moveError);
+    expect(card.select).toBeNull();
+    card.query<HTMLButtonElement>("button")!.click();
+    await expectStatus(card, "running");
+    expect(card.query('[role="alert"]')).toBeNull();
     expect(listCount).toBe(3);
   },
 );
 
-it.each([
-  { kind: "card", refreshDuringMove: false },
-  { kind: "card", refreshDuringMove: true },
-] as const)(
-  "preserves an acknowledged $kind move across shared widgets (refresh during move: $refreshDuringMove)",
-  async ({ kind, refreshDuringMove }) => {
+it.each([false, true])(
+  "preserves an acknowledged card move across shared widgets (refresh during move: %s)",
+  async (refreshDuringMove) => {
     const refreshed = createDeferred<void>();
     const move = createDeferred<unknown>();
     let persistedCards = cards;
     let listCount = 0;
-    const { fixture, request, mount } = setup(
-      vi.fn(async (method: string) => {
-        if (method === "workboard.cards.move") {
-          return move.promise;
-        }
+    const { request, mount, lease } = setupMove(
+      () => move.promise,
+      async () => {
         const listed = snapshot(persistedCards);
         if (++listCount > 1) {
           await refreshed.promise;
         }
         return listed;
-      }),
+      },
     );
     const card = mount("card", { cardId: "ready" });
     const board = mount("board", {});
     const mini = mount("mini", {});
-    await afterWorkboardUpdate(() => expect(card.container.querySelector("select")).not.toBeNull());
-    const lease = acquireWidgetRuntime(fixture.host, () => {});
-    disposers.push(() => lease.release());
-    const refresh = refreshDuringMove ? null : lease.runtime.refresh();
+    await expectLoaded(card);
+    const runtime = lease();
+    const refresh = refreshDuringMove ? null : runtime.refresh();
 
-    changeStatus((kind === "card" ? card : board).container);
-    expect(request).toHaveBeenLastCalledWith("workboard.cards.move", {
-      id: "ready",
-      status: "running",
-      position: 3000,
-    });
-    const duringMoveRefresh = refreshDuringMove ? lease.runtime.refresh() : null;
-    const movedCard = createWorkboardCard({ ...cards[0], status: "running", position: 3000 });
-    persistedCards = [...cards.slice(1), movedCard];
-    move.resolve({ card: movedCard });
+    changeStatus(card.container);
+    expect(request).toHaveBeenLastCalledWith("workboard.cards.move", moveParams);
+    const duringMoveRefresh = refreshDuringMove ? runtime.refresh() : null;
+    const moved = movedCard();
+    persistedCards = [...cards.slice(1), moved];
+    move.resolve({ card: moved });
     const expectAcknowledgedMove = () => {
-      expect(card.container.querySelector("select")?.value).toBe("running");
-      expect(
-        [...board.container.querySelectorAll(".workboard-column--running .workboard-card h3")].map(
-          (title) => title.textContent,
-        ),
-      ).toEqual(["Running card", "Ready card"]);
-      expect(
-        [...mini.container.querySelectorAll(".workboard-widget-mini__card strong")].map(
-          (title) => title.textContent,
-        ),
-      ).toEqual(["Running card", "Ready card"]);
+      expect(card.select?.value).toBe("running");
+      expect(board.texts(".workboard-column--running .workboard-card h3")).toEqual([
+        "Running card",
+        "Ready card",
+      ]);
+      expect(mini.texts(".workboard-widget-mini__card strong")).toEqual([
+        "Running card",
+        "Ready card",
+      ]);
     };
-    await afterWorkboardUpdate(expectAcknowledgedMove);
-    await afterWorkboardUpdate(() => expect(listCount).toBe(2));
+    await settle(expectAcknowledgedMove);
+    await settle(() => expect(listCount).toBe(2));
 
     refreshed.resolve();
     await Promise.all([refresh, duringMoveRefresh]);
-    await afterWorkboardUpdate(() => expect(lease.runtime.loading).toBe(false));
+    await settle(() => expect(runtime.loading).toBe(false));
     expectAcknowledgedMove();
   },
 );
@@ -419,10 +393,10 @@ it.each(["success", "failure"] as const)(
     } else {
       firstList.reject(new Error("List temporarily unavailable"));
     }
-    await afterWorkboardUpdate(() => {
+    await settle(() => {
       expect(request).toHaveBeenCalledTimes(2);
-      expect(mini.container.textContent).toContain("Ready card");
-      expect(card.container.textContent).toContain("Ready card");
+      expect(mini.text).toContain("Ready card");
+      expect(card.text).toContain("Ready card");
     });
   },
 );
@@ -437,46 +411,41 @@ it("preserves a current queued refresh when an older connection completes", asyn
         ? currentList.promise
         : snapshot(),
   );
-  const { fixture, mount } = setup(request);
+  const { fixture, mount, reconnect } = setup(request);
   const widget = mount("mini", {});
-  fixture.connection.connected = false;
-  fixture.notify();
-  fixture.connection.connected = true;
-  fixture.notify();
+  reconnect();
   fixture.emit("plugin.workboard.changed", {});
   oldList.resolve(snapshot([]));
   await oldList.promise;
   currentList.resolve(snapshot([]));
-  await afterWorkboardUpdate(() => {
+  await settle(() => {
     expect(request).toHaveBeenCalledTimes(3);
-    expect(widget.container.textContent).toContain("Running card");
+    expect(widget.text).toContain("Running card");
   });
 });
 
 it("ignores a completed move from the previous connection", async () => {
   const move = createDeferred<unknown>();
   let current = false;
-  const request = vi.fn(async (method: string) =>
-    method === "workboard.cards.move"
-      ? move.promise
-      : snapshot(current ? [{ ...cards[0]!, title: "Current card" }] : cards),
+  const { fixture, mount } = setupMove(
+    () => move.promise,
+    () => snapshot(current ? [{ ...cards[0]!, title: "Current card" }] : cards),
   );
-  const { fixture, mount } = setup(request);
   const widget = mount("card", { cardId: "ready" });
-  await afterWorkboardUpdate(() => expect(widget.container.querySelector("select")).not.toBeNull());
+  await expectLoaded(widget);
   changeStatus(widget.container);
   fixture.connection.connected = false;
   fixture.notify();
   current = true;
   fixture.connection.connected = true;
   fixture.notify();
-  await afterWorkboardUpdate(() => expect(widget.container.textContent).toContain("Current card"));
+  await settle(() => expect(widget.text).toContain("Current card"));
   move.resolve({ card: { ...cards[0], title: "Stale card", status: "running" } });
   await move.promise;
   await Promise.resolve();
-  expect(widget.container.textContent).toContain("Current card");
-  expect(widget.container.textContent).not.toContain("Stale card");
-  expect(widget.container.querySelector("select")?.value).toBe("ready");
+  expect(widget.text).toContain("Current card");
+  expect(widget.text).not.toContain("Stale card");
+  expect(widget.select?.value).toBe("ready");
 });
 
 it.each([
@@ -486,20 +455,14 @@ it.each([
 ] as const)(
   "fences retained hidden $kind $input controls while a visible peer retains the shared runtime",
   async ({ kind, input }) => {
-    const { fixture, request, mount } = setup(
-      vi.fn(async (method: string) =>
-        method === "workboard.cards.move"
-          ? { card: { ...cards[0], status: "running", position: 3000 } }
-          : snapshot(),
-      ),
-    );
+    const { fixture, request, mount } = setupMove(() => ({ card: movedCard() }));
     const hidden = mount(kind, kind === "card" ? { cardId: "ready" } : { boardId: "ops" });
     const visible = mount("mini", {});
-    await afterWorkboardUpdate(() => expect(visible.container.textContent).toContain("Ready card"));
+    await settle(() => expect(visible.text).toContain("Ready card"));
     let move = () => changeStatus(hidden.container);
     if (input === "drop") {
-      const card = hidden.container.querySelector(".workboard-card");
-      const column = hidden.container.querySelector(".workboard-column--running");
+      const card = hidden.query(".workboard-card");
+      const column = hidden.query(".workboard-column--running");
       if (!card || !column) {
         throw new Error("The board widget must render its card and destination column.");
       }
@@ -517,10 +480,10 @@ it.each([
     expect(request).toHaveBeenCalledTimes(1);
 
     hidden.setPresented(true);
-    expect(hidden.container.textContent).toContain("Ready card");
-    expect(hidden.container.querySelector("select")?.disabled).toBe(false);
+    expect(hidden.text).toContain("Ready card");
+    expect(hidden.select?.disabled).toBe(false);
     if (input === "drop") {
-      const card = hidden.container.querySelector(".workboard-card");
+      const card = hidden.query(".workboard-card");
       if (!card) {
         throw new Error("The presented board must render its draggable card.");
       }
@@ -528,15 +491,13 @@ it.each([
       card.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true }));
     }
     move();
-    expect(hidden.scopedRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", {
-      id: "ready",
-      status: "running",
-      position: 3000,
-    });
-    await afterWorkboardUpdate(() =>
+    expect(hidden.scopedRequest).toHaveBeenCalledExactlyOnceWith(
+      "workboard.cards.move",
+      moveParams,
+    );
+    await settle(() =>
       expect(
-        hidden.container.querySelector<HTMLSelectElement>('select[aria-label="Status: Ready card"]')
-          ?.value,
+        hidden.query<HTMLSelectElement>('select[aria-label="Status: Ready card"]')?.value,
       ).toBe("running"),
     );
   },
@@ -560,27 +521,23 @@ it.each(["mini", "board"] as const)(
     const { mount } = setup(vi.fn(async () => snapshot([...cards, other, archived])));
     const scoped = mount(kind, { boardId: "ops" });
     const all = mount(kind, {});
-    await afterWorkboardUpdate(() => expect(all.container.textContent).toContain("Other card"));
-    expect(scoped.container.textContent).toContain("Ready card");
-    expect(scoped.container.textContent).not.toContain("Other card");
-    expect(all.container.textContent).not.toContain("Archived card");
+    await settle(() => expect(all.text).toContain("Other card"));
+    expect(scoped.text).toContain("Ready card");
+    expect(scoped.text).not.toContain("Other card");
+    expect(all.text).not.toContain("Archived card");
     if (kind === "mini") {
       const counts = [
         ...scoped.container.querySelectorAll(".workboard-widget-mini__counts span"),
       ].map((entry) => entry.textContent?.replace(/\s+/g, " ").trim());
       expect(counts).toEqual(expect.arrayContaining(["1 Ready", "1 Running", "1 Done"]));
-      expect(scoped.container.querySelector("a")?.getAttribute("href")).toBe("/workboard/ops");
-      expect(all.container.querySelector("a")?.getAttribute("href")).toBe("/workboard");
+      expect(scoped.query("a")?.getAttribute("href")).toBe("/workboard/ops");
+      expect(all.query("a")?.getAttribute("href")).toBe("/workboard");
     } else {
       expect(scoped.container.querySelectorAll(".workboard-column")).toHaveLength(3);
       const product = mount("board", { boardId: "product" });
-      await afterWorkboardUpdate(() =>
-        expect(product.container.textContent).toContain("Other card"),
-      );
-      expect(product.container.querySelector(".workboard-column--running")?.textContent).toContain(
-        "No cards yet",
-      );
-      expect(product.container.textContent).not.toContain("No cards match this view");
+      await settle(() => expect(product.text).toContain("Other card"));
+      expect(product.query(".workboard-column--running")?.textContent).toContain("No cards yet");
+      expect(product.text).not.toContain("No cards match this view");
     }
   },
 );
@@ -588,9 +545,7 @@ it.each(["mini", "board"] as const)(
 it("keeps every board control read-only", async () => {
   const { mount, request } = setup();
   const widget = mount("board", {}, false);
-  await afterWorkboardUpdate(() =>
-    expect(widget.container.querySelectorAll("select")).toHaveLength(3),
-  );
+  await settle(() => expect(widget.container.querySelectorAll("select")).toHaveLength(3));
   expect([...widget.container.querySelectorAll("select")].every((select) => select.disabled)).toBe(
     true,
   );
@@ -605,19 +560,15 @@ it("skips session-only events, conditionally reloads cards, and fully reloads on
     boards: [],
     revision,
   }));
-  const { fixture } = setup(request);
-  const lease = acquireWidgetRuntime(fixture.host, () => {});
-  disposers.push(() => lease.release());
-  await lease.runtime.refresh();
+  const { fixture, lease, reconnect } = setup(request);
+  const runtime = lease();
+  await runtime.refresh();
   request.mockClear();
   fixture.emit("plugin.workboard.changed", { epoch: "cards", revision: 2, cardsRevision: 1 });
   expect(request).not.toHaveBeenCalled();
-  await lease.runtime.refresh();
+  await runtime.refresh();
   expect(request).toHaveBeenLastCalledWith("workboard.cards.list", { sinceRevision: revision });
-  fixture.connection.connected = false;
-  fixture.notify();
-  fixture.connection.connected = true;
-  fixture.notify();
-  await lease.runtime.refresh();
+  reconnect();
+  await runtime.refresh();
   expect(request.mock.calls.some(([, params]) => JSON.stringify(params) === "{}")).toBe(true);
 });
