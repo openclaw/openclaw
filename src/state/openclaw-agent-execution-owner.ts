@@ -681,13 +681,12 @@ export function createAgentDatabaseExecution(
     // Config changes do not drain captured executors; unused stores expire normally.
     // Callers resolve new routing, while accepted work keeps its original physical store.
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
-      close: async (sharedIdentity) => {
-        if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
-          reportTerminal(
-            new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
-          );
-          await acceptedWork.closeAccepted(() => owner.close());
-        }
+      admission: context.admission,
+      close: async () => {
+        reportTerminal(
+          new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
+        );
+        await acceptedWork.closeAccepted(() => owner.close());
       },
     });
     return owner.borrow(
