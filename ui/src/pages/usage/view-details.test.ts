@@ -4,7 +4,6 @@ import type { SessionUsageTimePoint } from "../../../../src/shared/session-usage
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
-// Control UI tests cover usage detail behavior through the rendered panel.
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SessionLogEntry, UsageProps, UsageSessionEntry } from "./types.ts";
@@ -61,18 +60,65 @@ function session(): UsageSessionEntry & { usage: NonNullable<UsageSessionEntry["
   };
 }
 
+function toolUsage(read = 4, exec = 3) {
+  return {
+    totalCalls: read + exec,
+    uniqueTools: 2,
+    tools: [
+      { name: "read", count: read },
+      { name: "exec", count: exec },
+    ],
+  };
+}
+
+function text(root: ParentNode | null | undefined, selector: string) {
+  return root?.querySelector(selector)?.textContent;
+}
+
+function texts(root: ParentNode, selector: string, normalize = false) {
+  return [...root.querySelectorAll(selector)].map((item) =>
+    normalize ? item.textContent?.replaceAll(/\s+/g, " ").trim() : item.textContent,
+  );
+}
+
+function toolRows(root: ParentNode) {
+  return [...root.querySelectorAll(".usage-list-item")].map((item) => [
+    item.firstElementChild?.textContent,
+    text(item, ".usage-list-value > span"),
+  ]);
+}
+
+function contextFile(
+  name: string,
+  chars: number,
+  native = false,
+): NonNullable<UsageSessionEntry["contextWeight"]>["injectedWorkspaceFiles"][number] {
+  return {
+    name,
+    path: `/synthetic/${name}`,
+    missing: false,
+    rawChars: chars,
+    ...(native
+      ? { injectionStatus: "native_unverified", injectedChars: null, truncated: null }
+      : { injectedChars: chars, truncated: false }),
+  };
+}
+
 function mount(
   points: SessionUsageTimePoint[],
-  start: number | null,
-  end: number | null,
-  breakdownMode: "total" | "by-type" = "total",
-  filters: {
-    startDate?: string;
-    endDate?: string;
-    selectedDays?: string[];
-    timeZone?: "local" | "utc";
-  } = {},
-  errors: {
+  {
+    start = null,
+    end = null,
+    breakdownMode = "total",
+    filters = {},
+    ...errors
+  }: {
+    start?: number | null;
+    end?: number | null;
+    breakdownMode?: "total" | "by-type";
+    filters?: Partial<
+      Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">
+    >;
     timeSeries?: string;
     sessionLogs?: string;
     sessionLogsData?: SessionLogEntry[] | null;
@@ -172,11 +218,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
       const onCursorRangeChange = vi.fn();
       const container = mount(
         [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
-        start,
-        end,
-        "total",
-        {},
-        { onCursorRangeChange },
+        { start, end, onCursorRangeChange },
       );
       const handle = container.querySelector<HTMLElement>(`.chart-handle-${side}`)!;
       expect(handle.getAttribute("role")).toBe("slider");
@@ -193,10 +235,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
     const onCursorRangeChange = vi.fn();
     const container = mount(
       [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
-      null,
-      null,
-      "total",
-      {},
       { onCursorRangeChange },
     );
     document.body.append(container);
@@ -222,10 +260,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
   it("retains manually expanded log tools across a cursor update", () => {
     const container = mount(
       [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
-      null,
-      null,
-      "total",
-      {},
       {
         sessionLogsData: [{ timestamp: 3, role: "assistant", content: "[Tool: read]" }],
         sessionLogsHasLoaded: true,
@@ -243,41 +277,29 @@ describe("renderSessionDetailPanel filtered usage", () => {
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
     const localOffsetMs = 8 * 60 * 60 * 1000;
-    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
-      this: Date,
-    ) {
-      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-    });
-    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
-      this: Date,
-    ) {
-      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-    });
-    const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
-      return new Date(this.getTime() + localOffsetMs).getUTCDate();
-    });
-    try {
-      const points = [
-        point({ timestamp: Date.parse("2026-05-13T18:00:00.000Z") }),
-        point({ timestamp: Date.parse("2026-05-13T23:59:59.999Z") }),
-      ];
-      const filters = {
-        startDate: "2026-05-13",
-        endDate: "2026-05-13",
-        selectedDays: ["2026-05-13"],
-      };
-
-      const utc = mount(points, null, null, "total", { ...filters, timeZone: "utc" });
-      const local = mount(points, null, null, "total", { ...filters, timeZone: "local" });
-
-      expect(utc.querySelectorAll(".ts-bar")).toHaveLength(2);
-      expect(local.querySelectorAll(".ts-bar")).toHaveLength(0);
-      expect(local.querySelector(".usage-empty-block")).not.toBeNull();
-    } finally {
-      localYear.mockRestore();
-      localMonth.mockRestore();
-      localDay.mockRestore();
+    for (const [local, utc] of [
+      ["getFullYear", "getUTCFullYear"],
+      ["getMonth", "getUTCMonth"],
+      ["getDate", "getUTCDate"],
+    ] as const) {
+      vi.spyOn(Date.prototype, local).mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs)[utc]();
+      });
     }
+    const points = [
+      point({ timestamp: Date.parse("2026-05-13T18:00:00.000Z") }),
+      point({ timestamp: Date.parse("2026-05-13T23:59:59.999Z") }),
+    ];
+    const filters = {
+      startDate: "2026-05-13",
+      endDate: "2026-05-13",
+      selectedDays: ["2026-05-13"],
+    };
+    const utc = mount(points, { filters: { ...filters, timeZone: "utc" } });
+    const local = mount(points, { filters: { ...filters, timeZone: "local" } });
+    expect(utc.querySelectorAll(".ts-bar")).toHaveLength(2);
+    expect(local.querySelectorAll(".ts-bar")).toHaveLength(0);
+    expect(local.querySelector(".usage-empty-block")).not.toBeNull();
   });
 
   it("keeps interval header totals on the timeline's selected days", () => {
@@ -289,16 +311,15 @@ describe("renderSessionDetailPanel filtered usage", () => {
         point({ timestamp: Date.parse("2026-05-14T12:00:00Z"), totalTokens: 900, cost: 9 }),
         point({ timestamp: end, totalTokens: 200, cost: 0.2 }),
       ],
-      start,
-      end,
-      "total",
       {
-        startDate: "2026-05-13",
-        endDate: "2026-05-15",
-        selectedDays: ["2026-05-13", "2026-05-15"],
-        timeZone: "utc",
-      },
-      {
+        start,
+        end,
+        filters: {
+          startDate: "2026-05-13",
+          endDate: "2026-05-15",
+          selectedDays: ["2026-05-13", "2026-05-15"],
+          timeZone: "utc",
+        },
         sessionLogsHasLoaded: true,
         sessionLogsData: [
           { timestamp: start, role: "assistant", content: "[Tool: read]\nSelected May 13" },
@@ -364,22 +385,8 @@ describe("renderSessionDetailPanel filtered usage", () => {
       point({ timestamp: end + 1000, totalTokens: 300, cost: 0.3 }),
     ];
     const entry = session();
-    entry.usage.messageCounts = {
-      total: 10,
-      user: 5,
-      assistant: 5,
-      toolCalls: 0,
-      toolResults: 4,
-      errors: 2,
-    };
-    entry.usage.toolUsage = {
-      totalCalls: 7,
-      uniqueTools: 2,
-      tools: [
-        { name: "read", count: 4 },
-        { name: "exec", count: 3 },
-      ],
-    };
+    entry.usage.messageCounts = { ...entry.usage.messageCounts!, toolResults: 4, errors: 2 };
+    entry.usage.toolUsage = toolUsage();
     const logs: SessionLogEntry[] = [
       { timestamp: start - 1000, role: "user", content: "Earlier request" },
       { timestamp: 0, role: "user", content: "Undated request" },
@@ -390,230 +397,154 @@ describe("renderSessionDetailPanel filtered usage", () => {
       { timestamp: end, role: "assistant", content: "Finished" },
     ];
     const data = { session: entry, sessionLogsData: logs, sessionLogsHasLoaded: true };
-    const container = mount(points, start, end, "by-type", {}, data);
+    const container = mount(points, { start, end, breakdownMode: "by-type", ...data });
 
-    expect(container.querySelector(".session-detail-stats")?.textContent).toContain("300");
-    expect(container.querySelector(".session-detail-stats")?.textContent).toContain("$0.30");
+    expect(text(container, ".session-detail-stats")).toContain("300");
+    expect(text(container, ".session-detail-stats")).toContain("$0.30");
     expect(container.querySelector(".session-detail-indicator")).not.toBeNull();
     const summary = [...container.querySelectorAll(".session-summary-card")];
-    expect(summary[0]?.querySelector(".session-summary-value")?.textContent).toBe("3");
+    expect(text(summary[0], ".session-summary-value")).toBe("3");
     const messageSummary = summary[0]?.textContent?.replaceAll(/\s+/g, " ");
     expect(messageSummary).toContain("0 user");
     expect(messageSummary).toContain("3 assistant");
     expect(messageSummary).toContain("Loaded conversation · selected interval");
-    expect(summary[2]?.querySelector(".session-summary-value")?.textContent).toBe("—");
+    expect(text(summary[2], ".session-summary-value")).toBe("—");
     expect(summary[2]?.textContent?.replaceAll(/\s+/g, " ")).toContain("— tool results");
     expect(summary[3]?.textContent).toContain("1s");
-    expect(
-      [...container.querySelectorAll(".timeseries-breakdown .legend-item")].map((item) =>
-        item.textContent?.replaceAll(/\s+/g, " ").trim(),
-      ),
-    ).toEqual(["Output 20", "Input 10", "Cache Write 5", "Cache Read 12"]);
-    expect(
-      container.querySelector(".timeseries-breakdown .cost-breakdown-total")?.textContent,
-    ).toContain("47");
+    expect(texts(container, ".timeseries-breakdown .legend-item", true)).toEqual([
+      "Output 20",
+      "Input 10",
+      "Cache Write 5",
+      "Cache Read 12",
+    ]);
+    expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain("47");
 
-    const full = mount(points, null, null, "total", {}, data);
+    const full = mount(points, data);
     const fullSummary = [...full.querySelectorAll(".session-summary-card")];
-    expect(fullSummary[0]?.querySelector(".session-summary-value")?.textContent).toBe("10");
+    expect(text(fullSummary[0], ".session-summary-value")).toBe("10");
     expect(fullSummary[0]?.textContent?.replaceAll(/\s+/g, " ")).toContain("5 user · 5 assistant");
     expect(fullSummary[0]?.textContent).not.toContain("Loaded conversation");
-    expect(fullSummary[1]?.querySelector(".session-summary-value")?.textContent).toBe("7");
+    expect(text(fullSummary[1], ".session-summary-value")).toBe("7");
     expect(fullSummary[1]?.textContent?.replaceAll(/\s+/g, " ")).toContain("2 tools used");
-    expect(
-      [...full.querySelectorAll(".usage-list-item")].map((item) => [
-        item.firstElementChild?.textContent,
-        item.querySelector(".usage-list-value > span")?.textContent,
-      ]),
-    ).toEqual([
+    expect(toolRows(full)).toEqual([
       ["read", "4"],
       ["exec", "3"],
     ]);
-    expect(fullSummary[2]?.querySelector(".session-summary-value")?.textContent).toBe("2");
+    expect(text(fullSummary[2], ".session-summary-value")).toBe("2");
     expect(fullSummary[2]?.textContent?.replaceAll(/\s+/g, " ")).toContain("4 tool results");
   });
 
-  it.each<{
-    name: string;
-    logs: SessionLogEntry[] | null;
-    hasLoaded: boolean;
-    loading?: boolean;
-    error?: string;
-  }>([{ name: "initial failure", logs: null, hasLoaded: false, error: "logs unavailable" }])(
-    "keeps interval message and tool counts unavailable for $name",
-    ({ logs, hasLoaded, loading, error }) => {
-      const start = Date.parse("2026-08-20T12:00:00Z");
-      const entry = session();
-      entry.usage.toolUsage = {
-        totalCalls: 7,
-        uniqueTools: 2,
-        tools: [
-          { name: "read", count: 4 },
-          { name: "exec", count: 3 },
-        ],
-      };
-      const container = mount(
-        [point({ timestamp: start }), point({ timestamp: start + 1000 })],
-        start,
-        start + 1000,
-        "total",
-        {},
-        {
-          session: entry,
-          sessionLogsData: logs,
-          sessionLogsHasLoaded: hasLoaded,
-          sessionLogsLoading: loading,
-          sessionLogs: error,
-        },
-      );
-      const messages = container.querySelector(".session-summary-card");
-      expect(messages?.querySelector(".session-summary-value")?.textContent).toBe("—");
-      expect(messages?.textContent).toContain("Loaded conversation · selected interval");
-      expect(messages?.textContent).not.toContain("0 user");
-      const tools = container.querySelectorAll(".session-summary-card")[1];
-      expect(tools?.querySelector(".session-summary-value")?.textContent).toBe("—");
-      expect(tools?.textContent?.replaceAll(/\s+/g, " ")).toContain("— tools used");
-      expect(
-        [...container.querySelectorAll(".usage-list-item")].map((item) => [
-          item.firstElementChild?.textContent,
-          item.querySelector(".usage-list-value > span")?.textContent,
-        ]),
-      ).toEqual([
-        ["read", "—"],
-        ["exec", "—"],
-      ]);
-    },
-  );
+  it("keeps interval message and tool counts unavailable for initial failure", () => {
+    const start = Date.parse("2026-08-20T12:00:00Z");
+    const entry = session();
+    entry.usage.toolUsage = toolUsage();
+    const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
+      start,
+      end: start + 1000,
+      session: entry,
+      sessionLogsData: null,
+      sessionLogsHasLoaded: false,
+      sessionLogs: "logs unavailable",
+    });
+    const messages = container.querySelector(".session-summary-card");
+    expect(text(messages, ".session-summary-value")).toBe("—");
+    expect(messages?.textContent).toContain("Loaded conversation · selected interval");
+    expect(messages?.textContent).not.toContain("0 user");
+    const tools = container.querySelectorAll(".session-summary-card")[1];
+    expect(text(tools, ".session-summary-value")).toBe("—");
+    expect(tools?.textContent?.replaceAll(/\s+/g, " ")).toContain("— tools used");
+    expect(toolRows(container)).toEqual([
+      ["read", "—"],
+      ["exec", "—"],
+    ]);
+  });
 
-  it.each(["stale"] as const)(
-    "keeps %s loaded counts independent of conversation search and role filters",
-    (state) => {
-      const start = Date.parse("2026-08-20T12:00:00Z");
-      const container = mount(
-        [point({ timestamp: start }), point({ timestamp: start + 1000 })],
-        start,
-        start + 1000,
-        "total",
-        {},
-        {
-          sessionLogsData: [
-            { timestamp: start, role: "user", content: "Question" },
-            { timestamp: start + 1000, role: "assistant", content: "Answer" },
-          ],
-          sessionLogsHasLoaded: true,
-          sessionLogs: state === "stale" ? "refresh failed" : undefined,
-          stale: state === "stale",
-          logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
-        },
-      );
-      const messages = container.querySelector(".session-summary-card");
-      expect(messages?.querySelector(".session-summary-value")?.textContent).toBe("2");
-      expect(messages?.textContent?.replaceAll(/\s+/g, " ")).toContain("1 user · 1 assistant");
-      expect(messages?.textContent).toContain("Loaded conversation · selected interval");
-      expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
-      expect(container.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("0");
-      if (state === "stale") {
-        expect(container.querySelector(".usage-detail-error--conversation")?.textContent).toContain(
-          "Showing stale data",
-        );
-      }
-    },
-  );
+  it("keeps stale loaded counts independent of conversation search and role filters", () => {
+    const start = Date.parse("2026-08-20T12:00:00Z");
+    const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
+      start,
+      end: start + 1000,
+      sessionLogsData: [
+        { timestamp: start, role: "user", content: "Question" },
+        { timestamp: start + 1000, role: "assistant", content: "Answer" },
+      ],
+      sessionLogsHasLoaded: true,
+      sessionLogs: "refresh failed",
+      stale: true,
+      logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
+    });
+    const messages = container.querySelector(".session-summary-card");
+    expect(text(messages, ".session-summary-value")).toBe("2");
+    expect(messages?.textContent?.replaceAll(/\s+/g, " ")).toContain("1 user · 1 assistant");
+    expect(messages?.textContent).toContain("Loaded conversation · selected interval");
+    expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
+    expect(container.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("0");
+    expect(text(container, ".usage-detail-error--conversation")).toContain("Showing stale data");
+  });
 
-  it.each(["toolResult"] as const)(
-    "counts repeated assistant calls without counting %s results in the selected range",
-    (resultRole) => {
-      const start = Date.parse("2026-08-20T12:00:00Z");
-      const end = start + 2000;
-      const entry = session();
-      entry.usage = {
-        ...entry.usage,
-        toolUsage: {
-          totalCalls: 2,
-          uniqueTools: 2,
-          tools: [
-            { name: "read", count: 1 },
-            { name: "exec", count: 1 },
-          ],
-        },
-      };
-      const logs: SessionLogEntry[] = [
-        { timestamp: start, role: "assistant", content: "[Tool: read]\n[Tool: read]" },
-        {
-          timestamp: start + 500,
-          role: resultRole,
-          content: "[Tool: read]\n[Tool Result]\nFirst file",
-        },
-        {
-          timestamp: start + 1000,
-          role: resultRole,
-          content: "[Tool: read]\n[Tool Result]\nSecond file",
-        },
-        { timestamp: end, role: "assistant", content: "Both files reviewed." },
-        { timestamp: end + 1000, role: "assistant", content: "[Tool: exec]" },
-        { timestamp: 0, role: "assistant", content: "[Tool: exec]" },
-      ];
-      const points = [start, end, end + 1000].map((timestamp) => point({ timestamp }));
-      const data = { session: entry, sessionLogsData: logs, sessionLogsHasLoaded: true };
-      const selected = mount(points, start, end, "total", {}, data);
-      expect(selected.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("2");
-      expect(selected.querySelectorAll(".session-summary-meta")[1]?.textContent?.trim()).toBe(
-        "1 tools used",
-      );
-      expect(
-        [...selected.querySelectorAll(".usage-list-item")].map((item) => [
-          item.firstElementChild?.textContent,
-          item.querySelector(".usage-list-value > span")?.textContent,
-        ]),
-      ).toEqual([
-        ["read", "2"],
-        ["exec", "0"],
-      ]);
-      expect(selected.querySelector(".session-log-tools-pill")?.textContent?.trim()).toBe(
-        "read × 2",
-      );
-      expect(
-        [...selected.querySelectorAll(".session-log-tools-pill")].map((pill) =>
-          pill.textContent?.trim(),
-        ),
-      ).toContain("exec × 1");
-    },
-  );
+  it("counts repeated assistant calls without counting toolResult results in the selected range", () => {
+    const start = Date.parse("2026-08-20T12:00:00Z");
+    const end = start + 2000;
+    const entry = session();
+    entry.usage.toolUsage = toolUsage(1, 1);
+    const logs: SessionLogEntry[] = [
+      { timestamp: start, role: "assistant", content: "[Tool: read]\n[Tool: read]" },
+      {
+        timestamp: start + 500,
+        role: "toolResult",
+        content: "[Tool: read]\n[Tool Result]\nFirst file",
+      },
+      {
+        timestamp: start + 1000,
+        role: "toolResult",
+        content: "[Tool: read]\n[Tool Result]\nSecond file",
+      },
+      { timestamp: end, role: "assistant", content: "Both files reviewed." },
+      { timestamp: end + 1000, role: "assistant", content: "[Tool: exec]" },
+      { timestamp: 0, role: "assistant", content: "[Tool: exec]" },
+    ];
+    const points = [start, end, end + 1000].map((timestamp) => point({ timestamp }));
+    const data = { session: entry, sessionLogsData: logs, sessionLogsHasLoaded: true };
+    const selected = mount(points, { start, end, ...data });
+    expect(selected.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("2");
+    expect(selected.querySelectorAll(".session-summary-meta")[1]?.textContent?.trim()).toBe(
+      "1 tools used",
+    );
+    expect(toolRows(selected)).toEqual([
+      ["read", "2"],
+      ["exec", "0"],
+    ]);
+    expect(text(selected, ".session-log-tools-pill")?.trim()).toBe("read × 2");
+    expect(texts(selected, ".session-log-tools-pill").map((value) => value?.trim())).toContain(
+      "exec × 1",
+    );
+  });
 
   it("accepts a reversed range and falls back to full totals when no points match", () => {
     const reversed = mount(
       [point({ timestamp: 1000, totalTokens: 50 }), point({ timestamp: 2000, totalTokens: 75 })],
-      2000,
-      1000,
+      { start: 2000, end: 1000 },
     );
     expect(reversed.querySelector(".session-detail-stats")?.textContent).toContain("125");
 
-    const empty = mount([point({ timestamp: 1000 })], 3000, 4000);
+    const empty = mount([point({ timestamp: 1000 })], { start: 3000, end: 4000 });
     expect(empty.querySelector(".session-detail-stats")?.textContent).toContain("1.0K");
     expect(empty.querySelector(".session-detail-indicator")).toBeNull();
   });
 
   it("never renders Invalid Date for out-of-range point timestamps", () => {
-    const container = mount(
-      [point({ timestamp: 8_640_000_000_000_001 }), point({ timestamp: 8_640_000_000_000_002 })],
-      null,
-      null,
-    );
+    const container = mount([
+      point({ timestamp: 8_640_000_000_000_001 }),
+      point({ timestamp: 8_640_000_000_000_002 }),
+    ]);
     expect(container.textContent).not.toContain("Invalid Date");
   });
 
   it("renders detail request failure messages without retry buttons", () => {
-    const container = mount(
-      [],
-      null,
-      null,
-      "total",
-      {},
-      {
-        timeSeries: "timeline unavailable",
-        sessionLogs: "logs unavailable",
-      },
-    );
+    const container = mount([], {
+      timeSeries: "timeline unavailable",
+      sessionLogs: "logs unavailable",
+    });
 
     const timelineError = container.querySelector<HTMLElement>(".usage-detail-error--timeline");
     const conversationError = container.querySelector<HTMLElement>(
@@ -636,22 +567,15 @@ describe("renderSessionDetailPanel filtered usage", () => {
     try {
       for (const locale of ["en", "fr", "en"] as const) {
         await i18n.setLocale(locale);
-        const container = mount(
-          [point({ timestamp: 1000 }), point({ timestamp: 2000 })],
-          null,
-          null,
-          "total",
-          {},
-          {
-            timeSeries: "timeline unavailable",
-            sessionLogs: "logs unavailable",
-            sessionLogsData: [
-              { timestamp, role: "user", content: "retained message" },
-              { timestamp: Number.NaN, role: "assistant", content: "undated message" },
-            ],
-            stale: true,
-          },
-        );
+        const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
+          timeSeries: "timeline unavailable",
+          sessionLogs: "logs unavailable",
+          sessionLogsData: [
+            { timestamp, role: "user", content: "retained message" },
+            { timestamp: Number.NaN, role: "assistant", content: "undated message" },
+          ],
+          stale: true,
+        });
 
         expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
         expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(
@@ -680,59 +604,35 @@ describe("renderSessionDetailPanel filtered usage", () => {
     }
   });
 
-  it.each([false, true])(
-    "counts embedded context once with an unverified native file: %s",
-    (nativeFile) => {
-      const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
-        source: "run",
-        generatedAt: 0,
-        systemPrompt: { chars: 1000, projectContextChars: 200, nonProjectContextChars: 800 },
-        skills: { promptChars: 200, entries: [{ name: "synthetic-skill", blockChars: 200 }] },
-        tools: {
-          listChars: 100,
-          schemaChars: 300,
-          entries: [{ name: "synthetic-tool", summaryChars: 100, schemaChars: 300 }],
-        },
-        injectedWorkspaceFiles: [
-          {
-            name: "known.md",
-            path: "/synthetic/known.md",
-            missing: false,
-            rawChars: 200,
-            injectedChars: 200,
-            truncated: false,
-          },
-        ],
-      };
-      if (nativeFile) {
-        contextWeight.injectedWorkspaceFiles.push({
-          name: "AGENTS.md",
-          path: "/synthetic/AGENTS.md",
-          missing: false,
-          rawChars: 900,
-          injectionStatus: "native_unverified",
-          injectedChars: null,
-          truncated: null,
-        });
-      }
-      const container = mount([], null, null, "total", {}, { contextWeight });
+  it("counts embedded context once with an unverified native file", () => {
+    const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
+      source: "run",
+      generatedAt: 0,
+      systemPrompt: { chars: 1000, projectContextChars: 200, nonProjectContextChars: 800 },
+      skills: { promptChars: 200, entries: [{ name: "synthetic-skill", blockChars: 200 }] },
+      tools: {
+        listChars: 100,
+        schemaChars: 300,
+        entries: [{ name: "synthetic-tool", summaryChars: 100, schemaChars: 300 }],
+      },
+      injectedWorkspaceFiles: [contextFile("known.md", 200), contextFile("AGENTS.md", 900, true)],
+    };
+    const container = mount([], { contextWeight });
 
-      expect(container.querySelector(".context-total")?.textContent).toContain("325");
-      expect(
-        [...container.querySelectorAll(".context-legend .legend-item")].map((item) =>
-          item.textContent?.replaceAll(/\s+/g, " ").trim(),
-        ),
-      ).toEqual(["Sys ~125", "Skills ~50", "Tools ~100", "Files ~50"]);
-      const fileRows = container.querySelectorAll(
-        ".context-breakdown-card:last-child .context-breakdown-item",
-      );
-      expect(fileRows).toHaveLength(nativeFile ? 2 : 1);
-      if (nativeFile) {
-        expect(fileRows[1]?.textContent).toContain("AGENTS.md");
-        expect(fileRows[1]?.querySelector(".muted")?.textContent).toBe("unknown");
-      }
-    },
-  );
+    expect(container.querySelector(".context-total")?.textContent).toContain("325");
+    expect(texts(container, ".context-legend .legend-item", true)).toEqual([
+      "Sys ~125",
+      "Skills ~50",
+      "Tools ~100",
+      "Files ~50",
+    ]);
+    const fileRows = container.querySelectorAll(
+      ".context-breakdown-card:last-child .context-breakdown-item",
+    );
+    expect(fileRows).toHaveLength(2);
+    expect(fileRows[1]?.textContent).toContain("AGENTS.md");
+    expect(fileRows[1]?.querySelector(".muted")?.textContent).toBe("unknown");
+  });
 
   it("preserves context-category order, sorted cards, expansion, and callbacks", () => {
     const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
@@ -755,42 +655,13 @@ describe("renderSessionDetailPanel filtered usage", () => {
         ],
       },
       injectedWorkspaceFiles: [
-        {
-          name: "small.md",
-          path: "/small.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 10,
-          truncated: false,
-        },
-        {
-          name: "large.md",
-          path: "/large.md",
-          missing: false,
-          rawChars: 30,
-          injectedChars: 30,
-          truncated: false,
-        },
-        {
-          name: "AGENTS.md",
-          path: "/AGENTS.md",
-          missing: false,
-          rawChars: 100,
-          injectionStatus: "native_unverified",
-          injectedChars: null,
-          truncated: null,
-        },
+        contextFile("small.md", 10),
+        contextFile("large.md", 30),
+        contextFile("AGENTS.md", 100, true),
       ],
     };
     const onToggleContextExpanded = vi.fn();
-    const container = mount(
-      [],
-      null,
-      null,
-      "total",
-      {},
-      { contextWeight, onToggleContextExpanded },
-    );
+    const container = mount([], { contextWeight, onToggleContextExpanded });
     const categories = ["system", "skills", "tools", "files"];
 
     expect(
@@ -799,25 +670,26 @@ describe("renderSessionDetailPanel filtered usage", () => {
       ),
     ).toEqual(categories);
     const cards = [...container.querySelectorAll(".context-breakdown-card")];
-    expect(
-      cards.map((card) => card.querySelector(".context-breakdown-title")?.textContent?.trim()),
-    ).toEqual(["Skills (5)", "Tools (2)", "Files (3)"]);
-    expect(
-      [...(cards[0]?.querySelectorAll(".context-breakdown-item .mono") ?? [])].map(
-        (entry) => entry.textContent,
-      ),
-    ).toEqual(["skill-4", "skill-3", "skill-2", "skill-1"]);
-    expect(cards[1]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe(
-      "larger-tool",
-    );
+    expect(texts(container, ".context-breakdown-title").map((value) => value?.trim())).toEqual([
+      "Skills (5)",
+      "Tools (2)",
+      "Files (3)",
+    ]);
+    expect(texts(cards[0]!, ".context-breakdown-item .mono")).toEqual([
+      "skill-4",
+      "skill-3",
+      "skill-2",
+      "skill-1",
+    ]);
+    expect(text(cards[1], ".context-breakdown-item .mono")).toBe("larger-tool");
     const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
-    expect(fileEntries.map((entry) => entry.querySelector(".mono")?.textContent)).toEqual([
+    expect(fileEntries.map((entry) => text(entry, ".mono"))).toEqual([
       "large.md",
       "small.md",
       "AGENTS.md",
     ]);
-    expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
-    expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
+    expect(text(fileEntries[2], ".muted")).toBe("unknown");
+    expect(text(cards[0], ".context-breakdown-more")).toContain("1 more");
     document.body.append(container);
     const toggle = container.querySelector<HTMLButtonElement>(".context-breakdown-header button")!;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
