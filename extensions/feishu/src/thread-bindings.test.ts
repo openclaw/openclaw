@@ -57,10 +57,7 @@ describe("Feishu thread bindings", () => {
 
   it("binds and resolves a Feishu topic conversation", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    createFeishuThreadBindingManager({
-      cfg: { ...baseCfg, agents: { entries: { main: {}, codex: {} } } },
-      accountId: "default",
-    });
+    createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
 
     const binding = await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
@@ -110,10 +107,8 @@ describe("Feishu thread bindings", () => {
   });
 
   it("expires idle bindings from manager and service lookups at the deadline", async () => {
-    const startedAt = 1_700_000_000_000;
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
-    const service = getSessionBindingService();
+    const manager = createManager();
     const targetSessionKey = "agent:codex:acp:binding:feishu:default:expired";
     const conversation = {
       channel: "feishu",
@@ -188,10 +183,8 @@ describe("Feishu thread bindings", () => {
   });
 
   it("keeps active bindings touchable and unbindable", async () => {
-    const startedAt = 1_700_000_000_000;
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
-    const service = getSessionBindingService();
+    createManager();
     const conversation = {
       channel: "feishu",
       accountId: "default",

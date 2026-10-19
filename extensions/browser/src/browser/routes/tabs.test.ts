@@ -279,19 +279,18 @@ describe("browser tab routes", () => {
     });
   });
 
-  it("returns browser-not-running for close when the browser is not reachable", async () => {
-    await expectBrowserNotRunningAction("close");
-  });
-
-  it("returns browser-not-running for select when the browser is not reachable", async () => {
-    vi.useFakeTimers();
-    const profileCtx = createProfileContext({ isReachable: vi.fn(async () => false) });
-    const pending = callTabsAction({ body: { action: "select", index: 0 }, profileCtx });
-    await vi.runAllTimersAsync();
-    expectResponse(await pending, 409, { error: "browser not running" });
-    expect(profileCtx.listTabs).not.toHaveBeenCalled();
-    expect(profileCtx.focusTab).not.toHaveBeenCalled();
-  });
+  it.each(["close", "select"] as const)(
+    "returns browser-not-running for %s when the browser is not reachable",
+    async (action) => {
+      vi.useFakeTimers();
+      const profileCtx = createProfileContext({ isReachable: vi.fn(async () => false) });
+      const pending = callTabsAction({ body: { action, index: 0 }, profileCtx });
+      await vi.runAllTimersAsync();
+      expectResponse(await pending, 409, { error: "browser not running" });
+      expect(profileCtx.listTabs).not.toHaveBeenCalled();
+      expect(action === "close" ? profileCtx.closeTab : profileCtx.focusTab).not.toHaveBeenCalled();
+    },
+  );
 
   it("closes an internally selected raw target through the exact namespace", async () => {
     const profileCtx = createProfileContext();

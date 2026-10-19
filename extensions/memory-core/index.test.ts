@@ -3,12 +3,8 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginService,
-  OpenClawPluginServiceV2,
 } from "openclaw/plugin-sdk/core";
-import type {
-  AnyAgentTool,
-  MemoryPluginRuntime,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { Value } from "typebox/value";
