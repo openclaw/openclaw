@@ -39,6 +39,12 @@
   min-height: 0;
 }
 
+/* The first-connect splash mounts before the shell's native titlebar clearance. */
+html.openclaw-native-macos .connect-splash__layout {
+  box-sizing: border-box;
+  padding-top: var(--openclaw-native-titlebar-height, 52px);
+}
+
 .connect-splash__sidebar {
   display: flex;
   flex-direction: column;
