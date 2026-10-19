@@ -24,9 +24,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("./status.agent-local.js", () => ({
-  collectStatusLocalSnapshot: mocks.localAgents,
-}));
+vi.mock("./status.agent-local.js", () => ({ collectStatusLocalSnapshot: mocks.localAgents }));
 // mock-isolation: Gateway projection tests must not read local session databases.
 vi.mock("../status/summary.js", () => ({
   getStatusSummary: mocks.localSummary,
@@ -49,9 +47,7 @@ vi.mock("./status.update.js", () => ({
     packageManager: "unknown",
   }),
 }));
-vi.mock("../gateway/probe.js", () => ({
-  probeGateway: mocks.probeGateway,
-}));
+vi.mock("../gateway/probe.js", () => ({ probeGateway: mocks.probeGateway }));
 vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
   waitForGatewayDiagnosticReadiness: mocks.waitForGatewayDiagnosticReadiness,
 }));

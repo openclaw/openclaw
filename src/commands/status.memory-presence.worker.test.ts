@@ -69,26 +69,21 @@ async function observeWorkerPools() {
   const { WorkerTaskPool } = loader(sdkPath) as typeof import("../plugin-sdk/process-runtime.js");
   type Pool = InstanceType<typeof WorkerTaskPool>;
   const pools = new Set<Pool>();
-  let nextFailure: Error | undefined;
   // oxlint-disable-next-line typescript/unbound-method -- Every intercepted call supplies the actual pool receiver via apply.
   const originalRun = WorkerTaskPool.prototype.run;
+  const dispatch = vi.fn(originalRun);
   const run = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
     this: Pool,
     ...args: Parameters<typeof originalRun>
   ) {
     pools.add(this);
-    if (nextFailure) {
-      const failure = nextFailure;
-      nextFailure = undefined;
-      return Promise.reject(failure);
-    }
-    return originalRun.apply(this, args);
+    return dispatch.apply(this, args);
   });
   return {
     run,
     pools,
     rejectNextInspection(error: Error) {
-      nextFailure = error;
+      dispatch.mockRejectedValueOnce(error);
     },
   };
 }

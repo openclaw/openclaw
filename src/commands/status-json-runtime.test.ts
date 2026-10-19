@@ -229,10 +229,7 @@ describe("status-json-runtime", () => {
         issues: [{ path: "gateway.port", message: "invalid" }],
       },
       secretDiagnostics: ["diag"],
-      pluginCompatibility: {
-        count: 1,
-        warnings: [compatibilityWarning],
-      },
+      pluginCompatibility: { count: 1, warnings: [compatibilityWarning] },
       backups: backup,
     });
   });
@@ -269,15 +266,10 @@ describe("status-json-runtime", () => {
   it("publishes full runtime policy before resolving explicit online usage", async () => {
     const sourceConfig: OpenClawConfig = {
       plugins: {
-        entries: {
-          codex: { enabled: true, config: { appServer: { homeScope: "agent" } } },
-        },
+        entries: { codex: { enabled: true, config: { appServer: { homeScope: "agent" } } } },
       },
     };
-    const runtimeConfig: OpenClawConfig = {
-      ...sourceConfig,
-      gateway: { port: 18789 },
-    };
+    const runtimeConfig: OpenClawConfig = { ...sourceConfig, gateway: { port: 18789 } };
     mocks.readConfigFileSnapshot.mockResolvedValueOnce({ runtimeConfig, sourceConfig });
     mocks.resolveStatusUsageSummary.mockImplementationOnce(async () => {
       expect(readRuntimeConfig().plugins).toEqual(sourceConfig.plugins);
@@ -324,10 +316,7 @@ describe("status-json-runtime", () => {
     });
 
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
-      runtimeInput(500, {
-        usage: false,
-        deep: false,
-      }),
+      runtimeInput(500, { usage: false, deep: false }),
     );
     expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith({});
     expect(result.gateway).toMatchObject({ url: "ws://127.0.0.1:18789", urlSource: "config" });
@@ -361,10 +350,7 @@ describe("status-json-runtime", () => {
 
     expect(result.health).toEqual({ error: "gateway health probe timed out" });
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
-      runtimeInput(500, {
-        deep: true,
-        suppressHealthErrors: true,
-      }),
+      runtimeInput(500, { deep: true, suppressHealthErrors: true }),
     );
   });
 });

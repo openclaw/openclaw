@@ -109,7 +109,13 @@ const runtimeDiagnostics = {
   sqliteWal: createSqliteWalHealth(),
   startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
   installationReplacementWarning: "Installation replaced; draining before handoff.",
-  secretEgressProxy: { state: "degraded", message: "Check OpenSSL, then retry." },
+  secretEgressProxy: {
+    state: "degraded",
+    message: "Check OpenSSL, then retry.",
+    caExpiresAt: "2036-09-01T00:00:00.000Z",
+    failedCertificates: 1,
+  },
+  childRuntime: { execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node", available: false },
 };
 
 function expectChannels(
@@ -276,10 +282,6 @@ describe("status scans", () => {
   });
 
   it("uses gateway fallback overrides for channels.status when requested", async () => {
-    const childRuntime = {
-      execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
-      available: false,
-    };
     const gatewaySnapshot: NonNullable<
       Parameters<typeof collectStatusScanOverview>[0]["gatewaySnapshot"]
     > = {
@@ -308,17 +310,7 @@ describe("status scans", () => {
     });
     vi.spyOn(commandConfigSnapshot, "readCommandConfigSnapshot");
     mocks.callGateway.mockImplementation(async ({ method }: { method: string }) =>
-      method === "status"
-        ? {
-            ...runtimeDiagnostics,
-            secretEgressProxy: {
-              ...runtimeDiagnostics.secretEgressProxy,
-              caExpiresAt: "2036-09-01T00:00:00.000Z",
-              failedCertificates: 1,
-            },
-            childRuntime: { ...childRuntime },
-          }
-        : { channelAccounts: {} },
+      method === "status" ? {} : { channelAccounts: {} },
     );
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
     const result = await collectStatusScanOverview({
@@ -330,7 +322,6 @@ describe("status scans", () => {
     });
 
     expect(result).toMatchObject({
-      runtimeDegradation: { ...runtimeDiagnostics, childRuntime },
       channelsStatus: { channelAccounts: {} },
       channelIssues: [{ channel: "quietchat", message: "boom" }],
     });

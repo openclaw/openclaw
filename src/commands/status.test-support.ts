@@ -61,20 +61,19 @@ export const baseStatusGatewaySnapshot = {
   gatewaySelf: { host: "gateway", version: "1.2.3" },
 } as const;
 
+const installedService = <T extends object>(label: string, extra: T) => ({
+  label,
+  installed: true,
+  loadedText: "loaded",
+  ...extra,
+});
+
 export const baseStatusServices = {
-  gatewayService: {
-    label: "LaunchAgent",
-    installed: true,
+  gatewayService: installedService("LaunchAgent", {
     managedByOpenClaw: true,
-    loadedText: "loaded",
     runtimeShort: "running",
-  },
-  nodeService: {
-    label: "node",
-    installed: true,
-    loadedText: "loaded",
-    runtime: { status: "running", pid: 42 },
-  },
+  }),
+  nodeService: installedService("node", { runtime: { status: "running", pid: 42 } }),
   nodeOnlyGateway: null,
 };
 
@@ -133,32 +132,32 @@ const baseStatusSummary = {
   },
 } as unknown as StatusSummary;
 
-const baseStatusAgentStatus = {
-  defaultId: "main",
-  ownership: "sole" as const,
-  selectionRequired: false,
-  bootstrapPendingCount: 1,
-  totalSessions: 2,
-  agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
+const baseStatusObservations = {
+  summary: baseStatusSummary,
+  agentStatus: {
+    defaultId: "main",
+    ownership: "sole" as const,
+    selectionRequired: false,
+    bootstrapPendingCount: 1,
+    totalSessions: 2,
+    agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
+  },
+  memory: {
+    agentId: "main",
+    files: 1,
+    chunks: 2,
+    vector: {},
+    fts: {},
+    cache: {},
+  } as unknown as MemoryStatusSnapshot,
+  memoryPlugin: {
+    enabled: true,
+    slot: "memory",
+  } as const satisfies MemoryPluginStatus,
+  pluginCompatibility: [
+    { pluginId: "a", severity: "warn", message: "legacy" },
+  ] as PluginCompatibilityNotice[],
 };
-
-const baseStatusMemory = {
-  agentId: "main",
-  files: 1,
-  chunks: 2,
-  vector: {},
-  fts: {},
-  cache: {},
-} as unknown as MemoryStatusSnapshot;
-
-const baseStatusMemoryPlugin = {
-  enabled: true,
-  slot: "memory",
-} as const satisfies MemoryPluginStatus;
-
-const baseStatusPluginCompatibility = [
-  { pluginId: "a", severity: "warn", message: "legacy" },
-] as PluginCompatibilityNotice[];
 
 export function createStatusScanResultFixture(
   overrides: Partial<StatusScanResult> = {},
@@ -169,12 +168,7 @@ export function createStatusScanResultFixture(
     sourceConfig: baseStatusCfg,
     configDiagnostics: null,
     secretDiagnostics: [],
-    osSummary: {
-      platform: "linux",
-      arch: "x64",
-      release: "test",
-      label: "linux (x64)",
-    },
+    osSummary: { platform: "linux", arch: "x64", release: "test", label: "linux (x64)" },
     tailscaleMode: "off",
     tailscaleDns: null,
     tailscaleHttpsUrl: null,
@@ -182,22 +176,13 @@ export function createStatusScanResultFixture(
     ...baseStatusGatewaySnapshot,
     channelIssues: [],
     channels: { rows: [], details: [] },
-    agentStatus: baseStatusAgentStatus,
-    summary: baseStatusSummary,
-    memory: baseStatusMemory,
-    memoryPlugin: baseStatusMemoryPlugin,
-    pluginCompatibility: baseStatusPluginCompatibility,
+    ...baseStatusObservations,
     ...overrides,
   };
 }
 
 function createStatusLastHeartbeat(): HeartbeatEventPayload {
-  return {
-    ts: Date.now() - 30_000,
-    status: "ok-token",
-    channel: "quietchat",
-    accountId: "acct",
-  };
+  return { ts: Date.now() - 30_000, status: "ok-token", channel: "quietchat", accountId: "acct" };
 }
 
 export function createStatusHealth(overrides: Partial<HealthSummary> = {}): HealthSummary {
@@ -217,13 +202,9 @@ function createStatusCommandFields() {
   return {
     env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
     surface: baseStatusOverviewSurface,
-    summary: baseStatusSummary,
+    ...baseStatusObservations,
     health: createStatusHealth(),
     lastHeartbeat: createStatusLastHeartbeat(),
-    agentStatus: baseStatusAgentStatus,
-    memory: baseStatusMemory,
-    memoryPlugin: baseStatusMemoryPlugin,
-    pluginCompatibility: baseStatusPluginCompatibility,
     updateValue: "available · custom update",
   };
 }
@@ -251,12 +232,7 @@ export function createStatusCommandReportDataParams(
       ts: Date.now(),
       summary: { critical: 0, warn: 1, info: 0 },
       findings: [
-        {
-          checkId: "warn-first",
-          severity: "warn",
-          title: "Warn first",
-          detail: "warn detail",
-        },
+        { checkId: "warn-first", severity: "warn", title: "Warn first", detail: "warn detail" },
       ],
     },
     usageLines: ["usage line"],
