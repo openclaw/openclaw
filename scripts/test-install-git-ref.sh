@@ -26,6 +26,22 @@ export OPENCLAW_INSTALL_CLI_SH_NO_RUN=1 OPENCLAW_INSTALL_SH_NO_RUN=1
 # shellcheck source=/dev/null
 source "$installer"
 run_quiet_step() { shift; "$@"; }
+git() {
+  if [[ " $* " == *' ls-remote '* ]]; then
+    local count
+    count="$(cat "$work/probes")"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$work/probes"
+    if [[ "$scenario" == exhausted || ( "$scenario" == transient && "$count" -lt 3 ) ]]; then
+      printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Could not resolve host: example.invalid' >&2
+      return 128
+    elif [[ "$scenario" == authentication ]]; then
+      printf '%s\n' 'fatal: Authentication failed for https://user:synthetic-password@example.invalid/repo' 'aUtHoRiZaTiOn: Bearer synthetic-header' 'COOKIE: synthetic-cookie' >&2
+      return 128
+    fi
+  fi
+  command git "$@"
+}
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 seed="$work/seed"
@@ -55,22 +71,6 @@ else
 fi
 printf '0\n' > "$work/probes"
 
-git() {
-  if [[ " $* " == *' ls-remote '* ]]; then
-    local count
-    count="$(cat "$work/probes")"
-    count=$((count + 1))
-    printf '%s\n' "$count" > "$work/probes"
-    if [[ "$scenario" == exhausted || ( "$scenario" == transient && "$count" -lt 3 ) ]]; then
-      printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Could not resolve host: example.invalid' >&2
-      return 128
-    elif [[ "$scenario" == authentication ]]; then
-      printf '%s\n' 'fatal: Authentication failed for https://user:synthetic-password@example.invalid/repo' 'aUtHoRiZaTiOn: Bearer synthetic-header' 'COOKIE: synthetic-cookie' >&2
-      return 128
-    fi
-  fi
-  command git "$@"
-}
 # Keep retry tests fast without replacing any Git behavior.
 sleep() { :; }
 export GIT_UPDATE=0
