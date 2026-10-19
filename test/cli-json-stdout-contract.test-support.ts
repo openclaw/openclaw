@@ -4,6 +4,12 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect } from "vitest";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
+// Literal commands have no shell quoting; retain argv arrays for empty or spaced values.
+export function cliCase<T extends object>(command: string | string[], details: T) {
+  const args = typeof command === "string" ? command.split(" ") : command;
+  return { name: args.join(" "), args, ...details };
+}
+
 export const ttySource = [
   'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
   'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
@@ -71,10 +77,25 @@ export function writeJson(file: string, value: unknown, newline = false) {
   return fs.writeFile(file, JSON.stringify(value) + (newline ? "\n" : ""), "utf8");
 }
 
-function preloadArgs(source: string[]) {
+export function preloadArgs(source: string[]) {
   return [
     `--import=data:text/javascript;base64,${Buffer.from(source.join("\n")).toString("base64")}`,
   ];
+}
+
+export function expectCommandGuidance(stderr: string, diagnostic: string, suggestion: string) {
+  expect(stderr).toContain(diagnostic);
+  expect(stderr).toContain(`Did you mean this?\n  ${suggestion}`);
+  expect(stderr.split(diagnostic)).toHaveLength(2);
+  expect(stderr.split(suggestion)).toHaveLength(2);
+  for (const text of [
+    "The CLI command failed.",
+    "Could not start the CLI.",
+    "OPENCLAW_DEBUG",
+    "openclaw doctor",
+  ]) {
+    expect(stderr).not.toContain(text);
+  }
 }
 
 export function runIsolatedCli(
