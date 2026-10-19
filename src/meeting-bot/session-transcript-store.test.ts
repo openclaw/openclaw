@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type { MeetingSessionRecord, MeetingTranscriptSnapshot } from "./session-types.js";
 
@@ -58,145 +58,133 @@ function snapshot(texts: string[], epoch?: string, droppedLines = 0): MeetingTra
   return { droppedLines, epoch, lines: texts.map((text) => ({ text })) };
 }
 
-describe("MeetingSessionTranscriptStore", () => {
-  it("observes pending and corrected sources before transcript dedup without persisting pending text", async () => {
-    const source = {
-      id: "caption-1",
-      epoch: "page-1",
-      revision: "1",
-      finalized: false,
-      ownEcho: false,
-    };
-    const pending = { text: "A pending invitation", source };
-    const committed = {
-      text: "A completed invitation",
-      source: { ...source, revision: "2", finalized: true },
-    };
-    const correction = { text: "A pending correction", source: { ...source, revision: "3" } };
-    const snapshots: MeetingTranscriptSnapshot[] = [
-      { droppedLines: 0, epoch: "page-1", lines: [], pendingLines: [pending] },
-      { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [] },
-      { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [correction] },
-    ];
-    const observed: string[][] = [];
-    const store = createStore(
-      snapshots,
-      async (lines) => {
-        expect(observed.at(-1)).toEqual(["2"]);
-        delivered.push(...lines.map((line) => line.text));
-      },
-      (captured) => {
-        observed.push(
-          [...captured.lines, ...(captured.pendingLines ?? [])].map(
-            (line) => line.source?.revision ?? "",
-          ),
-        );
-      },
-    );
+it("observes pending and corrected sources before transcript dedup without persisting pending text", async () => {
+  const source = {
+    id: "caption-1",
+    epoch: "page-1",
+    revision: "1",
+    finalized: false,
+    ownEcho: false,
+  };
+  const pending = { text: "A pending invitation", source };
+  const committed = {
+    text: "A completed invitation",
+    source: { ...source, revision: "2", finalized: true },
+  };
+  const correction = { text: "A pending correction", source: { ...source, revision: "3" } };
+  const snapshots: MeetingTranscriptSnapshot[] = [
+    { droppedLines: 0, epoch: "page-1", lines: [], pendingLines: [pending] },
+    { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [] },
+    { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [correction] },
+  ];
+  const observed: string[][] = [];
+  const store = createStore(
+    snapshots,
+    async (lines) => {
+      expect(observed.at(-1)).toEqual(["2"]);
+      delivered.push(...lines.map((line) => line.text));
+    },
+    (captured) => {
+      observed.push(
+        [...captured.lines, ...(captured.pendingLines ?? [])].map(
+          (line) => line.source?.revision ?? "",
+        ),
+      );
+    },
+  );
 
-    expect((await store.read(session.id)).lines).toEqual([]);
-    await store.read(session.id);
-    const result = await store.read(session.id);
-    expect(observed).toEqual([["1"], ["2"], ["2", "3"]]);
-    expect(delivered).toEqual(["A completed invitation"]);
-    expect(result.lines).toEqual([committed]);
+  expect((await store.read(session.id)).lines).toEqual([]);
+  await store.read(session.id);
+  const result = await store.read(session.id);
+  expect(observed).toEqual([["1"], ["2"], ["2", "3"]]);
+  expect(delivered).toEqual(["A completed invitation"]);
+  expect(result.lines).toEqual([committed]);
+});
+
+it("trims an oversized initial snapshot to the retained tail", async () => {
+  const texts = Array.from({ length: 2_005 }, (_, index) => `line-${index}`);
+  const store = createStore([snapshot(texts, "page-1", 7)]);
+
+  const result = await store.read(session.id);
+
+  expect(result).toMatchObject({
+    found: true,
+    startIndex: 12,
+    nextIndex: 2_012,
+    droppedLines: 12,
+  });
+  expect(result.lines?.map((line) => line.text)).toEqual(texts.slice(5));
+});
+
+it("keeps only the new epoch tail when its first snapshot already has a gap", async () => {
+  const store = createStore([
+    snapshot(["old-0", "old-1"], "page-1"),
+    snapshot(["new-3", "new-4"], "page-2", 3),
+    snapshot(["new-3", "new-4", "new-5"], "page-2", 3),
+  ]);
+
+  await store.read(session.id);
+  const afterReload = await store.read(session.id, { sinceIndex: 2 });
+  const afterAppend = await store.read(session.id, { sinceIndex: 7 });
+
+  expect(afterReload).toMatchObject({ startIndex: 5, nextIndex: 7, droppedLines: 5 });
+  expect(afterReload.lines?.map((line) => line.text)).toEqual(["new-3", "new-4"]);
+  expect(afterAppend).toMatchObject({ startIndex: 7, nextIndex: 8, droppedLines: 5 });
+  expect(afterAppend.lines?.map((line) => line.text)).toEqual(["new-5"]);
+});
+
+it("acknowledges a durable snapshot one line at a time", async () => {
+  const batch = snapshot(["first", "second"], "page-1");
+  let failedSecond = false;
+  const store = createStore([batch, batch], async (lines) => {
+    const text = lines[0]?.text;
+    if (text === "second" && !failedSecond) {
+      failedSecond = true;
+      throw new Error("temporary second-line failure");
+    }
+    if (text) {
+      delivered.push(text);
+    }
   });
 
-  it("trims an oversized initial snapshot to the retained tail", async () => {
-    const texts = Array.from({ length: 2_005 }, (_, index) => `line-${index}`);
-    const store = createStore([snapshot(texts, "page-1", 7)]);
+  await expect(store.read(session.id)).resolves.toMatchObject({ found: true });
+  await expect(store.read(session.id)).resolves.toMatchObject({ found: true });
 
-    const result = await store.read(session.id);
+  expect(delivered).toEqual(["first", "second"]);
+});
 
-    expect(result).toMatchObject({
-      found: true,
-      startIndex: 12,
-      nextIndex: 2_012,
-      droppedLines: 12,
-    });
-    expect(result.lines).toHaveLength(2_000);
-    expect(result.lines?.[0]?.text).toBe("line-5");
-    expect(result.lines?.at(-1)?.text).toBe("line-2004");
-  });
+it("strips the maximal suffix-prefix overlap from a no-epoch reset", async () => {
+  const store = createStore([snapshot(["A", "B"]), snapshot(["B", "C"])]);
+  await store.read(session.id);
+  await store.read(session.id);
+  expect(delivered).toEqual(["A", "B", "C"]);
+});
 
-  it("keeps only the new epoch tail when its first snapshot already has a gap", async () => {
-    const store = createStore([
-      snapshot(["old-0", "old-1"], "page-1"),
-      snapshot(["new-3", "new-4"], "page-2", 3),
-      snapshot(["new-3", "new-4", "new-5"], "page-2", 3),
-    ]);
-
-    await store.read(session.id);
-    const afterReload = await store.read(session.id, { sinceIndex: 2 });
-    const afterAppend = await store.read(session.id, { sinceIndex: 7 });
-
-    expect(afterReload).toMatchObject({ startIndex: 5, nextIndex: 7, droppedLines: 5 });
-    expect(afterReload.lines?.map((line) => line.text)).toEqual(["new-3", "new-4"]);
-    expect(afterAppend).toMatchObject({ startIndex: 7, nextIndex: 8, droppedLines: 5 });
-    expect(afterAppend.lines?.map((line) => line.text)).toEqual(["new-5"]);
-  });
-
-  it("acknowledges a durable snapshot one line at a time", async () => {
-    const batch = snapshot(["first", "second"], "page-1");
-    let failedSecond = false;
-    const store = createStore([batch, batch], async (lines) => {
-      const text = lines[0]?.text;
-      if (text === "second" && !failedSecond) {
-        failedSecond = true;
-        throw new Error("temporary second-line failure");
-      }
-      if (text) {
-        delivered.push(text);
-      }
-    });
-
-    await expect(store.read(session.id)).resolves.toMatchObject({ found: true });
-    await expect(store.read(session.id)).resolves.toMatchObject({ found: true });
-
-    expect(delivered).toEqual(["first", "second"]);
-  });
-
-  it("strips the maximal suffix-prefix overlap from a no-epoch reset", async () => {
-    const store = createStore([snapshot(["A", "B"]), snapshot(["B", "C"])]);
-    await store.read(session.id);
-    await store.read(session.id);
-    expect(delivered).toEqual(["A", "B", "C"]);
-  });
-
-  it("queues newer final rows behind an unavailable pending batch", async () => {
+it.each(["newer final rows", "an empty reset marker"])(
+  "queues %s behind pending delivery",
+  async (kind) => {
+    const finalizing = kind === "newer final rows";
+    const snapshots = finalizing
+      ? [snapshot(["A"], "page-1"), snapshot(["A", "B"], "page-1")]
+      : [snapshot(["A"]), snapshot([]), snapshot(["A", "B"])];
     unavailable = true;
-    const store = createStore([snapshot(["A"], "page-1"), snapshot(["A", "B"], "page-1")]);
-
-    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
-    await expect(store.captureNotes(session, { finalize: true })).rejects.toThrow(
-      "store unavailable",
-    );
+    const store = createStore(snapshots);
+    for (let index = 0, count = snapshots.length; index < count; index += 1) {
+      const options = { finalize: finalizing && index === count - 1 };
+      await expect(store.captureNotes(session, options)).rejects.toThrow("store unavailable");
+    }
     unavailable = false;
     await store.flushPending(session);
+    expect(delivered).toEqual(finalizing ? ["A", "B"] : ["A", "A", "B"]);
+  },
+);
 
-    expect(delivered).toEqual(["A", "B"]);
-  });
+it("preserves pending delivery when the final browser snapshot also fails", async () => {
+  unavailable = true;
+  const store = createStore([snapshot(["pending"]), new Error("browser snapshot unavailable")]);
 
-  it("preserves pending delivery when the final browser snapshot also fails", async () => {
-    unavailable = true;
-    const store = createStore([snapshot(["pending"]), new Error("browser snapshot unavailable")]);
-
-    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
-    await expect(store.captureNotes(session, { finalize: true })).rejects.toMatchObject({
-      finalCaptureError: "browser snapshot unavailable",
-    });
-  });
-
-  it("queues an empty reset marker while delivery is pending", async () => {
-    unavailable = true;
-    const store = createStore([snapshot(["A"]), snapshot([]), snapshot(["A", "B"])]);
-
-    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
-    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
-    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
-    unavailable = false;
-    await store.flushPending(session);
-
-    expect(delivered).toEqual(["A", "A", "B"]);
+  await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
+  await expect(store.captureNotes(session, { finalize: true })).rejects.toMatchObject({
+    finalCaptureError: "browser snapshot unavailable",
   });
 });
