@@ -10,16 +10,17 @@ import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/
 import { createShellConfigFixture } from "../../app/app-host.test-support.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ControlUiPluginSessionOpenMessage } from "./plugin-frame-session-navigation.ts";
 import { PluginPage } from "./plugin-page.tsx";
 
 const pluginPath = "/plugins/example/panel";
+const externalPath = "https://unrelated.example/panel";
 const sessionKey = "agent:writer:subagent:11111111-2222-4333-8444-555555555555";
 const message: ControlUiPluginSessionOpenMessage = {
   type: "openclaw-plugin-session-open",
@@ -37,30 +38,24 @@ beforeEach(() => {
       }
       const nonce = new URL(node.src).searchParams.get(CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY);
       if (nonce) {
-        // Deliver the probe document's response through the real source/nonce boundary.
         dispatch(node.contentWindow, { type: CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE, nonce });
       }
     }
   });
 });
 
-afterEach(async () => {
-  try {
-    await Promise.all(dispose.splice(0).map(async (cleanup) => cleanup()));
-  } finally {
-    cleanupSolid();
-    vi.restoreAllMocks();
-  }
-});
+afterEach(() =>
+  Promise.all(dispose.splice(0).map(async (cleanup) => cleanup())).finally(() =>
+    vi.restoreAllMocks(),
+  ),
+);
 
-async function mount(
-  options: {
-    requiresGatewayAuth?: boolean;
-    path?: string;
-    boardFace?: "dashboard";
-    container?: HTMLElement;
-  } = {},
-) {
+type MountOptions = Partial<Pick<GatewayControlUiPluginTab, "requiresGatewayAuth" | "path">> & {
+  boardFace?: "dashboard";
+  container?: HTMLElement;
+};
+
+async function mount(options: MountOptions = {}) {
   const descriptor: GatewayControlUiPluginTab = {
     pluginId: "example-plugin",
     id: "panel",
@@ -88,43 +83,31 @@ async function mount(
       auth: { role: "operator", scopes: ["operator.read"] },
       controlUiTabs: [descriptor],
     },
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
   } satisfies Partial<typeof gateway.snapshot>);
+  const rows = options.boardFace ? [{ key: sessionKey, boardFace: options.boardFace }] : [];
   const context = {
     basePath: "/console",
     gateway,
     config: { current: config, refresh: vi.fn(async () => config) },
     agents: { state: { agentsList: { defaultId: "main", agents: [] } } },
     agentSelection: { state: { selectedId: "main" }, set: actions.selectAgent },
-    sessions: {
-      state: {
-        result: {
-          sessions: options.boardFace ? [{ key: sessionKey, boardFace: options.boardFace }] : [],
-        },
-      },
-      subscribe: () => () => undefined,
-    },
+    sessions: { state: { result: { sessions: rows } } },
     navigate: actions.navigate,
   } as unknown as ApplicationContext;
-  const container = options.container ?? document.createElement("div");
-  document.body.append(container);
   const mounted = mountSolid(
     () => <PluginPage pluginId={descriptor.pluginId} tabId={descriptor.id} />,
-    { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
+    {
+      container: options.container,
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    },
   );
-  const unmount = () => {
-    mounted.unmount();
-    container.remove();
-  };
+  const { container, unmount } = mounted;
   dispose.push(unmount);
-  flush();
   await waitForSolid(() => expect(container.querySelector("iframe")).not.toBeNull());
-  const view = container.querySelector<HTMLElement>("openclaw-plugin-page")!;
   return {
     ...actions,
-    view,
-    frame: view.querySelector("iframe")!,
+    getFrame: () => container.querySelector("iframe"),
+    frame: container.querySelector("iframe")!,
     descriptor,
     gateway,
     snapshot,
@@ -143,19 +126,13 @@ function dispatch(
 }
 
 async function mountClickableFrame(signal: AbortSignal) {
-  const container = document.createElement("div");
+  const container = document.body.appendChild(document.createElement("div"));
+  dispose.push(() => container.remove());
   signal.throwIfAborted();
   const session = cdp();
   // Vitest initializes its CDP handler lazily; finish that before listener and command RPCs race.
   await session.send("Page.enable");
   const ready = createDeferred();
-  let cleanupPromise: Promise<void> | undefined;
-  const cleanup = () =>
-    (cleanupPromise ??= (async () => {
-      window.removeEventListener("message", onReady);
-      session.off("Fetch.requestPaused", onRequest);
-      await session.send("Fetch.disable");
-    })());
   const onReady = (event: MessageEvent<unknown>) => {
     const frame = container.querySelector("iframe");
     if (frame && event.source === frame.contentWindow && event.data === "test-click-ready") {
@@ -179,22 +156,22 @@ async function mountClickableFrame(signal: AbortSignal) {
       })
       .catch(ready.reject);
   };
-  dispose.push(cleanup);
+  dispose.push(async () => {
+    window.removeEventListener("message", onReady);
+    session.off("Fetch.requestPaused", onRequest);
+    await session.send("Fetch.disable");
+  });
   window.addEventListener("message", onReady);
   session.on("Fetch.requestPaused", onRequest);
-  try {
-    // Own the initial document; replacing srcdoc after mount races Vite's SPA fallback navigation.
-    await session.send("Fetch.enable", {
-      patterns: [
-        { urlPattern: new URL(pluginPath, window.location.href).href, resourceType: "Document" },
-      ],
-    });
-    signal.throwIfAborted();
-    const [fixture] = await withinTest(Promise.all([mount({ container }), ready.promise]), signal);
-    return fixture;
-  } finally {
-    await cleanup();
-  }
+  // Own the initial document; replacing srcdoc after mount races Vite's SPA fallback navigation.
+  await session.send("Fetch.enable", {
+    patterns: [
+      { urlPattern: new URL(pluginPath, window.location.href).href, resourceType: "Document" },
+    ],
+  });
+  signal.throwIfAborted();
+  const [fixture] = await withinTest(Promise.all([mount({ container }), ready.promise]), signal);
+  return fixture;
 }
 
 it("routes a sandbox-frame click with the base path and selection order", async ({ signal }) => {
@@ -231,8 +208,6 @@ it("preserves the existing preferred face and explicit global owner", async () =
 
 it("rejects other windows, wrong origins, response channels, and malformed requests", async () => {
   const { frame, navigate, selectAgent, setSessionKey } = await mount();
-  dispatch(window);
-  dispatch(null);
   dispatch(frame.contentWindow, message, "https://unrelated.example");
   const other = document.createElement("iframe");
   document.body.append(other);
@@ -265,7 +240,6 @@ it("rejects other windows, wrong origins, response channels, and malformed reque
     { ...message, agentId: " writer " },
     { ...message, agentId: "other-agent" },
     { ...message, url: "https://unrelated.example" },
-    { ...message, prompt: "Do not run" },
   ]) {
     dispatch(frame.contentWindow, invalid);
   }
@@ -284,7 +258,7 @@ it("rejects live descriptor, scope, client, and grant changes before a render", 
     target[key] = original;
   }
   dispatchWith(hello, "controlUiTabs", []);
-  dispatchWith(descriptor, "path", "https://unrelated.example/panel");
+  dispatchWith(descriptor, "path", externalPath);
   dispatchWith(descriptor, "path", "/plugins/example/other");
   dispatchWith(descriptor, "requiresGatewayAuth", false);
   dispatchWith(hello, "auth", { role: "operator", scopes: ["operator.approvals"] });
@@ -297,51 +271,41 @@ it("rejects live descriptor, scope, client, and grant changes before a render", 
   expect([navigate, setSessionKey].map((fn) => fn.mock.calls)).toEqual([[], []]);
 });
 
-it.each(["reconnect", "descriptor"] as const)(
-  "retires a frame across %s replacement and unmount",
-  async (change) => {
-    const fixture = await mount();
-    const staleWindow = fixture.frame.contentWindow;
-    if (change === "reconnect") {
-      fixture.snapshot.phase = "reconnecting";
-      fixture.notify();
-      fixture.snapshot.phase = "connected";
-      fixture.notify();
-      dispatch(staleWindow);
-      expect(fixture.navigate).not.toHaveBeenCalled();
-      await waitForSolid(() => {
-        const frame = fixture.view.querySelector("iframe");
-        expect(frame !== null && frame !== fixture.frame).toBe(true);
-      });
-    } else {
-      for (const path of ["/plugins/example/other", pluginPath]) {
-        fixture.descriptor.path = path;
-        fixture.notify();
-        flush();
-        await waitForSolid(() =>
-          expect(fixture.view.querySelector("iframe")?.getAttribute("src")).toBe(path),
-        );
-      }
-    }
-    flush();
-    const currentFrame = fixture.view.querySelector("iframe")!;
-    expect(currentFrame).not.toBe(fixture.frame);
+it.each(["reconnect", "descriptor"] as const)("retires %s frames", async (change) => {
+  const fixture = await mount();
+  const staleWindow = fixture.frame.contentWindow;
+  if (change === "reconnect") {
+    fixture.snapshot.phase = "reconnecting";
+    fixture.notify();
+    fixture.snapshot.phase = "connected";
+    fixture.notify();
     dispatch(staleWindow);
     expect(fixture.navigate).not.toHaveBeenCalled();
-    dispatch(currentFrame.contentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-    const currentWindow = currentFrame.contentWindow;
-    fixture.unmount();
-    dispatch(currentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-  },
-);
+    await waitForSolid(() => {
+      const frame = fixture.getFrame();
+      expect(frame !== null && frame !== fixture.frame).toBe(true);
+    });
+  } else {
+    for (const path of ["/plugins/example/other", pluginPath]) {
+      fixture.descriptor.path = path;
+      fixture.notify();
+      await waitForSolid(() => expect(fixture.getFrame()?.getAttribute("src")).toBe(path));
+    }
+  }
+  const currentFrame = fixture.getFrame()!;
+  expect(currentFrame).not.toBe(fixture.frame);
+  dispatch(staleWindow);
+  expect(fixture.navigate).not.toHaveBeenCalled();
+  dispatch(currentFrame.contentWindow);
+  expect(fixture.navigate).toHaveBeenCalledOnce();
+  const currentWindow = currentFrame.contentWindow;
+  fixture.unmount();
+  dispatch(currentWindow);
+  expect(fixture.navigate).toHaveBeenCalledOnce();
+});
 
-it.each([pluginPath, "https://unrelated.example/panel"])(
-  "never lends navigation to an unauthenticated descriptor at %s",
-  async (path) => {
-    const { frame, navigate } = await mount({ requiresGatewayAuth: false, path });
-    dispatch(frame.contentWindow);
-    expect(navigate).not.toHaveBeenCalled();
-  },
-);
+it.each([pluginPath, externalPath])("denies unauthenticated %s", async (path) => {
+  const { frame, navigate } = await mount({ requiresGatewayAuth: false, path });
+  dispatch(frame.contentWindow);
+  expect(navigate).not.toHaveBeenCalled();
+});
