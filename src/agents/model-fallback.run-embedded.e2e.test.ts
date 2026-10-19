@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -288,6 +289,75 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it.each(["idle", "request", "backup-profile", "fallback-model"] as const)(
+    "records timeout cooldown only with an alternative: %s",
+    async (scenario) => {
+      await withModelFallbackWorkspace(async (workspace) => {
+        const cfg = makeModelFallbackConfig();
+        const hasBackup = scenario === "backup-profile";
+        const hasFallback = scenario === "fallback-model";
+        cfg.agents!.defaults!.model = {
+          primary: "openai/mock-1",
+          fallbacks: hasFallback ? ["groq/mock-2"] : [],
+        };
+        cfg.auth = { order: { openai: hasBackup ? ["openai:p1", "openai:p2"] : ["openai:p1"] } };
+        // Stored credentials outside the authorized order must not enable cooldown.
+        await writeFallbackMultiProfileAuthStore(workspace.agentDir, { openAiProfileCount: 2 });
+        runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+          const { provider, modelId } = params as EmbeddedAttemptParams;
+          const failed = runEmbeddedAttemptMock.mock.calls.length === 1;
+          const assistant = buildEmbeddedRunnerAssistant({
+            provider,
+            model: modelId,
+            stopReason: failed ? (scenario === "request" ? "error" : "aborted") : "stop",
+            content: failed ? [] : [{ type: "text", text: "recovered" }],
+            ...(failed ? { errorMessage: "LLM request timed out." } : {}),
+          });
+          return makeEmbeddedRunnerAttempt({
+            providerRetryMaxRetries: 0,
+            terminal:
+              failed && scenario !== "request"
+                ? { kind: "timeout", phase: "prompt", source: "idle", aborted: true }
+                : { kind: "ok" },
+            lastAssistant: assistant,
+            currentAttemptAssistant: assistant,
+            assistantTexts: failed ? [] : ["recovered"],
+          });
+        });
+        const run = async (name: string) => {
+          const work = new AsyncWorkScope();
+          try {
+            return await work.run(() => runEmbeddedEntryFallback(workspace, name, { config: cfg }));
+          } finally {
+            await work.drain();
+          }
+        };
+
+        await run(`timeout-${scenario}`).catch(() => undefined);
+        const stats = (await readFallbackUsageStats(workspace.agentDir))["openai:p1"];
+        if (hasBackup || hasFallback) {
+          expect(stats?.cooldownReason).toBe("timeout");
+          expect(stats?.cooldownUntil).toBeGreaterThan(Date.now());
+          expectAttemptOrder([
+            { provider: "openai", authProfileId: "openai:p1" },
+            hasBackup
+              ? { provider: "openai", authProfileId: "openai:p2" }
+              : { provider: "groq", authProfileId: "groq:p1" },
+          ]);
+        } else {
+          expect(stats?.cooldownUntil).toBeUndefined();
+          expect(stats?.failureCounts?.timeout).toBeUndefined();
+          // Two immediate turns also cover the provider probe throttle closing.
+          for (const name of ["following", "concurrent-peer"]) {
+            const result = await run(`${name}-${scenario}`);
+            expect(result.result.payloads?.[0]?.text).toBe("recovered");
+          }
+          expectAttemptOrder(profileAttempts("openai", 3));
+        }
+      });
+    },
+  );
+
   it.each([
     { name: "prompt failure", phase: "prompt", fallback: true, promptFailure: true },
     { name: "aborted assistant", phase: "prompt", fallback: true },
