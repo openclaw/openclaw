@@ -20,14 +20,23 @@ import {
 
 registerCommandPaletteEnglish();
 
-export type ChatWelcomeProps = {
+export type ChatWelcomeIdentityProps = {
   currentAgentId?: string;
   agents?: AgentsListResult["agents"];
   assistantName: string;
-  /** Existing agent picker, shown in the new-session welcome heading. */
-  assistantNameControl?: JSX.Element;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  sessionHost?: UiSessionDefaultsHost | null;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
+  onDraftChange: (next: string) => void;
+  onSend: () => void;
+  onOpenSession?: (sessionKey: string) => void;
+};
+
+export type ChatWelcomeProps = {
+  /** Existing agent picker, shown in the new-session welcome heading. */
+  assistantNameControl?: JSX.Element;
   /** Hero hint override; defaults to the chat slash-command hint. */
   hint?: JSX.Element;
   /** Rendered between the hero and the recents (the new-session draft composer). */
@@ -38,13 +47,7 @@ export type ChatWelcomeProps = {
   fadeSecondaryContent?: boolean;
   sessions?: SessionsListResult | null;
   sessionKey?: string;
-  sessionHost?: UiSessionDefaultsHost | null;
-  modelSetupRequired?: boolean;
-  onModelSetup?: () => void;
-  onDraftChange: (next: string) => void;
-  onSend: () => void;
-  onOpenSession?: (sessionKey: string) => void;
-};
+} & ChatWelcomeIdentityProps;
 
 const WELCOME_SUGGESTION_KEYS = [
   "chat.welcome.suggestions.whatCanYouDo",
