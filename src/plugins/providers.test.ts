@@ -447,36 +447,6 @@ describe("resolvePluginProviders", () => {
     expectActivatedOwner("ollama", "runtime", true);
   });
 
-  it("activates the declared endpoint owner for custom provider refs with a core api", () => {
-    setManifest("qwen", {
-      providers: ["qwen", "dashscope"],
-      providerEndpoints: [
-        {
-          endpointClass: "modelstudio-native",
-          baseUrls: ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
-        },
-      ],
-    });
-
-    resolvePluginProviders({
-      config: {
-        models: {
-          providers: {
-            "custom-dashscope": {
-              api: "openai-completions",
-              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      providerRefs: ["custom-dashscope"],
-      activate: true,
-    });
-
-    expectActivatedOwner("qwen", "runtime", true);
-  });
-
   it("uses setup.providers to keep explicit provider owners on the setup path", () => {
     setManifest("setup-owned-provider", {
       providers: [],
@@ -623,5 +593,35 @@ describe("resolvePluginProviders", () => {
 
     expect(providers).toEqual([{ id: "openai", label: "OpenAI", auth: [], pluginId: "openai" }]);
     expectActivatedOwner("openai");
+  });
+
+  it("activates the declared endpoint owner for custom provider refs with a core api", () => {
+    setManifest("qwen", {
+      providers: ["qwen", "dashscope"],
+      providerEndpoints: [
+        {
+          endpointClass: "modelstudio-native",
+          baseUrls: ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
+        },
+      ],
+    });
+
+    resolvePluginProviders({
+      config: {
+        models: {
+          providers: {
+            "custom-dashscope": {
+              api: "openai-completions",
+              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providerRefs: ["custom-dashscope"],
+      activate: true,
+    });
+
+    expectActivatedOwner("qwen", "runtime", true);
   });
 });
