@@ -341,11 +341,9 @@ try {
     await delay(2_000);
   }
   phase = beginPhase("retained-navigation");
-  await page.evaluate(
-    (route) => window.openclawControlUi!.navigate(route === "cron" ? "chat" : route),
-    initialRoute,
-  );
-  await ready(initialRoute === "cron" ? "chat" : initialRoute);
+  const returnRoute = cronRuns > 0 ? "appearance" : initialRoute === "cron" ? "chat" : initialRoute;
+  await page.evaluate((route) => window.openclawControlUi!.navigate(route), returnRoute);
+  await ready(returnRoute);
   await page.evaluate(() => window.openclawControlUi!.navigate("cron"));
   await ready("cron");
 } catch (error) {
