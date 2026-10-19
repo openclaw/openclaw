@@ -424,15 +424,17 @@ suite.define(() => {
         ).toBe(true);
         expect(await session.isVisible()).toBe(true);
         await progressToggle.click();
-        const checks = pullRequest.locator(".chat-pr__checks-pill");
-        await checks.click();
-        await expect
-          .poll(() => pullRequest.locator(".chat-pr__checks-menu").isVisible())
-          .toBe(true);
+        await pullRequest.locator(".chat-pr__actions-trigger").click();
+        const prMenu = pullRequest.locator('.chat-pr__actions [role="menu"]').first();
+        await prMenu.locator('[data-value="checks"]').click();
+        const checksPage = prMenu.locator('.chat-pr-menu__page[aria-label="Checks"]');
+        await expect.poll(() => checksPage.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
-        await expect
-          .poll(() => pullRequest.locator(".chat-pr__checks-menu").isVisible())
-          .toBe(false);
+        await expect.poll(() => checksPage.isVisible()).toBe(false);
+        expect(await prMenu.isVisible()).toBe(true);
+        expect(await details.isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => prMenu.isVisible()).toBe(false);
         expect(await details.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
         await expect.poll(() => details.isVisible()).toBe(false);
