@@ -14,16 +14,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function createGatewayStub() {
+function createGatewayStub(waitAnswer?: () => Promise<unknown>) {
   const calls: GatewayCallRecord[] = [];
   const wait = createDeferred<unknown>();
   const call: AgentHarnessQuestionGatewayCall = async (method, opts, params) => {
     calls.push({ method, opts, params });
     if (method === "question.request") {
-      return { id: (params as { id: string }).id, expiresAtMs: Date.now() + 90_000 };
+      return {
+        id: (params as { id: string }).id,
+        ...(waitAnswer ? {} : { expiresAtMs: Date.now() + 90_000 }),
+      };
     }
     if (method === "question.waitAnswer") {
-      return await wait.promise;
+      return await (waitAnswer ? waitAnswer() : wait.promise);
     }
     if (method === "question.resolve") {
       const resolveParams = params as {
@@ -121,41 +124,22 @@ describe("Codex app-server user input bridge", () => {
   });
 
   it("records one response when the Gateway wait rejects and settles queued work", async () => {
-    const controller = new AbortController();
     const firstWait = createDeferred<unknown>();
-    const gatewayCall: AgentHarnessQuestionGatewayCall = vi.fn(
-      async (method, _opts, raw, options) => {
-        if (method === "question.request") {
-          return { id: (raw as { id: string }).id };
-        }
-        if (method === "question.waitAnswer") {
-          options?.signal?.addEventListener(
-            "abort",
-            () => firstWait.reject(options?.signal?.reason),
-            { once: true },
-          );
-          return await firstWait.promise;
-        }
-        return { status: "cancelled" };
-      },
-    );
+    let firstPending = true;
+    const gateway = createGatewayStub(async () => {
+      if (!firstPending) {
+        return { status: "answered", answers: { answers: { choice: ["Deep"] } } };
+      }
+      firstPending = false;
+      return await firstWait.promise;
+    });
     const { params, onOrdinaryResponse, request } = setup({
-      signal: controller.signal,
-      gatewayCall,
+      gatewayCall: gateway.call,
     });
     const first = request("first", requestParams({ itemId: "first" }));
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
     const second = request("second", requestParams({ itemId: "second" }));
-    expect(
-      vi.mocked(gatewayCall).mock.calls.filter(([method]) => method === "question.request"),
-    ).toHaveLength(1);
-    vi.mocked(gatewayCall).mockImplementation(async (method, _opts, raw) =>
-      method === "question.request"
-        ? { id: (raw as { id: string }).id }
-        : method === "question.waitAnswer"
-          ? { status: "answered", answers: { answers: { choice: ["Deep"] } } }
-          : { status: "cancelled" },
-    );
+    expect(gateway.calls.filter(({ method }) => method === "question.request")).toHaveLength(1);
     firstWait.reject(new Error("Gateway wait failed"));
     const response = await first;
     expect(response).toEqual({ answers: {} });
@@ -261,40 +245,30 @@ describe("Codex app-server user input bridge", () => {
 
   it("auto-resolves nonblocking gateway questions after exactly 120 seconds", async () => {
     vi.useFakeTimers();
-    const calls: GatewayCallRecord[] = [];
-    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, opts, rawParams) => {
-      calls.push({ method, opts, params: rawParams });
-      if (method === "question.request") {
-        return { id: (rawParams as { id: string }).id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
+    const gateway = createGatewayStub(
+      () =>
+        new Promise((resolve) => {
           setTimeout(() => resolve({ status: "pending" }), 120_000);
-        });
-      }
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      throw new Error(`unexpected gateway method: ${method}`);
-    };
-    const { request } = setup({ gatewayCall });
+        }),
+    );
+    const { request } = setup({ gatewayCall: gateway.call });
 
     const response = request(
       "input-nonblocking",
       requestParams({ isBlocking: false, autoResolutionMs: 60_000 }),
     );
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls.find((entry) => entry.method === "question.request")?.params).toMatchObject({
+    expect(
+      gateway.calls.find((entry) => entry.method === "question.request")?.params,
+    ).toMatchObject({
       timeoutMs: 120_000,
     });
 
     await vi.advanceTimersByTimeAsync(119_999);
-    let settled = false;
-    void response.then(() => {
-      settled = true;
-    });
+    const settled = vi.fn();
+    void response.then(settled);
     await Promise.resolve();
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
     await expect(response).resolves.toEqual({ answers: {} });
