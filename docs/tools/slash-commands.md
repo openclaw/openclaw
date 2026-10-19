@@ -332,6 +332,9 @@ named `dashboard`, skill discovery exposes its generated slash alias as
 `/dashboard_2`. `$dashboard` and `/skill dashboard` continue to select that
 user skill directly.
 
+A multiline `/dashboard` request keeps its line breaks and indentation, so a
+list of requirements reaches the agent complete.
+
   <Accordion title="Skills, allowlists, approvals">
     | Command | Description |
     | --- | --- |

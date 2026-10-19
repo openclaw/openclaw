@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isEmbeddedRunHandleCompacting } from "../agents/embedded-agent-runner/runs.probes.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
-import { diagnosticLogger as diag } from "../logging/diagnostic-runtime.js";
+import { diagnosticLogger as diag, logSessionStateChange } from "../logging/diagnostic-runtime.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { assertTurnAdmission } from "./session-controller.admission-rule.js";
 import {
@@ -536,6 +536,13 @@ export function clearReplyRunState(params: {
     entry.attachment = undefined;
   }
   entry.sourceTurnId = undefined;
+  logSessionStateChange({
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    state: "idle",
+    reason: "reply_operation_ended",
+    consumeQueuedTurn: false,
+  });
   notifyGatewayWorkMetricsChanged();
   notifyReplyRunEnded(entry);
 }

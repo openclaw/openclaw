@@ -94,18 +94,13 @@ export async function runTtsConvert(params: {
       voiceId: params.voiceId,
       channelId: params.channel,
     });
-    const hasExplicitSelection = Boolean(
-      overrides.provider ||
-      normalizeOptionalString(params.modelId) ||
-      normalizeOptionalString(params.voiceId),
-    );
     const localResult = await textToSpeech({
       text: params.text,
       cfg: effectiveCfg,
       prefsPath,
       channel: params.channel,
       overrides,
-      disableFallback: hasExplicitSelection,
+      disableFallback: Boolean(overrides.provider),
     });
     if (!localResult.success || !localResult.audioPath) {
       throw new Error(localResult.error ?? "TTS conversion failed");
