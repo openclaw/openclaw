@@ -1,5 +1,5 @@
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeJsonSnapshot, freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
   WorkerPlacementRecoveryCandidate,
   WorkerSessionPlacementReadResult,
@@ -175,10 +175,13 @@ export function retainProjection(
   ) {
     return;
   }
-  owner.projections.set(
-    sessionId,
-    retained === projection ? projection : structuredClone(projection),
-  );
+  if (retained !== projection) {
+    // Internal readers borrow owner facts; public adapters copy only their selected values.
+    freezeTrustedJsonSnapshot(placement);
+    Object.freeze(projection.projection);
+    Object.freeze(projection);
+  }
+  owner.projections.set(sessionId, projection);
   // Cold sessions can always rehydrate; residency is independent of durable ownership.
   if (owner.projections.size > 256) {
     owner.projections.delete(owner.projections.keys().next().value!);
@@ -201,10 +204,10 @@ export function projectCachedLocalPlacementTurnClaim(
   if (!retained) {
     return undefined;
   }
-  return structuredClone({
+  return {
     ...retained.projection,
     placements: new Map(retained.projection.placements).set(placement.sessionId, placement),
-  });
+  };
 }
 
 /** The authority owner retains exact reads until one of its writers publishes a change. */
@@ -227,7 +230,7 @@ export async function readCachedPlacementProjection(
     if (observation.revokedBy.size === 0 && !hasPendingPublication(owner, sessionId)) {
       retainProjection(owner, sessionId, value);
     }
-    return structuredClone(value);
+    return value;
   } finally {
     authority.release();
   }
