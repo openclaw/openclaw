@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseWorkerWorkspaceManifest,
   parseWorkerWorkspaceReconciliationPlan,
+  serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 
@@ -38,6 +39,41 @@ function readJournal(value: unknown) {
 }
 
 describe("worker workspace manifest parsing", () => {
+  it("prunes cache-only ancestors while preserving original empty directories", () => {
+    const directories = [
+      ".artifacts",
+      ".artifacts/vitest-worker-cache",
+      ".local",
+      ".local/share",
+      ".local/share/pnpm",
+      ".local/share/pnpm/store",
+      "empty",
+      "nested",
+      "nested/empty",
+    ];
+    const entries = [
+      { ...file, path: ".artifacts/vitest-worker-cache/out.js" },
+      { ...file, path: ".local/share/pnpm/store/content" },
+      file,
+    ];
+    const original = {
+      ...manifest,
+      entries: [
+        ...directories.map((path) => ({ path, type: "directory", mode: 0o700 })),
+        ...entries,
+      ].toSorted((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+    };
+    const expected = { ...manifest, directories: ["empty", "nested", "nested/empty"] };
+    expect(readManifest(original)).toEqual(expected);
+    expect(
+      readManifest(
+        JSON.parse(
+          serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries, directories }),
+        ),
+      ),
+    ).toEqual(expected);
+  });
+
   it("requires non-array records for manifests, journals, and entries", () => {
     for (const value of [null, [], false, 1, "invalid"]) {
       expect(() => readManifest(value)).toThrow("manifest is invalid");

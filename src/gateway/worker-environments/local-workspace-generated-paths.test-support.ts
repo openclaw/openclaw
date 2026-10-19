@@ -69,6 +69,11 @@ export async function proveGeneratedWorkspaceExpiry(owner: LocalWorkspaceOwner) 
   );
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeDefined();
   await fs.writeFile(path.join(projection, "source.txt"), "original\n");
+  // Removing the cache children leaves a real empty directory; expiry preserves it too.
+  await expect(withLocalWorkspaceProjection(owner, (state) => state.expire())).rejects.toThrow(
+    "unaccepted edits",
+  );
+  await fs.rmdir(path.join(projection, ".artifacts"));
   await withLocalWorkspaceProjection(owner, (state) => state.expire());
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
   await expect(fs.stat(projection)).rejects.toMatchObject({ code: "ENOENT" });
@@ -94,8 +99,6 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
     await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
   }
   const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;
-  // Keep the shared artifacts parent; only its disposable cache subtree disappeared.
-  await fs.mkdir(path.join(owner.worktree.path, ".artifacts"), { recursive: true });
   // Old captures can retain a cache ancestor that has since disappeared on the host.
   await writeWorkspaceFiles(projection, { [retainedWorker]: "previous compiler output\n" });
   const base = { ...(await manifestFor(projection)), baseCommit: row.base_commit };
