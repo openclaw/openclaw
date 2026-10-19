@@ -6,7 +6,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import type { PosixProcess } from "./transport-process-snapshot.js";
@@ -24,7 +24,7 @@ const closeOptions = { forceKillDelayMs: 500, exitTimeoutMs: 2_000 };
 function spawnRoot(file: string, args: string[]) {
   return spawn(process.execPath, [file, ...args], {
     detached: true,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: "pipe",
   });
 }
 
@@ -89,41 +89,40 @@ async function cleanupFixture(tempDir: string): Promise<void> {
 }
 
 describe.skipIf(process.platform === "win32")("Codex app-server process containment", () => {
-  it.each(["startedAt", "pgid"] as const)(
-    "does not signal a registered PID with a changed %s",
-    async (field) => {
-      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-        detached: true,
-        stdio: "ignore",
-      });
-      await once(child, "spawn");
-      try {
-        const identity = (
-          await processSnapshot.readCodexAppServerProcessSnapshot(undefined, [child.pid!])
-        )?.find((row) => row.pid === child.pid);
-        if (!identity) {
-          throw new Error("Missing test process identity");
-        }
-        const stale =
-          field === "startedAt"
-            ? { ...identity, startedAt: "Mon Jan 1 00:00:00 2001" }
-            : { ...identity, pgid: identity.pgid + 1 };
-        // PID reuse retires a stale row; group drift remains ambiguous and blocks startup.
-        expect(await terminateCodexAppServerOrphan(stale)).toBe(field === "startedAt");
-        expect(child).toMatchObject({ exitCode: null, signalCode: null });
-        expect(process.kill(child.pid!, 0)).toBe(true);
-      } finally {
-        const exited = once(child, "exit");
-        child.kill("SIGKILL");
-        await exited;
-      }
-    },
-  );
+  let tempDir: string;
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-process-"));
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanupFixture(tempDir);
+  });
+
+  it.each(["startedAt", "pgid"] as const)("does not signal stale %s identities", async (field) => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", tempDir], {
+      detached: true,
+      stdio: "ignore",
+    });
+    await once(child, "spawn");
+    const identity = (
+      await processSnapshot.readCodexAppServerProcessSnapshot(undefined, [child.pid!])
+    )?.find((row) => row.pid === child.pid);
+    if (!identity) {
+      throw new Error("Missing test process identity");
+    }
+    const stale =
+      field === "startedAt"
+        ? { ...identity, startedAt: "Mon Jan 1 00:00:00 2001" }
+        : { ...identity, pgid: identity.pgid + 1 };
+    // PID reuse retires a stale row; group drift remains ambiguous and blocks startup.
+    expect(await terminateCodexAppServerOrphan(stale)).toBe(field === "startedAt");
+    expect(child).toMatchObject({ exitCode: null, signalCode: null });
+    expect(process.kill(child.pid!, 0)).toBe(true);
+  });
 
   it("reaps descendants in independent and root process groups before close returns", async ({
     signal,
   }) => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transport-process-"));
     const rootPath = path.join(tempDir, "root.mjs");
     await fs.writeFile(
       rootPath,
@@ -156,34 +155,26 @@ if (role === "root") {
 
     const ready = fixtureReadiness(root, 5);
     const closed = once(root, "close");
-    try {
-      const lines = await withinTest(
-        awaitGateBeforeSettlement(ready, closed, "timed out waiting for 5 process fixture events"),
-        signal,
-      );
-      const events = lines.map((line) => JSON.parse(line) as FixtureEvent);
-      const eventByRole = new Map(events.map((event) => [event.role, event]));
-      const rootEvent = eventByRole.get("root");
-      const separateLeader = eventByRole.get("separate-leader");
-      const separateDescendant = eventByRole.get("separate-descendant");
-      const sharedLeader = eventByRole.get("shared-leader");
-      const sharedDescendant = eventByRole.get("shared-descendant");
-      expect(rootEvent).toBeDefined();
-      expect(separateLeader?.pgid).toBe(separateLeader?.pid);
-      expect(separateDescendant?.pgid).toBe(separateLeader?.pgid);
-      expect(sharedLeader?.pgid).toBe(rootEvent?.pgid);
-      expect(sharedDescendant?.pgid).toBe(rootEvent?.pgid);
-      await expect(closeCodexAppServerTransportAndWait(root, closeOptions)).resolves.toEqual({
-        exited: true,
-        cleanup: "closed",
-      });
-      expect(root).toMatchObject({ exitCode: 0, signalCode: null });
+    const lines = await withinTest(
+      awaitGateBeforeSettlement(ready, closed, "timed out waiting for 5 process fixture events"),
+      signal,
+    );
+    const events = lines.map((line) => JSON.parse(line) as FixtureEvent);
+    const groups = Object.fromEntries(events.map(({ role, pgid }) => [role, pgid]));
+    expect(groups).toEqual({
+      root: expect.any(Number),
+      "separate-leader": events.find(({ role }) => role === "separate-leader")?.pid,
+      "separate-descendant": groups["separate-leader"],
+      "shared-leader": groups.root,
+      "shared-descendant": groups.root,
+    });
+    await expect(closeCodexAppServerTransportAndWait(root, closeOptions)).resolves.toEqual({
+      exited: true,
+      cleanup: "closed",
+    });
+    expect(root).toMatchObject({ exitCode: 0, signalCode: null });
 
-      const survivors = await listProcesses(tempDir);
-      expect(survivors).toEqual([]);
-    } finally {
-      await cleanupFixture(tempDir);
-    }
+    expect(await listProcesses(tempDir)).toEqual([]);
   });
 
   it.for([
@@ -199,7 +190,6 @@ if (role === "root") {
     ["extended", false],
   ] as const)("revalidates identities while quiescing: %s", async (scenario, ctx) => {
     const [mode, sentinelSurvived] = scenario;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-identity-reuse-"));
     const rootPath = path.join(tempDir, "root.mjs");
     const sentinelPath = path.join(tempDir, "sentinel.mjs");
     await fs.writeFile(
@@ -224,125 +214,120 @@ process.stdin.on("end", () => process.exit(0));
     const root = spawnRoot(rootPath, [sentinelPath]);
     const ready = fixtureReadiness(root, 1);
     const rootClosed = once(root, "close");
-    try {
-      const [sentinelPidLine] = await withinTest(
-        awaitGateBeforeSettlement(ready, rootClosed, "Missing root or sentinel process identity"),
-        ctx.signal,
-      );
-      const sentinelPid = Number(sentinelPidLine);
-      const initial = await processSnapshot.readCodexAppServerProcessSnapshot(undefined, [
-        root.pid!,
-        sentinelPid,
-      ]);
-      const rootIdentity = initial?.find((row) => row.pid === root.pid);
-      const sentinelIdentity = initial?.find((row) => row.pid === sentinelPid);
-      if (!rootIdentity || !sentinelIdentity) {
-        throw new Error("Missing root or sentinel process identity");
+    const [sentinelPidLine] = await withinTest(
+      awaitGateBeforeSettlement(ready, rootClosed, "Missing root or sentinel process identity"),
+      ctx.signal,
+    );
+    const sentinelPid = Number(sentinelPidLine);
+    const initial = await processSnapshot.readCodexAppServerProcessSnapshot(undefined, [
+      root.pid!,
+      sentinelPid,
+    ]);
+    const rootIdentity = initial?.find((row) => row.pid === root.pid);
+    const sentinelIdentity = initial?.find((row) => row.pid === sentinelPid);
+    if (!rootIdentity || !sentinelIdentity) {
+      throw new Error("Missing root or sentinel process identity");
+    }
+    const stoppedRoot = { ...rootIdentity, state: "T" };
+    const oldSentinel = {
+      ...sentinelIdentity,
+      ppid: rootIdentity.pid,
+      state: "S",
+      startedAt: "Mon Jan 1 00:00:00 2001",
+    };
+    const stoppedSentinel = { ...sentinelIdentity, state: "T" };
+    const runningTree = [rootIdentity, sentinelIdentity];
+    const rootStoppedTree = [stoppedRoot, sentinelIdentity];
+    const stoppedTree = [stoppedRoot, stoppedSentinel];
+    const quiescing = [...repeat(runningTree), ...repeat(rootStoppedTree)];
+    const blockedTree = [stoppedRoot, { ...sentinelIdentity, state: "U" }];
+    const scenarios: Record<typeof mode, Array<PosixProcess[] | undefined | "deadline">> = {
+      reuse: [
+        ...repeat([rootIdentity, oldSentinel]),
+        ...repeat([stoppedRoot, oldSentinel]),
+        [stoppedRoot, { ...oldSentinel, state: "T" }],
+        stoppedTree,
+      ],
+      late: [...repeat([rootIdentity]), ...repeat(rootStoppedTree), stoppedTree],
+      reparented: [
+        ...quiescing,
+        [stoppedRoot, { ...stoppedSentinel, ppid: 1, pgid: stoppedSentinel.pgid + 1 }],
+      ],
+      "root-resumed": [...repeat(runningTree, 4), ...repeat(rootStoppedTree), stoppedTree],
+      traced: [...quiescing, [stoppedRoot, { ...stoppedSentinel, state: "t" }]],
+      uninterruptible: [...repeat(runningTree), ...repeat(blockedTree)],
+      "unconfirmed-termination": [...repeat(runningTree), ...repeat(blockedTree)],
+      "snapshot-failure": [...quiescing, undefined],
+      "inspection-timeout": [...repeat(runningTree), "deadline"],
+      extended: [...repeat(runningTree), ...repeat(rootStoppedTree, 16), stoppedTree],
+    };
+    const snapshots = scenarios[mode];
+    let inspection = 0;
+    let descendantSignalled = false;
+    const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
+    const actualProcess = processSnapshot.readCodexAppServerProcess;
+    let rootStopObserved = false;
+    const actualKill = process.kill.bind(process);
+    vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      const signalled = actualKill(pid, signal);
+      descendantSignalled ||= pid === sentinelPid && signal === "SIGKILL";
+      return signalled;
+    });
+    const readSnapshot = async (
+      inspectionDeadline: number,
+      pids?: readonly number[],
+    ): Promise<PosixProcess[]> => {
+      // Identity faults exercise signalling; cleanup needs a separate OS
+      // observation. A queued kill alone must not certify an uninterruptible child.
+      if (descendantSignalled && mode !== "unconfirmed-termination") {
+        return await actualSnapshot(inspectionDeadline, pids);
       }
-      const stoppedRoot = { ...rootIdentity, state: "T" };
-      const oldSentinel = {
-        ...sentinelIdentity,
-        ppid: rootIdentity.pid,
-        state: "S",
-        startedAt: "Mon Jan 1 00:00:00 2001",
-      };
-      const stoppedSentinel = { ...sentinelIdentity, state: "T" };
-      const runningTree = [rootIdentity, sentinelIdentity];
-      const rootStoppedTree = [stoppedRoot, sentinelIdentity];
-      const stoppedTree = [stoppedRoot, stoppedSentinel];
-      const quiescing = [...repeat(runningTree), ...repeat(rootStoppedTree)];
-      const blockedTree = [stoppedRoot, { ...sentinelIdentity, state: "U" }];
-      const scenarios: Record<typeof mode, Array<PosixProcess[] | undefined | "deadline">> = {
-        reuse: [
-          ...repeat([rootIdentity, oldSentinel]),
-          ...repeat([stoppedRoot, oldSentinel]),
-          [stoppedRoot, { ...oldSentinel, state: "T" }],
-          stoppedTree,
-        ],
-        late: [...repeat([rootIdentity]), ...repeat(rootStoppedTree), stoppedTree],
-        reparented: [
-          ...quiescing,
-          [stoppedRoot, { ...stoppedSentinel, ppid: 1, pgid: stoppedSentinel.pgid + 1 }],
-        ],
-        "root-resumed": [...repeat(runningTree, 4), ...repeat(rootStoppedTree), stoppedTree],
-        traced: [...quiescing, [stoppedRoot, { ...stoppedSentinel, state: "t" }]],
-        uninterruptible: [...repeat(runningTree), ...repeat(blockedTree)],
-        "unconfirmed-termination": [...repeat(runningTree), ...repeat(blockedTree)],
-        "snapshot-failure": [...quiescing, undefined],
-        "inspection-timeout": [...repeat(runningTree), "deadline"],
-        extended: [...repeat(runningTree), ...repeat(rootStoppedTree, 16), stoppedTree],
-      };
-      const snapshots = scenarios[mode];
-      let inspection = 0;
-      let descendantSignalled = false;
-      const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
-      const actualProcess = processSnapshot.readCodexAppServerProcess;
-      let rootStopObserved = false;
-      const actualKill = process.kill.bind(process);
-      vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-        const signalled = actualKill(pid, signal);
-        descendantSignalled ||= pid === sentinelPid && signal === "SIGKILL";
-        return signalled;
-      });
-      const readSnapshot = async (
-        inspectionDeadline: number,
-        pids?: readonly number[],
-      ): Promise<PosixProcess[]> => {
-        // Identity faults exercise signalling; cleanup needs a separate OS
-        // observation. A queued kill alone must not certify an uninterruptible child.
-        if (descendantSignalled && mode !== "unconfirmed-termination") {
-          return await actualSnapshot(inspectionDeadline, pids);
-        }
-        const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
-        if (rows === "deadline") {
-          await delay(Math.max(1, inspectionDeadline - performance.now()));
-          throw new processSnapshot.ProcessInspectionError("deadline");
-        }
-        if (!rows) {
-          throw new processSnapshot.ProcessInspectionError("unavailable");
-        }
-        if (
-          !rootStopObserved &&
-          rows.some((row) => row.pid === rootIdentity.pid && row.state === "T")
+      const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
+      if (rows === "deadline") {
+        await delay(Math.max(1, inspectionDeadline - performance.now()));
+        throw new processSnapshot.ProcessInspectionError("deadline");
+      }
+      if (!rows) {
+        throw new processSnapshot.ProcessInspectionError("unavailable");
+      }
+      if (
+        !rootStopObserved &&
+        rows.some((row) => row.pid === rootIdentity.pid && row.state === "T")
+      ) {
+        // Do not let synthetic stopped rows outrun delivery of the real SIGSTOP.
+        while (
+          !(await actualProcess(rootIdentity.pid, inspectionDeadline))?.state.startsWith("T")
         ) {
-          // Do not let synthetic stopped rows outrun delivery of the real SIGSTOP.
-          while (
-            !(await actualProcess(rootIdentity.pid, inspectionDeadline))?.state.startsWith("T")
-          ) {
-            await delay(1);
-          }
-          rootStopObserved = true;
+          await delay(1);
         }
-        return rows;
-      };
-      vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
-        (inspectionDeadline, pids) =>
-          readSnapshot(inspectionDeadline ?? performance.now() + 2_000, pids),
-      );
-      vi.spyOn(processSnapshot, "readCodexAppServerProcess").mockImplementation(
-        async (pid, inspectionDeadline) =>
-          (await readSnapshot(inspectionDeadline, [pid]))?.find((row) => row.pid === pid),
-      );
-      const closed = await closeCodexAppServerTransportAndWait(root, closeOptions);
-      vi.restoreAllMocks();
-      expect(closed).toEqual({
-        exited: true,
-        cleanup: sentinelSurvived || mode === "unconfirmed-termination" ? "uncertain" : "closed",
-      });
-      expect(root.exitCode).toBe(0);
-      const survived = (await listProcesses(tempDir)).includes(sentinelPid);
-      expect(survived).toBe(sentinelSurvived);
-      if (mode === "snapshot-failure" || mode === "inspection-timeout") {
-        const sentinel = await processSnapshot.readCodexAppServerProcess(
-          sentinelIdentity.pid,
-          performance.now() + 2_000,
-        );
-        expect(sentinel).toBeDefined();
-        expect(sentinel?.state).not.toMatch(/^[Tt]/);
+        rootStopObserved = true;
       }
-    } finally {
-      vi.restoreAllMocks();
-      await cleanupFixture(tempDir);
+      return rows;
+    };
+    vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
+      (inspectionDeadline, pids) =>
+        readSnapshot(inspectionDeadline ?? performance.now() + 2_000, pids),
+    );
+    vi.spyOn(processSnapshot, "readCodexAppServerProcess").mockImplementation(
+      async (pid, inspectionDeadline) =>
+        (await readSnapshot(inspectionDeadline, [pid]))?.find((row) => row.pid === pid),
+    );
+    const closed = await closeCodexAppServerTransportAndWait(root, closeOptions);
+    vi.restoreAllMocks();
+    expect(closed).toEqual({
+      exited: true,
+      cleanup: sentinelSurvived || mode === "unconfirmed-termination" ? "uncertain" : "closed",
+    });
+    expect(root.exitCode).toBe(0);
+    const survived = (await listProcesses(tempDir)).includes(sentinelPid);
+    expect(survived).toBe(sentinelSurvived);
+    if (mode === "snapshot-failure" || mode === "inspection-timeout") {
+      const sentinel = await processSnapshot.readCodexAppServerProcess(
+        sentinelIdentity.pid,
+        performance.now() + 2_000,
+      );
+      expect(sentinel).toBeDefined();
+      expect(sentinel?.state).not.toMatch(/^[Tt]/);
     }
   });
 });

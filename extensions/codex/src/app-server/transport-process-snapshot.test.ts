@@ -27,23 +27,26 @@ function stat(pid = process.pid, threads = "1", state = "S") {
   return `${pid} (worker) ${state} ${process.ppid} ${pid}${" 0".repeat(14)} ${threads} 0 12345\n`;
 }
 
+function mockProcfs(read: (file: string) => string) {
+  procfs.readFile.mockImplementation((file) =>
+    file === "/proc/sys/kernel/random/boot_id" ? bootId : read(file),
+  );
+}
+
 function runInspectorFixture(
   name: string,
   timeout: number,
   args: string[] = [],
   env = process.env,
 ) {
+  const fixture = new URL(
+    `./test-support/transport-process-${name}.test-support.mjs`,
+    import.meta.url,
+  );
   return new Promise<string>((resolve, reject) => {
     execFile(
       process.execPath,
-      [
-        "--import",
-        path.resolve("scripts/tsx.mjs"),
-        fileURLToPath(
-          new URL(`./test-support/transport-process-${name}.test-support.mjs`, import.meta.url),
-        ),
-        ...args,
-      ],
+      ["--import", path.resolve("scripts/tsx.mjs"), fileURLToPath(fixture), ...args],
       { timeout, env },
       (error, output) => (error ? reject(error) : resolve(output)),
     );
@@ -60,8 +63,7 @@ afterEach(() => {
 it.skipIf(process.platform === "win32")(
   "keeps timers responsive and reaps a blocked command inspector",
   async () => {
-    const stdout = await runInspectorFixture("blocked-command", 10_000);
-    const result = JSON.parse(stdout);
+    const result = JSON.parse(await runInspectorFixture("blocked-command", 10_000));
     expect(result).toMatchObject({
       outcome: { status: "rejected", reason: "deadline" },
       inspectorUsed: true,
@@ -139,7 +141,7 @@ it.for(["snapshot", "command"] as const)("normalizes inspector launch denial: %s
   });
 });
 
-describe("Codex procfs command inspector", () => {
+describe("Codex procfs inspector", () => {
   beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("linux"));
   it.for([
     "ready",
@@ -158,10 +160,7 @@ describe("Codex procfs command inspector", () => {
     vi.spyOn(performance, "now").mockImplementation(() => monotonicNowMs);
     const deadline = performance.now() + 250;
     let commandReads = 0;
-    procfs.readFile.mockImplementation((file) => {
-      if (file === "/proc/sys/kernel/random/boot_id") {
-        return bootId;
-      }
+    mockProcfs((file) => {
       if (file === `/proc/${process.pid}/cmdline`) {
         commandReads += 1;
         if (commandReads > 1 && mode === "empty") {
@@ -218,25 +217,19 @@ describe("Codex procfs command inspector", () => {
     }
     if (fixture.reason === "deadline") {
       await expect(inspected).rejects.toThrow("deadline");
+      procfs.readFile.mockClear();
+      await expect(
+        readCodexAppServerProcessCommand(observedProcess, performance.now() - 1),
+      ).rejects.toMatchObject({ reason: "deadline" });
+      expect(procfs.readFile).not.toHaveBeenCalled();
     }
-    procfs.readFile.mockClear();
-    await expect(
-      readCodexAppServerProcessCommand(observedProcess, performance.now() - 1),
-    ).rejects.toMatchObject({ reason: "deadline" });
-    expect(procfs.readFile).not.toHaveBeenCalled();
   });
-});
 
-describe("Codex procfs process inspector", () => {
-  beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("linux"));
   it.for(["command at limit", "command overflow", "snapshot overflow"])(
     "enforces the selected-read byte budget: %s",
     async (mode) => {
       const maxBytes = 8 * 1024 * 1024;
-      procfs.readFile.mockImplementation((file) => {
-        if (file === "/proc/sys/kernel/random/boot_id") {
-          return bootId;
-        }
+      mockProcfs((file) => {
         if (file.endsWith("/cmdline")) {
           return "x".repeat(maxBytes + Number(mode === "command overflow"));
         }
@@ -256,10 +249,7 @@ describe("Codex procfs process inspector", () => {
   );
 
   it.for(["2", "9007199254740992"])("validates zombie thread counts: %s", async (threads) => {
-    procfs.readFile.mockImplementation((file) => {
-      if (file === "/proc/sys/kernel/random/boot_id") {
-        return bootId;
-      }
+    mockProcfs((file) => {
       expect(file).toBe(`/proc/${process.pid}/stat`);
       return stat(process.pid, threads, "Z");
     });
@@ -276,10 +266,7 @@ describe("Codex procfs process inspector", () => {
     async (code) => {
       const neighborPid = process.pid + 1;
       procfs.readdir.mockReturnValue([String(process.pid), String(neighborPid)]);
-      procfs.readFile.mockImplementation((file) => {
-        if (file === "/proc/sys/kernel/random/boot_id") {
-          return bootId;
-        }
+      mockProcfs((file) => {
         if (file === `/proc/${process.pid}/stat`) {
           // Fields 3..22 follow the final ')', even when comm contains ')' and spaces.
           return `${process.pid} (codex ) worker) S ${process.ppid} ${process.pid}${" 0".repeat(14)} 1 0 12345${" 0".repeat(30)}\n`;

@@ -1,6 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
@@ -31,16 +30,14 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 vi.mock("./transport-process-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./transport-process-snapshot.js")>()),
-  readCodexAppServerProcessSnapshot: async () => [
-    {
-      pid: process.pid,
-      ppid: process.ppid,
-      pgid: process.pid,
+  readCodexAppServerProcessSnapshot: async () =>
+    [process.pid, 500002].map((pid, index) => ({
+      pid,
+      pgid: pid,
+      ppid: index ? process.pid : process.ppid,
       state: "S",
-      startedAt: "parent-start",
-    },
-    { pid: 500002, ppid: process.pid, pgid: 500002, state: "S", startedAt: "child-start" },
-  ],
+      startedAt: index ? "child-start" : "parent-start",
+    })),
   readCodexAppServerProcessCommand: async () => "/fixture/codex app-server",
 }));
 vi.mock("./transport-process-containment.js", () => ({
@@ -61,7 +58,7 @@ function queueSpawn(spawned: RegistrationTestChildProcess) {
   });
 }
 function holdRegistration(fail = false) {
-  const admission = createDeferred<void>();
+  const admission = Promise.withResolvers<void>();
   state.register.mockImplementation(async (key, value) => {
     await admission.promise;
     if (fail) {
@@ -87,12 +84,8 @@ async function startRegistration(spawned: RegistrationTestChildProcess) {
 beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   state.rows.clear();
-  state.register.mockImplementation(async (key, value) => {
-    state.rows.set(key, value);
-  });
-  state.delete.mockImplementation(async (key) => {
-    state.rows.delete(key);
-  });
+  state.register.mockImplementation(async (key, value) => void state.rows.set(key, value));
+  state.delete.mockImplementation(async (key) => void state.rows.delete(key));
   state.entries.mockResolvedValue([]);
 });
 afterEach(() => {
@@ -101,7 +94,7 @@ afterEach(() => {
 });
 
 it("starts process inspection after a slow durable registration read", async (ctx) => {
-  const reading = createDeferred<{ key: string; value: unknown }[]>();
+  const reading = Promise.withResolvers<{ key: string; value: unknown }[]>();
   const existing = {
     parent: { pid: process.pid, pgid: process.pid, startedAt: "parent-start" },
     child: { pid: 500001, pgid: 500001, startedAt: "existing-child-start" },
@@ -150,7 +143,7 @@ it("keeps startup pending until the durable registration commits", async (ctx) =
 });
 
 it.for(["insertion", "failed deletion"])("joins pending %s before closing", async (mode, ctx) => {
-  const gate = mode === "insertion" ? holdRegistration() : createDeferred<void>();
+  const gate = mode === "insertion" ? holdRegistration() : Promise.withResolvers<void>();
   if (mode === "failed deletion") {
     state.delete.mockImplementation(async () => {
       await gate.promise;
@@ -216,7 +209,7 @@ it.for(["revoked", "commit failure"])(
 );
 
 it("joins the best-effort boot sweep when the service stops", async () => {
-  const reading = createDeferred<{ key: string; value: unknown }[]>();
+  const reading = Promise.withResolvers<{ key: string; value: unknown }[]>();
   state.entries.mockReturnValue(reading.promise);
   const service = createCodexAppServerProcessReaperService();
   const ctx = registrationServiceContext("/fixture");

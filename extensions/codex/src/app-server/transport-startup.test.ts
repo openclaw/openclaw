@@ -36,21 +36,15 @@ async function waitForNativeExit(
   readSnapshot: typeof processSnapshot.readCodexAppServerProcessSnapshot,
   signal: AbortSignal,
 ): Promise<void> {
-  try {
-    for (;;) {
-      signal.throwIfAborted();
-      const snapshot = await withinTest(readSnapshot(performance.now() + 2_000), signal);
-      expect(snapshot.some((row) => row.pid === process.pid)).toBe(true);
-      const native = snapshot.find((row) => row.pid === pid);
-      if (!native || native.state.startsWith("Z")) {
-        return;
-      }
-      await waitForProcessTick(10, undefined, { signal });
+  for (;;) {
+    signal.throwIfAborted();
+    const snapshot = await withinTest(readSnapshot(performance.now() + 2_000), signal);
+    expect(snapshot.some((row) => row.pid === process.pid)).toBe(true);
+    const native = snapshot.find((row) => row.pid === pid);
+    if (!native || native.state.startsWith("Z")) {
+      return;
     }
-  } catch (error) {
-    throw new Error(`Native descendant ${pid} did not exit after startup refusal`, {
-      cause: error,
-    });
+    await waitForProcessTick(10, undefined, { signal });
   }
 }
 
