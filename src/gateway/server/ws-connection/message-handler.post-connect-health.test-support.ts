@@ -131,7 +131,7 @@ export function connectTrustedProxyUser(
       "x-forwarded-for": "203.0.113.10",
       "x-forwarded-user": "alice@example.com",
       "x-forwarded-proto": "https",
-      "x-openclaw-scopes": scopeCap,
+      ...(scopeCap === undefined ? {} : { "x-openclaw-scopes": scopeCap }),
     },
     ingressAttribution: {
       kind: "trusted-proxy",
