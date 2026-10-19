@@ -41,7 +41,7 @@ function mountMenu() {
   const trigger = view.container.querySelector<HTMLButtonElement>(
     ".agent-chat__input-btn--attach",
   )!;
-  const panel = view.container.querySelector<HTMLElement>(".agent-chat__capability-menu-panel")!;
+  const panel = view.container.querySelector(".agent-chat__capability-menu-panel")!;
   return { ...view, setMenu, trigger, panel, onChange };
 }
 
