@@ -410,6 +410,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
+  startupRepair?: boolean;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
   const database = { ...sharedDatabase };

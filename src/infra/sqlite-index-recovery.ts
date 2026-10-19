@@ -6,6 +6,7 @@ import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
 import { createPrivateSqliteTempDirectorySync } from "./sqlite-private-directory.js";
+import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 
 function syncAndHash(pathname: string) {
@@ -61,13 +62,19 @@ export function backupDoctorSqliteRepair(
 export function repairDoctorSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: { label: string; assertCurrent: () => void; ftsSchemas?: readonly string[] },
+  options: {
+    label: string;
+    assertCurrent: () => void;
+    ftsSchemas?: readonly string[];
+    ftsOnly?: boolean;
+  },
 ): string[] {
   let backupPath: string | undefined;
   let indexes: string[];
   try {
     indexes = repairSqliteIndexCorruption(database, pathname, {
       ftsSchemas: options.ftsSchemas,
+      ftsOnly: options.ftsOnly,
       assertCurrent: options.assertCurrent,
       backup: () => {
         options.assertCurrent();
@@ -85,7 +92,9 @@ export function repairDoctorSqliteIndexCorruption(
   return indexes.length > 0
     ? [
         `Saved pre-repair SQLite backup: ${backupPath}`,
-        `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
+        options.ftsOnly
+          ? `Rebuilt stale SQLite FTS indexes (${options.label}): ${indexes.map((name) => `${name}=${String(database.prepare(`SELECT count(*) AS n FROM main.${quoteSqliteIdentifier(name)}`).get()?.n)}`).join(", ")}; SQLite ${String(database.prepare("SELECT sqlite_version() AS version").get()?.version)}. No table rows were removed.`
+          : `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
       ]
     : [];
 }

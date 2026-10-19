@@ -10,6 +10,25 @@ import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-contract.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 
+export function readAgentDatabaseRequestPreparation(): {
+  startupJournal: boolean;
+  deletion?: AgentDeletionWorkerGuard;
+} {
+  const attachment = takeSqliteWorkerOperationAdmissionAttachment();
+  if (
+    !isRecord(attachment) ||
+    attachment.kind !== "agent-execution" ||
+    typeof attachment.startupJournal !== "boolean"
+  ) {
+    throw new Error("Agent execution requires its request-local preparation facts");
+  }
+  return {
+    startupJournal: attachment.startupJournal,
+    // SAFETY: The host sends this typed guard; its live owner compares it before SQL.
+    deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
+  };
+}
+
 /** Physical preparation outlives individual waits; registry notifications retain caller context. */
 export function createSharedAgentDatabasePreparation(assertCurrent: () => void) {
   const pending = new Set<Promise<void>>();
@@ -109,24 +128,5 @@ export function createSharedAgentDatabasePreparation(assertCurrent: () => void) 
         },
       };
     },
-  };
-}
-
-export function readAgentDatabaseRequestPreparation(): {
-  startupJournal: boolean;
-  deletion?: AgentDeletionWorkerGuard;
-} {
-  const attachment = takeSqliteWorkerOperationAdmissionAttachment();
-  if (
-    !isRecord(attachment) ||
-    attachment.kind !== "agent-execution" ||
-    typeof attachment.startupJournal !== "boolean"
-  ) {
-    throw new Error("Agent execution requires its request-local preparation facts");
-  }
-  return {
-    startupJournal: attachment.startupJournal,
-    // SAFETY: The host sends this typed guard; its live owner compares it before SQL.
-    deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
   };
 }

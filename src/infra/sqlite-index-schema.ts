@@ -55,36 +55,15 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
     diagnostics?: SqliteIntegrityDiagnostics;
     reuseIntegrity?: boolean;
-    repairIntegrityError?: () => boolean;
   } = {},
 ): SqliteIntegrityOperation<string[]> {
-  const { diagnostics, reuseIntegrity, repairIntegrityError, ...repairOptions } = options;
+  const { diagnostics, reuseIntegrity, ...repairOptions } = options;
   if (reuseIntegrity) {
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "cached";
     }
   } else {
-    try {
-      yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
-    } catch (error) {
-      if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
-        throw error;
-      }
-      try {
-        if (!repairIntegrityError?.()) {
-          throw error;
-        }
-      } catch (repairError) {
-        // Preserve the corruption verdict so failed repair still follows quarantine policy.
-        if (repairError !== error) {
-          error.message += ` Startup FTS repair failed: ${String(repairError)}`;
-        }
-        throw error;
-      }
-      if (diagnostics) {
-        diagnostics.integrityGateOutcome = "healthy";
-      }
-    }
+    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
   }
 
   const indexesStartedAt = performance.now();
@@ -218,7 +197,7 @@ export function repairCanonicalSqliteIndexes(
   return [...repairIndexes].map((index) => index.name).toSorted();
 }
 
-/** Preserve the damaged image before rebuilding derived indexes under the caller's custody. */
+/** Explicit maintenance only: preserve the damaged image before rebuilding derived indexes. */
 export function repairSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,

@@ -25,7 +25,6 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { withAgentCreationClaimWitness } from "./agent-creation-claim.js";
-import { withAgentDatabaseStartupFtsRepair } from "./agent-database-startup-fts.js";
 import { withAgentDeletionWorkerCleanup } from "./agent-deletion-cleanup.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import type {
@@ -267,6 +266,7 @@ function openAgentDatabaseBackend(
         };
         lease.validation = preparation.validation;
         lease.integrityRevoked = preparation.integrityRevoked;
+        lease.startupRepair = startupJournalRequested;
       } catch (error) {
         throw new SqliteWorkerOpenRefusedError(error);
       } finally {
@@ -279,22 +279,16 @@ function openAgentDatabaseBackend(
       try {
         // Admission callbacks inside the opener may run after its native handle exists.
         nativeOpenStarted = true;
-        const opened = withAgentDatabaseStartupFtsRepair(
-          startupJournalRequested,
-          input,
-          admitOpen,
-          () =>
-            openOpenClawAgentDatabase(options, lease, {
-              starting: () =>
-                requestSqliteWorkerOperationAdmission({
-                  stage: "prepare",
-                  facts: { kind: "agent-registration-start", lease: lease.receipt },
-                }),
-              committed(receipt) {
-                registration = receipt;
-              },
+        const opened = openOpenClawAgentDatabase(options, lease, {
+          starting: () =>
+            requestSqliteWorkerOperationAdmission({
+              stage: "prepare",
+              facts: { kind: "agent-registration-start", lease: lease.receipt },
             }),
-        );
+          committed(receipt) {
+            registration = receipt;
+          },
+        });
         database = opened;
         releaseBorrow = retainAgentDatabase(opened.db);
         openingResult = { ok: true, value: opened };

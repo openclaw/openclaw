@@ -1,9 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  ensureMemoryChunkProvenance,
-  ensureMemoryRecallMetadataSchema,
-  hasLegacyMemoryRecallMetadataColumns,
-} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { hasLegacyMemoryRecallMetadataColumns } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
@@ -347,9 +343,4 @@ export function hasPendingCurrentVersionAgentDatabaseMigration(database: Databas
       (getAdmittedSqliteSchemaFacts(database) ?? captureSqliteSchemaFacts(database)).tableSql,
     )
   );
-}
-
-export function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
-  ensureMemoryRecallMetadataSchema(db);
-  ensureMemoryChunkProvenance(db);
 }

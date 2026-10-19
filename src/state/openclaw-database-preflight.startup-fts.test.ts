@@ -141,7 +141,7 @@ it("admits a tokenizer-mismatched agent at Gateway startup with preserved conten
   await fixture.start();
   expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
   expect(readStartupMigrationWarning()).toContain(
-    "Rebuilt stale agent SQLite FTS indexes for main: session_transcript_fts=1",
+    "Rebuilt stale SQLite FTS indexes (agent main): session_transcript_fts=1",
   );
   expect(loadSessionEntry(session)).toEqual(entry);
   {
@@ -167,7 +167,7 @@ it("admits a tokenizer-mismatched agent at Gateway startup with preserved conten
   await flushLogger();
   const log = fs.readFileSync(logPath, "utf8");
   expect(
-    log.split("\n").filter((line) => line.includes("Rebuilt stale agent SQLite FTS indexes")),
+    log.split("\n").filter((line) => line.includes("Rebuilt stale SQLite FTS indexes")),
   ).toHaveLength(1);
   await closeStateDatabaseForTest();
   closeOpenClawAgentDatabasesForTest();
