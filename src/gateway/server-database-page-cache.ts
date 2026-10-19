@@ -87,6 +87,8 @@ export async function warmGatewayDatabasePageCache(params: {
               ["residentRatioAfter", value.residencyAfter?.residentRatio ?? -1],
               ["readBytes", value.readBytes],
               ["diskBytes", value.diskBytes],
+              ["estimatedReadBytes", value.estimatedReadBytes],
+              ["ioCountersUnavailable", String(value.ioCountersUnavailable)],
               ["payloadBytes", value.payloadBytes],
               ["payloadMessages", value.payloadMessages],
               ["elapsedMs", value.elapsedMs],
@@ -95,6 +97,12 @@ export async function warmGatewayDatabasePageCache(params: {
               ["limited", String(value.limited)],
             ]);
           };
+          // Without procfs counters the worker reports conservative byte estimates
+          // that must drive the same pacing and pass-budget safeguards.
+          const accountedBytes = (value: PageCacheProgress) =>
+            value.ioCountersUnavailable
+              ? value.estimatedReadBytes
+              : Math.max(value.readBytes, value.diskBytes);
           report("probe", progress);
           let reportedAt = started;
           let previousBytes = 0;
@@ -104,16 +112,14 @@ export async function warmGatewayDatabasePageCache(params: {
             await delay(
               Math.max(
                 1,
-                ((Math.max(progress.readBytes, progress.diskBytes) - previousBytes) /
-                  BYTES_PER_SECOND) *
-                  1000 -
+                ((accountedBytes(progress) - previousBytes) / BYTES_PER_SECOND) * 1000 -
                   (performance.now() - chunkStarted),
               ),
               undefined,
               { signal },
             );
             target.assertCurrent();
-            previousBytes = Math.max(progress.readBytes, progress.diskBytes);
+            previousBytes = accountedBytes(progress);
             chunkStarted = performance.now();
             progress = await runSqliteReadOnlyOperation(
               target.path,
@@ -126,10 +132,10 @@ export async function warmGatewayDatabasePageCache(params: {
             }
           }
           target.assertCurrent();
-          remaining -= Math.max(progress.readBytes, progress.diskBytes);
+          remaining -= accountedBytes(progress);
           report("complete", progress);
           params.log.info(
-            `database page-cache residency: database=${target.kind} scope=file-sample resident=${((progress.residency?.residentRatio ?? 0) * 100).toFixed(1)}% readBytes=${progress.readBytes} diskBytes=${progress.diskBytes} payloadBytes=${progress.payloadBytes} payloadMessages=${progress.payloadMessages} elapsedMs=${progress.elapsedMs.toFixed(1)} projectionQueryMs=${progress.queryBeforeMs?.toFixed(2) ?? "n/a"}->${progress.queryAfterMs?.toFixed(2) ?? "n/a"} limited=${progress.limited}`,
+            `database page-cache residency: database=${target.kind} scope=file-sample resident=${((progress.residency?.residentRatio ?? 0) * 100).toFixed(1)}% readBytes=${progress.readBytes} diskBytes=${progress.diskBytes} estimatedReadBytes=${progress.estimatedReadBytes} ioCountersUnavailable=${progress.ioCountersUnavailable} payloadBytes=${progress.payloadBytes} payloadMessages=${progress.payloadMessages} elapsedMs=${progress.elapsedMs.toFixed(1)} projectionQueryMs=${progress.queryBeforeMs?.toFixed(2) ?? "n/a"}->${progress.queryAfterMs?.toFixed(2) ?? "n/a"} limited=${progress.limited}`,
           );
         },
         { signal, deadlineOwnedByCaller: true },

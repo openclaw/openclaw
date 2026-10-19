@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -12,20 +13,36 @@ import { readSqlitePageCacheResidency } from "./sqlite-page-cache-residency.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
 
 const CHUNK_BYTES = 1024 * 1024;
+// Conservative per-step read estimates used only when procfs IO accounting is absent
+// (stock WSL kernels are built without CONFIG_TASKSTATS, so /proc/self/io is ENOENT).
+// They deliberately over-estimate so byte-budget and pacing safeguards stay effective.
+const ESTIMATED_METADATA_STEP_BYTES = 512 * 1024;
+const ESTIMATED_LOOKUP_STEP_BYTES = 64 * 1024;
 const RECENT_MS = 7 * 24 * 60 * 60 * 1000;
 const PAYLOAD_RECENT_MS = 48 * 60 * 60 * 1000;
 const MAX_PROJECTION_BYTES = 256 * 1024;
+// The projection query scans the newest rows; budget it at 8x a single bounded entry.
+const ESTIMATED_PROJECTION_BYTES = 8 * MAX_PROJECTION_BYTES;
 const PAYLOAD_BATCH_MESSAGES = 8;
 const MAX_PAYLOAD_MESSAGES = 32;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 type PayloadWarmStats = { payloadBytes: number; payloadMessages: number };
 
+type StepStats = PayloadWarmStats & {
+  /** Upper-bound bytes processed by this step; consumed only without procfs counters. */
+  estimatedReadBytes?: number;
+};
+
 export type PageCacheProgress = PayloadWarmStats & {
   residency: ReturnType<typeof readSqlitePageCacheResidency>;
   residencyAfter?: ReturnType<typeof readSqlitePageCacheResidency>;
   readBytes: number;
   diskBytes: number;
+  /** Conservative bytes-processed estimate; non-zero only when ioCountersUnavailable. */
+  estimatedReadBytes: number;
+  /** True when /proc/self/io cannot provide counters (e.g. ENOENT on WSL kernels). */
+  ioCountersUnavailable: boolean;
   elapsedMs: number;
   queryBeforeMs?: number;
   queryAfterMs?: number;
@@ -33,12 +50,22 @@ export type PageCacheProgress = PayloadWarmStats & {
   limited: boolean;
 };
 
-function readIo() {
-  const io = fs.readFileSync("/proc/self/io", "utf8");
-  return {
-    readBytes: Number(/^rchar: (\d+)$/m.exec(io)?.[1] ?? 0),
-    diskBytes: Number(/^read_bytes: (\d+)$/m.exec(io)?.[1] ?? 0),
-  };
+type IoCounters = { readBytes: number; diskBytes: number };
+
+function readIo(): IoCounters | null {
+  try {
+    const io = fs.readFileSync("/proc/self/io", "utf8");
+    return {
+      readBytes: Number(/^rchar: (\d+)$/m.exec(io)?.[1] ?? 0),
+      diskBytes: Number(/^read_bytes: (\d+)$/m.exec(io)?.[1] ?? 0),
+    };
+  } catch (error) {
+    // /proc/<pid>/io requires CONFIG_TASKSTATS; stock Microsoft WSL kernels omit it.
+    if (hasErrnoCode(error, "ENOENT")) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 /** Keyset reads finish before yielding; no SQLite snapshot survives the returned row. */
@@ -88,10 +115,7 @@ function sessionEntryProjection(query: ReturnType<typeof getNodeSqliteKysely<DB>
   );
 }
 
-function* agentHotPages(
-  db: DatabaseSync,
-  now: number,
-): Generator<PayloadWarmStats | undefined, void> {
+function* agentHotPages(db: DatabaseSync, now: number): Generator<StepStats, void> {
   const query = getNodeSqliteKysely<DB>(db);
   for (const row of recentSessions(db, now - RECENT_MS)) {
     executeSqliteQuerySync(
@@ -122,7 +146,11 @@ function* agentHotPages(
           .limit(256),
       );
     }
-    yield;
+    yield {
+      payloadBytes: 0,
+      payloadMessages: 0,
+      estimatedReadBytes: ESTIMATED_METADATA_STEP_BYTES,
+    };
   }
   // Finish the metadata pass before spending its remaining budget on recent payload pages.
   for (const row of recentSessions(db, now - PAYLOAD_RECENT_MS)) {
@@ -137,7 +165,7 @@ function* agentHotPages(
         .limit(MAX_PAYLOAD_MESSAGES),
     );
     // Empty selections also consume I/O; admit payload reads only after pacing this lookup.
-    yield;
+    yield { payloadBytes: 0, payloadMessages: 0, estimatedReadBytes: ESTIMATED_LOOKUP_STEP_BYTES };
     for (let offset = 0; offset < tail.length; offset += PAYLOAD_BATCH_MESSAGES) {
       const sequences = tail
         .slice(offset, offset + PAYLOAD_BATCH_MESSAGES)
@@ -165,21 +193,28 @@ function* agentHotPages(
         stats.payloadBytes += message.compressed?.byteLength ?? 0;
         stats.payloadMessages += Number(message.json !== null || message.compressed !== null);
       }
-      yield stats;
+      yield {
+        ...stats,
+        estimatedReadBytes: Math.max(
+          stats.payloadBytes,
+          PAYLOAD_BATCH_MESSAGES * MAX_PAYLOAD_BYTES,
+        ),
+      };
     }
   }
 }
 
-function* sharedPages(pathname: string): Generator<void, void> {
+function* sharedPages(pathname: string): Generator<StepStats, void> {
   const fd = fs.openSync(pathname, "r");
   try {
     const size = fs.fstatSync(fd).size;
     const buffer = Buffer.allocUnsafe(CHUNK_BYTES);
     for (let offset = 0; offset < size; offset += CHUNK_BYTES) {
-      if (fs.readSync(fd, buffer, 0, Math.min(CHUNK_BYTES, size - offset), offset) === 0) {
+      const bytesRead = fs.readSync(fd, buffer, 0, Math.min(CHUNK_BYTES, size - offset), offset);
+      if (bytesRead === 0) {
         break;
       }
-      yield;
+      yield { payloadBytes: 0, payloadMessages: 0, estimatedReadBytes: bytesRead };
     }
   } finally {
     fs.closeSync(fd);
@@ -193,11 +228,16 @@ function* warm(
   input: { kind: "agent" | "state"; maxBytes: number; now: number },
 ): Generator<PageCacheProgress, void> {
   const started = performance.now();
+  // Probe once per warm pass: on kernels without procfs IO accounting every later read
+  // would also fail, so fall back to bounded step estimates for the whole pass.
   const initial = readIo();
+  const countersAvailable = initial !== null;
   const progress: PageCacheProgress = {
     residency: readSqlitePageCacheResidency(pathname),
     readBytes: 0,
     diskBytes: 0,
+    estimatedReadBytes: 0,
+    ioCountersUnavailable: !countersAvailable,
     elapsedMs: 0,
     complete: false,
     limited: false,
@@ -207,12 +247,20 @@ function* warm(
   let db: DatabaseSync | undefined;
   let measureQuery: (() => number) | undefined;
   const update = () => {
-    const io = readIo();
-    progress.readBytes = io.readBytes - initial.readBytes;
-    progress.diskBytes = io.diskBytes - initial.diskBytes;
+    if (countersAvailable && initial) {
+      const io = readIo();
+      if (io) {
+        progress.readBytes = io.readBytes - initial.readBytes;
+        progress.diskBytes = io.diskBytes - initial.diskBytes;
+      }
+    }
     progress.elapsedMs = performance.now() - started;
     return progress;
   };
+  const effectiveReadBytes = () =>
+    countersAvailable
+      ? Math.max(progress.readBytes, progress.diskBytes)
+      : progress.estimatedReadBytes;
   try {
     if (input.kind === "agent") {
       db = openNodeSqliteDatabase(pathname, { readOnly: true, timeout: 0 });
@@ -230,6 +278,9 @@ function* warm(
         return performance.now() - before;
       };
       progress.queryBeforeMs = measureQuery();
+      if (!countersAvailable) {
+        progress.estimatedReadBytes += ESTIMATED_PROJECTION_BYTES;
+      }
     }
     yield { ...update() };
     if ((progress.residency?.residentRatio ?? 1) < 0.8 || (progress.queryBeforeMs ?? 0) > 10) {
@@ -240,9 +291,10 @@ function* warm(
           if (chunk) {
             progress.payloadBytes += chunk.payloadBytes;
             progress.payloadMessages += chunk.payloadMessages;
+            progress.estimatedReadBytes += chunk.estimatedReadBytes ?? 0;
           }
           update();
-          const bytes = Math.max(progress.readBytes, progress.diskBytes);
+          const bytes = effectiveReadBytes();
           if (bytes >= input.maxBytes) {
             progress.limited = true;
             break;
