@@ -1,43 +1,24 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handleFileFetch } from "./file-fetch.js";
+import { useFiles } from "./node-host.test-support.js";
 
-let tmpRoot: string;
-
-type FileFetchResult = Awaited<ReturnType<typeof handleFileFetch>>;
+const { at, file: makeFile } = useFiles("file-fetch-test-", vi.restoreAllMocks);
+type FetchResult = Awaited<ReturnType<typeof handleFileFetch>>;
 function expectFailureCode(
-  result: FileFetchResult,
+  result: FetchResult,
   code: string,
-): asserts result is Extract<FileFetchResult, { ok: false }> {
+): asserts result is Extract<FetchResult, { ok: false }> {
   expect(result).toMatchObject({ ok: false, code });
 }
-
-function expectSuccess(
-  result: FileFetchResult,
-): asserts result is Extract<FileFetchResult, { ok: true }> {
+function expectSuccess(result: FetchResult): asserts result is Extract<FetchResult, { ok: true }> {
   expect(result.ok).toBe(true);
 }
-
 async function fetchFile(name: string, content: string | Buffer) {
-  const target = path.join(tmpRoot, name);
-  await fs.writeFile(target, content);
-  const result = await handleFileFetch({ path: target });
+  const result = await handleFileFetch({ path: await makeFile(name, content) });
   expectSuccess(result);
   return result;
 }
-
-beforeEach(async () => {
-  // Canonicalize macOS temp aliases; symlink cases create their own links.
-  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "file-fetch-test-")));
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await fs.rm(tmpRoot, { recursive: true, force: true });
-});
-
 describe("handleFileFetch", () => {
   it("rejects relative paths", async () => {
     const r = await handleFileFetch({ path: "relative/file.txt" });
@@ -51,9 +32,9 @@ describe("handleFileFetch", () => {
     expect(r.message).toMatch(/NUL/);
   });
   it("returns IS_DIRECTORY when the path resolves to a directory", async () => {
-    const r = await handleFileFetch({ path: tmpRoot });
+    const r = await handleFileFetch({ path: at() });
     expectFailureCode(r, "IS_DIRECTORY");
-    expect(r.canonicalPath).toBe(tmpRoot);
+    expect(r.canonicalPath).toBe(at());
   });
   it("fetches an empty image-named file with extension-derived MIME", async () => {
     expect(await fetchFile("empty.png", "")).toMatchObject({
@@ -66,9 +47,9 @@ describe("handleFileFetch", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a retargeted path before reading file bytes",
     async () => {
-      const first = path.join(tmpRoot, "first.txt");
-      const second = path.join(tmpRoot, "second.txt");
-      const link = path.join(tmpRoot, "current.txt");
+      const first = at("first.txt");
+      const second = at("second.txt");
+      const link = at("current.txt");
       await fs.writeFile(first, "approved");
       await fs.writeFile(second, "not approved");
       await fs.symlink(first, link);
@@ -94,8 +75,8 @@ describe("handleFileFetch", () => {
   );
 
   it("rejects a replacement at the same canonical pathname before reading bytes", async () => {
-    const target = path.join(tmpRoot, "target.txt");
-    const moved = path.join(tmpRoot, "moved.txt");
+    const target = at("target.txt");
+    const moved = at("moved.txt");
     await fs.writeFile(target, "approved");
     const readFileSpy = vi.spyOn(fs, "readFile");
     const preflight = await handleFileFetch({ path: target, preflightOnly: true });
@@ -127,8 +108,7 @@ describe("handleFileFetch", () => {
     expect(r.mimeType).toBe("application/octet-stream");
   });
   it("bounds bytes consumed when a file grows after the size check", async () => {
-    const target = path.join(tmpRoot, "growing.txt");
-    await fs.writeFile(target, "small");
+    const target = await makeFile("growing.txt", "small");
     const realOpen = fs.open.bind(fs);
     let bytesRead = 0;
     let grown = false;
@@ -172,8 +152,7 @@ describe("handleFileFetch", () => {
   });
 
   it("clamps maxBytes to the hard ceiling", async () => {
-    const target = path.join(tmpRoot, "oversized.bin");
-    await fs.writeFile(target, "");
+    const target = await makeFile("oversized.bin", "");
     await fs.truncate(target, 16 * 1024 * 1024 + 1);
 
     const r = await handleFileFetch({ path: target, maxBytes: Number.MAX_SAFE_INTEGER });
@@ -182,8 +161,7 @@ describe("handleFileFetch", () => {
   });
 
   it("uses default cap when maxBytes is not finite or non-positive", async () => {
-    const target = path.join(tmpRoot, "above-default.bin");
-    await fs.writeFile(target, "");
+    const target = await makeFile("above-default.bin", "");
     await fs.truncate(target, 8 * 1024 * 1024 + 1);
 
     for (const maxBytes of [-1, Number.NaN, "8"] as unknown[]) {
@@ -193,8 +171,8 @@ describe("handleFileFetch", () => {
     }
   });
   it("refuses to follow a symlink by default (SYMLINK_REDIRECT)", async () => {
-    const real = path.join(tmpRoot, "real.txt");
-    const link = path.join(tmpRoot, "link.txt");
+    const real = at("real.txt");
+    const link = at("link.txt");
     await fs.writeFile(real, "data");
     await fs.symlink(real, link);
 
