@@ -3,6 +3,7 @@ import type { SolidRouteProps } from "../../app-route-types.ts";
 import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
@@ -229,9 +230,11 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     return <LazyViewError error={props.error} onRetry={props.reset} />;
   };
   return (
-    <Errored fallback={(error, reset) => <RenderError error={error()} reset={reset} />}>
-      <Content />
-    </Errored>
+    <SessionBackgroundLayoutScope>
+      <Errored fallback={(error, reset) => <RenderError error={error()} reset={reset} />}>
+        <Content />
+      </Errored>
+    </SessionBackgroundLayoutScope>
   );
 }
 
