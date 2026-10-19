@@ -273,25 +273,29 @@ it("reuses palette reads through session publications while retaining retries an
     await sessions.refresh({ agentId: "main", force: true });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("Transient favicon read"));
-    disconnect = connectControlUiFavicon(shell, {
-      gateway: harness.gateway,
-      agentSelection: selection,
-      sessions,
-      overlays,
-      theme: {
-        settings: {},
-        get branding() {
-          return currentThemeBranding();
+    disconnect = connectControlUiFavicon(
+      shell,
+      {
+        gateway: harness.gateway,
+        agentSelection: selection,
+        sessions,
+        overlays,
+        theme: {
+          settings: {},
+          get branding() {
+            return currentThemeBranding();
+          },
+          subscribe,
         },
-        subscribe,
+        agents: { state: { agentsList: null }, subscribe: () => () => {} },
+        agentIdentity: {
+          get: () => null,
+          ensure: async () => {},
+          subscribe,
+        },
       },
-      agents: { state: { agentsList: null }, subscribe: () => () => {} },
-      agentIdentity: {
-        get: () => null,
-        ensure: async () => {},
-        subscribe,
-      },
-    }, () => []);
+      () => [],
+    );
     await vi.waitFor(() => expect(warning).toHaveBeenCalledOnce());
     const styleReads = vi.spyOn(globalThis, "getComputedStyle");
     publishRow({ label: "Retry the failed icon on the next session publication" });
