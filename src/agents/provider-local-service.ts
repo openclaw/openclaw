@@ -192,7 +192,7 @@ async function acquireProviderLocalService(
       return;
     }
     released = true;
-    managed.active = Math.max(0, managed.active - 1);
+    managed.active -= 1;
     scheduleIdleStop(key, managed, service);
   };
 
