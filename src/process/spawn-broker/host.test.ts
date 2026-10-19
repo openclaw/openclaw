@@ -41,14 +41,15 @@ async function runFixture(script: string, options: SpawnOptions, input?: string)
   return { code, signal, stdout: stdout(), stderr: stderr() };
 }
 
-type BootstrapFixtureMode =
-  | "native"
-  | "stale-ambient"
-  | "send-throw"
-  | "send-callback"
-  | "child-disconnect";
+const bootstrapModes = [
+  "native",
+  "stale-ambient",
+  "send-throw",
+  "send-callback",
+  "child-disconnect",
+] as const;
 
-async function runBootstrapFixture(mode: BootstrapFixtureMode) {
+async function runBootstrapFixture(mode: (typeof bootstrapModes)[number]) {
   const script = `
     import assert from 'node:assert/strict';
     import childProcess from 'node:child_process';
@@ -101,17 +102,13 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode) {
     try {
       const {createSpawnBrokerHost} = await import(${JSON.stringify(new URL("./host.js", import.meta.url).href)});
       const host = createSpawnBrokerHost(mode === 'stale-ambient' ? {} : {nativeResources: true});
-      assert.ok(nativeChild);
-      assert.ok(nativeChild.pid > 0);
+      assert.ok(nativeChild?.pid > 0);
       // The standalone fixture has no Gateway lifetime keeping an unreferenced broker alive.
       nativeChild.ref();
       nativeChild.channel?.ref();
       assert.equal(observed.mock.calls.length, 1);
       if (mode.startsWith('send-')) {
-        await assert.rejects(host.ready(), error => {
-          assert.equal(error.cause?.message, 'synthetic initial bootstrap refusal');
-          return true;
-        });
+        await assert.rejects(host.ready(), error => error.cause?.message === 'synthetic initial bootstrap refusal');
       } else {
         await host.ready();
       }
@@ -170,10 +167,8 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode) {
   expect(stdout.trim()).toBe("completed");
 }
 
-it
-  .skipIf(process.platform === "win32")
-  .each(["native", "stale-ambient", "send-throw", "send-callback", "child-disconnect"] as const)(
-  "settles private bootstrap and native child closure (%s)",
+it.skipIf(process.platform === "win32").each(bootstrapModes)(
+  "settles %s bootstrap and native close",
   runBootstrapFixture,
   20_000,
 );
@@ -274,38 +269,35 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await settlement;
   });
 
-  it.each(["coalesced", "later"])(
-    "preserves native spawn waiters and single ordered events for %s exits",
-    async (timing) => {
-      const argv =
-        timing === "coalesced"
-          ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
-          : [process.execPath, "-e", "setTimeout(()=>process.exit(0),50)"];
-      const starting = runWithSpawnBroker(host, () =>
-        spawnAndWait({ argv, options: { stdio: "ignore" } }),
-      );
-      await Promise.resolve();
-      if (timing === "coalesced") {
-        const resumeAt = performance.now() + 20;
-        while (performance.now() < resumeAt) {
-          /* Batch the broker's native lifecycle messages. */
-        }
+  it.each(["coalesced", "later"])("orders native lifecycle events for %s exits", async (timing) => {
+    const argv =
+      timing === "coalesced"
+        ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
+        : [process.execPath, "-e", "setTimeout(()=>process.exit(0),50)"];
+    const starting = runWithSpawnBroker(host, () =>
+      spawnAndWait({ argv, options: { stdio: "ignore" } }),
+    );
+    await Promise.resolve();
+    if (timing === "coalesced") {
+      const resumeAt = performance.now() + 20;
+      while (performance.now() < resumeAt) {
+        /* Batch the broker's native lifecycle messages. */
       }
-      const child = await starting;
-      await Promise.resolve();
-      await Promise.resolve();
-      const events: string[] = [];
-      for (const event of ["exit", "close"]) {
-        child.on(event, () => events.push(event));
-      }
-      expect(child.exitCode).toBe(null);
-      const [code] = await once(child, "close", { signal: AbortSignal.timeout(1000) });
-      await delay(0);
-      expect(code).toBe(0);
-      expect(child.exitCode).toBe(0);
-      expect(events).toEqual(["exit", "close"]);
-    },
-  );
+    }
+    const child = await starting;
+    await Promise.resolve();
+    await Promise.resolve();
+    const events: string[] = [];
+    for (const event of ["exit", "close"]) {
+      child.on(event, () => events.push(event));
+    }
+    expect(child.exitCode).toBe(null);
+    const [code] = await once(child, "close", { signal: AbortSignal.timeout(1000) });
+    await delay(0);
+    expect(code).toBe(0);
+    expect(child.exitCode).toBe(0);
+    expect(events).toEqual(["exit", "close"]);
+  });
 
   it("preserves raw-spawn identity, independent output streams, and stdin", async () => {
     const size = 2 * 1024 * 1024 + 137;
@@ -386,7 +378,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
 
   for (const output of ["ignore", "pipe"] as const) {
     it(
-      "settles a real child after parent-initiated IPC disconnect (" + output + ")",
+      "settles parent IPC disconnect (" + output + ")",
       async ({ signal }) => {
         const child = nodeCommand(
           "process.on('disconnect', () => { process.stdout.end('stdout-tail'); process.stderr.end('stderr-tail'); }); process.send('ready');",
@@ -411,7 +403,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
   }
 
   it.each(["SIGTERM", "SIGINT"] as const)(
-    "keeps command completion and cleanup spawning available after a supervisor %s",
+    "finishes commands and cleanup after supervisor %s",
     async (signal) => {
       const brokerPid = host.pid!;
       const child = nodeCommand(

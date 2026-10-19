@@ -18,10 +18,9 @@ import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 const nodeArgv = (source: string, ...args: string[]) => [process.execPath, "-e", source, ...args];
 
-describe.skipIf(skipBrokerTests)("broker execa parity", () => {
+describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", () => {
   let host: SpawnBrokerHost;
   beforeAll(async () => {
     host = createSpawnBrokerHost();
@@ -42,11 +41,10 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
 
   async function ready(command: ReturnType<typeof start>, required = true) {
     const child = command.nodeChildProcess;
-    if (!required && !(child instanceof BrokerChild)) {
-      return;
+    if (required || child instanceof BrokerChild) {
+      ok(child instanceof BrokerChild, "Fixture did not use the broker");
+      await child.ready();
     }
-    ok(child instanceof BrokerChild, "Fixture did not use the broker");
-    await child.ready();
   }
 
   const cases: Array<[string, string, CommandSpawnOptions?, boolean?]> = [
@@ -77,7 +75,7 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     { guarded: true, revoked: true },
     { guarded: false, revoked: false },
   ])(
-    "keeps remote sandbox native initiation inside its final guard (guarded: $guarded, revoked: $revoked)",
+    "guards sandbox launch (guarded: $guarded, revoked: $revoked)",
     async ({ guarded, revoked }) => {
       const marker = path.join(tempDirs.make("sandbox-broker-revocation-"), "effect");
       const ownerContext = new AsyncLocalStorage<string>();
@@ -134,69 +132,59 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     },
   );
 
-  it.each([0, 23])(
-    "preserves admitted input closure through the broker (exit=%s)",
-    async (exitCode) => {
-      const beforeInput = vi.fn();
-      const result = await runWithSpawnBroker(host, () =>
-        runCommandWithTimeout(
-          nodeArgv(
-            `require('node:fs').closeSync(0);process.stderr.write('stdin closed\\n');process.exitCode=${exitCode};`,
-          ),
-          { input: "x".repeat(8 * 1024 * 1024), beforeInput, timeoutMs: 3_000 },
+  it.each([0, 23])("preserves admitted stdin closure (exit=%s)", async (exitCode) => {
+    const beforeInput = vi.fn();
+    const result = await runWithSpawnBroker(host, () =>
+      runCommandWithTimeout(
+        nodeArgv(
+          `require('node:fs').closeSync(0);process.stderr.write('stdin closed\\n');process.exitCode=${exitCode};`,
         ),
-      );
-      expect(result).toMatchObject({
-        code: exitCode,
-        stderr: "stdin closed\n",
-        termination: "exit",
-      });
-      expect(beforeInput).toHaveBeenCalledOnce();
-    },
-  );
+        { input: "x".repeat(8 * 1024 * 1024), beforeInput, timeoutMs: 3_000 },
+      ),
+    );
+    expect(result).toMatchObject({ code: exitCode, stderr: "stdin closed\n", termination: "exit" });
+    expect(beforeInput).toHaveBeenCalledOnce();
+  });
 
-  it.each(["EPIPE", "EIO"])(
-    "preserves transferred stdin error classification (%s)",
-    async (code) => {
-      const outcomes: unknown[] = [];
-      for (const broker of [false, true]) {
-        const command = start(
-          "const keepAlive=setInterval(()=>{},1000);process.on('SIGUSR2',()=>{clearInterval(keepAlive);process.stderr.write('finished\\n');process.exitCode=23});process.stdin.resume();process.stdout.write('ready');",
-          { stdin: "pipe", reject: false, timeout: 3_000, stripFinalNewline: false },
-          broker,
-        );
-        try {
-          await ready(command, broker);
-          await new Promise<void>((resolve) => {
-            command.stdout!.once("data", () => resolve());
-          });
-          const input = command.stdin!;
-          const closed = new Promise<void>((resolve) => {
-            input.once("close", () => resolve());
-          });
-          input.destroy(Object.assign(new Error("synthetic stdin failure"), { code }));
-          await closed;
-          // The pipe acknowledgement precedes this signal on the broker's private channel.
-          command.kill("SIGUSR2");
-          const result = await command;
-          outcomes.push({
-            code: result.code,
-            exitCode: result.exitCode,
-            originalMessage: result.originalMessage,
-            stderr: result.stderr,
-          });
-        } finally {
-          command.kill("SIGKILL");
-          await command.catch(() => {});
-        }
+  it.each(["EPIPE", "EIO"])("preserves transferred stdin errors (%s)", async (code) => {
+    const outcomes: unknown[] = [];
+    for (const broker of [false, true]) {
+      const command = start(
+        "const keepAlive=setInterval(()=>{},1000);process.on('SIGUSR2',()=>{clearInterval(keepAlive);process.stderr.write('finished\\n');process.exitCode=23});process.stdin.resume();process.stdout.write('ready');",
+        { stdin: "pipe", reject: false, timeout: 3_000, stripFinalNewline: false },
+        broker,
+      );
+      try {
+        await ready(command, broker);
+        await new Promise<void>((resolve) => {
+          command.stdout!.once("data", () => resolve());
+        });
+        const input = command.stdin!;
+        const closed = new Promise<void>((resolve) => {
+          input.once("close", () => resolve());
+        });
+        input.destroy(Object.assign(new Error("synthetic stdin failure"), { code }));
+        await closed;
+        // The pipe acknowledgement precedes this signal on the broker's private channel.
+        command.kill("SIGUSR2");
+        const result = await command;
+        outcomes.push({
+          code: result.code,
+          exitCode: result.exitCode,
+          originalMessage: result.originalMessage,
+          stderr: result.stderr,
+        });
+      } finally {
+        command.kill("SIGKILL");
+        await command.catch(() => {});
       }
-      expect(outcomes[1]).toEqual(outcomes[0]);
-      expect(outcomes[0]).toMatchObject({ code: code === "EIO" ? "EIO" : undefined, exitCode: 23 });
-    },
-  );
+    }
+    expect(outcomes[1]).toEqual(outcomes[0]);
+    expect(outcomes[0]).toMatchObject({ code: code === "EIO" ? "EIO" : undefined, exitCode: 23 });
+  });
 
   it.each(cases)(
-    "preserves buffered %s results and errors",
+    "matches buffered %s results and errors",
     async (_name, source, options, cancel) => {
       const outcomes: unknown[] = [];
       for (const broker of [false, true]) {
@@ -241,7 +229,7 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
   );
 
   it.each([false, true])(
-    "preserves both output streams and stdin beyond 1 MiB with buffer:%s",
+    "preserves large stdin and both output streams (buffer: %s)",
     async (buffer) => {
       const size = 1024 * 1024 + 137;
       const prefix = "broker input\n";
@@ -285,27 +273,24 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     expect(result.stdout).toHaveLength(17 * 1024 * 1024);
   });
 
-  it.each(["buffer", "utf8"] as const)(
-    "carries failed %s output only once on the wire",
-    async (encoding) => {
-      const size = 1024 * 1024;
-      const remote = host.spawnExeca(
-        nodeArgv(
-          `process.stdout.write('x'.repeat(${size}));process.stderr.write('y'.repeat(${size}));process.exitCode=7`,
-        ),
-        { stdin: "ignore", encoding, reject: false, maxBuffer: size },
-      );
-      await remote.child.ready();
-      remote.child.stdout?.resume();
-      remote.child.stderr?.resume();
-      const result = await remote.result;
-      expect(result.exitCode).toBe(7);
-      expect(result.stdout).toHaveLength(size);
-      expect(result.stderr).toHaveLength(size);
-      // IPC capacity accounts for captured output once, plus bounded result metadata.
-      expect(serialize(result).byteLength).toBeLessThan(2 * size + 16 * 1024);
-    },
-  );
+  it.each(["buffer", "utf8"] as const)("sends failed %s output once", async (encoding) => {
+    const size = 1024 * 1024;
+    const remote = host.spawnExeca(
+      nodeArgv(
+        `process.stdout.write('x'.repeat(${size}));process.stderr.write('y'.repeat(${size}));process.exitCode=7`,
+      ),
+      { stdin: "ignore", encoding, reject: false, maxBuffer: size },
+    );
+    await remote.child.ready();
+    remote.child.stdout?.resume();
+    remote.child.stderr?.resume();
+    const result = await remote.result;
+    expect(result.exitCode).toBe(7);
+    expect(result.stdout).toHaveLength(size);
+    expect(result.stderr).toHaveLength(size);
+    // IPC capacity accounts for captured output once, plus bounded result metadata.
+    expect(serialize(result).byteLength).toBeLessThan(2 * size + 16 * 1024);
+  });
 
   it("retains execa file output and Error results with reject:false", async () => {
     const directory = tempDirs.make("openclaw-broker-execa-");

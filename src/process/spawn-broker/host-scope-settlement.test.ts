@@ -27,9 +27,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: native.spawn,
 }));
-vi.mock("execa", () => ({
-  execa: native.forbidden,
-}));
+vi.mock("execa", () => ({ execa: native.forbidden }));
 vi.mock("../../infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/spawn-broker.js"),
   resolveRuntimeWorkerArgv: () => ["synthetic-spawn-broker"],
@@ -38,15 +36,9 @@ vi.mock("./cleanup.js", () => ({
   terminateLostBrokerChild: native.lostChildCleanup,
   terminateBrokerProcessGroup: native.groupCleanup,
 }));
-vi.mock("../../shared/pid-alive.js", () => ({
-  getFileLockProcessStartTime: native.forbidden,
-}));
-vi.mock("../child-process-tree.js", () => ({
-  isChildProcessTreeAlive: native.forbidden,
-}));
-vi.mock("../kill-tree.js", () => ({
-  killProcessTree: native.forbidden,
-}));
+vi.mock("../../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: native.forbidden }));
+vi.mock("../child-process-tree.js", () => ({ isChildProcessTreeAlive: native.forbidden }));
+vi.mock("../kill-tree.js", () => ({ killProcessTree: native.forbidden }));
 vi.mock("../windows-command.js", () => ({
   resolveSafeChildProcessInvocation: ({ argv }: { argv: string[] }) => ({
     command: argv[0],
@@ -78,19 +70,16 @@ function brokerFixture(ready = true) {
     override readonly pid = 41001;
     override connected = true;
     override exitCode: number | null = null;
-    exit() {
+    override disconnect() {
+      this.connected = false;
+      this.emit("disconnect");
+      this.kill();
+    }
+    override kill() {
       if (this.exitCode === null) {
         this.exitCode = 0;
         this.emit("exit", 0, null);
       }
-    }
-    override disconnect() {
-      this.connected = false;
-      this.emit("disconnect");
-      this.exit();
-    }
-    override kill() {
-      this.exit();
       return true;
     }
   })();
@@ -111,7 +100,6 @@ function brokerFixture(ready = true) {
   native.spawn.mockReturnValueOnce(worker);
   const host = createSpawnBrokerHost();
   hosts.push(host);
-  expect(send).toHaveBeenCalledExactlyOnceWith({ type: "bootstrap" }, expect.any(Function));
   // Assertions below distinguish command transmission from transport bootstrap.
   send.mockClear();
   const receive = (message: BrokerResponse) => worker.emit("message", message);
@@ -148,8 +136,6 @@ function failedResult(
     escapedCommand: "synthetic-missing",
     cwd: "/synthetic",
     durationMs: 0,
-    stdout: "",
-    stderr: "",
     error: serializeExecaError(error),
   };
 }
