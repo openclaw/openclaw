@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserContextOptions, Page } from "playwright";
 import { assert, beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -205,8 +204,20 @@ suite.define(() => {
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
     const header = page.locator(".chat-pane__header");
     await header.waitFor({ state: "visible" });
-    await selectChatLayoutAction(header, /^(Side panel|Minimize side panel)$/);
-    await selectChatLayoutAction(header, "Focus");
+    const actions = header.locator(".chat-header-session-menu__trigger");
+    await actions.click();
+    const split = page.getByRole("menuitem", { name: "Open split view", exact: true });
+    expect(await split.isEnabled()).toBe(true);
+    await page.keyboard.press("Escape");
+    await split.waitFor({ state: "hidden" });
+    const panels = page
+      .locator(".sidebar-region__panels-toggle")
+      .getByRole("button", { name: "Panels", exact: true });
+    if ((await panels.getAttribute("aria-expanded")) !== "true") {
+      await panels.click();
+    }
+    const sideHeader = page.locator('[data-region-header="side"]');
+    await sideHeader.waitFor();
     await gateway.setOnline(false);
 
     await expectReconnecting(page);
@@ -214,23 +225,30 @@ suite.define(() => {
       path: path.join(RECOVERY_ARTIFACT_DIR, "03-session-reconnecting-after.png"),
       fullPage: true,
     });
-
     const outlet = page.locator("openclaw-router-outlet");
     expect(await outlet.getAttribute("aria-disabled")).toBeNull();
     expect(await header.isVisible()).toBe(true);
 
-    expect(await header.getByRole("button", { name: "Layout", exact: true }).isEnabled()).toBe(
+    expect(await actions.isVisible()).toBe(false);
+    expect(await header.getByRole("button", { name: "Details", exact: true }).isEnabled()).toBe(
       true,
     );
-    const layoutMenu = await openChatLayoutMenu(header);
-    const split = layoutMenu.getByRole("menuitem", { name: "Open split view", exact: true });
-    expect(await split.isDisabled()).toBe(true);
+    const position = sideHeader.getByRole("button", { name: "Panel position", exact: true });
+    expect(await position.isEnabled()).toBe(true);
+    await position.click();
+    await page.getByRole("menuitemradio", { name: "Right", exact: true }).click();
+    await page.locator(".side-panel-position-menu").waitFor({ state: "hidden" });
+    await sideHeader.getByRole("button", { name: "Expand Side panel", exact: true }).click();
+    await sideHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+    expect(await header.isVisible()).toBe(true);
+    await panels.click();
+    await sideHeader.waitFor({ state: "hidden" });
+    await gateway.setOnline(true);
+    await actions.waitFor();
+    await actions.click();
+    expect(await split.isEnabled()).toBe(true);
     await page.keyboard.press("Escape");
     await split.waitFor({ state: "hidden" });
-    await selectChatLayoutAction(header, "Restore split");
-    await page.locator(".side-panel-launcher").waitFor();
-    await selectChatLayoutAction(header, "Minimize side panel");
-    await page.locator(".side-panel-launcher").waitFor({ state: "hidden" });
   });
 
   it.each([

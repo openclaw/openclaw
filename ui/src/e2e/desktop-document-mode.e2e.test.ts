@@ -337,7 +337,10 @@ suite.define(() => {
 
         const target = await gateway.waitForRequest("environments.status");
         expect(target.params).toEqual({ environmentId: sessionEnvironment.id });
-        expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+        // Paired-device headers resolve their display name once; Desktop still targets status directly.
+        expect(await gateway.getRequests("environments.list")).toHaveLength(
+          initialState === "offline" ? 1 : 0,
+        );
         expect(await exactText(panel, "Desktop sources").count()).toBe(0);
         await gateway.resolveDeferred("environments.status", sessionEnvironment);
         await expectObserve(gateway, sessionEnvironment.id);

@@ -1,5 +1,8 @@
 import type { AuthenticatedUser } from "../app/user-profile.ts";
-import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
+import type {
+  createControlUiSessionFixtures,
+  ControlUiSessionFixture,
+} from "./control-ui-session-fixtures.ts";
 
 export type ControlUiMockPresenceUser = AuthenticatedUser & {
   self?: boolean;
@@ -65,6 +68,8 @@ type GatewayMethods = {
     options?: { exactParams?: boolean },
   ) => number;
   getSessionRow: (key: string) => ControlUiSessionFixture;
+  /** Commit one fixture-owned visibility change without replacing the canonical roster. */
+  setSessionVisibility: ReturnType<typeof createControlUiSessionFixtures>["setVisibility"];
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },

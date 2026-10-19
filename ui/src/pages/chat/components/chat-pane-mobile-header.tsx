@@ -1,4 +1,6 @@
-import { children, Show, type Element } from "solid-js";
+import { children, createEffect, Show, type Element } from "solid-js";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
+import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
@@ -20,6 +22,8 @@ type ChatPaneMobileHeaderNotice =
     };
 
 export type ChatPaneMobileHeaderProps = {
+  active?: boolean;
+  onHeaderRef?: (element: HTMLElement) => void | (() => void);
   title: string;
   titlePending?: boolean;
   /** Mobile ProjectCrumb: menu, full accessible name and overflow fade. */
@@ -101,19 +105,27 @@ function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
   );
 }
 
-/** Mount only under native mobile presentation, never from pane width alone. */
 export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
+  let header!: HTMLDivElement;
+  const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
+  // Parked mobile chrome keeps its DOM; only the active layout publishes the pane's header.
+  createEffect(
+    () => (props.active !== false ? props.onHeaderRef : undefined),
+    (register) => register?.(header),
+  );
   const project = children(() => props.project);
   const titleOverflow = useScrollState(true, false);
   const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
   return (
     <div
+      ref={(element) => (header = element)}
       class={["agent-chat__header--mobile", { "mobile-header--incognito": props.incognito }]}
       role="group"
       aria-label={props.title}
       tabindex={-1}
     >
       <button
+        ref={drawerRef}
         type="button"
         class="mobile-header__control mobile-header__navigation"
         aria-label={drawerLabel()}

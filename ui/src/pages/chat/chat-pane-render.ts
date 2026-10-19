@@ -200,6 +200,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const { closePanelSlot, openPanelSlot, sessionWorkspace } = createChatPaneRails({
       state,
       sidebarLayout,
+      presentation: this.sessionPresentation,
+      visibleLayout: this.usesMobileHost ? this.presentSidebarLayout(sidebarLayout) : undefined,
       presentationId: this.presentationId,
       sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
       paneLabel: this.paneLabel,
@@ -682,7 +684,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         sidebarLayout,
         sessionWorkspace,
         chatProps: props,
-        detailsActions: { progressCardRefresh: detailsProgressRefresh },
+        detailsActions: {
+          ...this.captureProgressCardActions(canWriteProgressCard),
+          progressCardRefresh: detailsProgressRefresh,
+        },
         observerDigest,
         observerRunId,
         catalog,

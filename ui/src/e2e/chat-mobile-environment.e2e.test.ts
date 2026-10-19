@@ -1,0 +1,129 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { expect, it } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureUiProofEnabled,
+  chatSessionListResponse,
+  controlUiSessionUrl,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
+
+const suite = createChatFlowE2eSuite();
+const machineName = "Studio Mac";
+const remoteSession = {
+  key: "agent:main:environment-device",
+  sessionId: "environment-device-session",
+  kind: "direct",
+  label: "Review device environment",
+  spawnedCwd: "/repo/project",
+  updatedAt: 2,
+  placement: {
+    state: "active",
+    generation: 2,
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    stateChangedAtMs: 2,
+    environmentId: "node:studio",
+    activeOwnerEpoch: 1,
+    workerBundleHash: "a".repeat(64),
+    workspaceBaseManifestRef: "base-manifest",
+    remoteWorkspaceDir: "/worker/project",
+    runner: { kind: "device", status: "available", deviceId: "studio" },
+  },
+} satisfies GatewaySessionRow;
+const localSession = {
+  key: "agent:main:environment-local",
+  sessionId: "environment-local-session",
+  kind: "direct",
+  label: "Review local environment",
+  execNode: "legacy-node",
+  spawnedCwd: "/repo/local",
+  updatedAt: 1,
+  placement: {
+    state: "local",
+    generation: 1,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    stateChangedAtMs: 1,
+  },
+} satisfies GatewaySessionRow;
+
+suite.define(() => {
+  it("opens the resolved device from mobile Environment, returns to Details and retires it on session change", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: remoteSession.key,
+          sessionInfo: remoteSession,
+          featureMethods: ["environments.list"],
+          methodResponses: {
+            "sessions.list": chatSessionListResponse([remoteSession, localSession]),
+            "environments.list": {
+              profiles: [],
+              environments: [
+                {
+                  id: "node:studio",
+                  type: "node",
+                  label: machineName,
+                  status: "available",
+                  sessionHost: true,
+                  workerSlots: { total: 1, available: 0 },
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, remoteSession.key));
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        const header = pane.locator(".agent-chat__header--mobile");
+        await header
+          .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
+          .waitFor();
+        await gateway.waitForRequest("environments.list");
+        await header
+          .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
+          .click();
+        const host = pane.locator(".chat-mobile-host");
+        const environment = host.locator(".chat-environment-mobile");
+        const machine = environment.getByRole("button", { name: machineName, exact: true });
+        await machine.waitFor();
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(suite.artifactDir, "mobile-environment-machine.png"),
+            await takeControlUiViewportScreenshot(page, host, [header, machine]),
+          );
+        }
+        await machine.click();
+        await host
+          .locator(".chat-machine__identity")
+          .getByText(machineName, { exact: true })
+          .waitFor();
+        await host.getByRole("button", { name: "Back", exact: true }).click();
+        await machine.waitFor();
+        expect(
+          await host
+            .getByRole("button", { name: "Details", exact: true })
+            .getAttribute("aria-pressed"),
+        ).toBe("true");
+        await host.getByRole("button", { name: "Close", exact: true }).click();
+
+        await navigateToControlUiSession(page, localSession.key);
+        await header
+          .getByRole("button", { name: localSession.label + " — Details", exact: true })
+          .click();
+        await host.getByRole("button", { name: "Details", exact: true }).waitFor();
+        expect(await environment.getByText(machineName, { exact: true }).count()).toBe(0);
+        expect(await environment.getByText("legacy-node", { exact: true }).count()).toBe(0);
+        expect(await host.locator(".chat-machine").filter({ visible: true }).count()).toBe(0);
+        expect(await gateway.getRequests("environments.list")).toHaveLength(1);
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
+      },
+    );
+  });
+});

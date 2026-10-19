@@ -11,7 +11,7 @@ import {
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
-import { closeChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
@@ -256,12 +256,19 @@ suite.define(() => {
         await activePane.getByText("Ready for delegated work.", { exact: true }).waitFor();
         expect(activityRequests).toEqual([]);
         expect(await panel.isVisible()).toBe(false);
-        expect(await activePane.locator(".chat-pane__actions").getByRole("button").count()).toBe(3);
+        const actions = activePane.locator(".chat-pane__actions");
+        expect(
+          await actions
+            .getByRole("button")
+            .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+        ).toEqual(["Session sharing", "Details"]);
+        expect(
+          await activePane
+            .locator(".chat-pane__identity-actions .chat-header-session-menu__trigger")
+            .count(),
+        ).toBe(1);
 
-        const details = activePane.locator(".chat-pane__header-trailing > openclaw-chat-details");
-        const detailsDialog = activePane.getByRole("dialog", { name: "Details", exact: true });
-        await details.getByRole("button", { name: "Details", exact: true }).click();
-        await detailsDialog.waitFor();
+        const detailsDialog = await openChatDetails(activePane);
         await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
         detailsChunk.resolve();
         await detailsDialog.locator(".chat-details-session").waitFor();
@@ -317,15 +324,14 @@ suite.define(() => {
           session: child,
           ancestorSessions: [runningParent],
         });
-        const runningCount = activePane.locator(".chat-pane__subagents-running");
-        await runningCount.waitFor();
+        const detailsWithAgents = await openChatDetails(activePane);
+        await detailsWithAgents.getByText("Backend review", { exact: true }).waitFor();
+        await closeChatDetails(activePane);
         expect(await panel.isVisible()).toBe(false);
         await selectChatLayoutAction(activePane, "Subagents");
         const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
         await panelRow.getByText("Backend review", { exact: true }).waitFor();
-        expect(await activePane.locator(".chat-pane__subagents-running").textContent()).toContain(
-          "1 running",
-        );
+        expect(await panelRow.textContent()).toContain("Backend review");
         expect(await waitLine.isVisible()).toBe(false);
         const transcriptHeight = () =>
           activePane.locator(".chat-thread").evaluate((element) => element.clientHeight);

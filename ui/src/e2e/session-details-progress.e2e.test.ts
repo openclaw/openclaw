@@ -1,12 +1,13 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -166,8 +167,11 @@ suite.define(() => {
             },
           },
         });
-        const trigger = page.getByRole("button", { name: "Details", exact: true });
-        const details = page.locator(".chat-details");
+        const trigger = page
+          .getByRole("button", { name: "Details", exact: true })
+          .and(page.locator(".chat-details-toggle"));
+        const details = page.locator(".chat-details:not(.chat-mobile-host .chat-details)");
+        const detailsScroll = details.locator(".chat-details-desktop-body");
         const progress = details.locator('[data-progress-card-placement="details"]');
         const session = details.locator(".chat-details-session");
         const progressToggle = progress.locator(":scope > summary");
@@ -187,12 +191,16 @@ suite.define(() => {
         expect(await automations.textContent()).toContain("Watch pull request checks");
         const pullRequest = details.locator(".chat-pr").first();
         await pullRequest.waitFor();
-        const capture = async (name: string) => {
+        const capture = async (
+          name: string,
+          visibleDetails = details,
+          visibleProgress = progress,
+        ) => {
           const frame = await takeControlUiScreenshotFrame(
             page,
             page.locator(".chat").first(),
-            [details, progress, composer],
-            { animations: "disabled", elements: [details] },
+            [visibleDetails, visibleProgress, composer],
+            { animations: "disabled", elements: [visibleDetails] },
           );
           expect(
             await details.evaluate((root) => {
@@ -214,26 +222,46 @@ suite.define(() => {
           await writeFile(path.join(suite.artifactDir, name), frame.png);
           await writeFile(path.join(suite.artifactDir, "panel-" + name), frame.elements[0]!.png);
         };
-        const geometry = async (docked: boolean) => {
-          const { bounds, frame, conversation, footer, contained } = await details.evaluate(
-            async (element) => {
-              const document = element.ownerDocument;
-              const frameElement = document.querySelector(".chat-main__conversation-frame");
-              const conversationElement = document.querySelector(".chat-main__conversation");
-              const footerElement = document.querySelector(".chat-footer");
-              // Role/visibility commit before the desktop inset and frame transitions finish.
-              const animations = [
-                element,
-                frameElement,
-                conversationElement,
-                footerElement,
-                frameElement?.closest(".sidebar-region"),
-              ]
-                .flatMap((node) => node?.getAnimations() ?? [])
-                .filter((animation) =>
-                  Number.isFinite(animation.effect?.getComputedTiming().endTime),
+        const waitForLayoutToSettle = async (surface: Locator) => {
+          // Surface motion and the desktop/mobile conversation reservation settle separately.
+          await expect
+            .poll(() =>
+              surface.evaluate((panel) => {
+                const measured = [
+                  panel,
+                  ...document.querySelectorAll(
+                    ".chat-main__conversation-frame, .chat-main__conversation, .chat-footer, .agent-chat__input--chat",
+                  ),
+                ];
+                const layout = new Set<Element>();
+                for (const measuredElement of measured) {
+                  for (
+                    let element: Element | null = measuredElement;
+                    element;
+                    element = element.parentElement
+                  ) {
+                    layout.add(element);
+                  }
+                }
+                return [...layout].every((element) =>
+                  element
+                    .getAnimations()
+                    .every(
+                      (animation) =>
+                        !Number.isFinite(animation.effect?.getComputedTiming().endTime) ||
+                        animation.playState === "finished",
+                    ),
                 );
-              await Promise.allSettled(animations.map((animation) => animation.finished));
+              }),
+            )
+            .toBe(true);
+        };
+        const geometry = async (docked: boolean) => {
+          await expect.poll(() => details.getAttribute("data-open")).not.toBeNull();
+          await waitForLayoutToSettle(details);
+          const { bounds, frame, conversation, footer, input, contained } = await details.evaluate(
+            (element) => {
+              const document = element.ownerDocument;
               const box = (node: Element | null) => {
                 if (!node) {
                   return null;
@@ -243,9 +271,10 @@ suite.define(() => {
               };
               return {
                 bounds: box(element),
-                frame: box(frameElement),
-                conversation: box(conversationElement),
-                footer: box(footerElement),
+                frame: box(document.querySelector(".chat-main__conversation-frame")),
+                conversation: box(document.querySelector(".chat-main__conversation")),
+                footer: box(document.querySelector(".chat-footer")),
+                input: box(document.querySelector(".agent-chat__input--chat")),
                 contained: element.scrollWidth <= element.clientWidth,
               };
             },
@@ -254,15 +283,21 @@ suite.define(() => {
           expect(frame).toBeTruthy();
           expect(conversation).toBeTruthy();
           expect(footer).toBeTruthy();
+          expect(input).toBeTruthy();
           expect(bounds!.x).toBeGreaterThanOrEqual(frame!.x);
           expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(frame!.x + frame!.width + 1);
+          expect(bounds!.width).toBe(300);
+          // Both desktop presentations hug content within the conversation frame.
+          expect(Math.abs(bounds!.y - (frame!.y + 8))).toBeLessThanOrEqual(1);
+          expect(
+            Math.abs(bounds!.x + bounds!.width - (frame!.x + frame!.width - 8)),
+          ).toBeLessThanOrEqual(1);
+          expect(bounds!.height).toBeLessThanOrEqual(frame!.height - 16 + 1);
+          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(frame!.y + frame!.height - 8 + 1);
+          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(input!.y + input!.height + 1);
           if (docked) {
-            expect(bounds!.width).toBe(352);
-            expect(Math.abs(bounds!.height - frame!.height)).toBeLessThanOrEqual(1);
             expect(conversation!.x + conversation!.width).toBeLessThanOrEqual(bounds!.x + 1);
             expect(footer!.x + footer!.width).toBeLessThanOrEqual(bounds!.x + 1);
-          } else {
-            expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(footer!.y);
           }
           expect(contained).toBe(true);
         };
@@ -275,7 +310,7 @@ suite.define(() => {
         expect(await environment.textContent()).not.toContain(
           "/workspace/openclaw/session-details",
         );
-        const context = details.locator(".chat-details__context");
+        const context = details.locator('[data-details-group="context"]');
         expect(await context.locator("summary").textContent()).toContain("50%");
         await context.locator("summary").click();
         expect(await context.textContent()).toContain("64k / 128k");
@@ -290,7 +325,8 @@ suite.define(() => {
         await trigger.focus();
         await trigger.press("Enter");
         await expect.poll(() => details.getAttribute("role")).toBe("dialog");
-        expect(await details.locator(".chat-details__participants").count()).toBe(0);
+        // Desktop Details is nonmodal; verify Tab between its native sections.
+        await details.locator('[data-details-group="people"] > summary').focus();
         await page.keyboard.press("Tab");
         await expect
           .poll(() =>
@@ -358,7 +394,7 @@ suite.define(() => {
         await menu.locator('[data-value="hide"]').waitFor({ state: "visible" });
         expect(await menu.locator('[role^="menuitem"]').count()).toBe(6);
         await page.keyboard.press("Escape");
-        expect(await menu.locator('[role^="menuitem"]').count()).toBe(6);
+        await expect.poll(() => menu.locator('[role^="menuitem"]').count()).toBe(0);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('[data-value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(1);
@@ -430,36 +466,34 @@ suite.define(() => {
         await trigger.waitFor({ state: "hidden" });
         expect(await details.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
-        await openChatDetails(page);
-        await expect.poll(() => details.getAttribute("role")).toBe("dialog");
-        const mobileHost = page.locator(".chat-mobile-host");
-        expect(await mobileHost.getAttribute("data-mode")).toBe("dock");
-        const mobileGeometry = await mobileHost.evaluate(async (element) => {
-          const input = element.ownerDocument.querySelector(".agent-chat__input--chat");
-          const animations = [element, element.closest(".sidebar-region"), input]
-            .flatMap((node) => node?.getAnimations() ?? [])
-            .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime));
-          await Promise.allSettled(animations.map((animation) => animation.finished));
-          const bounds = element.getBoundingClientRect();
-          return {
-            left: bounds.left,
-            right: bounds.right,
-            top: bounds.top,
-            bottom: bounds.bottom,
-            composerBottom: input?.getBoundingClientRect().bottom,
-            contained: element.scrollWidth <= element.clientWidth,
-          };
-        });
-        expect(mobileGeometry.composerBottom).toBeDefined();
-        expect(mobileGeometry.left).toBeGreaterThanOrEqual(0);
-        expect(mobileGeometry.right).toBeLessThanOrEqual(430);
-        expect(mobileGeometry.top).toBeGreaterThanOrEqual(mobileGeometry.composerBottom! - 1);
-        expect(mobileGeometry.bottom).toBeLessThanOrEqual(900);
-        expect(mobileGeometry.contained).toBe(true);
-        expect(await details.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        const mobileDetails = await openChatDetails(page);
+        const mobileProgress = mobileDetails.locator('[data-details-destination="task-progress"]');
+        await mobileProgress.waitFor();
+        expect(await mobileDetails.getAttribute("data-mode")).toBe("dock");
+        await waitForLayoutToSettle(mobileDetails);
+        const mobileBounds = await mobileDetails.boundingBox();
+        const mobileComposer = await page.locator(".agent-chat__input--chat").boundingBox();
+        expect(mobileBounds).toBeTruthy();
+        expect(mobileComposer).toBeTruthy();
+        expect(mobileBounds!.x).toBeGreaterThanOrEqual(0);
+        expect(mobileBounds!.x + mobileBounds!.width).toBeLessThanOrEqual(430);
+        expect(mobileBounds!.y).toBeGreaterThanOrEqual(
+          mobileComposer!.y + mobileComposer!.height - 1,
+        );
+        expect(mobileBounds!.y + mobileBounds!.height).toBeLessThanOrEqual(900);
+        expect(await mobileDetails.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
         expect(await composer.inputValue()).toBe("Keep my draft while I inspect Details.");
-        await capture("narrow.png");
-        await mobileHost.getByRole("button", { name: "Close", exact: true }).click();
+        await capture("narrow.png", mobileDetails, mobileProgress);
+        await mobileProgress.click();
+        await mobileDetails.getByRole("button", { name: "Back", exact: true }).waitFor();
+        await closeChatDetails(page);
+        await expect
+          .poll(() =>
+            page
+              .locator(".mobile-header__title")
+              .evaluate((element) => element === document.activeElement),
+          )
+          .toBe(true);
         await page.setViewportSize({ width: 1728, height: 1000 });
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await trigger.click();
@@ -502,18 +536,18 @@ suite.define(() => {
           .toBeLessThan(2);
         const threadTop = await thread.evaluate((el) => el.scrollTop);
         expect(threadTop).toBeGreaterThan(0);
-        await details.hover();
+        await detailsScroll.hover();
         await page.mouse.wheel(0, 600);
-        await expect.poll(() => details.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+        await expect.poll(() => detailsScroll.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
         expect(await thread.evaluate((el) => el.scrollTop)).toBe(threadTop);
         expect(await composer.inputValue()).toBe("Keep my draft while I inspect Details.");
         await geometry(true);
         await capture("long-details.png");
-        const detailsTop = await details.evaluate((el) => el.scrollTop);
+        const detailsTop = await detailsScroll.evaluate((el) => el.scrollTop);
         await thread.hover();
         await page.mouse.wheel(0, -600);
         await expect.poll(() => thread.evaluate((el) => el.scrollTop)).toBeLessThan(threadTop);
-        expect(await details.evaluate((el) => el.scrollTop)).toBe(detailsTop);
+        expect(await detailsScroll.evaluate((el) => el.scrollTop)).toBe(detailsTop);
         await gateway.setMethodResponse("cron.list", {
           jobs: [],
           snapshotRevision: "details-empty",
@@ -531,7 +565,7 @@ suite.define(() => {
           .poll(() => details.locator("[data-details-group=automations]").count())
           .toBe(0);
         expect(await details.locator(".chat-pr").count()).toBe(0);
-        await details.evaluate((element) => {
+        await detailsScroll.evaluate((element) => {
           element.scrollTop = 0;
         });
         await capture("empty.png");

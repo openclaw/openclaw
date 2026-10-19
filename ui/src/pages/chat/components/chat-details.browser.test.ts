@@ -340,7 +340,7 @@ describe("chat Details presentation", () => {
     expect(panel.getAttribute("role")).toBe("dialog");
     const bounds = panel.getBoundingClientRect();
     const paneBounds = pane.getBoundingClientRect();
-    expect(bounds.width).toBe(352);
+    expect(bounds.width).toBe(300);
     expect(bounds.height).toBeGreaterThan(40);
     expect(bounds.left).toBeGreaterThanOrEqual(paneBounds.left);
     expect(bounds.right).toBeLessThanOrEqual(paneBounds.right);

@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { useScrollState } from "../../components/solid/scroll-state.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "./chat-pane-header-view.tsx";
@@ -15,29 +16,138 @@ import { ChatView, type ChatProps } from "./chat-view.tsx";
 import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./components/chat-details.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
-import { PaneHeaderView, type ChatPaneHeaderPresentation } from "./components/chat-pane-header.tsx";
+import { PaneHeaderView } from "./components/chat-pane-header.tsx";
+import type { ChatPaneHeaderPresentation } from "./components/chat-pane-header.types.ts";
 import type { SidebarRegionViewProps } from "./components/chat-sidebar-region-types.ts";
+import {
+  ChatSubagentMobileHeader,
+  type ChatSubagentMobileStop,
+} from "./components/chat-subagents-mobile.tsx";
+import { SubagentDesktopAvatar } from "./components/chat-subagents-panel-desktop.tsx";
 
 function PaneSubagentHeader(props: {
+  sessionKey: string;
   title: string;
   onBack: () => void;
   stop: Parameters<typeof PaneSubagentStop>[0] | undefined;
   details: ChatDetailsViewProps | undefined;
+  /** Supplied by the chrome owner for desktop, including embedded child panes. */
+  desktop?: { sessionKey: string };
+  /** Complete mobile rail supplied by the native mobile composition owner. */
+  mobileHeader?: SolidJSX.Element;
+  /** Explicit native presentation, including child panes without a mobile host. */
+  mobile?: boolean;
 }) {
+  const mobileStop = (): ChatSubagentMobileStop | undefined => {
+    const stop = props.stop;
+    return stop
+      ? {
+          label: t("chat.runControls.stop"),
+          accessibleLabel: t("chat.subagentsPanel.stop", { name: props.title }),
+          disabled: false,
+          pending: false,
+          confirmation: {
+            title: t("chat.subagentsPanel.stopConfirmTitle"),
+            message: t("chat.subagentsPanel.stopConfirmMessage"),
+            confirmLabel: t("chat.subagentsPanel.stopConfirmAction"),
+            cancelLabel: t("common.cancel"),
+          },
+          // The native callback captures and revalidates its session/run and access.
+          onConfirm: stop.onAbort,
+        }
+      : undefined;
+  };
   return (
-    <header class="chat-subagent-detail__header">
-      <button class="chat-subagent-detail__back" type="button" onClick={() => props.onBack()}>
-        <Icon name="arrowLeft" />
-        {t("chat.subagentsPanel.back")}
-      </button>
-      <div class="chat-subagent-detail__heading">
-        <strong class="chat-subagent-detail__title">{props.title}</strong>
-        <Show when={props.stop}>{(stop) => <PaneSubagentStop {...stop()} />}</Show>
-        <Show when={props.details !== undefined}>
-          <ChatDetails {...props.details!} />
+    <Show
+      when={props.mobileHeader}
+      fallback={
+        <Show
+          when={props.mobile === true}
+          fallback={
+            <Show
+              when={props.desktop}
+              fallback={
+                <header class="chat-subagent-detail__header">
+                  <button
+                    class="chat-subagent-detail__back"
+                    type="button"
+                    onClick={() => props.onBack()}
+                  >
+                    <Icon name="arrowLeft" />
+                    {t("chat.subagentsPanel.back")}
+                  </button>
+                  <div class="chat-subagent-detail__heading">
+                    <strong class="chat-subagent-detail__title">{props.title}</strong>
+                    <Show when={props.stop}>{(stop) => <PaneSubagentStop {...stop()} />}</Show>
+                    <Show when={props.details !== undefined}>
+                      <ChatDetails {...props.details!} />
+                    </Show>
+                  </div>
+                </header>
+              }
+            >
+              {(desktop) => {
+                const nameRef = useScrollState(true, false);
+                return (
+                  <header
+                    class="subagents-desktop__child-rail session-panel-rail"
+                    data-presentation="desktop"
+                  >
+                    <span class="session-panel-rail__group">
+                      <button
+                        class="subagents-desktop__back session-panel-rail__button"
+                        type="button"
+                        aria-label={t("chat.subagentsPanel.back")}
+                        onClick={() => props.onBack()}
+                      >
+                        <Icon name="chevronLeft" />
+                      </button>
+                    </span>
+                    <SubagentDesktopAvatar sessionKey={desktop().sessionKey} />
+                    <strong ref={nameRef} class="subagents-desktop__child-name" title={props.title}>
+                      {props.title}
+                    </strong>
+                    <Show when={props.stop}>
+                      {(stop) => (
+                        <span class="session-panel-rail__group">
+                          <button
+                            class="subagents-desktop__stop session-panel-rail__button session-panel-rail__button--labelled"
+                            type="button"
+                            aria-label={t("chat.runControls.stopGenerating")}
+                            onClick={() => stop().onAbort()}
+                          >
+                            <Icon name="stop" />
+                            <span>{t("chat.runControls.stop")}</span>
+                          </button>
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={props.details !== undefined}>
+                      <ChatDetails {...props.details!} />
+                    </Show>
+                  </header>
+                );
+              }}
+            </Show>
+          }
+        >
+          <ChatSubagentMobileHeader
+            sessionKey={props.sessionKey}
+            title={props.title}
+            backLabel={t("chat.subagentsPanel.back")}
+            onBack={() => props.onBack()}
+            stop={mobileStop()}
+            actions={
+              <Show when={props.details !== undefined}>
+                <ChatDetails {...props.details!} />
+              </Show>
+            }
+          />
         </Show>
-      </div>
-    </header>
+      }
+    >
+      {(header) => header()}
+    </Show>
   );
 }
 

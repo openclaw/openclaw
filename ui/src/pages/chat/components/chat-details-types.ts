@@ -73,13 +73,18 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "onOpenSubagent"
     | "onOpenSubagents"
     | "onScrollPortRef"
+    | "personActivity"
   > & {
+    desktopPresentation?: ChatDetailsDesktopPresentation;
+    desktopDisclosures?: ChatDetailsDesktopDisclosures;
     environment?: ChatDetailsEnvironmentData;
     outputs?: ChatDetailsOutputs;
     /** Stable per native resource identity; acquire only while Details is presented. */
     retainOutputs?: () => (() => void) | undefined;
     /** Details consumes the unfiltered progress projection, independently of Show in chat. */
     progressCardError?: "access-denied" | "unavailable";
+    showTaskProgress?: boolean;
+    onShowTaskProgressChange?: (shown: boolean) => void;
     onSessionSelect?: (sessionKey: string) => void;
     detailsWorkspace?: ChatDetailsWorkspace;
     onHideTaskProgress?: () => void;

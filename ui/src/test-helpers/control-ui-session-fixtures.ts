@@ -3,6 +3,10 @@ import type {
   SessionsResolveCandidate,
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionVisibility,
+  SessionVisibilitySetResult,
+} from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 
 export type ControlUiSessionFixture = {
   key: string;
@@ -18,51 +22,54 @@ export type ControlUiSessionFixture = {
 };
 
 // Also serialized into the page realm; keep these builders free of module captures.
-export function createControlUiSessionRow(
+export function createControlUiSessionRow<T extends Partial<ControlUiSessionFixture>>(
   key: string,
   label: string,
   updatedAt: number,
-  options?: Partial<ControlUiSessionFixture>,
+  options?: T,
 ) {
   const archivedAt = options?.archivedAt ?? (options?.archived ? updatedAt : undefined);
   const pinnedAt =
     archivedAt === undefined
       ? (options?.pinnedAt ?? (options?.pinned ? updatedAt : undefined))
       : undefined;
-  return {
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    sessionId: `session:${key}`,
-    label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
-    ...options,
-    contextTokens: options?.contextTokens ?? null,
-    kind: options?.kind ?? "direct",
-    pinned: pinnedAt !== undefined,
-    pinnedAt,
-    archived: archivedAt !== undefined,
-    archivedAt,
-  };
+  return Object.assign(
+    {
+      displayName: label,
+      hasActiveRun: false,
+      key,
+      sessionId: `session:${key}`,
+      label,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      status: "done",
+      totalTokens: 0,
+      updatedAt,
+    },
+    options,
+    {
+      contextTokens: options?.contextTokens ?? null,
+      kind: options?.kind ?? "direct",
+      pinned: pinnedAt !== undefined,
+      pinnedAt,
+      archived: archivedAt !== undefined,
+      archivedAt,
+    },
+  );
 }
 
-export function createControlUiMockSessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
-) {
-  const { model, modelProvider, ...extra } = options;
-  return createControlUiSessionRow(key, label, updatedAt, {
-    contextTokens: 200_000,
-    model: model ?? "gpt-5-mini",
-    modelProvider: modelProvider ?? "openai",
-    ...extra,
-  });
+export function createControlUiMockSessionRow<
+  T extends { model?: string; modelProvider?: string } & Record<string, unknown>,
+>(key: string, label: string, updatedAt: number, options?: T) {
+  return createControlUiSessionRow(
+    key,
+    label,
+    updatedAt,
+    Object.assign({ contextTokens: 200_000 }, options, {
+      model: options?.model ?? "gpt-5-mini",
+      modelProvider: options?.modelProvider ?? "openai",
+    }),
+  );
 }
 
 export function createControlUiChatHistoryMessage(
@@ -636,6 +643,21 @@ export function createControlUiSessionFixtures(
       };
     },
     patch,
+    setVisibility(key: string, expectedSessionId: string, visibility: SessionVisibility) {
+      const canonical = canonicalKey(key);
+      const value = records.get(canonical);
+      if (!listed.has(canonical) || !value || value.row.sessionId !== expectedSessionId) {
+        return {
+          __mockError: {
+            code: "INVALID_REQUEST",
+            message: "session identity changed; refresh and retry",
+          },
+        };
+      }
+      value.row = { ...value.row, visibility };
+      value.changed.add("visibility");
+      return { ok: true, sessionKey: canonical, visibility } satisfies SessionVisibilitySetResult;
+    },
     commitAbort,
     trackRun,
     materializeResponse,

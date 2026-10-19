@@ -43,6 +43,20 @@ export async function renderPanelFixture(
   closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
 ) {
   installResizeObserverStub();
+  if (!document.fonts) {
+    const fonts = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { ready: Promise.resolve() },
+    });
+    onTestFinished(() => {
+      if (fonts) {
+        Object.defineProperty(document, "fonts", fonts);
+      } else {
+        Reflect.deleteProperty(document, "fonts");
+      }
+    });
+  }
   const existing = panelViews.get(mount);
   const primary = existing?.primary ?? ChatPanelPrimary();
   const props = renderSidebarRegion({

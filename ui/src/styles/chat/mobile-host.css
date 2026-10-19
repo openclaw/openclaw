@@ -286,16 +286,6 @@
   box-shadow: none;
 }
 
-/* Native Session/Progress content keeps its inset inside the full-bleed host. */
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__details
-  > div
-  > .chat-details
-  > :is(openclaw-chat-details-session, openclaw-chat-details-progress) {
-  padding-inline: var(--mobile-content-inset);
-}
-
 .sidebar-region--mobile-host > .chat-mobile-host[hidden],
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__panels[hidden],
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details[hidden],

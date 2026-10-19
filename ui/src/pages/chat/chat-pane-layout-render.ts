@@ -1,9 +1,11 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
-import { merge, type Element } from "solid-js";
+import { merge } from "solid-js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
+import "./components/chat-details.tsx";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { t } from "../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -11,9 +13,12 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { clawCreatorFlow } from "../claws/creator-flow.ts";
 import { canCreateClawDraft } from "../claws/draft-navigation.ts";
+import { chatGoalPresentation } from "./chat-goals.ts";
+import type { MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
-import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
+import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { ChatPaneHeaderLayout, type PaneDetailsActions } from "./chat-pane-header-layout.ts";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -21,11 +26,13 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { listSubagents } from "./chat-subagent-wait.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
-import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
+import type { ChatDetailsElements } from "./components/chat-details.tsx";
+import { chatPullRequestId } from "./components/chat-pull-requests.ts";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
@@ -40,6 +47,7 @@ import {
   activatePanel,
   sidebarActivePanel,
   sidebarMainPanel,
+  setSidebarExpanded,
   isSidebarSlotVisible,
   reorderPanel,
   toggleSidebarPanelExpanded,
@@ -56,7 +64,7 @@ type ChatPaneLayoutRenderParams = {
   sessionWorkspace: ReturnType<typeof createChatPaneRails>["sessionWorkspace"] &
     Pick<ChatProps, "onScrollPortRef">;
   chatProps: ChatProps;
-  detailsActions: Pick<ChatProps, "progressCardRefresh">;
+  detailsActions: PaneDetailsActions;
   observerDigest: SessionObserverDigest | null;
   observerRunId: string | null;
   catalog: boolean;
@@ -66,17 +74,15 @@ type ChatPaneLayoutRenderParams = {
   closePanelSlot: (slot: SidebarSlotId) => void;
 };
 
-export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
-  dashboardControls: Element | undefined = undefined;
-  private readonly setDashboardControls = (action: Element | undefined) => {
-    if (this.dashboardControls !== action) {
-      this.dashboardControls = action;
-    }
+export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
+  private readonly detailsElements: ChatDetailsElements = {
+    getComposerInput: () => getChatComposerState(this.presentationId).composerInput,
   };
 
-  private readonly detailsElements: ChatDetailsElements = {};
-
-  private registerDetailsElement(name: keyof ChatDetailsElements, element: HTMLElement) {
+  private registerDetailsElement(
+    name: "pane" | "header" | "frame" | "footer",
+    element: HTMLElement,
+  ) {
     this.detailsElements[name] = element;
     return () => {
       if (this.detailsElements[name] === element) {
@@ -87,11 +93,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
 
   protected readonly onSidebarPanelOpened = (slot: SidebarSlotId) => {
     const destination = this.mobilePresentation.destination;
-    this.navigateMobileHost({
-      area: "panels",
-      slot,
-      ...(destination.area === "details" ? { backTo: destination } : {}),
-    });
+    const backTo = destination.area === "details" ? destination : undefined;
+    this.navigateMobileHost({ area: "panels", slot, backTo });
   };
 
   get composerReady(): boolean {
@@ -108,6 +111,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
   }
 
   private toolIcons?: PluginToolIcons;
+  private readonly attachmentCatalog = new PaneAttachmentCatalog();
+
+  override dispose(): void {
+    this.attachmentCatalog.dispose();
+    super.dispose();
+  }
 
   mountToolIcons(readGateway: () => unknown): void {
     this.toolIcons = createChatToolIcons(() => {
@@ -146,6 +155,21 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
 
     // What the pane shows. Its controls keep working on the layout as it is saved.
     const sidebarLayout = this.presentSidebarLayout(savedLayout);
+    const openDetailsPage = (details: MobileDetailsRoute, title: string, source?: HTMLElement) =>
+      this.navigateMobileHost(
+        {
+          area: "details",
+          ...(details.kind === "task-progress" || details.kind === "people"
+            ? { backTo: { area: "details" as const } }
+            : {}),
+          page: {
+            key: details.kind === "pull-request" ? details.id : details.kind,
+            title: details.kind === "publication" ? t("chat.pullRequests.publishPr") : title,
+            details,
+          },
+        },
+        source,
+      );
     const conversationVisible = isSidebarSlotVisible(sidebarLayout, "conversation");
     const workspace = resolveSessionWorkspace({
       session: selectedSession,
@@ -198,19 +222,87 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           };
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const panePresentation = { owner: this.element, isPresented: () => this.presented };
+    const connectionGeneration = this.connectionGeneration;
+    const headerPresentation = {
+      owner: this.element,
+      isPresented: () => this.visuallyPresented,
+      preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
+    };
     const slotPresentation = (slot: SidebarSlotId, mode: "visible" | "active" = "visible") => ({
       owner: this.element,
       isPresented: () =>
         this.presented &&
         (mode === "active" ? this.active : this.visuallyPresented) &&
+        (slot === "conversation" || !mobileHost?.destination.page) &&
         isSidebarSlotVisible(sidebarLayout, slot),
     });
     // Only a full pane has a Subagents panel of its own. Elsewhere a subagent's
     // name still opens its session and their count stays text.
     const ownsSubagentsPanel = !catalog && !this.compact;
+    const goalPresentation = chatGoalPresentation(state, selectedSession?.goal ?? undefined);
+    const subagentStop =
+      chatProps.disabledBanner?.presentation &&
+      chatProps.canAbort &&
+      chatProps.onAbort &&
+      !hasTerminalRunStatus(chatProps.runStatus)
+        ? { onAbort: chatProps.onAbort }
+        : undefined;
+    const subagentStopInNotice =
+      this.sessionPresentation === "desktop" &&
+      !this.onBackToSubagents &&
+      chatProps.disabledBanner?.presentation === "compact";
     const paneChatProps: ChatProps = merge(chatProps, {
       onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
       onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
+      disabledBanner:
+        subagentStopInNotice && chatProps.disabledBanner
+          ? { ...chatProps.disabledBanner, stop: subagentStop }
+          : chatProps.disabledBanner,
+      mobileComposer: Boolean(mobileHost),
+      showNewMessages:
+        (this.sessionPresentation !== "desktop" || conversationVisible) &&
+        chatProps.showNewMessages,
+      mobileActivities: mobileHost
+        ? {
+            goal: goalPresentation
+              ? {
+                  executionConfirmed: goalPresentation.executionConfirmed,
+                  onOpen: (source) =>
+                    openDetailsPage({ kind: "goal" }, t("sessionsView.goal"), source),
+                }
+              : undefined,
+            onOpenSubagents: () => {
+              const working = listSubagents(chatProps).filter(
+                (agent) => agent.status === "running" || agent.status === "waiting",
+              );
+              this.showSubagents(working.length === 1 ? working[0]!.key : null);
+            },
+            onOpenProgress: (source) =>
+              openDetailsPage(
+                { kind: "task-progress" },
+                t("sessionProgressCard.composerTitle"),
+                source,
+              ),
+            onOpenPullRequest: (request) =>
+              openDetailsPage(
+                { kind: "pull-request", id: chatPullRequestId(request) },
+                request.title,
+              ),
+            publication: chatProps.githubPublication
+              ? {
+                  eligible: true,
+                  onOpen: (source) =>
+                    openDetailsPage(
+                      { kind: "publication" },
+                      t("chat.activityPills.publication.review"),
+                      source,
+                    ),
+                }
+              : undefined,
+          }
+        : undefined,
+      mobileKeyboardVisible: mobileHost?.keyboardVisible,
+      onComposerEditingChange: mobileHost?.onComposerEditingChange,
       error: conversationVisible ? chatProps.error : null,
       detailsEnabled: !catalog && !this.compact,
       detailsWorkspace: {
@@ -220,7 +312,31 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           selectedSession?.worktree?.branch ??
           chatProps.pullRequestsBranch?.branch,
       },
+      onOpenSidebar: chatProps.onOpenSidebar
+        ? (content) => {
+            const slot = chatProps.onOpenSidebar?.(content);
+            if (slot) {
+              this.navigateMobileHost({ area: "panels", slot });
+            }
+          }
+        : undefined,
+      onOpenWorkspaceFile: chatProps.onOpenWorkspaceFile
+        ? (target) => {
+            const result = chatProps.onOpenWorkspaceFile?.(target);
+            // The native file owner admits the preview synchronously before its async read.
+            if (state.connected && state.client) {
+              this.onSidebarPanelOpened("workspace");
+            }
+            return result;
+          }
+        : undefined,
       onOpenWorkspace: () => openPanelSlot("workspace"),
+      onOpenSessionDiff: chatProps.onOpenSessionDiff
+        ? () => {
+            chatProps.onOpenSessionDiff?.();
+            this.onSidebarPanelOpened("detail");
+          }
+        : undefined,
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
       onOpenProcesses: ownsSubagentsPanel
@@ -237,44 +353,32 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     } satisfies Partial<ChatProps>);
-    const detailsProgress = this.detailsProgressCardPresentation;
-    const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
-      ? {
-          chat: {
-            ...paneChatProps,
-            ...detailsActions,
-            progressCard: detailsProgress?.card ?? null,
-            progressCardIdentity: detailsProgress?.identity,
-            progressCardLifetime: detailsProgress?.lifetime,
-            progressCardInitialLoading: this.detailsProgressCardInitialLoading,
-          },
-          elements: this.detailsElements,
-          mobileHost,
-          mobile: this.mergedChrome && !this.onBackToSubagents,
-          presentation: panePresentation,
-          conversationVisible,
-          externalTrigger:
-            (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") !== "conversation",
-          setRef: (details) => {
-            this.headerDetailsRef.value = details;
-          },
-        }
-      : undefined;
-    const subagentStop =
-      chatProps.disabledBanner?.presentation &&
-      chatProps.canAbort &&
-      chatProps.onAbort &&
-      !hasTerminalRunStatus(chatProps.runStatus)
-        ? { onAbort: chatProps.onAbort }
-        : undefined;
-    const subagentHeader = this.onBackToSubagents
-      ? {
-          onBack: this.onBackToSubagents,
-          title: this.resolveHeaderSessionTitle(selectedSession),
-          stop: subagentStop,
-          details: headerDetails,
-        }
-      : null;
+    sessionWorkspace.transcriptAttachments = this.attachmentCatalog.read({
+      state,
+      selectedSession,
+      currentAgentId,
+      chatProps,
+      paneChatProps,
+      gateway: this.context.gateway,
+      presentation: this.sessionPresentation,
+      workspacePresented: slotPresentation("workspace").isPresented(),
+      sessionWorkspace,
+    });
+    const { headerDetails, subagentHeader } = this.renderHeaderDetails({
+      elements: this.detailsElements,
+      state,
+      selectedSession,
+      chatProps,
+      paneChatProps,
+      detailsActions,
+      subagentStop,
+      ownsSubagentsPanel,
+      mobileHost,
+      sidebarLayout,
+      headerPresentation,
+      panePresentation,
+      conversationVisible,
+    });
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
@@ -321,11 +425,44 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       };
     }
     const desktopFocus = this.desktopFocus;
-    sessionWorkspace.onScrollPortRef = this.mobileScrollFades.register;
+    const toggleMobilePanel = (slot: SidebarSlotId) =>
+      isSidebarSlotVisible(sidebarLayout, slot) ? closePanelSlot(slot) : openPanelSlot(slot);
+    const headerWorkspace = mobileHost
+      ? {
+          ...sessionWorkspace,
+          onScrollPortRef: this.mobileScrollFades.register,
+          collapsed: !isSidebarSlotVisible(sidebarLayout, "workspace"),
+          onOpenDiff: sessionWorkspace.onOpenDiff
+            ? () => {
+                sessionWorkspace.onOpenDiff?.();
+                this.navigateMobileHost({ area: "panels", slot: "detail" });
+              }
+            : undefined,
+          onToggleCollapsed: () => toggleMobilePanel("workspace"),
+          onToggleTerminal: sessionWorkspace.onToggleTerminal
+            ? () => toggleMobilePanel("terminal")
+            : undefined,
+          onToggleBrowser: sessionWorkspace.onToggleBrowser
+            ? () => toggleMobilePanel("browser")
+            : undefined,
+          onToggleDesktop: sessionWorkspace.onToggleDesktop
+            ? () => toggleMobilePanel("desktop")
+            : undefined,
+        }
+      : { ...sessionWorkspace, onScrollPortRef: this.mobileScrollFades.register };
+    const desktopPanel = savedLayout.columns[0]?.panels.find((panel) => panel.slot === "desktop");
+    const desktopIsMain = desktopPanel !== undefined && desktopPanel.id === savedLayout.mainPanelId;
+    const desktopExpanded =
+      savedLayout.expanded === true &&
+      (desktopIsMain
+        ? !savedLayout.expandedSide
+        : savedLayout.expandedSide === true &&
+          desktopPanel !== undefined &&
+          savedLayout.columns[0]?.activePanelId === desktopPanel.id);
     const panelDefinitions = sidebarPanelDefinitions({
       onScrollPortRef: this.mobileScrollFades.register,
-      presentation: this.sessionPresentation,
       paneId: this.paneId,
+      presentation: this.sessionPresentation,
       panePresentationId: this.presentationId,
       subagentsInputRegion: this.inputRegion,
       subagentsPresented: slotPresentation("subagents"),
@@ -335,6 +472,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onSubagentSessionSelect: (sessionKey, options) =>
         this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,
+      detailPresented: slotPresentation("detail"),
       state,
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
@@ -350,6 +488,19 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
       desktopPresented,
+      desktopExpanded,
+      onToggleDesktopExpanded: () => {
+        if (!desktopPanel) {
+          return;
+        }
+        if (desktopIsMain) {
+          state.updateSidebarLayout(setSidebarExpanded(savedLayout, !desktopExpanded), {
+            dashboardPresentation: "personal",
+          });
+        } else {
+          nativeCallbacks.togglePanelExpanded(desktopPanel.id);
+        }
+      },
       desktopRefreshOnPresentation: !this.pendingPanelToggles.requests.has("desktop"),
       desktopAvailable,
       desktopSource,
@@ -368,8 +519,28 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         }
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
-      workspace: sessionWorkspace,
-      detail: { chat: chatProps, host: state },
+      workspace: headerWorkspace,
+      workspacePresented: slotPresentation("workspace"),
+      detail: {
+        chat: paneChatProps,
+        presentation: this.sessionPresentation,
+        host: state,
+        onOpenMobilePage: mobileHost
+          ? (request, source) =>
+              this.navigateMobileHost(
+                {
+                  area: "panels",
+                  slot: "detail",
+                  page: { key: request.key, title: request.title, render: request.render },
+                  backTo: { area: "panels", slot: "detail" },
+                },
+                source,
+              )
+          : undefined,
+        onWorkspaceIntent: mobileHost
+          ? () => this.navigateMobileHost({ area: "panels", slot: "workspace" })
+          : undefined,
+      },
       digest: observerDigest,
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
@@ -391,7 +562,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           currentAgentId,
         ),
       connected: state.connected,
-      onClearCompanion: () => this.clearSessionCompanion(),
+      onClearCompanion: this.clearSessionCompanion,
       onCreateClaw:
         currentAgentId && canCreateClawDraft(this.context)
           ? () => void clawCreatorFlow(this.context).start(currentAgentId)
@@ -501,7 +672,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           },
         }
       : nativeCallbacks;
-    const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.
     const header =
@@ -509,15 +679,15 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         ? null
         : {
             header: this.renderPaneHeader(
-              sessionWorkspace,
+              headerWorkspace,
               selectedSession,
               catalog,
               agentWorkspace,
               workspaceGit,
               chatProps.placementStartup,
-              savedLayout,
+              mobileHost ? sidebarLayout : savedLayout,
               panelDefinitions,
-              subagentStop,
+              subagentStopInNotice ? undefined : subagentStop,
               headerDetails,
               { openPanelSlot: callbacks.openSlot, closePanelSlot: callbacks.closeSlot },
             ),
@@ -527,18 +697,20 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
                 : undefined,
             sessionKey: state.sessionKey,
             agentId: currentAgentId,
-            presentation: {
-              owner: this.element,
-              isPresented: () => this.visuallyPresented,
-              preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
-            },
+            presentation: headerPresentation,
           };
+    const externalPanelsToggle = this.sessionPresentation === "desktop" && header !== null;
     if (header) {
-      header.header.header.setDashboardControls = this.setDashboardControls;
-    }
-    const dashboard = panelDefinitions.find((definition) => definition.slot === "dashboard");
-    if (dashboard?.view?.dashboard) {
-      dashboard.view.dashboard.controls = this.dashboardControls;
+      this.configureHeaderPanelPresentation({
+        nativeHeader: header.header.header,
+        headerDetails,
+        state,
+        currentAgentId,
+        sidebarLayout,
+        panelDefinitions,
+        catalog,
+        externalPanelsToggle,
+      });
     }
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
@@ -565,6 +737,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       presentationId: this.presentationId,
       presentation: this.compact || this.onBackToSubagents ? undefined : this.sessionPresentation,
       mobileHost,
+      externalPanelsToggle,
       conversationTab: { label: chatProps.assistantName, avatar },
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),

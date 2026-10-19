@@ -117,6 +117,7 @@ export function sidebarPanelDefinitions(
     definePanel("portal", "globe"),
     definePanel("workspace", "fileText"),
     definePanel("companion", "messageSquarePlus", true, {
+      // The main pane has no closable tab, so it keeps its native reset action.
       headerActionView:
         params?.presentation === "desktop" &&
         state &&
