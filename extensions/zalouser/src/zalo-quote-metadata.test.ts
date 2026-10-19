@@ -1,18 +1,23 @@
-// Zalouser tests cover inbound normalization and outbound bounds through public plugin paths.
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, Message } from "./zca-client.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
 let sessionSequence = 0;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    // Close the store before removing its files on Windows.
+    resetPluginStateStoreForTests();
+    cleanup();
+  }),
+);
 
 vi.mock("./zca-client.js", () => ({
   createZalo: createZaloMock,
@@ -52,14 +57,10 @@ function createMockApi(overrides: Partial<API> = {}): API {
   } as unknown as API;
 }
 
-async function withStoredSession<T>(params: {
-  profile: string;
-  api: API;
-  run: () => Promise<T>;
-}): Promise<T> {
-  const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-message-"));
+async function withStoredSession<T>(profile: string, api: API, run: () => Promise<T>): Promise<T> {
+  const stateDir = tempDirs.make("openclaw-zalouser-message-");
   await saveStoredZaloCredentials(
-    params.profile,
+    profile,
     {
       imei: "test-imei",
       cookie: [{ key: "zpsid", value: "test" }],
@@ -68,16 +69,8 @@ async function withStoredSession<T>(params: {
     },
     { OPENCLAW_STATE_DIR: stateDir },
   );
-  createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => params.api) });
-  try {
-    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, params.run);
-  } finally {
-    // Listener and send paths leave the shared state database open under the temporary
-    // state dir, so it must be released before removal or Windows keeps the files locked
-    // and the removal fails with EBUSY.
-    resetPluginStateStoreForTests();
-    await rm(stateDir, { recursive: true, force: true });
-  }
+  createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, run);
 }
 
 function findListener(listenerOn: ListenerOn, event: string): (message: Message) => void {
@@ -120,70 +113,58 @@ describe("Zalo payload bounds", () => {
   it("applies the resolved account media cap before the native message send", async () => {
     const sendMessage = vi.fn(async () => ({ msgId: "media-cap" }));
     const api = createMockApi({ sendMessage } as Partial<API>);
-    const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "zalouser-media-cap-")));
+    const directory = tempDirs.make("zalouser-media-cap-");
     const file = path.join(directory, "attachment.txt");
-    try {
-      await withStoredSession({
-        profile: "media-cap",
-        api,
-        run: async () => {
-          const sendMedia = zalouserMessageAdapter.send?.media;
-          if (!sendMedia) {
-            throw new Error("Zalo Personal media sender unavailable");
-          }
-          const params = {
-            cfg: {
-              channels: {
-                zalouser: {
-                  mediaMaxMb: 10,
-                  accounts: { Limited: { profile: "media-cap", mediaMaxMb: 1 / 1024 } },
-                },
-              },
+    await withStoredSession("media-cap", api, async () => {
+      const sendMedia = zalouserMessageAdapter.send?.media;
+      if (!sendMedia) {
+        throw new Error("Zalo Personal media sender unavailable");
+      }
+      const params = {
+        cfg: {
+          channels: {
+            zalouser: {
+              mediaMaxMb: 10,
+              accounts: { Limited: { profile: "media-cap", mediaMaxMb: 1 / 1024 } },
             },
-            accountId: "limited",
-            to: "user:123456789",
-            text: "attachment",
-            mediaUrl: file,
-            mediaLocalRoots: [directory],
-          };
-          await writeFile(file, "x".repeat(1536));
-          await expect(sendMedia(params)).rejects.toThrow(/exceeds.*limit/i);
-          expect(sendMessage).not.toHaveBeenCalled();
-          await writeFile(file, "x".repeat(512));
-          const result = await sendMedia(params);
-          expect(result.messageId).toBe("media-cap");
-          expect(sendMessage).toHaveBeenCalledOnce();
-          expect(sendMessage).toHaveBeenCalledWith(
-            expect.objectContaining({
-              attachments: [expect.objectContaining({ data: Buffer.from("x".repeat(512)) })],
-            }),
-            "123456789",
-            expect.anything(),
-          );
+          },
         },
-      });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+        accountId: "limited",
+        to: "user:123456789",
+        text: "attachment",
+        mediaUrl: file,
+        mediaLocalRoots: [directory],
+      };
+      await writeFile(file, "x".repeat(1536));
+      await expect(sendMedia(params)).rejects.toThrow(/exceeds.*limit/i);
+      expect(sendMessage).not.toHaveBeenCalled();
+      await writeFile(file, "x".repeat(512));
+      const result = await sendMedia(params);
+      expect(result.messageId).toBe("media-cap");
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments: [expect.objectContaining({ data: Buffer.from("x".repeat(512)) })],
+        }),
+        "123456789",
+        expect.anything(),
+      );
+    });
   });
 
   it("keeps the 2,000-code-unit transport payload UTF-16 well-formed", async () => {
     const sendMessage = vi.fn(async () => ({ msgId: "message-1" }));
     const api = createMockApi({ sendMessage } as Partial<API>);
 
-    await withStoredSession({
-      profile: "payload-bounds",
-      api,
-      run: async () => {
-        await expect(
-          sendZaloTextMessage("thread-1", `${"x".repeat(1_999)}🚀tail`, {
-            profile: "payload-bounds",
-          }),
-        ).resolves.toMatchObject({
-          messageId: "message-1",
-          receipt: { platformMessageIds: ["message-1"] },
-        });
-      },
+    await withStoredSession("payload-bounds", api, async () => {
+      await expect(
+        sendZaloTextMessage("thread-1", `${"x".repeat(1_999)}🚀tail`, {
+          profile: "payload-bounds",
+        }),
+      ).resolves.toMatchObject({
+        messageId: "message-1",
+        receipt: { platformMessageIds: ["message-1"] },
+      });
     });
 
     expect(sendMessage).toHaveBeenCalledWith("x".repeat(1_999), "thread-1", expect.anything());
@@ -191,45 +172,31 @@ describe("Zalo payload bounds", () => {
 });
 
 describe("Zalo inbound normalization", () => {
-  async function captureInbound(messages: Message[]): Promise<Array<Record<string, unknown>>> {
+  async function captureInbound(messages: Message[]) {
     const profile = `listener-${sessionSequence++}`;
-    const listenerOn = vi.fn();
-    const api = createMockApi({
-      listener: {
-        on: listenerOn,
-        off: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn(),
-      },
-    } as Partial<API>);
+    const api = createMockApi();
     const received: Message[] = [];
 
-    await withStoredSession({
-      profile,
-      api,
-      run: async () => {
-        const abortController = new AbortController();
-        const listener = await startZaloListener({
-          accountId: "default",
-          profile,
-          abortSignal: abortController.signal,
-          onMessage: (message) => {
-            received.push(message);
-          },
-          onError: vi.fn(),
-        });
-        const onMessage = findListener(listenerOn, "message");
-        for (const message of messages) {
-          onMessage(message);
-        }
-        listener.stop();
-      },
+    await withStoredSession(profile, api, async () => {
+      const listener = await startZaloListener({
+        accountId: "default",
+        profile,
+        abortSignal: new AbortController().signal,
+        onMessage: (message) => {
+          received.push(message);
+        },
+        onError: vi.fn(),
+      });
+      const onMessage = findListener(vi.mocked(api.listener.on), "message");
+      for (const message of messages) {
+        onMessage(message);
+      }
+      listener.stop();
     });
 
     return received
       .map((message) => normalizeZaloInboundMessage(message, "555444333"))
-      .filter((message): message is NonNullable<typeof message> => message !== null)
-      .map((message) => message as unknown as Record<string, unknown>);
+      .filter((message): message is NonNullable<typeof message> => message !== null);
   }
 
   it("extracts quote metadata and implicit mentions", async () => {
@@ -281,31 +248,23 @@ describe("Zalo inbound normalization", () => {
 });
 
 describe("Zalo group context cache", () => {
-  function createGroupApi(getGroupInfo: ReturnType<typeof vi.fn>): API {
-    return createMockApi({ getGroupInfo } as Partial<API>);
-  }
-
   it("reuses group context until its five-minute TTL expires", async () => {
     const getGroupInfo = vi.fn(async () => ({
       gridInfoMap: { "group-ttl": { groupId: "group-ttl", name: "Group" } },
     }));
-    const api = createGroupApi(getGroupInfo);
+    const api = createMockApi({ getGroupInfo } as Partial<API>);
     const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
-    await withStoredSession({
-      profile: "cache-ttl",
-      api,
-      run: async () => {
-        await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
-          groupId: "group-ttl",
-          name: "Group",
-        });
-        now.mockReturnValue(1_700_000_299_999);
-        await resolveZaloGroupContext("cache-ttl", "group-ttl");
-        expect(getGroupInfo).toHaveBeenCalledOnce();
-        now.mockReturnValue(1_700_000_300_000);
-        await resolveZaloGroupContext("cache-ttl", "group-ttl");
-      },
+    await withStoredSession("cache-ttl", api, async () => {
+      await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
+        groupId: "group-ttl",
+        name: "Group",
+      });
+      now.mockReturnValue(1_700_000_299_999);
+      await resolveZaloGroupContext("cache-ttl", "group-ttl");
+      expect(getGroupInfo).toHaveBeenCalledOnce();
+      now.mockReturnValue(1_700_000_300_000);
+      await resolveZaloGroupContext("cache-ttl", "group-ttl");
     });
 
     expect(getGroupInfo).toHaveBeenCalledTimes(2);

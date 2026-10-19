@@ -155,7 +155,6 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
     const server = createServer();
     const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
     const sockets = new Set<Socket>();
-    const trace: string[] = [];
     const firstUpgrade = createDeferred<void>();
     const connected = createDeferred<void>();
     let upgrades = 0;
@@ -165,7 +164,6 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
     });
     server.on("upgrade", (request, socket, head) => {
       upgrades++;
-      trace.push(`transport:upgrade:${upgrades}`);
       if (upgrades === 1) {
         firstUpgrade.resolve();
       } else {
@@ -203,7 +201,6 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
           );
           listener.once("connected", (...args) => {
             expect(args).toEqual([]);
-            trace.push("transport:connected");
             connected.resolve();
           });
           const terminal = createDeferred<void>();
@@ -215,9 +212,7 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
         },
       }));
       const runtime = createZalouserRuntimeEnv();
-      const errors = vi.fn((...args: unknown[]) => {
-        trace.push(args.map(String).join(" "));
-      });
+      const errors = vi.fn();
       runtime.error = errors;
       const options = {
         account: createDefaultResolvedZalouserAccount(),
@@ -228,16 +223,11 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
       };
       let firstSettled = false;
       first = monitorZalouserProvider(options);
-      const firstError = first.then(
-        () => {
+      const firstError = first
+        .catch((error: unknown) => error)
+        .finally(() => {
           firstSettled = true;
-          return null;
-        },
-        (error: unknown) => {
-          firstSettled = true;
-          return error;
-        },
-      );
+        });
       await firstUpgrade.promise;
       await vi.advanceTimersByTimeAsync(29_999);
       expect(firstSettled).toBe(false);
@@ -246,7 +236,6 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
       await vi.advanceTimersByTimeAsync(1);
       expect(errors).toHaveBeenCalledOnce();
       expect(await firstError).toEqual(new Error("Zalo listener websocket handshake timed out"));
-      trace.push("monitor:rejected");
       // Stop during CONNECTING emits ws's error on nextTick before closed.
       // There is deliberately no test error listener masking an unhandled error.
       await closed[0];
@@ -261,14 +250,11 @@ it("settles a real zca-js handshake timeout and reconnects the same monitor prof
       ]);
       expect(upgrades).toBe(2);
       expect(listeners).toHaveLength(2);
-      trace.push("monitor:retry-started");
       abort.abort();
       await second;
       await closed[1];
       expect(listeners[1]?.listenerCount("error")).toBe(0);
       expect(errors).toHaveBeenCalledOnce();
-      trace.push("monitor:abort-settled");
-      console.log(JSON.stringify({ proof: "zca-js-real-transport-controlled-clock", trace }));
     } finally {
       try {
         abort.abort();
