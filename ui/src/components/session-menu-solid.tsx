@@ -3,7 +3,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { activateMenuShortcut } from "./menu-shortcuts.ts";
+import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
@@ -107,7 +107,7 @@ function SessionMenuContent(
   const view = useSessionMenuEntries(actions, readState);
   const shortcut = (event: KeyboardEvent) => {
     if (!actions.handleKeydown(event, view.appearance)) {
-      activateMenuShortcut(host, event);
+      activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
   let stopShortcut: (() => void) | undefined;

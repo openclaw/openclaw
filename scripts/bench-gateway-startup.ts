@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createCipheriv } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -63,6 +64,9 @@ type GatewayBenchCase = {
 };
 
 type GatewaySample = {
+  agentRecoveryMs?: Record<string, number>;
+  integrityGateMs?: Record<string, number>;
+  agentDatabaseAdmissionErrors?: number;
   completionMs: number | null;
   cpuCoreRatio: number | null;
   cpuMs: number | null;
@@ -102,6 +106,11 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   runs: number;
   timeoutMs: number;
   warmup: number;
+  fixtureRoot?: string;
+  seedOnly: boolean;
+  agentDatabaseMib: number;
+  agentGateDelayMs: number;
+  startAt?: number;
 };
 
 const DEFAULT_RUNS = 5;
@@ -116,6 +125,7 @@ const BOOLEAN_FLAGS = new Set([
   "--json",
   "--installed-child",
   "--installed-cpu-diagnostic",
+  "--seed-only",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -129,6 +139,10 @@ const VALUE_FLAGS = new Set([
   "--runs",
   "--timeout-ms",
   "--warmup",
+  "--fixture-root",
+  "--agent-database-mib",
+  "--agent-gate-delay-ms",
+  "--start-at",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -168,6 +182,18 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 }
 
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
+  {
+    id: "slowAgentDatabase",
+    name: "gateway, one checking agent and four ready agents",
+    runByDefault: false,
+    config: {
+      ...BASE_CONFIG,
+      plugins: { enabled: false },
+      cron: { enabled: false },
+      agents: { defaults: { heartbeat: { every: "0m" } } },
+    },
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+  },
   {
     id: "default",
     name: "gateway default",
@@ -366,6 +392,21 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     runs: parsePositiveInt(flags.get("--runs")?.[0], DEFAULT_RUNS, "--runs"),
     timeoutMs: parsePositiveInt(flags.get("--timeout-ms")?.[0], DEFAULT_TIMEOUT_MS, "--timeout-ms"),
     warmup: parseNonNegativeInt(flags.get("--warmup")?.[0], DEFAULT_WARMUP, "--warmup"),
+    fixtureRoot: flags.get("--fixture-root")?.[0],
+    seedOnly: flags.has("--seed-only"),
+    agentDatabaseMib: parseNonNegativeInt(
+      flags.get("--agent-database-mib")?.[0],
+      512,
+      "--agent-database-mib",
+    ),
+    agentGateDelayMs: parseNonNegativeInt(
+      flags.get("--agent-gate-delay-ms")?.[0],
+      10_000,
+      "--agent-gate-delay-ms",
+    ),
+    startAt: flags.has("--start-at")
+      ? parsePositiveInt(flags.get("--start-at")?.[0], 0, "--start-at")
+      : undefined,
   };
 }
 
@@ -391,6 +432,11 @@ Options:
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
+  --fixture-root <path> Prepared slowAgentDatabase fixture (requires --runs 1 --warmup 0)
+  --seed-only         Create a new --fixture-root without launching a Gateway
+  --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
+  --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
+  --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
 
 Case ids:
   ${GATEWAY_CASES.map((benchCase) => `${benchCase.id} (${benchCase.name})`).join("\n  ")}
@@ -442,6 +488,16 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       if (sample.maxRssMb == null) {
         missing.push("rss");
       }
+      if (result.id === "slowAgentDatabase") {
+        if (
+          SLOW_DATABASE_AGENT_IDS.some((agentId) => sample.agentRecoveryMs?.[agentId] === undefined)
+        ) {
+          missing.push("per-agent recovery");
+        }
+        if (sample.integrityGateMs?.["gate-passed"] === undefined) {
+          missing.push("full integrity scan");
+        }
+      }
       if (missing.length > 0) {
         failures.push({
           id: result.id,
@@ -449,6 +505,27 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
           sampleIndex: index + 1,
         });
         return;
+      }
+      if (result.id === "slowAgentDatabase") {
+        const gatePassed = sample.integrityGateMs!["gate-passed"]!;
+        for (const agentId of SLOW_DATABASE_AGENT_IDS) {
+          const recovered = sample.agentRecoveryMs![agentId]!;
+          const slow = agentId === "bench-slow";
+          if (slow ? recovered <= gatePassed : recovered >= gatePassed) {
+            failures.push({
+              id: result.id,
+              reason: `${agentId} recovered at ${recovered.toFixed(1)}ms; must recover ${slow ? "after" : "before"} integrity gate passed at ${gatePassed.toFixed(1)}ms`,
+              sampleIndex: index + 1,
+            });
+          }
+        }
+        if (sample.agentDatabaseAdmissionErrors !== 0) {
+          failures.push({
+            id: result.id,
+            reason: `database admission errors: ${sample.agentDatabaseAdmissionErrors ?? "missing count"}`,
+            sampleIndex: index + 1,
+          });
+        }
       }
       if (sample.exitedBeforeTeardown === true) {
         failures.push({
@@ -733,8 +810,176 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
         providerStaticCatalogStallMs: benchCase.providerStaticCatalogStallMs,
       })
     : null;
-  const agentList = buildBenchAgentList(root, benchCase.agentTopology);
+  const agentList =
+    benchCase.id === "slowAgentDatabase"
+      ? SLOW_DATABASE_AGENT_IDS.map((id) => ({ id, workspace: path.join(root, "workspace", id) }))
+      : buildBenchAgentList(root, benchCase.agentTopology);
   return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
+}
+
+const SLOW_DATABASE_AGENT_IDS = [
+  "bench-fast-01",
+  "bench-fast-02",
+  "bench-fast-03",
+  "bench-fast-04",
+  "bench-slow",
+] as const;
+
+async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: number): Promise<void> {
+  mkdirSync(root);
+  const benchCase = GATEWAY_CASES.find((entry) => entry.id === "slowAgentDatabase")!;
+  const configPath = writeConfig(root, benchCase);
+  const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
+  const previousEnv = process.env;
+  process.env = { ...env };
+  try {
+    const [agentDb, stateDb, { writeSessionEntry }, { bindSubagentRunRecord }, registry] =
+      await Promise.all([
+        import("../src/state/openclaw-agent-db.js"),
+        import("../src/state/openclaw-state-db.js"),
+        import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+        import("../src/agents/subagents/registry/subagent-registry.store.codec.js"),
+        import("../src/agents/subagents/registry/subagent-registry.store.kernel.js"),
+      ]);
+    const now = Date.now() - 60_000;
+    const requesterAgentId = SLOW_DATABASE_AGENT_IDS[0];
+    const databases: Array<{ agentId: string; path: string }> = [];
+    let slowPath = "";
+    try {
+      for (const agentId of SLOW_DATABASE_AGENT_IDS) {
+        const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
+        const runId = `slow-db-bench-${agentId}`;
+        const childSessionKey = `agent:${agentId}:subagent:${runId}`;
+        const requesterSessionKey = `agent:${requesterAgentId}:requester:${agentId}`;
+        agentDb.runOpenClawAgentWriteTransaction(
+          (writable) => {
+            writeSessionEntry(writable, requesterSessionKey, {
+              sessionId: `requester-${agentId}`,
+              updatedAt: now,
+            });
+          },
+          { agentId: requesterAgentId, env },
+        );
+        agentDb.runOpenClawAgentWriteTransaction(
+          (writable) => {
+            writeSessionEntry(writable, childSessionKey, {
+              sessionId: runId,
+              lifecycleRevision: runId,
+              lifecycleRunId: runId,
+              startedAt: now,
+              updatedAt: now,
+            });
+          },
+          { agentId, env },
+        );
+        stateDb.runOpenClawStateWriteTransaction(
+          (state) => {
+            registry.writeSubagentRunValuesInDatabase(
+              state,
+              [
+                bindSubagentRunRecord({
+                  runId,
+                  childSessionKey,
+                  childAgentId: agentId,
+                  childSessionIdentity: { sessionId: runId, lifecycleRevision: runId },
+                  requesterSessionKey,
+                  requesterAgentId,
+                  requesterDisplayKey: requesterSessionKey,
+                  task: "Synthetic interrupted startup recovery",
+                  cleanup: "keep",
+                  createdAt: now,
+                  execution: {
+                    status: "running",
+                    startedAt: now,
+                    lifecycleGeneration: "synthetic-previous-gateway",
+                  },
+                  completion: { required: false },
+                  delivery: { status: "not_required" },
+                  expectsCompletionMessage: false,
+                }),
+              ],
+              [],
+            );
+          },
+          { env },
+        );
+        if (agentId === "bench-slow") {
+          slowPath = database.path;
+          // An unused canonical cache scope adds real pages without loading payloads at boot.
+          const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16)).update(
+            Buffer.alloc(1024 * 1024),
+          );
+          const insert = database.db.prepare(
+            "INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES ('startup-benchmark', ?, ?, ?)",
+          );
+          for (let index = 0; index < mib; index++) {
+            insert.run(String(index), payload, now);
+            if (index % 16 === 15) {
+              database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+            }
+          }
+        }
+        database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        databases.push({ agentId, path: database.path });
+      }
+    } finally {
+      await agentDb.closeOpenClawAgentDatabasesAsync();
+      await stateDb.closeOpenClawStateDatabaseAsync();
+    }
+    // Exclusive offline fixture custody: the next owner must perform its real full scan.
+    rmSync(`${slowPath}.seal`, { force: true });
+    writeFileSync(
+      path.join(root, "slow-agent-fixture.json"),
+      JSON.stringify(
+        {
+          databases: databases.map(({ agentId, path: databasePath }) => ({
+            agentId,
+            bytes: statSync(databasePath).size,
+          })),
+          gateDelayMs,
+        },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(
+      path.join(root, "slow-agent-preload.mjs"),
+      `
+import { DatabaseSync } from 'node:sqlite';
+import { isMainThread } from 'node:worker_threads';
+const slowPath = ${JSON.stringify(slowPath)};
+const original = DatabaseSync.prototype.prepare;
+DatabaseSync.prototype.prepare = function(sql) {
+  if (this.location() === slowPath && /^PRAGMA integrity_check;?$/i.test(sql.trim())) {
+    console.log('[slow-agent-bench] gate-start');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${gateDelayMs});
+    const statement = original.call(this, sql);
+    const all = statement.all;
+    statement.all = function(...args) {
+      const rows = all.apply(this, args);
+      if (rows.length === 1 && rows[0].integrity_check === 'ok') {
+        console.log('[slow-agent-bench] gate-passed');
+      }
+      return rows;
+    };
+    return statement;
+  }
+  return original.call(this, sql);
+};
+if (isMainThread) {
+  const key = Symbol.for('openclaw.sessionLifecycleEventListeners');
+  const listeners = globalThis[key] ??= new Set();
+  listeners.add((event) => {
+    if (event.reason === 'subagent-status' && /:subagent:slow-db-bench-/.test(event.sessionKey)) {
+      console.log('[slow-agent-bench] recovered ' + event.sessionKey.split(':')[1]);
+    }
+  });
+}
+`,
+    );
+  } finally {
+    process.env = previousEnv;
+  }
 }
 
 async function runGatewaySample(
@@ -745,17 +990,41 @@ async function runGatewaySample(
     heapProfDir?: string;
     sampleIndex: number;
     timeoutMs: number;
+    fixtureRoot?: string;
+    startAt?: number;
   },
 ): Promise<GatewaySample> {
-  return await withGatewayBenchRoot(async (root) => {
-    const port = await getFreePort();
+  const withRoot = options.fixtureRoot
+    ? async <T>(run: (root: string) => Promise<T>) => run(path.resolve(options.fixtureRoot!))
+    : withGatewayBenchRoot;
+  return await withRoot(async (root) => {
+    const slowAgent = options.benchCase.id === "slowAgentDatabase";
+    let port = await getFreePort();
+    if (slowAgent) {
+      while (port < 40000) {
+        port = await getFreePort();
+      }
+    }
     const configPath = writeConfig(root, options.benchCase);
     const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
+    if (slowAgent) {
+      env.NODE_OPTIONS = `--import=${path.join(root, "slow-agent-preload.mjs")}`;
+    }
+    const agentRecoveryMs: Record<string, number> = {};
+    const integrityGateMs: Record<string, number> = {};
+    let agentDatabaseAdmissionErrors = 0;
     if (options.benchCase.incidentFixture) {
       await writeIncidentFixture(root, { kind: options.benchCase.incidentFixture });
       if (fixtureIncludesPackagedPlugins(options.benchCase.incidentFixture)) {
         assertIncidentPackagedPluginInventory();
       }
+    }
+    if (options.startAt !== undefined) {
+      const remaining = options.startAt - Date.now();
+      if (remaining < 0) {
+        throw new CliArgumentError("--start-at deadline has already passed");
+      }
+      await delay(remaining);
     }
     const startAt = performance.now();
     const deadlineAt = startAt + options.timeoutMs;
@@ -773,6 +1042,7 @@ async function runGatewaySample(
 
     try {
       const nodeOptions = [
+        ...(slowAgent ? ["--import", path.join(root, "slow-agent-preload.mjs")] : []),
         ...(options.cpuProfDir
           ? [
               "--cpu-prof",
@@ -806,6 +1076,17 @@ async function runGatewaySample(
       });
 
       const onLine = (line: string, nowMs: number) => {
+        if (line.includes("AgentDatabaseAdmissionError")) {
+          agentDatabaseAdmissionErrors++;
+        }
+        const recoveredAgent = /\[slow-agent-bench\] recovered (\S+)/u.exec(line)?.[1];
+        if (recoveredAgent && SLOW_DATABASE_AGENT_IDS.some((id) => id === recoveredAgent)) {
+          agentRecoveryMs[recoveredAgent] ??= nowMs;
+        }
+        const gate = /\[slow-agent-bench\] (gate-start|gate-passed)/u.exec(line);
+        if (gate) {
+          integrityGateMs[gate[1]!] ??= nowMs;
+        }
         const readyLogKind = classifyGatewayReadyLog(line);
         if (readyLogKind === "http-listen" && httpListenLogMs == null) {
           httpListenLogMs = nowMs;
@@ -845,6 +1126,16 @@ async function runGatewaySample(
           startAt,
         });
       const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
+      if (slowAgent) {
+        while (
+          Object.keys(agentRecoveryMs).length < SLOW_DATABASE_AGENT_IDS.length &&
+          startedChild.exitCode === null &&
+          startedChild.signalCode === null &&
+          performance.now() < deadlineAt
+        ) {
+          await delay(25);
+        }
+      }
       const completionMs = options.benchCase.completionTracePhase
         ? await waitForStartupTracePhase({
             deadlineAt,
@@ -864,6 +1155,7 @@ async function runGatewaySample(
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
       return {
+        ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
         completionMs,
         cpuCoreRatio,
         cpuMs,
@@ -899,6 +1191,8 @@ async function runCase(
     runs: number;
     timeoutMs: number;
     warmup: number;
+    fixtureRoot?: string;
+    startAt?: number;
   },
 ): Promise<CaseResult> {
   const samples: GatewaySample[] = [];
@@ -971,6 +1265,29 @@ async function main() {
   }
 
   const options = parseOptions(argv);
+  const slowAgent = options.cases.length === 1 && options.cases[0]?.id === "slowAgentDatabase";
+  if (options.fixtureRoot || options.seedOnly || slowAgent) {
+    if (
+      !slowAgent ||
+      !options.fixtureRoot ||
+      (!options.seedOnly && (options.runs !== 1 || options.warmup !== 0))
+    ) {
+      throw new CliArgumentError(
+        "slowAgentDatabase requires --fixture-root and either --seed-only or --runs 1 --warmup 0",
+      );
+    }
+    if (options.seedOnly) {
+      await seedSlowAgentFixture(
+        path.resolve(options.fixtureRoot),
+        options.agentDatabaseMib,
+        options.agentGateDelayMs,
+      );
+      return;
+    }
+    if (!existsSync(path.join(options.fixtureRoot, "slow-agent-fixture.json"))) {
+      throw new CliArgumentError("--fixture-root must first be prepared with --seed-only");
+    }
+  }
   if (options.installedCohort) {
     const { runInstalledGatewayBenchmark } = await import("./lib/gateway-bench-installed.ts");
     process.exitCode = await runInstalledGatewayBenchmark({

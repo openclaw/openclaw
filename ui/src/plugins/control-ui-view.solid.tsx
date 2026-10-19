@@ -345,6 +345,7 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   renderCompanion?: () => JSX.Element;
   presented?: boolean;
   enabled?: boolean;
+  replacementRef?: (element: HTMLElement) => void | (() => void);
 }) {
   // Delegated mounts run later inside a foreign plugin and retain the host's owner.
   const owner = getOwner();
@@ -385,9 +386,14 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   }
   const mountDefault = (target: HTMLElement) => mount(target, DefaultView);
   const mountCompanion = (target: HTMLElement) => mount(target, () => props.renderCompanion?.());
-  return (
-    <Show when={selected()} fallback={props.renderDefault()}>
+  function ReplacementView() {
+    let host!: HTMLElement;
+    onSettled(() => props.replacementRef?.(host));
+    return (
       <PluginView
+        ref={(element) => {
+          host = element;
+        }}
         data-plugin-composer={props.surface === "composer" ? "" : undefined}
         surface={props.surface}
         props={props.props}
@@ -395,6 +401,11 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
         mountDefaultView={mountDefault}
         mountReplacementCompanion={mountCompanion}
       />
+    );
+  }
+  return (
+    <Show when={selected()} fallback={props.renderDefault()}>
+      <ReplacementView />
     </Show>
   );
 }

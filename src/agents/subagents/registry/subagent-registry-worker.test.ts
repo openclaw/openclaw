@@ -35,7 +35,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
@@ -949,6 +949,7 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   await expect(
     bindSubagentRunGatewayOwners({
       runs: subagentRuns,
+      entries: [...getSubagentActivationRuns(subagentRuns)],
       resumedRuns: new Set(),
       getGatewayContextResolver: () => replacementResolver,
       onRecovered: () => {},

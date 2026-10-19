@@ -9,8 +9,10 @@ import {
   normalizeCacheKey,
   postTrustedWebToolsJson,
   readCache,
+  readCachedSearchPayload,
   resolveCacheTtlMs,
   writeCache,
+  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { assertPluginCapabilitySecretAvailable } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
@@ -27,10 +29,6 @@ import {
   resolveTavilySearchTimeoutSeconds,
 } from "./config.js";
 
-const SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
->();
 const EXTRACT_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
@@ -174,9 +172,9 @@ export async function runTavilySearch(
     params.cfg?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return cached;
   }
 
   const body: Record<string, unknown> = {
@@ -251,7 +249,7 @@ export async function runTavilySearch(
     result.truncated = true;
   }
 
-  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
+  writeCachedSearchPayload(cacheKey, result, cacheTtlMs);
   return result;
 }
 

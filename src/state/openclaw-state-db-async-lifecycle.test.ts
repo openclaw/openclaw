@@ -63,6 +63,31 @@ function holdReader(
 }
 
 describe("canonical shared-state resource drainage", () => {
+  it("targets registered admissions after first creation and drains all on global close", async () => {
+    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
+    const firstPath = databasePath("first");
+    const secondPath = databasePath("second");
+    const first = lifecycle.capture(firstPath);
+    const initialKey = first.identity.key;
+    const closeFirst = vi.fn(async () => {});
+    const closeSecond = vi.fn(async () => {});
+    lifecycle.register({ admission: first, close: closeFirst });
+    writeFileSync(firstPath, "");
+    writeFileSync(secondPath, "");
+    lifecycle.publish(firstPath);
+    const second = lifecycle.capture(secondPath);
+    lifecycle.register({ admission: second, close: closeSecond });
+    expect(first.identity.key).not.toBe(initialKey);
+
+    await lifecycle.close(firstPath, () => true);
+    expect(closeFirst).toHaveBeenCalledExactlyOnceWith(first.identity);
+    expect(closeSecond).not.toHaveBeenCalled();
+
+    await lifecycle.close(undefined, () => true);
+    expect(closeFirst).toHaveBeenLastCalledWith(undefined);
+    expect(closeSecond).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
   it("reuses warm existing facts without resolving paths or allocating replacement tokens", () => {
     const pathname = databasePath();
     writeFileSync(pathname, "");

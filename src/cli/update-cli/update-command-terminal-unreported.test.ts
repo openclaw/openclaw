@@ -23,9 +23,9 @@ import {
 } from "./update-command-result.js";
 import {
   deferUpdateCommandTerminalResult,
-  publishUpdateCommandTerminalResult,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const mocks = vi.hoisted(() => ({

@@ -426,7 +426,10 @@ pending placement subphase, such as
 database available until accepted effects have recorded their outcomes.
 
 Worker-environment shutdown also names its computer, inference, transfer, tunnel,
-and accepted-operation joins. For an attached worker, shutdown stops the exact
+and accepted-operation joins. Closing the service cancels a pending reconciliation
+owner lookup through the database reader before joining the guard; an idle lookup
+does not wait for the process shutdown deadline. Admitted recovery effects still
+settle before their owners close. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop, drain, and active-turn
 cancellation acknowledgments share at most five seconds after shutdown begins,
@@ -1309,8 +1312,13 @@ existing restart delivery and continuation behavior.
   `openclaw_session_recovery_age_seconds`.
 - **Startup timing:** the `sidecars.subagent-recovery` completion line includes
   `readersMs`, `deliveryMs`, `execMs`, `registryLoadMs`, and `registryActivationMs`
-  at the normal info level. These elapsed times include dependency loading and
-  waits for workers or database admission. Within `deliveryMs`,
+  at the normal info level. Recovery no longer prewarms every agent's readers
+  before starting; `readersMs` remains zero. Delivery, exec notification, and
+  subagent recovery run independently, and subagent activation preserves ordering
+  within each requester session. Independent sessions, including those owned by
+  the same agent, continue through a slow database open in another session.
+  Their tails remain tracked through shutdown. These elapsed times overlap and
+  include dependency loading and waits for workers or database admission. Within `deliveryMs`,
   `deliveryNoticesMs` measures blocked-notice selection and persistence, and
   `retryWaitMs` measures retry backoff; these nested totals are not additional
   phase time. Registry activation includes `registryActivationBindMs`,

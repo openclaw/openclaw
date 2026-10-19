@@ -682,7 +682,7 @@ export async function recordUpdatePackageCompletion(
 }
 
 /** Write the terminal ledger and its visible result together after settlement. */
-export async function publishUpdateCommandTerminalResult(
+async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
   outcome: {

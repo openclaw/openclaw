@@ -4,7 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sqlite from "../infra/node-sqlite.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteCleanCloseSeal,
+  writeSqliteCleanCloseSeal,
+} from "../infra/sqlite-clean-close-seal.js";
+import {
+  readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import {
@@ -30,6 +37,7 @@ import {
   withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -81,6 +89,10 @@ it("certifies idle handles after grace and borrowed handles only after their fin
     await vi.advanceTimersByTimeAsync(0);
     expect(idle.db.isOpen).toBe(false);
     expect(readSqliteDatabaseCleanClose(idle.path)).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      "agent database clean-close receipt: written; agent=idle",
+      expect.objectContaining({ agentId: "idle", receipt: "written" }),
+    );
     expect(held.db.isOpen).toBe(true);
     expect(readSqliteDatabaseCleanClose(held.path)).toBe(false);
     release.resolve();
@@ -101,6 +113,83 @@ it("certifies idle handles after grace and borrowed handles only after their fin
     await borrowed;
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+  }
+});
+
+it.each([
+  "unchanged",
+  "legacy-matching",
+  "no-proof",
+  "malformed-proof",
+  "identity-mismatch",
+  "runtime-mismatch",
+  "sqlite-mismatch",
+  "schema-mismatch",
+  "policy-mismatch",
+] as const)("reports the next admission's clean-close proof outcome (%s)", (outcome) => {
+  const options = {
+    agentId: "receipt-agent",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-seal-reason-") },
+  };
+  const first = openOpenClawAgentDatabase(options);
+  first.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{}', 1)");
+  closeOpenClawAgentDatabasesForTest();
+  const file = fs.statSync(first.path, { bigint: true });
+  const seal = readSqliteCleanCloseSeal(first.path, file)!;
+  expect(seal).toBeDefined();
+  // Drop process custody so admission must consume the on-disk restart proof.
+  retireSqliteDatabaseAdmissionForPath(first.path);
+  if (outcome === "no-proof") {
+    fs.unlinkSync(`${first.path}.seal`);
+  } else if (outcome === "malformed-proof") {
+    fs.writeFileSync(`${first.path}.seal`, "{torn");
+  } else if (outcome !== "unchanged") {
+    const identity = { ...sqliteDatabaseSealSchemaFor("agent")!.identity };
+    if (outcome === "runtime-mismatch") {
+      identity.runtime = '["other-runtime",null]';
+    } else if (outcome === "sqlite-mismatch") {
+      identity.sqlite = "other-sqlite";
+    } else if (outcome === "schema-mismatch") {
+      identity.schema = "other-schema";
+    } else if (outcome === "policy-mismatch") {
+      identity.policy -= 1;
+    }
+    expect(
+      writeSqliteCleanCloseSeal(
+        first.path,
+        outcome === "legacy-matching" ? seal.schemaIdentity : "other-identity",
+        file,
+        {
+          ...seal,
+          identity:
+            outcome === "legacy-matching" || outcome === "identity-mismatch" ? undefined : identity,
+        },
+      ),
+    ).toBe(true);
+  }
+  logger.info.mockClear();
+  const reopened = openOpenClawAgentDatabase(options);
+  expect(
+    reopened.db
+      .prepare("SELECT state_key FROM auth_profile_state WHERE state_key='preserved'")
+      .get(),
+  ).toEqual({ state_key: "preserved" });
+  if (outcome === "unchanged" || outcome === "legacy-matching") {
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "agent database integrity gate",
+      expect.anything(),
+    );
+    expect(readSqliteDatabaseCleanClose(first.path)).toBe(true);
+  } else {
+    expect(logger.info).toHaveBeenCalledWith(
+      "agent database integrity gate",
+      expect.objectContaining({
+        agentId: "receipt-agent",
+        integrityGateReason: outcome,
+        integrityGateMode: "full",
+        integrityGateOutcome: "healthy",
+      }),
+    );
   }
 });
 

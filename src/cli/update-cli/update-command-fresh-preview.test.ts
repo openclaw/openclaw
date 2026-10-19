@@ -47,9 +47,9 @@ import * as commandRun from "./update-command-run.js";
 import * as runtimePlan from "./update-command-runtime-preflight.js";
 import {
   deferUpdateCommandTerminalResult,
-  publishUpdateCommandTerminalResult,
   resolveSettledUpdateCommandResult,
 } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 import * as commandTriage from "./update-command-triage.js";
 import { updateCommand } from "./update-command.js";
 

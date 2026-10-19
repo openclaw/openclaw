@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createRoot, createSignal, flush, For } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useScrollState } from "../../components/solid/scroll-state.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createScrollStateRef } from "./scroll-state.ts";
 
@@ -64,6 +65,28 @@ function reflect(element: HTMLElement, state: { scrollable: boolean; atEnd: bool
   element.dataset.scrollable = String(state.scrollable);
   element.dataset.atEnd = String(state.atEnd);
 }
+
+it("keeps horizontal scroll affordances on Solid-bound elements", () => {
+  const view = mountSolid(() => <div role="region" ref={useScrollState(true)} />);
+  cleanup.push(view.unmount);
+  const element = view.getByRole("region");
+  const values = geometry(element, true);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(element.dataset).toMatchObject({
+    scrollable: "true",
+    atStart: "true",
+    atEnd: "false",
+  });
+  values.offset = 200;
+  element.dispatchEvent(new Event("scroll"));
+  vi.advanceTimersToNextFrame();
+  expect(element.dataset).toMatchObject({
+    scrollable: "true",
+    atStart: "false",
+    atEnd: "true",
+  });
+});
 
 it("moves observation to the rendered replacement and ignores the old pending layout", () => {
   const [identity, setIdentity] = createSignal(0);

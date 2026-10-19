@@ -19,6 +19,7 @@ import {
 } from "../../../lib/identity-avatar.ts";
 
 export type ChatAuthorAvatarProps = {
+  elementRef?: (element: HTMLElement) => void;
   sender: IdentityAvatarInput | null | undefined;
   class?: string;
   agentAvatar?: { avatar?: string | null; textAvatar?: string | null };
@@ -58,6 +59,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
             <IdentityAvatar identity={sender()}>
               {(view) => (
                 <ProfileAuthorAvatar
+                  elementRef={props.elementRef}
                   view={view()}
                   sender={sender()}
                   label={label()!}
@@ -68,6 +70,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
           }
         >
           <span
+            ref={(element) => props.elementRef?.(element)}
             class={props.class ?? "chat-author-avatar"}
             role="img"
             aria-label={label()!}
@@ -88,6 +91,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
 }
 
 function ProfileAuthorAvatar(props: {
+  elementRef?: (element: HTMLElement) => void;
   view: IdentityAvatarView;
   sender: IdentityAvatarInput;
   label: string;
@@ -100,6 +104,7 @@ function ProfileAuthorAvatar(props: {
   const presentation = createIdentityAvatarPresentation(() => props.view);
   return (
     <span
+      ref={(element) => props.elementRef?.(element)}
       data-avatar-state={channelPhoto() ? undefined : presentation.state()}
       class={["chat-author-avatar", channelPhoto() ? undefined : presentation.classes()]}
       role="img"
@@ -135,11 +140,16 @@ function ProfileAuthorAvatar(props: {
 }
 
 /** Image failure reveals the same initials without replacing the avatar frame. */
-export function UserAvatarSlot(props: { view: IdentityAvatarView; label: string }) {
+export function UserAvatarSlot(props: {
+  view: IdentityAvatarView;
+  label: string;
+  elementRef?: (element: HTMLElement) => void;
+}) {
   const presentation = createIdentityAvatarPresentation(() => props.view);
   return (
     <Show when={Boolean(props.view.imageUrl)} fallback={<UserInitials {...props} />}>
       <span
+        ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
       >
@@ -149,15 +159,20 @@ export function UserAvatarSlot(props: { view: IdentityAvatarView; label: string 
           class="chat-avatar user"
           alt={props.label}
         />
-        <UserInitials {...props} />
+        <UserInitials view={props.view} label={props.label} />
       </span>
     </Show>
   );
 }
 
-function UserInitials(props: { view: IdentityAvatarView; label: string }) {
+function UserInitials(props: {
+  view: IdentityAvatarView;
+  label: string;
+  elementRef?: (element: HTMLElement) => void;
+}) {
   return (
     <div
+      ref={(element) => props.elementRef?.(element)}
       class="chat-avatar user chat-avatar--sender-initials"
       style={{ background: `hsl(${props.view.fallback.colorSeed % 360} 48% 42%)` }}
       role="img"

@@ -108,11 +108,8 @@ class ArchiveSession {
     });
     try {
       this.unregisterState = registerOpenClawStateDatabaseAsyncResource({
-        close: async (identity) => {
-          if (!identity || identity.key === this.state.identity.key) {
-            await this.close();
-          }
-        },
+        admission: this.state,
+        close: () => this.close(),
       });
     } catch (error) {
       this.unregisterAgent();

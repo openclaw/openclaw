@@ -73,6 +73,10 @@ describe("native plugin surface", () => {
     const [label, setLabel] = createSignal("First");
     const click = vi.fn();
     const disposed = vi.fn();
+    const releaseReplacement = vi.fn();
+    const replacementRef = vi.fn(() => releaseReplacement);
+    const [readReplacementRef] = createSignal(() => replacementRef);
+    const warnings = vi.spyOn(console, "warn");
     const contexts: ApplicationContext[] = [];
     let fail = false;
     function DefaultView() {
@@ -87,6 +91,7 @@ describe("native plugin surface", () => {
           props={{ sessionKey: "main", agentId: "main", routeId: "chat" }}
           renderDefault={() => <DefaultView />}
           renderCompanion={() => <span>Companion</span>}
+          replacementRef={readReplacementRef()}
         />
       ),
       { wrapper: provider.wrapper },
@@ -110,6 +115,8 @@ describe("native plugin surface", () => {
       },
     });
     await waitForSolid(() => expect(view.getAllByRole("button")).toHaveLength(1));
+    expect(replacementRef).toHaveBeenCalledOnce();
+    expect(releaseReplacement).not.toHaveBeenCalled();
     const delegated = view.getByRole("button", { name: "First" });
     expect(view.queryByText("Companion")).toBeNull();
     setLabel("Second");
@@ -130,11 +137,17 @@ describe("native plugin surface", () => {
     await waitForSolid(() =>
       expect(view.container.querySelector("openclaw-plugin-view")).toBeNull(),
     );
+    expect(releaseReplacement).toHaveBeenCalledOnce();
     view.getByRole("button", { name: "Second" }).click();
     expect(click).toHaveBeenCalledTimes(3);
     view.unmount();
+    expect(releaseReplacement).toHaveBeenCalledOnce();
     expect(disposed).toHaveBeenCalledTimes(contexts.length);
     expect(source.listeners.size).toBe(0);
+    expect(
+      warnings.mock.calls.some(([message]) => String(message).includes("STRICT_READ_UNTRACKED")),
+    ).toBe(false);
+    warnings.mockRestore();
   });
 
   it("revokes deselected composer operations before rendering and retires replaced contexts", async () => {

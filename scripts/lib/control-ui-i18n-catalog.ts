@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildBaseHints } from "../../src/config/schema.hints.js";
+import { PUBLIC_SESSION_COPY } from "../../src/shared/public-session-copy.ts";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
 import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-home.ts";
@@ -233,6 +234,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerUpdateActionsEnglish.catalog,
     registerTranscriptsEnglish.catalog,
     registerUsageEnglish.catalog,
+    { publicReader: PUBLIC_SESSION_COPY },
     loadControlUiCoreHintCatalog(),
   );
 }
@@ -241,6 +243,7 @@ export async function readControlUiSourceCatalog(): Promise<string> {
   const sources = await Promise.all(
     [
       ...sourceFiles.map((fileName) => path.join(localesDir, fileName)),
+      path.resolve(localesDir, "../../../../src/shared/public-session-copy.ts"),
       path.resolve(localesDir, "../../../../extensions/active-memory/control-ui.presentation.json"),
       path.resolve(localesDir, "../../../../extensions/memory-wiki/control-ui.presentation.json"),
     ].map((filePath) => readFile(filePath, "utf8")),

@@ -1,4 +1,4 @@
-import type { Locale } from "../../i18n/lib/registry.ts";
+import type { Locale } from "../../../../src/shared/control-ui-locale.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { projectSource } from "./projection.ts";
 

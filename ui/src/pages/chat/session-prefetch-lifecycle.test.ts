@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { registerChatPane } from "./chat-pane-elements.ts";
 import { resolveChatSnapshotKey, type ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
@@ -36,6 +37,7 @@ function mountPane(
     sessionKey,
     transcriptLoading,
   });
+  onTestFinished(registerChatPane(pane));
   parent.append(pane);
   if (parent === shell) {
     updatePrefetch(

@@ -111,6 +111,17 @@ subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
 
+Agent clean-close receipt messages name the agent. An intermediate `active-leases`
+receipt can precede that same agent's final `written` receipt: idle retained database
+handles still hold leases even when no agent work is running. The final handle must
+release its lease after checkpoint and native close before certifying the seal.
+At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
+report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
+identity changes report `runtime-mismatch`, `sqlite-mismatch`, `schema-mismatch`,
+or `policy-mismatch`. Older seals lack component diagnostics and report
+`identity-mismatch` when their combined identity differs. Matching older seals
+remain reusable; the added diagnostic metadata does not change admission policy.
+
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
 without revoking an earlier clean-close seal. Once native opening begins, failed
@@ -741,8 +752,19 @@ model publications unless the ID also belongs to the configured agent roster.
 Pending preparation does not produce a startup migration warning. Status and
 Doctor derive failed inspection and preparation warnings from current agent
 admission decisions, with the reason and repair guidance. Successful preparation
-clears the agent's pending refusal without requiring a restart. Genuine migration
-warnings remain recorded for the boot. This changes no stored state or update
+clears the agent's pending refusal without requiring a restart. Recovery discovery
+and cron session maintenance exclude pending stores before acquiring their readers,
+so healthy agents continue. Custom session-store selectors retain healthy sibling
+databases when another physical database in the family is unavailable.
+Cron retries after the admission owner publishes the
+agent's availability; it does not log an admission failure while inspection is pending.
+Database admission refusals do not schedule periodic sweeps of healthy stores.
+Session requests retain the typed, retryable inspection-pending response until
+preparation completes. No ordinary reads or writes bypass the integrity gate.
+New database opens wait for an available worker before selecting their execution
+carrier, so a brief busy period on one worker does not bind them behind another
+agent's full integrity scan. Worker limits and existing command ordering are unchanged.
+Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
 Every 60 seconds while recovery is pending, `agent database startup preparation

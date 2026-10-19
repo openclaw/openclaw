@@ -21,6 +21,7 @@ export type ComposerProgressDisclosureContext = {
   sessionIdentity?: string;
   cardLifetime?: object;
   readingHistory?: boolean;
+  getTranscriptElement?: () => HTMLElement | null;
   onManipulate?: () => void;
 };
 
@@ -252,7 +253,7 @@ function createDisclosure(
     const transcript =
       lifecycle?.presented === false || lifecycle?.manualOnly
         ? null
-        : (element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null);
+        : (lifecycle?.getTranscriptElement?.() ?? null);
     if (transcript === currentTranscript) {
       return;
     }
