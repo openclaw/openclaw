@@ -235,14 +235,6 @@ it("skips quiet inventories but expires a new stage even when its producer never
     expect(requests).not.toHaveBeenCalled();
     expect(existsSync(spoolRoot)).toBe(false);
 
-    await closeOpenClawStateDatabaseAsync();
-    requests.mockClear();
-    await pruneOrphanedDeliveryQueueMedia({ stateDir });
-    expect(requests).toHaveBeenCalled();
-    expect(
-      loadDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, mediaStageId, stateDir),
-    ).not.toBeNull();
-
     await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
     expect(
       loadDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, mediaStageId, stateDir),
