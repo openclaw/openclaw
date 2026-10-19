@@ -12,8 +12,6 @@ type ModelSpecOverride = {
   availableContextTokens?: number;
   maxCompletionTokens?: number;
   capabilities?: {
-    supportsReasoning?: boolean;
-    supportsVision?: boolean;
     supportsFunctionCalling?: boolean;
   };
   includeModelSpec?: boolean;
@@ -153,8 +151,6 @@ describe("venice-models", () => {
     }
   });
 
-  // Venice's public model/pricing contract (2026-08-30) applies extended rates
-  // to the whole request only when total prompt tokens exceed the threshold.
   it("prices qwen-3-7-plus at cached and uncached context boundaries", async () => {
     const id = "qwen-3-7-plus";
     const threshold = 256_000;
@@ -169,7 +165,7 @@ describe("venice-models", () => {
           [prompt - 100_000, 0],
           [prompt, 0],
           [prompt - 100_000, 50_000],
-        ]) {
+        ] as const) {
           const usage = {
             input: prompt - cacheRead - cacheWrite,
             output: 1000,
@@ -195,31 +191,23 @@ describe("venice-models", () => {
     }
   });
 
-  it("uses a conservative bounded maxTokens value for new models", async () => {
-    const [newModel] = await discoverVeniceModels([
+  it.each([
+    { context: 50_000, tools: false, cap: 50_000 },
+    { context: undefined, tools: true, cap: 128_000 },
+  ])("bounds new-model tokens with context $context", async ({ context, tools, cap }) => {
+    const [model] = await discoverVeniceModels([
       {
-        id: "new-model-2026",
-        availableContextTokens: 50_000,
+        id: "new-model",
+        availableContextTokens: context,
         maxCompletionTokens: 200_000,
-        capabilities: { supportsFunctionCalling: false },
+        capabilities: { supportsFunctionCalling: tools },
       },
     ]);
-
-    expect(newModel?.maxTokens).toBe(50000);
-    expect(newModel?.maxTokens).toBeLessThanOrEqual(newModel?.contextWindow ?? Infinity);
-    expect(newModel?.compat?.supportsTools).toBe(false);
-  });
-
-  it("caps new-model maxTokens to the fallback context window when API context is missing", async () => {
-    const [newModel] = await discoverVeniceModels([
-      {
-        id: "new-model-without-context",
-        maxCompletionTokens: 200_000,
-        capabilities: { supportsFunctionCalling: true },
-      },
-    ]);
-
-    expect(newModel).toMatchObject({ contextWindow: 128000, maxTokens: 128000 });
+    expect(model).toMatchObject({ contextWindow: cap, maxTokens: cap });
+    expect(model?.maxTokens).toBeLessThanOrEqual(model?.contextWindow ?? Infinity);
+    if (!tools) {
+      expect(model?.compat?.supportsTools).toBe(false);
+    }
   });
 
   it("ignores missing capabilities on partial metadata instead of aborting discovery", async () => {
@@ -239,8 +227,7 @@ describe("venice-models", () => {
     const partialModel = models.find((m) => m.id === "new-model-partial");
     expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
     expect(knownModel?.maxTokens).toBe(2048);
-    expect(partialModel?.contextWindow).toBe(128000);
-    expect(partialModel?.maxTokens).toBe(2048);
+    expect(partialModel).toMatchObject({ contextWindow: 128000, maxTokens: 2048 });
     expect(partialModel?.compat?.supportsTools).toBeUndefined();
   });
 
