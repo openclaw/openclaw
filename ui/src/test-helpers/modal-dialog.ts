@@ -1,11 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { assert, expect, vi } from "vitest";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
-
-function requiredElement<T extends Element>(parent: ParentNode, selector: string): T {
-  const element = parent.querySelector<T>(selector);
-  assert(element, `Expected ${selector}`);
-  return element;
-}
 
 export function nextFrame() {
   return new Promise<void>((resolve) => {
@@ -14,7 +9,10 @@ export function nextFrame() {
 }
 
 export function afterModalHidden(modal: OpenClawModalDialog): Promise<void> {
-  const dialog = requiredElement<HTMLDialogElement>(modal, "dialog.oc-modal-dialog");
+  const dialog = expectDefined(
+    modal.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog"),
+    "rendered native modal dialog",
+  );
   if (dialog.dataset.phase === "hidden") {
     return Promise.resolve();
   }
@@ -129,7 +127,10 @@ export function createModalDialogTestFixture(
 // Separate from answering so tests can change owner state while a decision is pending.
 export function waitForConfirmDialogActions(): Promise<HTMLElement> {
   return waitForDialog(() =>
-    requiredElement<HTMLElement>(document.body, "openclaw-modal-dialog .exec-approval-actions"),
+    expectDefined(
+      document.body.querySelector<HTMLElement>("openclaw-modal-dialog .exec-approval-actions"),
+      "open confirm dialog",
+    ),
   );
 }
 
@@ -142,7 +143,10 @@ export function answerConfirmDialog(
     alternative: ".btn:not(.danger):not(.primary):not([autofocus])",
     cancel: ".btn[autofocus]",
   };
-  requiredElement<HTMLButtonElement>(actions, selectors[choice]).click();
+  expectDefined(
+    actions.querySelector<HTMLButtonElement>(selectors[choice]),
+    "confirm dialog button",
+  ).click();
 }
 
 export const waitForRenderedModalDialog = getRenderedModalDialog;
@@ -169,7 +173,10 @@ export async function submitInputDialog(value: string): Promise<void> {
 
 export async function getRenderedModalDialog(container: ParentNode) {
   const modal = await waitForDialog(() =>
-    requiredElement<OpenClawModalDialog>(container, "openclaw-modal-dialog"),
+    expectDefined(
+      container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog"),
+      "openclaw-modal-dialog",
+    ),
   );
   await modal.updateComplete;
   await nextFrame();

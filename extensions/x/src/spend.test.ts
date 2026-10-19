@@ -36,7 +36,7 @@ function fixture(config: Partial<XCostLimits> = {}) {
     };
     return openXSpend({ ...runtime, state: replacement }, "default", () => limits);
   }
-  return { limits, spend, store, replaceStore };
+  return { limits, logger, spend, store, replaceStore };
 }
 
 function blockWrites(test: ReturnType<typeof fixture>) {

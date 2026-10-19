@@ -36,7 +36,7 @@ async function createFixture(workspaceDir: string) {
     text: (endpoint) => endpoint,
   });
   return {
-    input(sessionId: string, endpoint: string, sessionKey = `agent:main:${sessionId}`) {
+    input: (sessionId: string, endpoint: string, sessionKey = `agent:main:${sessionId}`) => {
       const cfg: OpenClawConfig = {
         plugins: { enabled: false },
         mcp: {
@@ -46,7 +46,7 @@ async function createFixture(workspaceDir: string) {
       return { workspaceDir, sessionId, sessionKey, cfg };
     },
     hooks,
-    hold() {
+    hold: () => {
       const entered = createDeferred();
       const release = createDeferred();
       releases.push(() => release.resolve());

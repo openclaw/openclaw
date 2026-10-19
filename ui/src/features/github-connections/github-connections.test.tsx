@@ -87,8 +87,7 @@ function mount(
   const { container: element } = mountSolid(GitHubConnections, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
-  const query = <T extends Element = HTMLElement>(selector: string) =>
-    element.querySelector<T>(selector);
+  const query = element.querySelector.bind(element);
   const button = (label: string) =>
     [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === label)!;
   const text = (present: string[], absent: string[] = []) => expectText(element, present, absent);

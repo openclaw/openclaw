@@ -436,6 +436,7 @@ vi.mock("./auth-store.runtime.js", () => ({
   resolveOAuthDir: () => "/tmp/openclaw-oauth",
 }));
 
+// mock-isolation: synthetic Baileys sockets keep tests off real WhatsApp sessions and credentials.
 vi.mock("./session.runtime.js", () => {
   const created = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =

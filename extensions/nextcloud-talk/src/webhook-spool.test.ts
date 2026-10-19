@@ -433,21 +433,31 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("keeps unrelated Talk Activity events ignored", async () => {
-    const body = activityBody({
-      id: "4243",
-      name: "participant_joined",
-      content: JSON.stringify({ message: "Alice joined the conversation", parameters: {} }),
-    });
-    const deliver = vi.fn();
-    const log = vi.fn();
-    await withSpool(startSpool(queue, deliver, log), async (spool) => {
-      await expectIgnored(spool, body, deliver);
-      expect(log).toHaveBeenCalledWith(
-        "nextcloud-talk: ignored non-message webhook event (type=Activity objectType=Note)",
-      );
-    });
-  });
+  it.each([
+    { name: "participant_joined", message: "Alice joined the conversation", parameters: {} },
+    {
+      name: "object_shared",
+      message: "{object}",
+      parameters: { object: { type: "deck-card", id: "redacted" } },
+    },
+  ])(
+    "keeps unrelated Talk Activity $name events ignored",
+    async ({ name, message, parameters }) => {
+      const body = activityBody({
+        id: "4243",
+        name,
+        content: JSON.stringify({ message, parameters }),
+      });
+      const deliver = vi.fn();
+      const log = vi.fn();
+      await withSpool(startSpool(queue, deliver, log), async (spool) => {
+        await expectIgnored(spool, body, deliver);
+        expect(log).toHaveBeenCalledWith(
+          "nextcloud-talk: ignored non-message webhook event (type=Activity objectType=Note)",
+        );
+      });
+    },
+  );
 
   it("logs non-message events before they consume the message id", async () => {
     const deliver = vi.fn();

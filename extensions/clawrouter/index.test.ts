@@ -2,6 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
@@ -92,7 +93,11 @@ const SCOPED_AUTH = {
   lockedProfile: true,
 };
 
-function catalogContext(apiKey: string, discoveryApiKey?: string, source = "profile") {
+function catalogContext(
+  apiKey: string,
+  discoveryApiKey?: string,
+  source = "profile",
+): ProviderCatalogContext {
   const auth = { apiKey, discoveryApiKey };
   return {
     config: { models: {} },

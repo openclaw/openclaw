@@ -251,6 +251,7 @@ describe("GitHub detail selected read identity", () => {
           if (unavailable && authorized) {
             return json({}, status);
           }
+          return undefined;
         });
         if (cached) {
           await loadGitHubDetail(input, selected, fetchMock);
@@ -328,6 +329,7 @@ describe("GitHub detail selected read identity", () => {
             headers: { Location: "/repos/octocat/another" + suffix },
           });
         }
+        return undefined;
       });
       await expectStatus(loadGitHubDetail(input, identity(), fetchMock), 404);
       expect(fetchMock.mock.calls.some(([url]) => requestUrl(url).includes("/another/"))).toBe(
@@ -365,6 +367,7 @@ describe("GitHub detail selected read identity", () => {
       if (path.endsWith("/issues/1")) {
         return json(item({ title: new Headers(options?.headers).get("Authorization") }));
       }
+      return undefined;
     });
     for (const selected of [first, second, rotated]) {
       await expect(loadGitHubDetail(input, selected, fetchMock)).resolves.toMatchObject({
@@ -388,6 +391,7 @@ describe("GitHub detail selected read identity", () => {
         }
         return response.promise;
       }
+      return undefined;
     });
     const first = loadGitHubDetail(input, identity(), fetchMock);
     await started[0]!.promise;
@@ -422,6 +426,7 @@ describe("GitHub detail selected read identity", () => {
           revoke();
           return json({}, 503);
         }
+        return undefined;
       });
       const first = loadGitHubDetail(input, selected, fetchMock);
       if (stage === "concurrent repository read") {
@@ -779,6 +784,7 @@ describe("progressive GitHub documents", () => {
         checksStarted.resolve();
         return checks.promise;
       }
+      return undefined;
     });
     const selected = identity("progressive");
     const read = reader(input, selected, fetchMock);
@@ -853,6 +859,7 @@ describe("progressive GitHub documents", () => {
       if (path.endsWith("/status")) {
         return json({ sha: currentSha, total_count: 0, statuses: [] });
       }
+      return undefined;
     });
     const selected = identity("progressive-refresh");
     const read = reader(input, selected, fetchMock);

@@ -108,7 +108,7 @@ export async function startProofRecording(
       },
     },
   });
-  const page = await context.newPage().catch(async (error) => {
+  const page = await context.newPage().catch(async (error: unknown) => {
     await context.close();
     throw error;
   });

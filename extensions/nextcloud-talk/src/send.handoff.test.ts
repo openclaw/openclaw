@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ChannelMessageSendMediaContext as SendContext } from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelMessageSendMediaContext } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
@@ -25,6 +25,18 @@ vi.mock("../runtime-api.js", async (original) => {
       }),
   };
 });
+
+type SendContext = Pick<
+  ChannelMessageSendMediaContext,
+  | "cfg"
+  | "to"
+  | "text"
+  | "mediaUrl"
+  | "accountId"
+  | "replyToId"
+  | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
+>;
 
 const sendText = expectDefined(nextcloudTalkPlugin.message?.send?.text, "text sender");
 const sendMedia = expectDefined(nextcloudTalkPlugin.outbound?.sendMedia, "media sender");

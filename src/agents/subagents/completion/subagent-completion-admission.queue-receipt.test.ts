@@ -98,10 +98,8 @@ it.each(["pending", "completed", "replaced", "absent"] as const)(
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(getDeliveryQueueEntryStatus(queueName, id)).toBe("completed");
       } else if (intentState === "replaced") {
-        upsertDeliveryQueueEntryInDatabase(
-          { queueName, entry: { ...queued, text: "Replacement intent" } },
-          db.value,
-        );
+        const replacement: QueuedSessionDelivery = { ...queued, text: "Replacement intent" };
+        upsertDeliveryQueueEntryInDatabase({ queueName, entry: replacement }, db.value);
       } else if (intentState === "absent") {
         deleteDeliveryQueueEntryInDatabase(db.value, queueName, id);
       }

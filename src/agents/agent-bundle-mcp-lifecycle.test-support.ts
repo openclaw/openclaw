@@ -57,7 +57,7 @@ export async function startMcpLifecycleServer(options: {
   }
   return {
     url: `http://127.0.0.1:${address.port}`,
-    async close() {
+    close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

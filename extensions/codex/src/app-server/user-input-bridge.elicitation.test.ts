@@ -66,7 +66,7 @@ function createGateway(
   });
   const request = (id: string, input = formParams(), signal?: AbortSignal) =>
     bridge.handleElicitationRequest({ id, params: input }, signal);
-  return { call, calls, questions, params, request, cancelPending: bridge.cancelPending };
+  return { call, calls, questions, params, request, cancelPending: () => bridge.cancelPending() };
 }
 
 function createAnsweringGateway(answerBatches: Array<Record<string, string[]>>) {
@@ -258,6 +258,7 @@ describe("Codex ordinary MCP elicitation adapter", () => {
         "url",
         formParams({
           mode: "url",
+          requestedSchema: undefined,
           url: "https://example.com/authorize",
           elicitationId: "auth-1",
         }),
