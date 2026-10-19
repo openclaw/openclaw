@@ -396,18 +396,20 @@ export async function prepareToolExecutionEnd(
   ) {
     ctx.state.successfulCronAdds += 1;
   }
-  if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
+  if (
+    !isToolError &&
+    toolName === HEARTBEAT_RESPONSE_TOOL_NAME &&
+    ctx.state.heartbeatToolResponse === undefined &&
+    asOptionalObjectRecord(resultRecord?.details)?.status === "accepted"
+  ) {
     const response = normalizeHeartbeatToolResponse(resultRecord?.details);
     if (response) {
-      const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
-      if (isFirstHeartbeatResponse) {
-        runBestEffortCallback({
-          label: "heartbeat tool response",
-          log: ctx.log,
-          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
-        });
-      }
+      runBestEffortCallback({
+        label: "heartbeat tool response",
+        log: ctx.log,
+        callback: () => ctx.params.onHeartbeatToolResponse?.(response),
+      });
     }
   }
 

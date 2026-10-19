@@ -169,7 +169,7 @@ it("captures repaired model usage before queued delivery and throwing cleanup", 
   expect(observed).toEqual(expected);
 });
 
-it("preserves an accepted heartbeat response and private scratch through retry", async () => {
+it("preserves the first accepted heartbeat response and scratch through duplicates and retry", async () => {
   const onHeartbeatToolResponse = vi.fn();
   const { emit, subscription, startTool } = harness({
     sessionPersistence: "detached",
@@ -195,7 +195,31 @@ it("preserves an accepted heartbeat response and private scratch through retry",
   });
   await subscription.waitForPendingEvents();
   expect(subscription.getHeartbeatToolResponse()).toEqual(response);
+  const changedResponse = {
+    outcome: "no_change",
+    notify: false,
+    summary: "A different decision after acceptance.",
+    scratch: "Replacement scratch must not be applied.",
+  };
+  startTool(tool.name, changedResponse, "duplicate");
+  emit({
+    type: "tool_execution_end",
+    toolName: tool.name,
+    toolCallId: "duplicate",
+    isError: false,
+    result: await tool.execute("duplicate", changedResponse),
+  });
   emit(completed());
+  const retryTool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+  assert(retryTool);
+  startTool(retryTool.name, changedResponse, "retry");
+  emit({
+    type: "tool_execution_end",
+    toolName: retryTool.name,
+    toolCallId: "retry",
+    isError: false,
+    result: await retryTool.execute("retry", changedResponse),
+  });
   const reply = assistant(0);
   message(emit, reply);
   emit({ type: "agent_end", messages: [reply] });
