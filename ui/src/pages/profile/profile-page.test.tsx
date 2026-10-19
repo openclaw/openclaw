@@ -16,7 +16,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForSolid as waitForFast, flush } from "../../test-helpers/solid-settle.ts";
 import * as avatarProcessing from "./avatar-processing.ts";
 import {
@@ -37,6 +37,9 @@ const modelAccountStep = {
   message: "Paste the redirect URL or wait for sign-in to finish.",
   externalUrl: "https://auth.openai.com/oauth/authorize?state=s",
 };
+function person(profile: UserProfile = modelAccountProfile): AuthenticatedUser {
+  return { id: profile.id, email: profile.emails[0], name: profile.displayName ?? undefined };
+}
 function mount(request: GatewayBrowserClient["request"], user: AuthenticatedUser | null = null) {
   const harness = createConnectedContext(request, user);
   return { ...harness, page: mountProfilePage(harness.context) };
@@ -100,10 +103,6 @@ async function startProfileSignIn(page: ParentNode) {
         ?.disabled,
     ).toBe(false),
   );
-  await openPicker(page.querySelector<HTMLElement>(".profile-auth-provider")!);
-  await waitForFast(() =>
-    expect(page.querySelector('[role="option"][data-value="openai"]')).not.toBeNull(),
-  );
   const picker = page.querySelector<HTMLElement>(".profile-auth-provider")!;
   await choosePickerValue(picker, "openai");
   await waitForFast(() =>
@@ -143,11 +142,10 @@ it("refreshes translated copy when the locale changes while mounted", async () =
 it("renders identity before Usage statistics and opens the usage page", async () => {
   const profile = modelAccountProfile;
   const request = profileRequest(() => profile);
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    email: profile.emails[0],
-    name: profile.displayName ?? undefined,
-  });
+  const harness = createConnectedContext(
+    request as GatewayBrowserClient["request"],
+    person(profile),
+  );
   const page = mountProfilePage(harness.context);
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
   await waitForFast(() =>
@@ -185,11 +183,7 @@ it("loads a read-only profile without enabling mutations", async () => {
   const request = vi.fn(async (method: string) =>
     method === "users.self" ? { profile: modelAccountProfile } : disconnectedGitHub,
   );
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], person());
   harness.context.gateway.snapshot.hello = {
     type: "hello-ok",
     protocol: 1,
@@ -262,11 +256,7 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
     "users.prefs.get": () => ({ status: "ok", entries: {} }),
     "users.self": () => (request.mock.calls.length === 1 ? firstIdentity.promise : { profile }),
   });
-  const { page } = mount(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    email: profile.emails[0],
-    name: profile.displayName ?? undefined,
-  });
+  const { page } = mount(request as GatewayBrowserClient["request"], person(profile));
 
   await waitForFast(() => expect(callCount(request, "users.self")).toBe(1));
   flush();
@@ -302,11 +292,10 @@ it("replaces an in-flight identity request after a same-client reconnect", async
     "users.self": () =>
       callCount(request, "users.self") === 1 ? staleRequest.promise : freshRequest.promise,
   });
-  const { page, ...harness } = mount(request as GatewayBrowserClient["request"], {
-    id: staleProfile.id,
-    email: staleProfile.emails[0],
-    name: staleProfile.displayName ?? undefined,
-  });
+  const { page, ...harness } = mount(
+    request as GatewayBrowserClient["request"],
+    person(staleProfile),
+  );
 
   const selfCalls = () => request.mock.calls.filter(([method]) => method === "users.self");
   await waitForFast(() => expect(selfCalls()).toHaveLength(1));
@@ -427,11 +416,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
       return { profile, avatarRevision };
     },
   });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], person());
   publishAvatarPresence = () =>
     harness.context.gateway.updateSelfUser?.({
       avatarUrl: `/api/users/${profile.id}/avatar?v=${avatarRevision}`,
@@ -555,11 +540,7 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
       return { status: "connected", authProfileId: "openai:ada", links };
     },
   });
-  const { page } = mount(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
+  const { page } = mount(request as GatewayBrowserClient["request"], person());
 
   await waitForFast(() => expect(page.querySelector(".profile-auth-add-account")).not.toBeNull());
   await startProfileSignIn(page);

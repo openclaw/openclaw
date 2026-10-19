@@ -3,7 +3,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -58,19 +57,11 @@ function createContext(
     defaultId: "main",
     mainKey: "main",
     scope: "per-sender",
-    agents: [
-      { id: "main", name: "Main" },
-      { id: "other", name: "Other" },
-    ],
+    agents: ["main", "other"].map((id) => ({ id })),
   };
-  const selection = createAgentSelectionCapability(base.gateway, agents, undefined, undefined, {
-    requireConfiguredAgent: true,
-  });
-  return {
-    context: { ...base, settingsAgentSelection: selection },
-    selection,
-    emit: harness.emitSnapshot,
-  };
+  const selection = base.settingsAgentSelection;
+  selection.set("main");
+  return { context: base, selection, emit: harness.emitSnapshot };
 }
 function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
   const harness = createContext(request, signedIn, multipleProfiles);
@@ -151,11 +142,11 @@ it("creates the signed-in personal file", async () => {
 });
 
 it.each([
-  { signedIn: false, multipleProfiles: true },
-  { signedIn: true, multipleProfiles: false },
+  [false, true],
+  [true, false],
 ])(
-  "never loads personal files with $signedIn sign-in and $multipleProfiles profiles",
-  async ({ signedIn, multipleProfiles }) => {
+  "never loads personal files with sign-in=%s and multiple profiles=%s",
+  async (signedIn, multipleProfiles) => {
     const request = signedIn ? vi.fn().mockResolvedValue(file) : vi.fn();
     const { element } = mount(request, signedIn, multipleProfiles);
     await idle(element);
@@ -209,21 +200,16 @@ it("never restores a former person's cached draft after an account change", asyn
 });
 
 it.each([
-  { change: "agent", pending: false },
-  { change: "profile", pending: false },
-  { change: "connection hello", pending: false },
-  { change: "connection hello", pending: true },
-])(
-  "retires the old read after $change (replacement pending: $pending)",
-  async ({ change, pending }) => {
+  ["agent", "other", "profile-1", false],
+  ["profile", "main", "profile-2", false],
+  ["connection hello", "main", "profile-1", false],
+  ["connection hello", "main", "profile-1", true],
+] as const)(
+  "retires the old read after %s targeting %s/%s (replacement pending: %s)",
+  async (change, agentId, profileId, pending) => {
     const old = createDeferred<PersonalFile>();
     const replacement = createDeferred<PersonalFile>();
-    const current = {
-      ...file,
-      agentId: change === "agent" ? "other" : file.agentId,
-      profileId: change === "profile" ? "profile-2" : file.profileId,
-      content: "Current instructions",
-    };
+    const current = { ...file, agentId, profileId, content: "Current instructions" };
     const request =
       change === "profile"
         ? vi.fn().mockReturnValue(old.promise)

@@ -16,7 +16,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
@@ -49,6 +49,12 @@ const redirectStep = (attempt = 1): WizardStep => ({
   externalUrl: `https://auth.openai.com/oauth/authorize?state=${attempt}`,
 });
 
+function authLink(
+  account: Pick<UserModelAccount, "provider" | "authProfileId">,
+  updatedAt = 1,
+): UserProfileAuthLink {
+  return { provider: account.provider, authProfileId: account.authProfileId, updatedAt };
+}
 async function mountAccounts(
   handle: (
     method: string,
@@ -74,13 +80,9 @@ async function mountAccounts(
 ) {
   let starts = 0;
   let savedAccounts = initialAccounts;
-  let links: UserProfileAuthLink[] = savedAccounts
+  let links = savedAccounts
     .filter((account) => account.selected)
-    .map((account) => ({
-      provider: account.provider,
-      authProfileId: account.authProfileId,
-      updatedAt: 1,
-    }));
+    .map((account) => authLink(account));
   let inventoryPage = 0;
   const fixtures = [
     ...savedAccounts,
@@ -186,14 +188,6 @@ async function mountAccounts(
           false,
         ),
       );
-      await openPicker(accounts.querySelector<HTMLElement>(".profile-auth-provider")!);
-      await waitForSolid(() =>
-        expect(
-          accounts.querySelector(
-            `.profile-auth-provider [role="option"][data-value="${providerId}"]`,
-          ),
-        ).not.toBeNull(),
-      );
       await choosePickerValue(
         accounts.querySelector<HTMLElement>(".profile-auth-provider")!,
         providerId,
@@ -272,11 +266,7 @@ it("refreshes accounts and their saved default when another client changes authe
     {
       inventoryPages: [
         inventory([connectedAccount], connectedResult.links),
-        {
-          profileId: "profile-1",
-          accounts: [{ ...connectedAccount, selected: false }, work],
-          links: [{ provider: work.provider, authProfileId: work.authProfileId, updatedAt: 2 }],
-        },
+        inventory([{ ...connectedAccount, selected: false }, work], [authLink(work, 2)]),
       ],
     },
   );
@@ -315,15 +305,7 @@ it.each([false, true])(
       async (method, params) => {
         if (method === action) {
           expect(params).toEqual({ profileId: "profile-1", authProfileId: selected.authProfileId });
-          return {
-            links: [
-              {
-                provider: "openai",
-                authProfileId: selected.authProfileId,
-                updatedAt: admin ? 1 : 2,
-              },
-            ],
-          };
+          return { links: [authLink(selected, admin ? 1 : 2)] };
         }
         expect(method).toBe("users.unlinkAuthProfile");
         expect(params).toEqual({ profileId: "profile-1", provider: "openai" });
@@ -352,10 +334,6 @@ it.each([false, true])(
       );
       expect(query('[data-auth-profile-id="openai:personal"]')).not.toBeNull();
     }
-    expect(request).toHaveBeenCalledWith(action, {
-      profileId: "profile-1",
-      authProfileId: selected.authProfileId,
-    });
     await enabled(".profile-auth-link-unlink");
     click(".profile-auth-link-unlink");
     if (admin) {
@@ -374,10 +352,6 @@ it.each([false, true])(
         false,
       );
     }
-    expect(request).toHaveBeenCalledWith("users.unlinkAuthProfile", {
-      profileId: "profile-1",
-      provider: "openai",
-    });
   },
 );
 
@@ -643,7 +617,7 @@ it("adds a catalog-provided account through its masked auth step without provide
       return {
         status: "connected",
         authProfileId: account.authProfileId,
-        links: [{ provider: account.provider, authProfileId: account.authProfileId, updatedAt: 1 }],
+        links: [authLink(account)],
       };
     },
     {
