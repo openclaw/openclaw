@@ -1,14 +1,26 @@
 import { Portal } from "@solidjs/web";
-import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import {
+  Loading,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  lazy,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
-import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
+
+const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
+  export: "ChatDetailsSession",
+});
 
 type Props = {
   props?: ChatDetailsProps;
@@ -65,6 +77,8 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
     const canDock = () => !props.mobile && props.conversationVisible !== false && wideEnough();
     const opened = () =>
       props.presented && (intent() === "open" || (intent() === "auto" && canDock()));
+    // Load on first presentation, then retain disclosure state while closed.
+    const [sessionOpened] = createSignal<boolean>((previous) => previous === true || opened());
     const docked = () => opened() && canDock();
     const surface = document.createElement("div");
     surface.style.display = "contents";
@@ -303,11 +317,15 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
             <Show when={scope()} keyed>
               {(_scope) => (
                 <>
-                  <ChatDetailsSession
-                    props={props.props}
-                    presented={props.presented && opened()}
-                    dismissed={intent() === "closed"}
-                  />
+                  <Show when={sessionOpened()}>
+                    <Loading>
+                      <ChatDetailsSession
+                        props={props.props}
+                        presented={props.presented && opened()}
+                        dismissed={intent() === "closed"}
+                      />
+                    </Loading>
+                  </Show>
                   <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>
                     <ChatDetailsProgress
                       onHideProgress={() => {
