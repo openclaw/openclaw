@@ -5,11 +5,14 @@ import { meetStatusScript } from "./google-meet-page-scripts.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 
 const MEETING_URL = "https://meet.google.com/abc-defg-hij";
+const adapter = GOOGLE_MEET_PLATFORM_ADAPTER.browser;
+const ready = (health: Parameters<typeof MeetingPlatformAdapter.isRealtimeRouteReady>[1]) =>
+  MeetingPlatformAdapter.isRealtimeRouteReady("agent", health);
 
 it.each([true, false])(
   "starts browser capture only for the current Meet session (owner=%s)",
   async (owns) => {
-    const source = GOOGLE_MEET_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+    const source = adapter.buildAudioCaptureScript?.({
       action: "start",
       captureId: "capture-1",
       meetingSessionId: "session-1",
@@ -78,7 +81,6 @@ async function runAudioStatus(
       ? "Turn off microphone"
       : "Turn on microphone";
   });
-  const leave = pageNode("Leave call");
   const select = microphoneSelect(selectLabels);
   const media = {
     sinkId: "",
@@ -86,7 +88,7 @@ async function runAudioStatus(
       media.sinkId = value;
     }),
   };
-  const buttons = [microphone, leave];
+  const buttons = [microphone, pageNode("Leave call")];
   const document = {
     body: { textContent: "" },
     title: "Meet",
@@ -94,13 +96,11 @@ async function runAudioStatus(
       return selector.includes("select") && selector.includes("microphone") ? select : null;
     },
     querySelectorAll(selector: string) {
-      if (selector === "audio, video") {
-        return [media];
-      }
-      if (selector.includes("button") || selector.includes('[role="')) {
-        return buttons;
-      }
-      return [];
+      return selector === "audio, video"
+        ? [media]
+        : selector.includes("button") || selector.includes('[role="')
+          ? buttons
+          : [];
     },
   };
   const outputLabel = label.includes("OpenClaw") ? "OpenClaw Meeting Audio" : label;
@@ -157,37 +157,25 @@ describe("GOOGLE_MEET_PLATFORM_ADAPTER audio routing", () => {
   );
 
   it("parses input-route health and retries until both routes are ready", () => {
-    const pending = GOOGLE_MEET_PLATFORM_ADAPTER.browser.parseStatus({
-      result: JSON.stringify({
-        inCall: true,
-        micMuted: false,
-        audioInputRouted: true,
-        audioInputDeviceLabel: "OpenClaw Meeting Audio",
-        audioOutputRouted: false,
-        manualAction: {
-          reason: "meet-audio-choice-required",
-          message: "Select the virtual speaker",
-        },
-      }),
-    });
-
-    expect(pending).toMatchObject({
+    const status = {
+      inCall: true,
+      micMuted: false,
       audioInputRouted: true,
       audioInputDeviceLabel: "OpenClaw Meeting Audio",
       audioOutputRouted: false,
-    });
+      manualAction: {
+        reason: "meet-audio-choice-required",
+        message: "Select the virtual speaker",
+      },
+    };
+    const pending = adapter.parseStatus({ result: JSON.stringify(status) });
+    expect(pending).toMatchObject(status);
     if (!pending) {
       throw new Error("expected parsed Google Meet browser health");
     }
-    expect(GOOGLE_MEET_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(true);
-    expect(
-      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
-        ...pending,
-        audioOutputRouted: true,
-        manualAction: undefined,
-      }),
-    ).toBe(true);
-    expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", pending)).toBe(false);
+    expect(adapter.shouldRetryJoinStatus?.(pending)).toBe(true);
+    expect(ready({ ...pending, audioOutputRouted: true, manualAction: undefined })).toBe(true);
+    expect(ready(pending)).toBe(false);
   });
 
   it("keeps Meet muted and reports manual action when input selection cannot be verified", async () => {
@@ -205,6 +193,6 @@ describe("GOOGLE_MEET_PLATFORM_ADAPTER audio routing", () => {
       manualAction: { reason: "meet-audio-choice-required" },
     });
     expect(microphone.click).toHaveBeenCalledOnce();
-    expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", health)).toBe(false);
+    expect(ready(health)).toBe(false);
   });
 });

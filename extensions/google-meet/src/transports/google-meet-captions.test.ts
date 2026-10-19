@@ -10,10 +10,23 @@ import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES } from "./types.js";
 const words = "Please share the recap";
 const caption = (text = words, marker?: string) =>
   new CaptionNode(`Alice\n${text}`, marker === undefined ? {} : { "data-is-self": marker });
+type Page = ReturnType<typeof createCaptionPage>;
+const pending = (page: Page) => onlySourcedLine(page.read().pendingLines);
+const lines = (page: Page) => page.read().lines;
+function settle(page: Page) {
+  page.show([]);
+  page.settle();
+}
+function historical(page: Page, text: string) {
+  const line = onlyLine(page.read().pendingLines);
+  expect(line.text).toBe(text);
+  expect(line.source).toBeUndefined();
+  return line;
+}
 async function observe(row = caption()) {
   const page = createCaptionPage([row]);
   await page.poll();
-  return { row, page, first: onlySourcedLine(page.read().pendingLines) };
+  return { row, page, first: pending(page) };
 }
 
 describe("Google Meet caption source identity and provenance", () => {
@@ -35,15 +48,13 @@ describe("Google Meet caption source identity and provenance", () => {
       observedAt: expect.any(String),
     });
     await page.poll();
-    expect(onlySourcedLine(page.read().pendingLines)).toEqual(first);
+    expect(pending(page)).toEqual(first);
     row.textContent = "Alice\nActually, wait for approval";
     page.show([row]);
-    expect(onlyLine(page.read().lines)).toMatchObject({
-      text: words,
-      provenance: first.provenance,
-    });
-    expect(onlyLine(page.read().lines).source).toBeUndefined();
-    const corrected = onlySourcedLine(page.read().pendingLines);
+    const retired = onlyLine(lines(page));
+    expect(retired).toMatchObject({ text: words, provenance: first.provenance });
+    expect(retired.source).toBeUndefined();
+    const corrected = pending(page);
     expect(corrected.text).toBe("Actually, wait for approval");
     expect(corrected.source).toEqual({ ...first.source, revision: "2" });
     expect(corrected.provenance?.observationId).not.toBe(first.provenance?.observationId);
@@ -51,12 +62,10 @@ describe("Google Meet caption source identity and provenance", () => {
     expect(committed.at(-1)?.provenance).toEqual(corrected.provenance);
     page.show([caption()]);
     await page.poll();
-    expect(page.read().lines).toEqual(committed);
-    const historical = onlyLine(page.read().pendingLines);
-    expect(historical.text).toBe(words);
-    expect(historical.source).toBeUndefined();
-    expect(historical.provenance?.observationId).not.toBe(first.provenance?.observationId);
-    expect(page.read(true).lines).toEqual([...committed, historical]);
+    expect(lines(page)).toEqual(committed);
+    const replay = historical(page, words);
+    expect(replay.provenance?.observationId).not.toBe(first.provenance?.observationId);
+    expect(page.read(true).lines).toEqual([...committed, replay]);
   });
 
   it("retires stale duplicates without advancing their shared source", async () => {
@@ -72,19 +81,17 @@ describe("Google Meet caption source identity and provenance", () => {
     // Expire cross-node matching so the survivor keeps its stale lifecycle.
     page.advance(2_000);
     page.show([stale]);
-    const committed = onlySourcedLine(page.read().lines);
+    const committed = onlySourcedLine(lines(page));
     expect(committed).toMatchObject({
       text: words + " after review",
       source: { ...source, revision: "3", finalized: true },
     });
-    expect(onlyLine(page.read().pendingLines)).toMatchObject({ text: words });
-    expect(onlyLine(page.read().pendingLines).source).toBeUndefined();
-    page.show([]);
-    page.settle();
+    historical(page, words);
+    settle(page);
     expect(page.read().pendingLines).toEqual([]);
-    expect(page.read().lines.map((line) => line.text)).toEqual([words + " after review", words]);
-    expect(page.read().lines[0]).toEqual(committed);
-    expect(page.read().lines[1]?.source).toBeUndefined();
+    expect(lines(page).map((line) => line.text)).toEqual([words + " after review", words]);
+    expect(lines(page)[0]).toEqual(committed);
+    expect(lines(page)[1]?.source).toBeUndefined();
   });
 
   it("does not revive a finalized source from a historical prefix in its DOM row", async () => {
@@ -96,11 +103,9 @@ describe("Google Meet caption source identity and provenance", () => {
     row.textContent = `Alice\n${words}`;
     page.show([row]);
     await page.poll();
-    expect(page.read().lines).toEqual([committed]);
-    const historical = onlyLine(page.read().pendingLines);
-    expect(historical.text).toBe(words);
-    expect(historical.source).toBeUndefined();
-    expect(page.read(true).lines).toEqual([committed, historical]);
+    expect(lines(page)).toEqual([committed]);
+    const replay = historical(page, words);
+    expect(page.read(true).lines).toEqual([committed, replay]);
   });
 
   it("preserves old identities at capacity without granting authority to new captions", async () => {
@@ -110,32 +115,28 @@ describe("Google Meet caption source identity and provenance", () => {
     );
     const page = createCaptionPage(texts.map((text) => caption(text)));
     await page.poll();
-    const lines = page.read().pendingLines;
-    expect(lines).toHaveLength(texts.length);
-    const ids = lines.slice(0, GOOGLE_MEET_TRANSCRIPT_MAX_LINES).map((line) => line.source?.id);
+    const visible = page.read().pendingLines;
+    expect(visible).toHaveLength(texts.length);
+    const ids = visible.slice(0, GOOGLE_MEET_TRANSCRIPT_MAX_LINES).map((line) => line.source?.id);
     expect(ids).not.toContain(undefined);
     expect(new Set(ids).size).toBe(GOOGLE_MEET_TRANSCRIPT_MAX_LINES);
-    expect(lines.at(-1)?.source).toBeUndefined();
-    expect(lines.every((line) => line.provenance?.self === "unknown")).toBe(true);
-    const first = onlySourcedLine(lines.slice(0, 1));
+    expect(visible.at(-1)?.source).toBeUndefined();
+    expect(visible.every((line) => line.provenance?.self === "unknown")).toBe(true);
+    const first = onlySourcedLine(visible.slice(0, 1));
     const committed = page.read(true);
     expect(committed.pendingLines).toEqual([]);
     expect(committed.lines.map((line) => line.text)).toEqual(texts.slice(1));
     expect(committed.lines.at(-1)?.source).toBeUndefined();
     page.show([caption(first.text)]);
-    expect(page.read().lines).toEqual(committed.lines);
-    expect(onlySourcedLine(page.read().pendingLines).source).toEqual({
+    expect(lines(page)).toEqual(committed.lines);
+    expect(pending(page).source).toEqual({
       ...first.source,
       revision: "2",
       finalized: true,
     });
     page.show([caption("Final thought")]);
-    const last = onlyLine(page.read().pendingLines);
-    expect(last).toMatchObject({
-      text: "Final thought",
-      provenance: { speaker: "Alice", self: "unknown" },
-    });
-    expect(last.source).toBeUndefined();
+    const last = historical(page, "Final thought");
+    expect(last.provenance).toMatchObject({ speaker: "Alice", self: "unknown" });
     const final = page.read(true);
     expect(final.lines).toHaveLength(GOOGLE_MEET_TRANSCRIPT_MAX_LINES);
     expect(final.lines.at(-1)).toEqual(last);
@@ -145,7 +146,7 @@ describe("Google Meet caption source identity and provenance", () => {
     const { page, first } = await observe();
     page.reload();
     await page.poll();
-    const reloaded = onlySourcedLine(page.read().pendingLines).source;
+    const reloaded = pending(page).source;
     expect(reloaded.id).not.toBe(first.source.id);
     expect(reloaded.epoch).not.toBe(first.source.epoch);
     await page.poll("session-2");
@@ -156,54 +157,48 @@ describe("Google Meet caption source identity and provenance", () => {
   });
 
   it("separates native self and other observations when a DOM row is reused", async () => {
-    const row = new CaptionNode(
-      `Assistant\n${words}`,
-      {},
-      new CaptionNode("", { "data-is-self": "true" }),
-    );
+    const parent = new CaptionNode("", { "data-is-self": "true" });
+    const row = new CaptionNode(`Assistant\n${words}`, {}, parent);
     const { page, first } = await observe(row);
     expect(first.source.ownEcho).toBe(true);
-    page.show([]);
-    page.settle();
+    settle(page);
     row.textContent = `Alice\n${words}`;
     row.setAttribute("data-is-self", "false");
     page.advance(5_000);
     page.show([row]);
-    const next = onlySourcedLine(page.read().pendingLines);
+    const next = pending(page);
     expect(next.source.id).not.toBe(first.source.id);
     expect(next.source.ownEcho).toBe(false);
     expect(next.provenance).toMatchObject({ speaker: "Alice", self: "other" });
-    expect(page.read().lines[0]?.provenance).toEqual(first.provenance);
+    expect(lines(page)[0]?.provenance).toEqual(first.provenance);
   });
 
   it("does not borrow an earlier non-self marker when attribution is missing", async () => {
     const { page, first } = await observe(caption(words, "false"));
-    page.show([]);
-    page.settle();
+    settle(page);
     page.show([caption()]);
     const unknown = onlyLine(page.read().pendingLines);
     expect(unknown.provenance).toMatchObject({ speaker: "Alice", self: "unknown" });
     expect(unknown.source).toBeUndefined();
-    expect(page.read().lines[0]?.provenance).toEqual(first.provenance);
+    expect(lines(page)[0]?.provenance).toEqual(first.provenance);
   });
 
   it("keeps own-echo authority sticky through marker changes and settled rerenders", async () => {
     const { row, page, first } = await observe();
     expect(first.provenance?.self).toBe("unknown");
     page.markSelf(row, "true");
-    const self = onlySourcedLine(page.read().pendingLines);
+    const self = pending(page);
     expect(self.source).toMatchObject({ id: first.source.id, ownEcho: true });
     expect(self.provenance?.self).toBe("self");
     page.markSelf(row, "false");
-    const other = onlySourcedLine(page.read().pendingLines);
+    const other = pending(page);
     expect(other.source).toMatchObject({ id: first.source.id, ownEcho: true });
     expect(other.provenance?.self).toBe("other");
     expect(self.provenance?.self).toBe("self");
     expect(first.provenance?.self).toBe("unknown");
-    page.show([]);
-    page.settle();
+    settle(page);
     page.show([caption(words, "false")]);
-    const replacement = onlySourcedLine(page.read().pendingLines);
+    const replacement = pending(page);
     expect(replacement.source).toMatchObject({ id: first.source.id, ownEcho: true });
     expect(replacement.provenance?.self).toBe("other");
     expect(replacement.provenance?.observationId).not.toBe(other.provenance?.observationId);
@@ -218,17 +213,16 @@ describe("Google Meet caption source identity and provenance", () => {
     const { row, page, first } = await observe();
     row.textContent += " only after approval";
     page.show([row]);
-    page.show([]);
-    page.settle();
-    const corrected = onlySourcedLine(page.read().lines);
+    settle(page);
+    const corrected = onlySourcedLine(lines(page));
     expect(corrected.source.id).toBe(first.source.id);
     expect(corrected.provenance?.self).toBe("unknown");
     page.advance(5_000);
     page.show([caption(words, "false")]);
-    const historical = onlyLine(page.read().pendingLines);
-    expect(historical.source).toBeUndefined();
-    expect(historical.provenance).toMatchObject({ speaker: "Alice", self: "other" });
-    expect(page.read(true).lines.at(-1)).toEqual(historical);
+    const replay = onlyLine(page.read().pendingLines);
+    expect(replay.source).toBeUndefined();
+    expect(replay.provenance).toMatchObject({ speaker: "Alice", self: "other" });
+    expect(page.read(true).lines.at(-1)).toEqual(replay);
   });
 
   it("does not finalize a shared source while a duplicate row is still visible", async () => {
@@ -240,21 +234,20 @@ describe("Google Meet caption source identity and provenance", () => {
     expect(initial[0]?.provenance?.observationId).not.toBe(initial[1]?.provenance?.observationId);
     const survivor = rows[1]!;
     page.show([survivor]);
-    const retired = onlySourcedLine(page.read().lines);
-    const live = onlySourcedLine(page.read().pendingLines);
+    const retired = onlySourcedLine(lines(page));
+    const live = pending(page);
     expect(retired.source).toMatchObject({ id: live.source.id, revision: "1", finalized: false });
     expect(retired.provenance).toEqual(initial[0]?.provenance);
     expect(live.provenance).toEqual(initial[1]?.provenance);
     survivor.textContent += " only after approval";
     page.show([survivor]);
-    const edited = onlySourcedLine(page.read().pendingLines);
+    const edited = pending(page);
     expect(edited.source).toMatchObject({ id: live.source.id, revision: "2", finalized: false });
     expect(edited.text).toContain("only after approval");
     expect(edited.provenance?.observationId).not.toBe(live.provenance?.observationId);
-    page.show([]);
-    page.settle();
+    settle(page);
     expect(page.read().pendingLines).toEqual([]);
-    expect(page.read().lines.at(-1)?.source).toMatchObject({ id: live.source.id, finalized: true });
-    expect(page.read().lines.at(-1)?.provenance).toEqual(edited.provenance);
+    expect(lines(page).at(-1)?.source).toMatchObject({ id: live.source.id, finalized: true });
+    expect(lines(page).at(-1)?.provenance).toEqual(edited.provenance);
   });
 });
