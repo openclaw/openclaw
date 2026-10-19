@@ -17,8 +17,10 @@ type SessionWorkerStopDialogProps = {
 
 /** The placement owner retains the captured identity and performs the effect. */
 function SessionWorkerStopDialog(props: SessionWorkerStopDialogProps) {
+  let cancelButton!: HTMLButtonElement;
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => cancelButton}
       class="session-worker-stop-dialog"
       label={t("sessionsView.workerStopTitle")}
       onModal-cancel={(event) => {
@@ -58,6 +60,7 @@ function SessionWorkerStopDialog(props: SessionWorkerStopDialogProps) {
           <button
             type="button"
             class="btn"
+            ref={(element) => (cancelButton = element)}
             autofocus
             disabled={props.pending}
             onClick={() => props.onCancel()}
