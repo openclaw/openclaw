@@ -24,10 +24,13 @@ export const slackHuddleStatusPrelude: Parameters<
   const slackHuddleCallDocument = () => {
     try {
       const opened = window.__openclawSlackHuddleCallWindow;
-      // Slack points the window at its huddle's channel; a window for any other huddle is never used.
-      // A window that navigated cross-origin throws here and is ignored.
-      return opened && !opened.closed && expectedIdentity &&
-        meetingIdentity(opened.location.href) === expectedIdentity ? opened.document : undefined;
+      // Slack points the window at its huddle's /client/<team>/<channel>. Channel ids are workspace-scoped,
+      // so the window must name exactly the team and channel of this verified tab (which enforces any
+      // workspace binding); a window for any other huddle is never used. Cross-origin access throws.
+      const clientPath = (href) => new URL(href).pathname.match(/^\\/client\\/[TE][A-Z0-9]{8,}\\/[CGD][A-Z0-9]{8,}/)?.[0];
+      const tabPath = clientPath(location.href);
+      return opened && !opened.closed && tabPath && meetingIdentity(location.href) === expectedIdentity &&
+        clientPath(opened.location.href) === tabPath ? opened.document : undefined;
     } catch {
       return undefined;
     }
@@ -187,8 +190,9 @@ export const slackHuddleStatusPrelude: Parameters<
     manualAction = manualActionFor("slack-admission-required", "Request to join this huddle in Slack and wait for admission, then retry status.");
   } else if (!inCall && ((join && /^start huddle$/i.test(text(join))) || (!preview && linkHuddleIdleSettled))) {
     manualAction = manualActionFor("slack-huddle-not-active", "No one is in this huddle yet. Start the huddle in Slack, then ask again.");
-  // Observe-only joins never request the microphone, so Slack's permission banner cannot block them.
-  } else if (allowMicrophone && ((microphonePermissionState === "denied" || microphonePermissionState === "prompt") ||
+  // Observe-only joins never request the microphone, and only the requested huddle's client page holds
+  // the granted origin; the desktop-app launcher on slack.com never does.
+  } else if (identityVerified && allowMicrophone && ((microphonePermissionState === "denied" || microphonePermissionState === "prompt") ||
     (!inCall && /allow (?:slack (?:to )?)?(?:access to |use (?:your )?)?(?:the |your )?microphone|microphone permission/i.test(huddleText)))) {
     manualAction = manualActionFor("slack-permission-required", "Allow Slack microphone permission in the OpenClaw Chrome profile, then retry.");
   }

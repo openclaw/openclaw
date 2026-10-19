@@ -42,22 +42,32 @@ function muteControl(on: boolean) {
 }
 
 it.each([
-  { href: `${CLIENT_URL}?open=start_huddle`, clicks: 1 },
-  { href: "https://app.slack.com/client/T0123ABCD/C9999ABCD?open=start_huddle", clicks: 0 },
+  { href: `${CLIENT_URL}?open=start_huddle`, clicks: 1, mode: "transcribe" as const },
+  // The launcher's origin never holds the talk-back microphone grant, so it never asks for it.
+  { href: `${CLIENT_URL}?open=start_huddle`, clicks: 1, mode: "agent" as const },
+  {
+    href: "https://app.slack.com/client/T0123ABCD/C9999ABCD?open=start_huddle",
+    clicks: 0,
+    mode: "agent" as const,
+  },
+  // Slack draws the launcher before its link; that loading page must not end a talk-back join.
+  { href: undefined, clicks: 0, mode: "agent" as const },
 ])(
-  "follows Slack's desktop-app launcher only to the requested huddle ($clicks)",
-  async ({ href, clicks }) => {
+  "follows Slack's desktop-app launcher only to the requested huddle ($clicks, $mode)",
+  async ({ href, clicks, mode }) => {
     const link = new PageNode(
       "a",
-      { "data-qa": "ssb_redirect_open_in_browser", href },
+      { "data-qa": "ssb_redirect_open_in_browser", ...(href ? { href } : {}) },
       "use Slack in your browser",
     );
     const result = await fixture({
-      document: page(link),
+      document: href ? page(link) : page(),
       currentUrl: "https://slack.com/huddle/C0123ABCD",
-    }).status();
+      microphonePermission: "prompt",
+    }).status({ mode });
     expect(link.clicks).toBe(clicks);
     expect(result.clickedContinueInBrowser).toBe(clicks === 1);
+    expect(result.manualAction).toBeUndefined();
   },
 );
 
@@ -239,3 +249,39 @@ it("captures captions Slack renders in the huddle window", async () => {
     recentTranscript: [{ speaker: "Morgan:", text: "The next step is ready." }],
   });
 });
+
+it.each([
+  { windowTeam: "T0123ABCD", reason: undefined },
+  // Channel ids are workspace-scoped: the same channel id in another workspace is another huddle.
+  { windowTeam: "T9999ABCD", reason: "slack-microphone-required" },
+])(
+  "binds a channel-only session's huddle window to the tab's workspace ($windowTeam)",
+  async ({ windowTeam, reason }) => {
+    const mute = muteControl(false);
+    const opened = huddleWindow(mute, qaNode("huddle_toolbar__leave_button", "Leave"));
+    opened.location = new URL(`https://app.slack.com/client/${windowTeam}/C0123ABCD`);
+    const browser = fixture({
+      document: page(channelHeader(true), qaNode("huddle_toolbar__leave_button", "Leave")),
+      currentUrl: CLIENT_URL,
+      window: {
+        ...slackWindow(opened, {
+          identity: "slack-huddle:C0123ABCD",
+          sessionId: "session-1",
+          bindable: true,
+          joinRequested: true,
+        }),
+        __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
+      },
+    });
+    const channelOnly = { url: "https://app.slack.com/huddle/C0123ABCD" };
+    await browser.status({ ...channelOnly, readOnly: true });
+    (browser.window.open as (url: string) => unknown)("about:blank");
+    const result = await browser.status(channelOnly);
+    expect(result.inCall).toBe(true);
+    if (reason) {
+      expect(result).toMatchObject({ manualAction: { reason } });
+    } else {
+      expect(result.manualAction).toBeUndefined();
+    }
+  },
+);
