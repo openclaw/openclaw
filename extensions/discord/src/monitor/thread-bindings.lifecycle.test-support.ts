@@ -29,10 +29,7 @@ const hoisted = vi.hoisted(() => {
     token: "tok-created",
   }));
   const createDiscordRestClient = vi.fn((..._args: unknown[]) => ({
-    rest: {
-      get: restGet,
-      post: restPost,
-    },
+    rest: { get: restGet, post: restPost },
   }));
   const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
   const readAcpSessionEntryAsync = vi.fn();
@@ -48,9 +45,8 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../send.js", async () => {
-  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("../send.js")>("../send.js")),
     addRoleDiscord: vi.fn(),
     sendMessageDiscord: hoisted.sendMessageDiscord,
     sendWebhookMessageDiscord: hoisted.sendWebhookMessageDiscord,
@@ -62,11 +58,10 @@ vi.mock("../send.messages.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-    "openclaw/plugin-sdk/acp-runtime",
-  );
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+      "openclaw/plugin-sdk/acp-runtime",
+    )),
     readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
   };
 });
@@ -74,6 +69,18 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
 const { createThreadBindingManager } = await import("./thread-bindings.manager.js");
 const discordClientModule = await import("../client.js");
 const discordThreadBindingApi = await import("./thread-bindings.discord-api.js");
+
+function mockRest(
+  params: Pick<
+    Parameters<typeof discordThreadBindingApi.createWebhookForChannel>[0],
+    "cfg" | "accountId" | "token"
+  >,
+) {
+  return hoisted.createDiscordRestClient(
+    { accountId: params.accountId, token: params.token },
+    params.cfg,
+  ).rest;
+}
 
 export function createTestThreadBindingManager(
   params: Omit<Parameters<typeof createThreadBindingManager>[0], "cfg"> & {
@@ -105,25 +112,11 @@ export function installThreadBindingLifecycleTestHooks() {
     } as unknown as DiscordRuntime);
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
-    hoisted.sendMessageDiscord.mockReset().mockResolvedValue({});
-    hoisted.sendWebhookMessageDiscord.mockReset().mockResolvedValue({});
-    hoisted.restGet.mockReset().mockResolvedValue({
-      id: "thread-1",
-      type: 11,
-      parent_id: "parent-1",
-    });
-    hoisted.restPost.mockReset().mockResolvedValue({
-      id: "wh-created",
-      token: "tok-created",
-    });
-    hoisted.createDiscordRestClient.mockReset().mockImplementation((..._args: unknown[]) => ({
-      rest: {
-        get: hoisted.restGet,
-        post: hoisted.restPost,
-      },
-    }));
-    hoisted.createThreadDiscord.mockReset().mockResolvedValue({ id: "thread-created" });
-    hoisted.readAcpSessionEntryAsync.mockReset().mockResolvedValue(null);
+    // mockReset restores each vi.fn(implementation), including one-shot overrides.
+    for (const mock of Object.values(hoisted)) {
+      mock.mockReset();
+    }
+    hoisted.readAcpSessionEntryAsync.mockResolvedValue(null);
     vi.spyOn(discordClientModule, "createDiscordRestClient").mockImplementation(
       (...args) =>
         hoisted.createDiscordRestClient(...args) as unknown as ReturnType<
@@ -132,17 +125,7 @@ export function installThreadBindingLifecycleTestHooks() {
     );
     vi.spyOn(discordThreadBindingApi, "createWebhookForChannel").mockImplementation(
       async (params) => {
-        const rest = hoisted.createDiscordRestClient(
-          {
-            accountId: params.accountId,
-            token: params.token,
-          },
-          params.cfg,
-        ).rest;
-        const created = (await rest.post("mock:channel-webhook")) as {
-          id?: string;
-          token?: string;
-        };
+        const created = await mockRest(params).post("mock:channel-webhook");
         return {
           webhookId: typeof created?.id === "string" ? created.id.trim() || undefined : undefined,
           webhookToken:
@@ -156,14 +139,7 @@ export function installThreadBindingLifecycleTestHooks() {
         if (explicit) {
           return explicit;
         }
-        const rest = hoisted.createDiscordRestClient(
-          {
-            accountId: params.accountId,
-            token: params.token,
-          },
-          params.cfg,
-        ).rest;
-        const channel = (await rest.get("mock:channel-resolve")) as {
+        const channel = (await mockRest(params).get("mock:channel-resolve")) as {
           id?: string;
           type?: number;
           parent_id?: string;
@@ -190,14 +166,8 @@ export function installThreadBindingLifecycleTestHooks() {
       async (params) => {
         const created = await hoisted.createThreadDiscord(
           params.channelId,
-          {
-            name: params.threadName,
-          },
-          {
-            accountId: params.accountId,
-            token: params.token,
-            cfg: params.cfg,
-          },
+          { name: params.threadName },
+          { accountId: params.accountId, token: params.token, cfg: params.cfg },
         );
         return typeof created?.id === "string" ? created.id.trim() || null : null;
       },
