@@ -7,6 +7,7 @@ import {
   getOwner,
   merge,
   onCleanup,
+  onSettled,
   runWithOwner,
 } from "solid-js";
 import type { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
@@ -19,6 +20,7 @@ import {
 } from "../../../components/solid/menu.tsx";
 import { registerSessionOrganizationEnglish } from "../../../i18n/locales/en-session-organization.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 
 registerSessionOrganizationEnglish();
@@ -38,13 +40,17 @@ export type HeaderSessionMenuPage = {
 export type HeaderSessionMenuMobileHost = {
   open(page: HeaderSessionMenuPage, source: HTMLElement): void;
   close(): void;
+  isCurrent(page: HeaderSessionMenuPage): boolean;
 };
 
 const plainLabel = (label: string) => label.replace(/(?:…|\.{3})$/u, "");
 const isItem = (entry: MenuEntry): entry is MenuItem =>
   entry.kind !== "content" && entry.kind !== "group";
 
-function PageEntries(props: { entries: readonly MenuEntry[]; select: (item: MenuItem) => void }) {
+function PageEntries(props: {
+  entries: readonly MenuEntry[];
+  select: (item: MenuItem, event?: MouseEvent) => void;
+}) {
   const entries = createProjection(() => props.entries, [], { key: "id" });
   return (
     <For each={entries}>
@@ -67,9 +73,9 @@ function PageEntries(props: { entries: readonly MenuEntry[]; select: (item: Menu
             />
           );
         }
-        const activate = () => {
+        const activate = (event: MouseEvent) => {
           if (!entry.disabled) {
-            props.select(entry);
+            props.select(entry, event);
           }
         };
         if (entry.render) {
@@ -156,6 +162,7 @@ export function createMobileHeaderSessionMenu(options: {
   const openPage = (
     kind: "assign-owner" | "group" | "advanced" | "icon",
     backTo?: HeaderSessionMenuPage,
+    keyboardSource?: HTMLElement,
   ) => {
     const host = options.host();
     const source = options.source();
@@ -167,6 +174,10 @@ export function createMobileHeaderSessionMenu(options: {
     }
     const page = runWithOwner(renderOwner, () =>
       createRoot((dispose) => {
+        const [focusArmed, setFocusArmed] = createSignal(false);
+        const [focusReady, setFocusReady] = createSignal(false);
+        let contentRoot: HTMLDivElement | undefined;
+        let focusCancelled = false;
         const [query, setQuery] = createSignal("");
         const [searchOpen, setSearchOpen] = createSignal(false);
         const entries = () => {
@@ -242,6 +253,7 @@ export function createMobileHeaderSessionMenu(options: {
           backTo,
           content: (
             <div
+              ref={(element) => (contentRoot = element)}
               class={[
                 "session-actions-page",
                 {
@@ -304,8 +316,16 @@ export function createMobileHeaderSessionMenu(options: {
                                   .concat(entry)
                               : [entry],
                           )}
-                        select={(item) =>
-                          item.id === "compact:open-icon" ? openPage("icon", page) : select(item)
+                        select={(item, event) =>
+                          item.id === "compact:open-icon"
+                            ? openPage(
+                                "icon",
+                                page,
+                                event?.detail === 0 && event.currentTarget instanceof HTMLElement
+                                  ? event.currentTarget
+                                  : undefined,
+                              )
+                            : select(item)
                         }
                       />
                     </div>
@@ -331,7 +351,7 @@ export function createMobileHeaderSessionMenu(options: {
                   </section>
                 </>
               ) : kind === "icon" ? (
-                options.view.appearance.render(true)
+                options.view.appearance.render(true, () => setFocusReady(true))
               ) : (
                 <div class="session-actions-page__group">
                   <PageEntries entries={entries()} select={select} />
@@ -340,6 +360,48 @@ export function createMobileHeaderSessionMenu(options: {
             </div>
           ),
         };
+        if (keyboardSource) {
+          const canFocus = () => {
+            const active = source.ownerDocument.activeElement;
+            return (
+              !focusCancelled &&
+              source.isConnected &&
+              host.isCurrent(descriptor) &&
+              contentRoot?.isConnected === true &&
+              (active === source.ownerDocument.body ||
+                active === source ||
+                active === keyboardSource)
+            );
+          };
+          createPendingFocus(
+            () => ({
+              armed: focusArmed(),
+              ready: focusReady(),
+              current: host.isCurrent(descriptor),
+            }),
+            {
+              requested: (next, previous) => {
+                if (!next.armed) {
+                  return false;
+                }
+                if (!next.current) {
+                  focusCancelled = true;
+                  return false;
+                }
+                return previous?.armed ? undefined : true;
+              },
+              ready: (next) => next.ready && contentRoot?.isConnected === true,
+              focus: () => options.view.appearance.focusFirst(canFocus),
+            },
+          );
+          // Navigation and the picker ref settle before this one entry request is armed.
+          onSettled(() => {
+            setFocusArmed(true);
+          });
+          onCleanup(() => {
+            focusCancelled = true;
+          });
+        }
         pageDisposers.set(descriptor, dispose);
         return descriptor;
       }),

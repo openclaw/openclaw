@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { flush } from "solid-js";
+import { createSignal, flush, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { openSubmenu } from "../../../test-helpers/session-menu.ts";
@@ -13,11 +13,13 @@ afterEach(() => document.body.replaceChildren());
 async function menuFixture(mobile: boolean | undefined) {
   const menu = document.createElement("openclaw-chat-header-session-menu");
   const onAction = vi.fn();
-  const open = vi.fn<(page: HeaderSessionMenuPage, source: HTMLElement) => void>();
-  const close = vi.fn();
+  const [currentPage, setCurrentPage] = createSignal<HeaderSessionMenuPage>();
+  const [presented, setPresented] = createSignal(true);
+  const open = vi.fn<(page: HeaderSessionMenuPage, source: HTMLElement) => void>(setCurrentPage);
+  const close = vi.fn<() => void>(() => setCurrentPage(undefined));
   menu.mobile = mobile;
   menu.compact = true;
-  menu.mobileHost = { open, close };
+  menu.mobileHost = { open, close, isCurrent: (page) => presented() && currentPage() === page };
   menu.onAction = onAction;
   menu.copyMarkdownAllowed = true;
   menu.archiveAllowed = true;
@@ -28,7 +30,7 @@ async function menuFixture(mobile: boolean | undefined) {
   expect(menu.openMenu()).toBe(true);
   flush();
   await menu.updateComplete;
-  return { menu, onAction, open, close };
+  return { menu, onAction, open, close, currentPage, setCurrentPage, setPresented };
 }
 
 it("copies through the native action and closes the whole mobile menu", async () => {
@@ -228,3 +230,61 @@ it("omits pane closure from mobile Advanced for a single pane", async () => {
   expect(mounted.container.textContent).not.toContain("Close pane");
   expect(menu.querySelector('[value="compact:open-view"]')).toBeNull();
 });
+
+it.each(["keyboard", "pointer", "close", "suspend", "newer focus", "dispose"] as const)(
+  "only consumes the current native appearance keyboard request: %s",
+  async (entry) => {
+    const { menu, currentPage, close, setCurrentPage, setPresented } = await menuFixture(true);
+    const mounted = mountSolid(() => (
+      <Show when={currentPage()} keyed>
+        {(page) => page.content}
+      </Show>
+    ));
+    menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
+    flush();
+    const appearance = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Icon & color",
+    )!;
+    const advancedPage = currentPage()!;
+    appearance.focus();
+    appearance.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, detail: entry === "pointer" ? 1 : 0 }),
+    );
+    const newer = document.createElement("button");
+    document.body.append(newer);
+    if (entry === "close") {
+      close();
+    } else if (entry === "suspend") {
+      setPresented(false);
+    } else if (entry === "newer focus") {
+      newer.focus();
+    } else if (entry === "dispose") {
+      menu.remove();
+    }
+    flush();
+    const firstColor =
+      mounted.container.querySelector<HTMLButtonElement>('[aria-label="No color"]');
+    if (entry === "keyboard") {
+      expect(firstColor).not.toBeNull();
+      expect(document.activeElement).toBe(firstColor);
+      const appearancePage = currentPage()!;
+      newer.focus();
+      setCurrentPage(advancedPage);
+      flush();
+      setCurrentPage(appearancePage);
+      flush();
+      expect(document.activeElement).toBe(newer);
+    } else {
+      expect(document.activeElement).not.toBe(firstColor);
+      if (entry === "suspend") {
+        expect(firstColor?.isConnected).toBe(true);
+        setPresented(true);
+        flush();
+        expect(document.activeElement).not.toBe(firstColor);
+      }
+      if (entry === "newer focus") {
+        expect(document.activeElement).toBe(newer);
+      }
+    }
+  },
+);

@@ -19,7 +19,11 @@ import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
 registerSessionOrganizationEnglish();
 
-export type AppearancePickerFocus = (target: "first" | "grid" | "custom", roving?: boolean) => void;
+export type AppearancePickerFocus = (
+  target: "first" | "grid" | "custom",
+  roving?: boolean,
+  canFocus?: () => boolean,
+) => void;
 
 export type AppearancePickerProps = {
   mobile?: boolean;
@@ -51,8 +55,11 @@ export function AppearancePicker(props: AppearancePickerProps) {
   let custom: HTMLButtonElement | undefined;
   let input: HTMLTextAreaElement | undefined;
   onSettled(() => {
-    props.ref?.((target, roving) =>
+    props.ref?.((target, roving, canFocus) =>
       onSettled(() => {
+        if (canFocus?.() === false) {
+          return;
+        }
         if (target === "first") {
           [...colors.values(), ...choices.values()]
             .find((button) => button.isConnected && !button.disabled)
@@ -392,14 +399,17 @@ export function useSessionMenuAppearance(
   };
   return {
     prepare,
-    focusFirst: () => focus?.("first"),
+    focusFirst: (canFocus?: () => boolean) => focus?.("first", undefined, canFocus),
     showIconGrid,
-    render: (mobile = false) => (
+    render: (mobile = false, onReady?: () => void) => (
       <AppearancePicker
         controlRef={controlRef}
         mobile={mobile}
         sessionLabel={readState().session.label}
-        ref={(handle) => (focus = handle)}
+        ref={(handle) => {
+          focus = handle;
+          onReady?.();
+        }}
         allowSvg
         mode={mode()}
         currentIcon={readState().session.icon}
