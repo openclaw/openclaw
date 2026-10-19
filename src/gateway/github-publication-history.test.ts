@@ -90,8 +90,13 @@ async function historyFixture() {
   const coordinator = createTestGitHubPublicationCoordinator({
     placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
   });
-  const publish = (idempotencyKey: string) =>
-    coordinator.requestForSessionV2({ agentId: "main", sessionKey: SESSION_KEY, idempotencyKey });
+  const publish = (idempotencyKey: string, draft?: boolean) =>
+    coordinator.requestForSessionV2({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      idempotencyKey,
+      ...(draft !== undefined ? { draft } : {}),
+    });
   const state = async () => ({
     head: await git("rev-parse", "HEAD"),
     index: await fs.readFile(path.join(cwd, ".git", "index")),
@@ -194,7 +199,15 @@ describe("GitHub publication branch history", () => {
     const firstHead = await f.remoteHead();
     expect(await f.publish("initial")).toEqual(first);
     await f.write("next accepted edit\n");
-    await f.published("fast-forward");
+    const callsBeforeUpdate = f.calls.length;
+    expect(await f.publish("fast-forward", true)).toMatchObject({ status: "published", url });
+    expect(
+      f.calls
+        .slice(callsBeforeUpdate)
+        .filter(
+          (args) => args.includes("POST") || args.includes("PATCH") || args.includes("graphql"),
+        ),
+    ).toEqual([]);
     const secondHead = await f.remoteHead();
     expect(secondHead).not.toBe(firstHead);
     expect(await f.head("HEAD^")).toBe(firstHead);

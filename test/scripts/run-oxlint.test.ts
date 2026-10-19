@@ -347,6 +347,15 @@ describe("run-oxlint", () => {
     }
   });
 
+  it("skips plugin boundary artifacts for source-backed UI lint", () => {
+    for (const args of [
+      ["--tsconfig", "tsconfig.ui.json", "ui/src/main.ts"],
+      ["--tsconfig=tsconfig.ui.json", "--tsconfig=config/tsconfig/oxlint.core.json"],
+    ]) {
+      expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(false);
+    }
+  });
+
   it("skips artifact preparation for metadata-only oxlint commands", () => {
     for (const flag of ["--help", "--version", "--print-config", "--rules"]) {
       expect(shouldPrepareExtensionPackageBoundaryArtifacts([flag])).toBe(false);

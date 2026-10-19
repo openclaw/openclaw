@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -16,6 +17,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 
 const hasAnyAuthProfileStoreSourceAsyncMock = vi.hoisted(() => vi.fn(() => false));
 // mock-isolation: Cron diagnostics simulate missing auth sources without a credential-store owner.
@@ -33,8 +35,14 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-diagnostic-events-");
+let sessionStorePath: string;
 
-function makeParams(cfg: OpenClawConfig = {}) {
+function makeParams(config: OpenClawConfig = {}) {
+  const cfg: OpenClawConfig = {
+    ...config,
+    session: { ...config.session, store: sessionStorePath },
+  };
   setRuntimeConfigSnapshot(cfg);
   return {
     deliveryAttemptFence: null,
@@ -96,6 +104,8 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
   beforeEach(() => {
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
+    sessionStorePath = path.join(sessionDirs.make(), "sessions.json");
+    resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath: sessionStorePath }));
   });
 
   it("anchors cron execution to a child message lifecycle trace and restores its parent", async () => {
@@ -157,16 +167,17 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
   it("emits final lifecycle events under the adopted run session id", async () => {
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
+        storePath: sessionStorePath,
         sessionEntry: makeCronSessionEntry({
           sessionId: "fallback-run-session",
-          sessionFile: "/tmp/fallback-run-session.jsonl",
+          sessionFile: path.join(path.dirname(sessionStorePath), "fallback-run-session.jsonl"),
         }),
       }),
     );
     runWithModelFallbackMock.mockResolvedValue(
       fallbackResult({
         sessionId: "persisted-run-session",
-        sessionFile: "/tmp/persisted-run-session.jsonl",
+        sessionFile: path.join(path.dirname(sessionStorePath), "persisted-run-session.jsonl"),
         usage: { input: 10, output: 20 },
       }),
     );

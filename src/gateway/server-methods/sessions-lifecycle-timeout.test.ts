@@ -4,21 +4,26 @@ import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import {
-  removeChatAbortControllerEntry,
-  runWithChatAbortExecution,
-} from "../chat-abort-lifecycle-internal.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
+  captureSessionTarget,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient } from "../session-sharing.test-utils.js";
@@ -47,25 +52,54 @@ it.each([
       aborted.resolve();
     };
     const handle = createEmbeddedRunHandle({ abort: onAbort });
+    const controllerTarget = captureSessionTarget({
+      storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: target.agentId,
+      }),
+      ...target,
+      incarnation: sessionId,
+    });
     let execution: Promise<void> | undefined;
     if (backend === "embedded") {
-      setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
-    } else {
-      const entry: ChatAbortControllerEntry = {
-        agentId: "main",
-        sessionKey,
+      registerTestEmbeddedRun(
         sessionId,
-        controller: new AbortController(),
-        startedAtMs: 1,
-        expiresAtMs: Infinity,
-      };
-      entry.controller.signal.addEventListener("abort", onAbort, { once: true });
-      context.chatAbortControllers.set("stuck-backend", entry);
-      execution = runWithChatAbortExecution(
-        entry,
-        () => completion.promise,
-        () => {},
+        handle,
+        sessionKey,
+        undefined,
+        "main",
+        undefined,
+        undefined,
+        {
+          target: controllerTarget,
+        },
       );
+    } else {
+      const registration = registerChatAbortController({
+        target: controllerTarget,
+        runId: "stuck-backend",
+        ...target,
+        sessionId,
+        timeoutMs: 60_000,
+        sourceWork: completion.promise,
+        onCancel: onAbort,
+      });
+      if (!registration.registered) {
+        throw new Error("Expected the unresponsive controller source to register");
+      }
+      const claim = await claimSessionControllerTask(registration.entry.input, (selected) => {
+        createReplyOperation({
+          ...target,
+          sessionId,
+          resetTriggered: false,
+          target: controllerTarget,
+          mailboxClaim: selected,
+        });
+      });
+      execution = completion.promise.finally(() => {
+        claim.operation?.complete();
+        releaseSessionControllerClaim(claim);
+        registration.cleanup();
+      });
     }
     const respond = vi.fn();
     const client = roleClient("write", "timeout-operator");
@@ -88,7 +122,7 @@ it.each([
     });
     try {
       await awaitGateBeforeSettlement(aborted.promise, request, "backend was not cancelled");
-      await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
       expect(respond).toHaveBeenCalledOnce();
       expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
         false,
@@ -108,9 +142,8 @@ it.each([
     } finally {
       vi.useRealTimers();
       completion.resolve();
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      clearTestEmbeddedRun(sessionId, handle, sessionKey);
       await execution;
-      removeChatAbortControllerEntry(context.chatAbortControllers, "stuck-backend");
       await request;
     }
   },

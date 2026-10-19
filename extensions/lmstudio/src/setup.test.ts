@@ -188,6 +188,8 @@ function createPromptText(apiKey = "lmstudio-test-key", baseUrl = "http://localh
   return vi.fn().mockResolvedValueOnce(baseUrl).mockResolvedValueOnce(apiKey);
 }
 
+// `promptText` is the public callback-based setup API. Keep its non-wizard
+// coverage next to the wizard prompter cases.
 function runInteractive(
   params: Omit<Parameters<typeof promptAndConfigureLmstudioInteractive>[0], "config"> & {
     config?: OpenClawConfig;

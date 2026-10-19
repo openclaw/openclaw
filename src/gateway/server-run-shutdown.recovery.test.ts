@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import {
@@ -13,8 +13,6 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../agents/run-termination.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
-import { admitReplyTurn } from "../auto-reply/reply/reply-turn-admission.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -36,23 +34,28 @@ import {
 } from "../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
-import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
-import { registerQueuedChatTurn, type QueuedChatTurnMap } from "./chat-queued-turns.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
-import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
-import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import {
+  captureRecoveryTarget,
+  createMockGatewayRecoveryRuntime,
+} from "./server-recovery-runtime.test-support.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import {
@@ -62,11 +65,47 @@ import {
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { projectGatewaySessionActiveRun } from "./session-utils-display.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
-import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;
 let storePath: string;
+
+function registerRecoveryRun(
+  params: Omit<Parameters<typeof registerChatAbortController>[0], "target"> & {
+    sessionKey: string;
+    resolveGatewayContext: GatewayContextResolver;
+    storePath?: string;
+  },
+  timing?: Parameters<ReturnType<typeof registerChatAbortController>["initializeTiming"]>[0],
+) {
+  const { resolveGatewayContext, storePath: scopedStorePath, ...options } = params;
+  const registration = registerChatAbortController({
+    ...options,
+    target: captureRecoveryTarget(
+      scopedStorePath ?? storePath,
+      options.sessionKey,
+      options.sessionId,
+      options.agentId ?? "main",
+    ),
+  });
+  if (!registration.registered) {
+    throw new Error("Expected a fresh recovery source");
+  }
+  bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
+  registration.initializeTiming(timing);
+  onTestFinished(async () => {
+    const input = registration.entry.input;
+    input.claim?.operation?.complete();
+    if (input.claim) {
+      releaseSessionControllerClaim(input.claim);
+    }
+    registration.cleanup();
+    retireSessionControllerInput(input);
+    await input.settlement.promise;
+  });
+  return registration;
+}
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "restart-drain-session-settlement" });
@@ -84,6 +123,7 @@ it.each([
   "before commit",
   "user abort",
   "replacement",
+  "other physical store",
   "newer run",
   "reset",
   "non-main",
@@ -95,28 +135,34 @@ it.each([
   const target = { storePath, sessionKey };
   await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
   const resolveGatewayContext = () => undefined;
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities: [sessionKey, sessionId],
     resolveGatewayContext,
     assertAllowed: () => {},
   });
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-  const registration = registerChatAbortController({
-    chatAbortControllers,
+  const registration = registerRecoveryRun({
+    resolveGatewayContext,
     runId,
     sessionKey,
     sessionId,
     timeoutMs: 60_000,
   });
-  const shouldMark = releaseAt === "before planning" || releaseAt === "before commit";
+  const releaseClaim = await claimRpcSourceForTest(registration.entry);
+  const shouldMark =
+    releaseAt === "before planning" ||
+    releaseAt === "before commit" ||
+    releaseAt === "other physical store";
   if (releaseAt !== "user abort") {
     registration.controller.abort(createAgentRunRestartAbortError());
   }
-  const release = () => {
+  const release = async () => {
+    releaseClaim();
+    retireSessionControllerInput(registration.entry.input);
+    await registration.entry.input.settlement.promise;
     registration.cleanup();
     admission.release();
-    expect(chatAbortControllers.has(runId)).toBe(false);
+    expect(getRpcSource(runId)).toBeUndefined();
     expect(admission.isActive()).toBe(false);
   };
   const apply = sessionAccessor.applySessionEntryReplacements;
@@ -127,22 +173,20 @@ it.each([
         ...params,
         update: async (entries) => {
           const prepared = await params.update(entries);
-          release();
+          await release();
           return prepared;
         },
       }),
     );
   }
   const harness = createAgentEventTestHarness();
-  let replacement: ReturnType<typeof registerChatAbortController> | undefined;
+  let replacement: ReturnType<typeof registerRecoveryRun> | undefined;
   try {
     await prepareGatewayRunShutdown({
       resolveGatewayContext,
       timeoutMs: 0,
       warnings: [],
       getPendingReplyCount: () => 0,
-      chatAbortControllers,
-      chatQueuedTurns: new Map(),
       chatRunState: harness.chatRunState,
       agentRunSeq: harness.agentRunSeq,
       removeChatRun: () => undefined,
@@ -153,18 +197,25 @@ it.each([
           registration.controller.abort(createAgentRunDirectAbortError());
         }
         if (releaseAt === "completed" && registration.registered) {
-          registration.entry.projectSessionTerminalPersisted = true;
+          registration.entry.adapter.projectSessionTerminalPersisted = true;
         }
         if (releaseAt !== "before commit") {
-          release();
+          await release();
         }
-        if (releaseAt === "replacement" || releaseAt === "newer run") {
-          replacement = registerChatAbortController({
-            chatAbortControllers,
+        if (
+          releaseAt === "replacement" ||
+          releaseAt === "newer run" ||
+          releaseAt === "other physical store"
+        ) {
+          replacement = registerRecoveryRun({
+            resolveGatewayContext,
             runId: releaseAt === "newer run" ? "newer-run" : runId,
             sessionKey,
             sessionId,
             timeoutMs: 60_000,
+            ...(releaseAt === "other physical store"
+              ? { storePath: state.statePath("other-store", "sessions.json") }
+              : {}),
           });
         }
         if (releaseAt === "newer run" || releaseAt === "reset" || releaseAt === "non-main") {
@@ -193,7 +244,12 @@ it.each([
     }
   } finally {
     replacementSpy.mockRestore();
+    releaseClaim();
+    retireSessionControllerInput(registration.entry.input);
     registration.cleanup();
+    if (replacement) {
+      retireSessionControllerInput(replacement.entry.input);
+    }
     replacement?.cleanup();
     admission.release();
     await harness.handler.dispose();
@@ -231,36 +287,38 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         },
       },
     );
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
       resolveGatewayContext,
       assertAllowed: () => {},
     });
-    const chatQueuedTurns: QueuedChatTurnMap = new Map();
-    const controller = new AbortController();
     const reply =
       kind === "queue"
-        ? createReplyOperation({ sessionKey, sessionId, resetTriggered: false })
+        ? createReplyOperation({
+            sessionKey,
+            sessionId,
+            resetTriggered: false,
+            target: captureRecoveryTarget(storePath, sessionKey, sessionId),
+          })
+        : undefined;
+    const queued =
+      kind === "queue"
+        ? registerRecoveryRun({
+            resolveGatewayContext,
+            runId,
+            sessionKey,
+            sessionId,
+            timeoutMs: 60_000,
+            onCancel: () => admission.release(),
+          })
         : undefined;
     let queueCancelledBeforeReply = false;
     if (reply) {
       bindGatewayContextResolver(reply, resolveGatewayContext);
       reply.abortSignal.addEventListener("abort", () => {
-        queueCancelledBeforeReply = controller.signal.aborted;
+        queueCancelledBeforeReply = queued?.controller.signal.aborted === true;
       });
-    }
-    if (kind === "queue") {
-      expect(
-        registerQueuedChatTurn({
-          chatQueuedTurns,
-          controller,
-          runId,
-          sessionKey,
-          sessionId,
-          onAborted: () => admission.release(),
-        }),
-      ).toBe(true);
     }
     const gatewayRuntime = createMockGatewayRecoveryRuntime();
     vi.mocked(gatewayRuntime.dispatchAgent).mockResolvedValue({
@@ -275,8 +333,6 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         timeoutMs: 0,
         warnings: [],
         getPendingReplyCount: () => 0,
-        chatAbortControllers: new Map(),
-        chatQueuedTurns,
         chatRunState: harness.chatRunState,
         agentRunSeq: harness.agentRunSeq,
         removeChatRun: () => undefined,
@@ -292,12 +348,13 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         mainRestartRecovery: { cycleId: expect.any(String) },
       });
       if (kind === "queue") {
-        expect(controller.signal.reason).toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
-        expect(chatQueuedTurns.size).toBe(0);
+        expect(queued?.controller.signal.reason).toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
+        expect(getRpcSource(runId)).toBeUndefined();
         expect(admission.isActive()).toBe(false);
         expect(queueCancelledBeforeReply).toBe(true);
       }
       reply?.complete();
+      queued?.cleanup();
       admission.release();
       rotateAgentEventLifecycleGeneration();
       const recover = () =>
@@ -339,27 +396,24 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
           transcript,
         );
         expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
-        const nextTurn = await admitReplyTurn({
-          sessionKey,
-          sessionId,
-          storePath,
-          kind: "visible",
-          resetTriggered: false,
-        });
-        try {
-          expect(nextTurn.status).toBe("owned");
-          expect(loadSessionEntry(target)?.sessionId).toBe(sessionId);
-        } finally {
-          if (nextTurn.status === "owned") {
-            nextTurn.operation.complete();
-          }
-        }
+        const nextTarget = captureRecoveryTarget(storePath, sessionKey, sessionId);
+        await withSessionTurn(
+          { sessionKey, sessionId, storePath, target: nextTarget },
+          async (operation) => {
+            expect(operation).toBeDefined();
+            expect(loadSessionEntry(target)?.sessionId).toBe(sessionId);
+          },
+        );
       } else {
         expect(gatewayRuntime.dispatchAgent).toHaveBeenCalledTimes(1);
         expect(loadSessionEntry(target)).toMatchObject({ status: "done", abortedLastRun: false });
       }
     } finally {
       reply?.complete();
+      if (queued) {
+        retireSessionControllerInput(queued.entry.input);
+        queued.cleanup();
+      }
       admission.release();
       recoveryLog.mockRestore();
     }
@@ -398,7 +452,7 @@ it.each(["none", "active", "pending"] as const)(
       status: "done",
     });
     let recoveryMarkedBeforeInterruption = false;
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
       owner,
@@ -414,7 +468,7 @@ it.each(["none", "active", "pending"] as const)(
     });
     const pendingValidation = vi.fn();
     let pendingPromoted = false;
-    const pending = beginSessionWorkAdmission({
+    const pending = beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
       owner,
@@ -436,7 +490,7 @@ it.each(["none", "active", "pending"] as const)(
       (error: unknown) => error,
     );
     const interruptFinalWrite = vi.fn();
-    const finalAdmission = await beginSessionWorkAdmission({
+    const finalAdmission = await beginSessionEffect({
       scope: storePath,
       identities: [finalSessionKey, finalSessionId],
       resolveGatewayContext,
@@ -453,13 +507,13 @@ it.each(["none", "active", "pending"] as const)(
       .finally(() => finalAdmission.release());
     const siblingInterrupt = vi.fn();
     const unboundInterrupt = vi.fn();
-    const sibling = await beginSessionWorkAdmission({
+    const sibling = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
       resolveGatewayContext: () => undefined,
       onInterrupt: siblingInterrupt,
     });
-    const unbound = await beginSessionWorkAdmission({
+    const unbound = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
       resolveGatewayContext: undefined,
@@ -488,6 +542,8 @@ it.each(["none", "active", "pending"] as const)(
     const queued = enqueueCommandInLane(lane, queuedTask, {
       abortSignal: controller.signal,
     }).catch((error: unknown) => error);
+    const successorInterrupt = vi.fn();
+    let successor: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     const harness = createAgentEventTestHarness();
     try {
       expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
@@ -497,8 +553,6 @@ it.each(["none", "active", "pending"] as const)(
         timeoutMs: 0,
         warnings: [],
         getPendingReplyCount: () => 0,
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
         chatRunState: harness.chatRunState,
         agentRunSeq: harness.agentRunSeq,
         removeChatRun: () => undefined,
@@ -506,6 +560,12 @@ it.each(["none", "active", "pending"] as const)(
         nodeSendToSession: harness.nodeSendToSession,
         markMainSessionsAbortedForRestart: async (params) => {
           await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
+          successor = await beginSessionEffect({
+            scope: storePath,
+            identities: [sessionKey, sessionId],
+            resolveGatewayContext,
+            onInterrupt: successorInterrupt,
+          });
         },
       });
       expect(controller.signal.aborted).toBe(true);
@@ -527,6 +587,8 @@ it.each(["none", "active", "pending"] as const)(
       expect(unbound.isActive()).toBe(true);
       expect(siblingInterrupt).not.toHaveBeenCalled();
       expect(unboundInterrupt).not.toHaveBeenCalled();
+      expect(successor?.isActive()).toBe(true);
+      expect(successorInterrupt).not.toHaveBeenCalled();
       let released = false;
       void shutdown.released.then(
         () => {
@@ -548,6 +610,7 @@ it.each(["none", "active", "pending"] as const)(
         );
       }
       expect(finalAdmission.isActive()).toBe(false);
+      expect(successor?.isActive()).toBe(true);
       expect(JSON.stringify(await loadTranscriptEvents(finalTarget))).toContain(
         "The protected final write persisted.",
       );
@@ -560,6 +623,7 @@ it.each(["none", "active", "pending"] as const)(
       await pending;
       sibling.release();
       unbound.release();
+      successor?.release();
       await harness.handler.dispose();
     }
   },
@@ -592,22 +656,28 @@ it.each(
     const subscriptionConfig = { ...cfg, logging: { audit: { enabled: false } } };
     setRuntimeConfigSnapshot(subscriptionConfig, subscriptionConfig);
     await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
-    const params = createSubscriptionTestFixture().createParams();
-    const clock = createGatewaySchedulerClock(Date.now());
-    params.scheduler = createTestGatewayScheduler(clock.clock);
+    const resolveGatewayContext = () => undefined;
+    const params = {
+      ...createSubscriptionTestFixture().createParams(),
+      resolveGatewayContext,
+    };
     params.chatRunState.registry.add(runId, { sessionKey, clientRunId });
     const registration = registerSubscriptionChatRun(params, {
       runId: clientRunId,
       sessionKey,
       sessionId,
       agentId: "main",
+      target: captureRecoveryTarget(storePath, sessionKey, sessionId),
     });
+    bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
+    const releaseClaim = await claimRpcSourceForTest(registration.entry);
     registration.markExecutionStarted();
     registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main" });
     const unsubs = startGatewayEventSubscriptions(params);
     let unsubscribeAgent: Promise<void> | undefined;
     const drain = () => (unsubscribeAgent ??= unsubs.agentUnsub());
     let replacement: ReturnType<typeof registerSubscriptionChatRun> | undefined;
+    let releaseReplacementClaim: (() => void) | undefined;
     const replacementRunId = `${runId}-replacement`;
     const writeEntered = createDeferred();
     const releaseWrite = createDeferred();
@@ -639,26 +709,17 @@ it.each(
       registration.cleanup();
       if (heldWrite) {
         await writeEntered.promise;
-        registration.entry.expiresAtMs = clock.clock.now() - 1;
-        const timers = startGatewayMaintenanceTimers({
-          ...createGatewayMaintenanceStateForTest(),
-          ...params,
-        });
-        try {
-          await clock.advanceBy(60_000);
-          expect(params.chatAbortControllers.has(clientRunId)).toBe(false);
-          expect(params.restartRecoveryCandidates.get(clientRunId)).toMatchObject({
-            runId: clientRunId,
-            ...(aliased ? { sourceRunId: runId } : {}),
-          });
-        } finally {
-          await timers.stopPeriodicTasks();
-          await timers.skillUsageCleanup();
-        }
+        releaseClaim();
+        registration.cleanup();
+        expect(getRpcSource(clientRunId)).toBe(registration.entry);
+        expect(registration.entry.adapter.projectSessionTerminalPending).toBe(true);
         releaseWrite.resolve();
       }
       await waitForChatAbortTerminalPersistence(registration.entry);
-      expect(params.chatAbortControllers.has(clientRunId)).toBe(false);
+      releaseClaim();
+      registration.cleanup();
+      await registration.entry.input.settlement.promise;
+      expect(getRpcSource(clientRunId)).toBeUndefined();
       expect(loadSessionEntry(target)).toMatchObject({
         status: completed ? "done" : "interrupted",
         abortedLastRun: !completed,
@@ -667,11 +728,10 @@ it.each(
 
       await prepareGatewayRunShutdown({
         ...params,
-        resolveGatewayContext: () => undefined,
+        resolveGatewayContext,
         timeoutMs: 0,
         warnings: [],
         getPendingReplyCount: () => 0,
-        chatQueuedTurns: new Map(),
         removeChatRun: () => undefined,
         markMainSessionsAbortedForRestart: async (captured) => {
           if (outcome === "replacement") {
@@ -681,7 +741,10 @@ it.each(
               sessionKey,
               sessionId,
               agentId: "main",
+              target: captureRecoveryTarget(storePath, sessionKey, sessionId),
             });
+            bindGatewayContextResolver(replacement.entry.input, resolveGatewayContext);
+            releaseReplacementClaim = await claimRpcSourceForTest(replacement.entry);
             replacement.markExecutionStarted();
             registerAgentRunContext(replacementRunId, {
               sessionKey,
@@ -734,6 +797,8 @@ it.each(
       unsubs.heartbeatUnsub();
       unsubs.transcriptUnsub();
       unsubs.lifecycleUnsub();
+      releaseClaim();
+      releaseReplacementClaim?.();
       registration.cleanup();
       replacement?.cleanup();
       clearAgentRunContext(runId);
@@ -746,14 +811,15 @@ it.each(
 it("persists recovery when restart cancellation precedes shutdown marking", async () => {
   const childKey = "agent:main:dashboard:child";
   const mainKey = "agent:main:dashboard:main";
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const resolveGatewayContext = () => undefined;
   const persist = vi.fn(persistGatewaySessionLifecycleEvent);
   const harness = createAgentEventTestHarness({
     persistGatewaySessionLifecycleEventForEvent: persist,
   });
   harness.clearAgentRunContext.mockImplementation(clearAgentRunContext);
   const unsubscribe = subscribeAgentEvents(harness.handler);
-  const registrations: Array<ReturnType<typeof registerChatAbortController>> = [];
+  const registrations: Array<ReturnType<typeof registerRecoveryRun>> = [];
+  const releases: Array<() => void> = [];
   const joinPersistence = async () => {
     await unsubscribe.drain();
     await Promise.all(persist.mock.results.map((result) => result.value));
@@ -775,16 +841,19 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
         { sessionId, updatedAt: 1_000, spawnDepth },
       );
       registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main" });
-      const registration = registerChatAbortController({
-        chatAbortControllers,
-        runId,
-        sessionId,
-        sessionKey,
-        agentId: "main",
-        now: 1_000,
-        timeoutMs: 60_000,
-      });
+      const registration = registerRecoveryRun(
+        {
+          resolveGatewayContext,
+          runId,
+          sessionId,
+          sessionKey,
+          agentId: "main",
+          timeoutMs: 60_000,
+        },
+        { now: 1_000 },
+      );
       registrations.push(registration);
+      releases.push(await claimRpcSourceForTest(registration.entry));
       registration.markExecutionStarted();
       emitAgentEvent({
         runId,
@@ -797,7 +866,8 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
       expect(read(sessionKey).lifecycleRunId).toBe(runId);
       expect.soft(read(sessionKey).status).toBeUndefined();
       const active = resolveVisibleActiveSessionRunState({
-        context: { chatAbortControllers },
+        storePath,
+        resolveGatewayContext,
         requestedKey: sessionKey,
         canonicalKey: sessionKey,
         sessionId,
@@ -811,12 +881,10 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     registrations[1]!.controller.abort(createAgentRunRestartAbortError());
     const warnings: string[] = [];
     await prepareGatewayRunShutdown({
-      resolveGatewayContext: () => undefined,
+      resolveGatewayContext,
       timeoutMs: 0,
       warnings,
       getPendingReplyCount: () => 0,
-      chatAbortControllers,
-      chatQueuedTurns: new Map(),
       chatRunState: harness.chatRunState,
       agentRunSeq: harness.agentRunSeq,
       removeChatRun: () => undefined,
@@ -841,7 +909,8 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     expect.soft(read(childKey).status).toBe("interrupted");
     expect(hasLiveAgentRunContext(`${childKey}:run`)).toBe(false);
     const active = resolveVisibleActiveSessionRunState({
-      context: { chatAbortControllers },
+      storePath,
+      resolveGatewayContext,
       requestedKey: childKey,
       canonicalKey: childKey,
       sessionId: read(childKey).sessionId,
@@ -930,6 +999,9 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     await unsubscribe();
     await joinPersistence();
     await harness.handler.dispose();
+    for (const release of releases) {
+      release();
+    }
     for (const registration of registrations) {
       registration.cleanup();
     }

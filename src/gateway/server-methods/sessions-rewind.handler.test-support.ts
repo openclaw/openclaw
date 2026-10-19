@@ -4,7 +4,7 @@ import type { AgentHarness } from "../../agents/harness/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -49,12 +49,11 @@ export function installHarness(
 export async function holdLifecycle(
   storePath: string,
   sessionId: string,
-  action: "archive" | "rewind" = "archive",
   afterRelease?: () => Promise<void>,
 ) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const settled = runExclusiveSessionLifecycleMutation(action, {
+  const settled = runSessionMutation({
     scope: storePath,
     identities: [sessionId],
     run: async () => {
@@ -74,12 +73,9 @@ type MessageCutMethod =
   | "sessions.fork"
   | "sessions.rewind";
 
-function messageCutContext(active = false): GatewayRequestContext {
+function messageCutContext(): GatewayRequestContext {
   return {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(
-      active ? [["active-run", { sessionId: sourceSessionId, sessionKey }]] : undefined,
-    ),
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;

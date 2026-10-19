@@ -263,8 +263,9 @@ it("reuses descendants after parent progress while keeping inherited models curr
         prepareSessionRowPublication(projection, Date.now())(
           client,
           createVisibleActiveSessionRunProjector(
-            context,
             projection.state.rowContext.projectedAgentRuns,
+            undefined,
+            context.resolveGatewayContext,
           ),
         ).snapshot({
           agentId: "main",

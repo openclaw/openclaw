@@ -393,7 +393,7 @@ describe("runCommandBuffered", () => {
         let command: ReturnType<typeof runCommandBuffered> | undefined;
         // Freeze deadlines, not subprocess I/O: Node startup must not consume the
         // timeout or the 100ms inherited-pipe idle grace. Receipts stay real.
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
         try {
           let settled = false;
           command = runCommandBuffered(nodeCommand(parentSource), {

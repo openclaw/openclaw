@@ -579,6 +579,8 @@ export async function finalizeWorkerTurnResult(
     },
   };
   assertResultCurrent();
+  // The terminal reply is committed; retained workspace cleanup still owns settlement.
+  turn.replyOperation?.freezeAbort();
   params.onReply(result);
   await settleWorkspace();
   return result;

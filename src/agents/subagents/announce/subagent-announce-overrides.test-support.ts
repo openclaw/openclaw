@@ -3,6 +3,9 @@ import * as configRuntime from "../../../config/config.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import * as sessionHistory from "../../../config/sessions/session-history.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import { adoptSessionControllerSource } from "../../../sessions/session-controller.mailbox.js";
+import * as sessionQueries from "../../../sessions/session-controller.queries.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import * as announceRuntime from "./subagent-announce.runtime.js";
@@ -32,19 +35,13 @@ type OutputTestDeps = Pick<
 
 export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   getRequesterSessionActivity: typeof deliveryRuntime.getSubagentRequesterSessionActivity;
-  isEmbeddedAgentRunActive: typeof embeddedRuns.isEmbeddedAgentRunActive;
+  isSessionRunActive: typeof sessionQueries.isSessionRunActive;
   resolveRequesterSessionAbandonment: typeof embeddedRuns.resolveEmbeddedRunAbandonment;
   loadSessionEntry: typeof sessionAccessor.loadSessionEntryReadOnly;
   loadSessionEntryByKey: typeof deliveryRuntime.loadSessionEntryByKey;
   loadRequesterSessionEntry: (
     ...args: Parameters<typeof deliveryRuntime.loadRequesterSessionEntry>
   ) => Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>>;
-  queueEmbeddedAgentMessageWithOutcome: (
-    ...args: Parameters<typeof embeddedRuns.queueEmbeddedAgentMessageWithOutcomeAsync>
-  ) =>
-    | embeddedRuns.EmbeddedAgentQueueMessageOutcome
-    | Promise<embeddedRuns.EmbeddedAgentQueueMessageOutcome>;
-  queueGuardedEmbeddedAgentMessageWithOutcome: typeof embeddedRuns.queueGuardedEmbeddedAgentMessageWithOutcomeAsync;
   sendMessage: typeof deliveryRuntime.sendSubagentAnnounceMessage;
 };
 
@@ -54,6 +51,48 @@ type Overrides = Partial<AnnounceTestDeps & OutputTestDeps & SubagentAnnounceDel
 type Scope = "announce" | "output" | "delivery";
 const scopes = new Map<Scope, Overrides>();
 const restoreOverrides: Array<() => void> = [];
+
+/** Exercise reserved-source adoption when a test replaces the in-process Gateway adapter. */
+async function dispatchThroughTestGateway(
+  callGateway: AnnounceTestDeps["callGateway"],
+  method: string,
+  params: Record<string, unknown>,
+  options: Parameters<typeof announceRuntime.dispatchGatewayMethodInProcess>[2],
+) {
+  const dispatch = () =>
+    callGateway({
+      method,
+      params,
+      expectFinal: options?.expectFinal,
+      onAccepted: options?.onAccepted,
+      timeoutMs: options?.timeoutMs,
+    });
+  const controllerInput = method === "agent" ? options?.controllerInput : undefined;
+  if (!controllerInput) {
+    return await dispatch();
+  }
+  const runId = typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined;
+  const target = controllerInput.target ?? controllerInput.mailbox.owner.target;
+  if (!runId || !target) {
+    throw new Error("Reserved announce source requires its run and physical target");
+  }
+  adoptSessionControllerSource(controllerInput, {
+    target,
+    policy: controllerInput.policy,
+    protocolRunId: runId,
+    adapter: {},
+  });
+  return await withSessionTurn(
+    {
+      sessionKey: controllerInput.mailbox.key,
+      sessionId: controllerInput.sourceSessionId ?? target.incarnation,
+      agentId: target.agentId,
+      target,
+      controllerInput,
+    },
+    dispatch,
+  );
+}
 
 function install<T extends (...args: never[]) => unknown>(
   original: T,
@@ -90,13 +129,12 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       ...(scope !== "output" && callGateway && !overrides.dispatchGatewayMethodInProcess
         ? {
             dispatchGatewayMethodInProcess: (async (method, params, options) =>
-              await callGateway({
+              await dispatchThroughTestGateway(
+                callGateway,
                 method,
                 params,
-                expectFinal: options?.expectFinal,
-                onAccepted: options?.onAccepted,
-                timeoutMs: options?.timeoutMs,
-              })) satisfies AnnounceTestDeps["dispatchGatewayMethodInProcess"],
+                options,
+              )) satisfies AnnounceTestDeps["dispatchGatewayMethodInProcess"],
           }
         : {}),
     });
@@ -182,6 +220,19 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
         return current.loadSessionEntry!(readScope);
       },
     );
+    install(
+      sessionEntryWorker.withSessionEntryReadOnlyInWorker,
+      () => vi.spyOn(sessionEntryWorker, "withSessionEntryReadOnlyInWorker"),
+      async (readScope, assertCurrent, consume) => {
+        assertCurrent();
+        const result = await consume(
+          { ok: true, value: current.loadSessionEntry!(readScope) },
+          { kind: "file", assertCurrent },
+        );
+        assertCurrent();
+        return result;
+      },
+    );
   }
   if (current.loadRequesterSessionEntry) {
     install(
@@ -212,11 +263,11 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       current.getRequesterSessionActivity,
     );
   }
-  if (current.isEmbeddedAgentRunActive) {
+  if (current.isSessionRunActive) {
     install(
-      embeddedRuns.isEmbeddedAgentRunActive,
-      () => vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive"),
-      current.isEmbeddedAgentRunActive,
+      sessionQueries.isSessionRunActive,
+      () => vi.spyOn(sessionQueries, "isSessionRunActive"),
+      current.isSessionRunActive,
     );
   }
   if (current.resolveRequesterSessionAbandonment) {
@@ -224,21 +275,6 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
       embeddedRuns.resolveEmbeddedRunAbandonment,
       () => vi.spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment"),
       current.resolveRequesterSessionAbandonment,
-    );
-  }
-  const queue = current.queueEmbeddedAgentMessageWithOutcome;
-  if (queue) {
-    install(
-      embeddedRuns.queueEmbeddedAgentMessageWithOutcomeAsync,
-      () => vi.spyOn(embeddedRuns, "queueEmbeddedAgentMessageWithOutcomeAsync"),
-      async (...args) => await queue(...args),
-    );
-  }
-  if (current.queueGuardedEmbeddedAgentMessageWithOutcome) {
-    install(
-      embeddedRuns.queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
-      () => vi.spyOn(embeddedRuns, "queueGuardedEmbeddedAgentMessageWithOutcomeAsync"),
-      current.queueGuardedEmbeddedAgentMessageWithOutcome,
     );
   }
   if (current.sendMessage) {

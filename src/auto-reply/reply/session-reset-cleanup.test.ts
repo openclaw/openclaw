@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager,
@@ -20,18 +21,31 @@ import {
 } from "../../infra/system-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import {
+  createReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  releaseSessionControllerClaim,
+  reserveSessionControllerSource,
+  tryClaimSessionControllerTask,
+} from "../../sessions/session-controller.mailbox.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
+import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
-import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import {
+  clearCommittedSessionResetRuntimeState,
   clearSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
 } from "./session-reset-cleanup.js";
 
 afterEach(() => {
   clearEmbeddedSessionPromptStates(["old-session"]);
-  replyRunTesting.resetReplyRunRegistry();
+  controllerTesting.resetSessionControllerForTest();
   resetDiagnosticRunActivityForTest();
   resetSystemEventsForTest();
 });
@@ -132,7 +146,7 @@ describe("clearSessionResetRuntimeState", () => {
     expect(peekSystemEvents("agent:beta:global")).toEqual(["beta"]);
   });
 
-  it("releases active reply work owned by the archived reset session id", () => {
+  it("retains archived reply custody until its actual producer returns", async () => {
     const cancel = vi.fn();
     const operation = createOperation();
     operation.attachBackend({
@@ -141,13 +155,23 @@ describe("clearSessionResetRuntimeState", () => {
       isStreaming: () => false,
     });
     operation.setPhase("running");
-
-    clearArchived();
-
-    expect(cancel).toHaveBeenCalledWith("restart");
-    expect(replyRunRegistry.isActive(replySessionKey)).toBe(false);
-    const nextOperation = createOperation("new-session");
-    expect(nextOperation.sessionId).toBe("new-session");
+    const raw = createDeferred();
+    const producer = raw.promise.then(() => operation.complete());
+    try {
+      clearArchived();
+      expect(cancel).toHaveBeenCalledWith("restart");
+      expect(isSessionRunActiveForKey(replySessionKey)).toBe(true);
+      expect(() => createOperation("new-session")).toThrow("already active");
+      raw.resolve();
+      await producer;
+      await operation.ownerSettlement;
+      const nextOperation = createOperation("new-session");
+      expect(nextOperation.sessionId).toBe("new-session");
+      nextOperation.complete();
+    } finally {
+      raw.resolve();
+      await producer;
+    }
   });
 
   it("does not clear a fresh active reply under the same key when only the archived id is reset", () => {
@@ -156,7 +180,7 @@ describe("clearSessionResetRuntimeState", () => {
 
     clearArchived();
 
-    expect(replyRunRegistry.get(replySessionKey)).toBe(operation);
+    expect(getSessionControllerOperation(replySessionKey)).toBe(operation);
   });
 
   it("does not clear a replacement admitted while the archived run is cancelling", () => {
@@ -176,7 +200,7 @@ describe("clearSessionResetRuntimeState", () => {
     clearArchived();
 
     expect(replacement).toBeDefined();
-    expect(replyRunRegistry.get(replySessionKey)).toBe(replacement);
+    expect(getSessionControllerOperation(replySessionKey)).toBe(replacement);
   });
 
   it("leaves queued reservations for the archived id so session init can rebind them", () => {
@@ -185,7 +209,60 @@ describe("clearSessionResetRuntimeState", () => {
     clearArchived();
 
     expect(operation.phase).toBe("queued");
-    expect(replyRunRegistry.get(replySessionKey)).toBe(operation);
+    expect(getSessionControllerOperation(replySessionKey)).toBe(operation);
+  });
+
+  it("clears queued sources without cancelling the executing reset turn that requested it", async () => {
+    const sessionKey = "agent:main:dashboard:reset-self";
+    enqueueSystemEvent("stale", withSystemEventOwner({ sessionKey }, "main"));
+    // A `/new` or `/reset` chat turn owns a claimed controller input and runs
+    // initSessionState as that claim's operation; its reply signal is the input's.
+    const storePath = "/synthetic/reset-self.sqlite";
+    const target = captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" });
+    const resetTurn = reserveSessionControllerSource(sessionKey, {
+      policy: { mode: "followup" },
+      target,
+    });
+    const claim = tryClaimSessionControllerTask(resetTurn);
+    if (!claim) {
+      throw new Error("expected reset turn claim");
+    }
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId: "old-session",
+      resetTriggered: true,
+      mailboxClaim: claim,
+      upstreamAbortSignal: claim.abortController.signal,
+    });
+    const queued = reserveSessionControllerSource(sessionKey, {
+      policy: { mode: "followup" },
+      target,
+    });
+    const onError = vi.fn();
+    try {
+      withSessionControllerOwner(operation, () =>
+        clearCommittedSessionResetRuntimeState({
+          previousSessionEntry: { sessionId: "old-session" },
+          storePath,
+          agentId: "main",
+          sessionKey,
+          signal: resetTurn.abortSignal,
+          onError,
+        }),
+      );
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(resetTurn.abortSignal.aborted).toBe(false);
+      expect(queued.abortSignal.aborted).toBe(true);
+      expect(peekSystemEvents(sessionKey)).toStrictEqual([]);
+      // A clear outside that turn still cancels its claimed input.
+      clearFollowupQueue(sessionKey);
+      expect(resetTurn.abortSignal.aborted).toBe(true);
+    } finally {
+      operation.complete();
+      releaseSessionControllerClaim(claim);
+      await claim.settlement.promise;
+    }
   });
 });
 

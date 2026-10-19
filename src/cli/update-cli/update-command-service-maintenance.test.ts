@@ -279,20 +279,33 @@ it.each([{ state: "failed", tasksCurrent: 2, residual: true }])(
     }),
 );
 
-it.each(["systemd-user-bus-unavailable", undefined] as const)(
+it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const)(
   "explains lost inspection after admission without claiming identity drift: %s",
   (reason) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("linux");
       let available = true;
       const service = createMockGatewayService({
-        readCommand: async () => ({
-          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
-          environment: { HOME: home },
-        }),
+        readCommand: async () => {
+          if (!available && reason === "native-exception") {
+            throw new ServiceInspectionError("systemd-user-bus-unavailable");
+          }
+          return {
+            programArguments: [
+              process.execPath,
+              path.join(process.cwd(), "openclaw.mjs"),
+              "gateway",
+            ],
+            environment: { HOME: home },
+          };
+        },
         readRuntime: async () => {
           if (!available) {
-            throw reason ? new ServiceInspectionError(reason) : new Error("private-runtime-detail");
+            throw reason
+              ? new ServiceInspectionError(
+                  reason === "native-exception" ? "systemd-user-bus-unavailable" : reason,
+                )
+              : new Error("private-runtime-detail");
           }
           return { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 2001 } };
         },
@@ -319,6 +332,13 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
       expect(failure).toBeInstanceOf(GatewayServiceUpdateOwnershipError);
       if (!(failure instanceof GatewayServiceUpdateOwnershipError)) {
         throw new Error("Expected service inspection refusal");
+      }
+      if (reason === "native-exception") {
+        expect(failure.message).toContain("systemd");
+        expect(service.stop).not.toHaveBeenCalled();
+        expect(service.start).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        return;
       }
       const detail = reason
         ? (formatServiceInspectionReason(reason).split(".", 1)[0] ?? "")

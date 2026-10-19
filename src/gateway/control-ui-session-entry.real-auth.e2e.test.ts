@@ -10,9 +10,12 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
@@ -395,7 +398,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     }
   });
 
-  for (const change of ["membership", "role"] as const) {
+  for (const change of ["visibility", "role"] as const) {
     it(`withholds all app bytes when ${change} changes after real document preparation`, async ({
       signal,
     }) => {
@@ -415,8 +418,9 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         expect(prepared.current).toBe(true);
         expect(prepared.body).toContain("<openclaw-app");
         expect(prepared.res.headersSent).toBe(false);
-        if (change === "membership") {
-          expect(await removeSessionMember(privateScope, memberId)).not.toBeNull();
+        if (change === "visibility") {
+          // Membership alone does not grant or revoke this role's read access.
+          await patchSessionEntryCore(privateScope, () => ({ visibility: "draft" }));
         } else {
           await setCanonicalUserProfileRole(memberId, "denied", {
             onCommitted: invalidateOperatorRolePolicy,
@@ -437,6 +441,9 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         held.resume();
         await Promise.allSettled([pending]);
         held.restore();
+        if (change === "visibility") {
+          await patchSessionEntryCore(privateScope, () => ({ visibility: "read-only" }));
+        }
         await setCanonicalUserProfileRole(memberId, null, {
           onCommitted: invalidateOperatorRolePolicy,
         });

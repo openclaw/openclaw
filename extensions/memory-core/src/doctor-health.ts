@@ -65,8 +65,7 @@ function resolveSelectedMemoryProvider(config: unknown, agentId: string): string
   if (!(overrides?.enabled ?? defaults?.enabled ?? true)) {
     return null;
   }
-  const configured = overrides?.provider ?? defaults?.provider;
-  const provider = normalizeOptionalLowercaseString(configured);
+  const provider = normalizeOptionalLowercaseString(overrides?.provider ?? defaults?.provider);
   return !provider || provider === "auto" ? "openai" : provider;
 }
 
@@ -91,21 +90,18 @@ function createManagedLocalEmbeddingSetupCheck(
             config: ctx.cfg,
             env,
             stateDir: resolveStateDir(env),
+            shouldInspectAgent: (agentId) =>
+              resolveSelectedMemoryProvider(ctx.cfg, agentId) ===
+              LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
           },
           async (params) => {
-            const provider = resolveSelectedMemoryProvider(params.config, params.agentId);
-            if (provider !== LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
-              return null;
-            }
             const failure = await state.inspectEmbeddingProviderSetup({
-              config: params.config,
-              env: params.env,
-              agentId: params.agentId,
-              provider,
+              ...params,
+              provider: LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
             });
             if (failure === undefined) {
               return {
-                provider,
+                provider: LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
                 reason: MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
                 requirement: "memory-embedding-provider-plugin",
                 fixHint:

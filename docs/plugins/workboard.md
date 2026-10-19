@@ -486,6 +486,12 @@ error without changing the card, including when `force` is set. To recover
 blocked work, use `workboard_unblock` first to move it to `todo`.
 `force` only bypasses dependency or schedule holds.
 
+Once a managed worker blocks its attempt, late lifecycle observations from that
+attempt cannot settle it again. Unblocking and promoting the card leaves it
+`ready` for a fresh dispatch and preserves the blocked attempt's failure. Ignored
+observations are logged with the card and attempt IDs. Explicitly linking a
+different session still allows that session's lifecycle to synchronize.
+
 ## Dispatch
 
 Dispatch is Gateway-local: it does not spawn arbitrary OS processes. Normal

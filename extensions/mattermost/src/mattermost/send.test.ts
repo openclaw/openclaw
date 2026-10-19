@@ -1,6 +1,8 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
 let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
@@ -13,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 }));
 
 const mockState = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  currentConfig: vi.fn(() => ({})),
   loadOutboundMediaFromUrl: vi.fn(),
   recordActivity: vi.fn(),
   resolveMattermostAccount: vi.fn(() => ({
@@ -95,15 +97,6 @@ vi.mock("./runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
-  requireRuntimeConfig: (cfg: unknown) => {
-    if (cfg) {
-      return cfg;
-    }
-    throw new Error("Mattermost send requires a resolved runtime config");
-  },
-}));
-
 vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
@@ -127,28 +120,6 @@ vi.mock("./client.js", async () => ({
   uploadMattermostFile: mockState.uploadMattermostFile,
 }));
 
-vi.mock("../runtime.js", () => {
-  const getMattermostRuntime = () => ({
-    config: {
-      loadConfig: mockState.loadConfig,
-    },
-    logging: {
-      shouldLogVerbose: () => false,
-      getChildLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-    },
-    channel: {
-      text: {
-        resolveMarkdownTableMode: () => "off",
-        convertMarkdownTables: (text: string) => text,
-      },
-      activity: {
-        record: mockState.recordActivity,
-      },
-    },
-  });
-  return { getMattermostRuntime, getOptionalMattermostRuntime: getMattermostRuntime };
-});
-
 beforeAll(async () => {
   ({ sendMessageMattermost } = await import("./send.js"));
   ({ parseMattermostTarget } = await import("./target-resolution.js"));
@@ -160,9 +131,15 @@ let defaultAccountSequence = 0;
 
 beforeEach(() => {
   vi.resetAllMocks();
+  setMattermostRuntime(
+    createPluginRuntimeMock({
+      config: { current: mockState.currentConfig },
+      channel: { activity: { record: mockState.recordActivity } },
+    }),
+  );
   mockState.normalizeMattermostBaseUrl.mockImplementation(normalizeBaseUrl);
   mockState.resolveMarkdownTableMode.mockImplementation(resolveTableMode);
-  mockState.loadConfig.mockReturnValue({});
+  mockState.currentConfig.mockReturnValue({});
   mockState.resolveMattermostAccount.mockReturnValue(
     makeAccount("mattermost-cache-" + defaultAccountSequence++),
   );
@@ -202,7 +179,7 @@ describe("sendMessageMattermost", () => {
     await expect(
       sendMessageMattermost("channel:town-square", "hello", undefined as never),
     ).rejects.toThrow("Mattermost send requires a resolved runtime config");
-    expect(mockState.loadConfig).not.toHaveBeenCalled();
+    expect(mockState.currentConfig).not.toHaveBeenCalled();
     expect(mockState.resolveMattermostAccount).not.toHaveBeenCalled();
   });
 

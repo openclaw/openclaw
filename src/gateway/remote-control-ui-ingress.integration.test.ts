@@ -212,7 +212,6 @@ describe("remote Control UI ingress production composition", () => {
     const requestContext = bindSessionRowProjection(
       {
         ...createGatewayWsTestRequestContext(),
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => config,
         trackExecution: <T>(run: () => T | Promise<T>) => connectionWork.track(run),
         logGateway: logger,

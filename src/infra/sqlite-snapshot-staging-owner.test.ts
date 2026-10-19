@@ -6,6 +6,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { RetainedWorkerTask } from "@openclaw/worker-runtime";
 import {
   createRetainedOperation,
   flatMapRetainedOperation,
@@ -33,7 +34,6 @@ import { waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
 import type {
-  RetainedWorkerTask,
   WorkerTaskPoolOptions,
   WorkerTaskPoolOwnerOptions,
 } from "./worker-task-pool.types.js";

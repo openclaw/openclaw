@@ -54,6 +54,7 @@ describe("composer prediction completion", () => {
     expect(completion.mock.calls[0]?.[0]).toMatchObject({
       provider: "example",
       model,
+      purpose: "composer-prediction",
       thinkLevel: "off",
       answerTokenBudget: 160,
       timeoutMs: 8_000,
@@ -99,7 +100,10 @@ describe("composer prediction completion", () => {
       .mockResolvedValueOnce({ selection: { selectedHarnessId: "openclaw" } });
 
     expect(await completeComposerPrediction(params)).toBe("What should I check next?");
-    expect(completion.mock.calls.map(([call]) => call.model)).toEqual(["small", "backup"]);
+    expect(completion.mock.calls.map(([call]) => [call.model, call.purpose])).toEqual([
+      ["small", "composer-prediction"],
+      ["backup", "composer-prediction"],
+    ]);
   });
 
   it.each(["NO_SUGGESTION", "", "x".repeat(501)])(

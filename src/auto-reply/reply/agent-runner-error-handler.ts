@@ -19,8 +19,9 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
@@ -45,7 +46,6 @@ import {
   resolveRestartLifecycleError,
 } from "./reply-operation-abort.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import { hasReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
 
 const MAX_LIVE_SWITCH_RETRIES = 2;
 
@@ -256,17 +256,9 @@ export async function handleAgentExecutionError(params: {
       ? failoverFacts.providerRequestError
       : undefined;
   const restartLifecycleError = resolveRestartLifecycleError(err);
-  if (
-    restartLifecycleError instanceof GatewayDrainingError ||
-    restartLifecycleError instanceof CommandLaneClearedError
-  ) {
+  if (restartLifecycleError instanceof GatewayDrainingError) {
     takePendingLifecycleTerminal().emit("error", restartLifecycleError);
-    turn.replyOperation?.fail(
-      restartLifecycleError instanceof GatewayDrainingError
-        ? "gateway_draining"
-        : "command_lane_cleared",
-      restartLifecycleError,
-    );
+    turn.replyOperation?.fail("gateway_draining", restartLifecycleError);
     return finalFailure(buildRestartLifecycleReplyText());
   }
   if (isCompactionFailure) {

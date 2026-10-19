@@ -23,13 +23,13 @@ import "./elapsed-time.tsx";
 import "./tooltip.ts";
 /** Compose independently owned session state and context indicators. */
 export function renderSidebarSessionIndicators(
-  host: SessionListHost,
+  host: () => SessionListHost,
   readSession: () => SidebarRecentSession,
   readDisplay?: () => CatalogBackingSessionDisplay | undefined,
   readIcon?: () => JSX.Element,
   headerSummary?: () => TeamSessionSlotsProps,
 ) {
-  const team = createMemo(() => host.sidebarAgentsMode === "roster");
+  const team = createMemo(() => host().sidebarAgentsMode === "roster");
   const ownAttention = createMemo(() => readSession().ownAttention ?? readSession().attention);
   const hasApproval = createMemo(() => {
     const attention = ownAttention();
@@ -37,7 +37,7 @@ export function renderSidebarSessionIndicators(
       ? attention.requests.some((request) => request.kind === "approval")
       : !team() && attention.kind === "approval";
   });
-  const childrenExpanded = createMemo(() => host.isSessionChildrenExpanded(readSession()));
+  const childrenExpanded = createMemo(() => host().isSessionChildrenExpanded(readSession()));
   const initialPullRequest = createMemo(
     () => readSession().pullRequest ?? readDisplay?.()?.pullRequest,
   );
@@ -45,7 +45,7 @@ export function renderSidebarSessionIndicators(
     const readSessionValue = readSession();
     const initialPullRequestValue = initialPullRequest();
     return readSessionValue.worktreeId
-      ? host.sessionPullRequests.summary(
+      ? host().sessionPullRequests.summary(
           readSessionValue.key,
           readSessionValue.worktreeId,
           initialPullRequestValue,
@@ -54,7 +54,7 @@ export function renderSidebarSessionIndicators(
   });
   const ownerAttribution = createMemo(() => {
     const readSessionValue = readSession();
-    return host.sessionsStatusFilter === "archived"
+    return host().sessionsStatusFilter === "archived"
       ? "archived"
       : readSessionValue.owner?.assignedAt !== undefined
         ? "owned"
@@ -62,8 +62,8 @@ export function renderSidebarSessionIndicators(
   });
   const ownerActor = createMemo(() => {
     const readSessionValue = readSession();
-    return host.sessionOwnershipVisibility.avatars
-      ? host.sessionsStatusFilter === "archived"
+    return host().sessionOwnershipVisibility.avatars
+      ? host().sessionsStatusFilter === "archived"
         ? readSessionValue.archivedBy
         : readSessionValue.owner?.actor
       : undefined;
@@ -72,7 +72,7 @@ export function renderSidebarSessionIndicators(
     const ownerActorValue = ownerActor();
     const readSessionValue = readSession();
     return ownerActorValue?.identity?.type === "profile"
-      ? projectPresencePayload(host.sessionData.presencePayload).users.some(
+      ? projectPresencePayload(host().sessionData.presencePayload).users.some(
           (user) =>
             presenceMatchesProfile(user, ownerActorValue.identity) &&
             user.watchedSessions.includes(readSessionValue.key),
@@ -83,13 +83,13 @@ export function renderSidebarSessionIndicators(
   // only for live presence; pinned and archive-attribution rows have no matching header.
   const ownerRepeatedBySection = createMemo(
     () =>
-      host.sessionsGrouping === "person" &&
+      host().sessionsGrouping === "person" &&
       !readSession().pinned &&
       ownerAttribution() !== "archived",
   );
   // A self filter already identifies solo ownership. Keep shared rows and
   // archive attribution visible; the participant count includes unshown faces.
-  const selfUser = createMemo(() => host.sessionDataContext?.gateway.snapshot.selfUser);
+  const selfUser = createMemo(() => host().sessionDataContext?.gateway.snapshot.selfUser);
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {
     const actor = ownerActor();
@@ -97,7 +97,7 @@ export function renderSidebarSessionIndicators(
       ownerAttribution() !== "archived" &&
       actor?.identity?.type === "profile" &&
       actor.identity.id === selfProfileId() &&
-      (host.sessionInvolvingMeFilterActive || host.sessionOwnerFilterId === actor.id) &&
+      (host().sessionInvolvingMeFilterActive || host().sessionOwnerFilterId === actor.id) &&
       (readSession().participantCount ?? readSession().participants?.length ?? 0) === 0
     );
   });
@@ -112,7 +112,7 @@ export function renderSidebarSessionIndicators(
       ? undefined
       : ownerActorValue;
   });
-  const gateway = createMemo(() => host.sessionDataContext?.gateway);
+  const gateway = createMemo(() => host().sessionDataContext?.gateway);
   const channelAvatarAuth = createMemo(() =>
     resolveControlUiAvatarAuth({
       hello: gateway()?.snapshot.hello,
@@ -160,7 +160,7 @@ export function renderSidebarSessionIndicators(
   const snoozed = createMemo(
     () =>
       !readSession().isChild &&
-      (host.sessionsStatusFilter === "snoozed" || host.sessionsStatusFilter === "all") &&
+      (host().sessionsStatusFilter === "snoozed" || host().sessionsStatusFilter === "all") &&
       isSessionSnoozed(readSession(), Date.now()),
   );
   const hasTrail = createMemo(
@@ -267,9 +267,9 @@ export function renderSidebarSessionIndicators(
             ? persistentIndicator
             : undefined}
           <openclaw-viewer-facepile
-            prop:presencePayload={host.sessionData.presencePayload}
-            prop:selfUser={host.sessionDataContext?.gateway.snapshot.selfUser}
-            prop:selfInstanceId={host.sessionData.presenceInstanceId}
+            prop:presencePayload={host().sessionData.presencePayload}
+            prop:selfUser={host().sessionDataContext?.gateway.snapshot.selfUser}
+            prop:selfInstanceId={host().sessionData.presenceInstanceId}
             prop:sessionKey={readSession().key}
             prop:excludeIdentities={renderedIdentities() ?? EMPTY_VIEWER_IDENTITIES}
             prop:maxVisible={3}

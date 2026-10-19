@@ -1,25 +1,25 @@
-import type { Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { readExactSessionEntryRow as readSessionRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
 import {
-  createAgentDatabaseInspectionRefusal,
-  preparePendingAgentDatabase,
-  readAgentDatabaseAdmissionRefusal,
-  recordAgentDatabaseAdmissions,
+  createAgentDatabaseInspectionRefusal as inspectionRefusal,
+  preparePendingAgentDatabase as preparePending,
+  readAgentDatabaseAdmissionRefusal as readRefusal,
+  recordAgentDatabaseAdmissions as recordAdmissions,
 } from "./agent-database-admission.js";
 import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
-import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
+import { openOpenClawAgentDatabase as openAgentDb } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution as captureExecution } from "./openclaw-agent-execution.js";
+import { resolveOpenClawStateSqlitePath as stateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const journalReads = vi.hoisted(() => new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
@@ -44,10 +44,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   `;
   return {
     ...actual,
-    createCpuTrackedWorker(
-      filename: string | URL,
-      options: ConstructorParameters<typeof Worker>[1],
-    ) {
+    createCpuTrackedWorker(filename, options) {
       return actual.createCpuTrackedWorker(filename, {
         ...options,
         execArgv: [
@@ -58,41 +55,35 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
         workerData: { ...options?.workerData, testStartupJournalReads: journalReads },
       });
     },
-  };
+  } satisfies typeof actual;
 });
 
 it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
   "reuses the native actor with request-scoped startup journal checks (%s)",
   async (scenario) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "worker", env: state.env };
       const sessionKey = "agent:worker:startup-journal";
       replaceSessionEntrySync(
         { ...options, sessionKey },
         { sessionId: "startup-journal", updatedAt: 1, label: "seed" },
       );
-      const database = openOpenClawAgentDatabase(options);
-      const execution = captureOpenClawAgentDatabaseExecution(options);
-      const writer = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env));
+      const database = openAgentDb(options);
+      const execution = captureExecution(options);
+      const writer = openNodeSqliteDatabase(stateSqlitePath(state.env));
       const insertDeletion = () => {
         writer
           .prepare(
             `INSERT INTO agent_deletion_journal
              (agent_id, operation_id, agent_dir, workspace_dir, sessions_dir,
               database_paths_json, cleanup_paths_json, created_at, cleanup_completed, delete_files)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES ('worker', 'raw-startup-deletion', ?, ?, ?, ?, '[]', 1, 0, 0)`,
           )
           .run(
-            "worker",
-            "raw-startup-deletion",
             state.agentDir("worker"),
             state.workspaceDir,
             state.sessionsDir("worker"),
             JSON.stringify([database.path]),
-            "[]",
-            1,
-            0,
-            0,
           );
         publishAgentDeletionJournalStatus(writer, "worker", "pending");
       };
@@ -101,34 +92,29 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
       let afterAuthorize: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
       const source: AgentDatabaseRequestExecutionSource = {
         assertCurrent: () => execution.assertCurrent(),
-        createAdmission(binding) {
-          return () => ({
-            nativeLocations: binding.nativeLocations,
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              binding.authorize(request);
-              execution.assertCurrent();
-              if (isRecord(request.facts) && isRecord(request.facts.identity)) {
-                const identity = request.facts.identity;
-                if (typeof identity.incarnation === "string") {
-                  incarnations.add(identity.incarnation);
-                }
+        createAdmission: (binding) => () => ({
+          nativeLocations: binding.nativeLocations,
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            binding.authorize(request);
+            execution.assertCurrent();
+            if (isRecord(request.facts) && isRecord(request.facts.identity)) {
+              const identity = request.facts.identity;
+              if (typeof identity.incarnation === "string") {
+                incarnations.add(identity.incarnation);
               }
-              if (binding.attachment.startupJournal) {
-                startupStages.add(request.stage);
-              }
-              afterAuthorize?.(request);
-              if (!grant()) {
-                throw new Error("Startup journal fixture lost native admission");
-              }
-            }, binding.attachment),
-          });
-        },
+            }
+            if (binding.attachment.startupJournal) {
+              startupStages.add(request.stage);
+            }
+            afterAuthorize?.(request);
+            if (!grant()) {
+              throw new Error("Startup journal fixture lost native admission");
+            }
+          }, binding.attachment),
+        }),
       };
       const replace = async (label: string) => {
-        const previous = readExactSessionEntryRow(database, sessionKey);
-        if (!previous) {
-          throw new Error("Missing seeded session row");
-        }
+        const previous = expectDefined(readSessionRow(database, sessionKey), "Missing seeded row");
         return execution.runExisting(source, (scope) =>
           scope.execute({
             type: "session.entries.replace",
@@ -142,21 +128,28 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
         );
       };
       const reads = new Int32Array(journalReads);
+      const readLabel = () => readSessionRow(database, sessionKey)?.entry.label;
+      const replaceNormally = async (label: string) => {
+        Atomics.store(reads, 0, 0);
+        await replace(label);
+        expect({ reads: Atomics.load(reads, 0), label: readLabel() }).toEqual({ reads: 0, label });
+      };
       try {
         await execution.runExisting(source, (scope) =>
           scope.execute({ type: "database.prepareWrite", input: undefined }),
         );
-        Atomics.store(reads, 0, 0);
-        await replace("normal-before");
-        expect(Atomics.load(reads, 0)).toBe(0);
-        expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("normal-before");
-        const refusal = createAgentDatabaseInspectionRefusal({
+        await replaceNormally("normal-before");
+        const refusal = inspectionRefusal({
           agentId: "worker",
           paths: [database.path],
           pending: true,
           reason: "native startup preparation",
         });
-        recordAgentDatabaseAdmissions([refusal], { env: state.env, source: "startup" });
+        recordAdmissions([refusal], { env: state.env, source: "startup" });
+        const replaceDuringStartup = (label: string) =>
+          preparePending(refusal, { env: state.env, assertCurrent() {} }, async () => {
+            await replace(label);
+          });
         if (scenario === "deletion-before-commit") {
           let inserted = false;
           afterAuthorize = (request) => {
@@ -166,38 +159,23 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
               insertDeletion();
             }
           };
-          await expect(
-            preparePendingAgentDatabase(
-              refusal,
-              { env: state.env, assertCurrent() {} },
-              async () => {
-                await replace("must-roll-back");
-              },
-            ),
-          ).rejects.toThrow("deleted during startup inspection");
-          expect(inserted).toBe(true);
-          expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(refusal);
-          expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("normal-before");
-        } else {
-          await preparePendingAgentDatabase(
-            refusal,
-            { env: state.env, assertCurrent() {} },
-            async () => {
-              await replace("startup");
-            },
+          await expect(replaceDuringStartup("must-roll-back")).rejects.toThrow(
+            "deleted during startup inspection",
           );
-          expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBeUndefined();
-          expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("startup");
+          expect(inserted).toBe(true);
+          expect(readRefusal("worker", options)).toBe(refusal);
+          expect(readLabel()).toBe("normal-before");
+        } else {
+          await replaceDuringStartup("startup");
+          expect(readRefusal("worker", options)).toBeUndefined();
+          expect(readLabel()).toBe("startup");
           expect(startupStages).toEqual(new Set(["prepare", "transaction", "commit"]));
         }
         expect(Atomics.load(reads, 0)).toBeGreaterThan(0);
         afterAuthorize = undefined;
         if (scenario === "normal-startup-normal") {
           insertDeletion();
-          Atomics.store(reads, 0, 0);
-          await replace("normal-after");
-          expect(Atomics.load(reads, 0)).toBe(0);
-          expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("normal-after");
+          await replaceNormally("normal-after");
         }
         expect(incarnations.size).toBe(1);
       } finally {
@@ -207,7 +185,7 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
           .run("raw-startup-deletion");
         publishAgentDeletionJournalStatus(writer, "worker", "absent");
         writer.close();
-        recordAgentDatabaseAdmissions([], { env: state.env, source: "startup" });
+        recordAdmissions([], { env: state.env, source: "startup" });
         await execution.release();
       }
     });

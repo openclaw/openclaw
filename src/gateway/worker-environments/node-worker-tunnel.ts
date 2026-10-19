@@ -183,7 +183,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
     const transportTimeoutMs =
       addTimerTimeoutGraceMs(commandTimeoutMs, COMMAND_RESULT_GRACE_MS) ?? commandTimeoutMs;
-    const deadline = Date.now() + transportTimeoutMs;
+    const deadline = performance.now() + transportTimeoutMs;
     const signals = [entry.abortController.signal, AbortSignal.timeout(transportTimeoutMs)];
     if (command.signal) {
       signals.push(command.signal);
@@ -216,7 +216,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     }
     while (true) {
       assertCurrent();
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - performance.now();
       if (remainingMs <= 0 || signal.aborted) {
         throw signal.reason ?? new Error("node worker workspace command timed out");
       }
@@ -283,7 +283,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         ) {
           throw error;
         }
-        await sleepWithAbort(Math.min(RETRY_DELAY_MS, Math.max(1, deadline - Date.now())), signal);
+        await sleepWithAbort(Math.min(RETRY_DELAY_MS, remainingMs), signal);
         continue;
       }
       if (!result.ok) {

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
-import { constants } from "node:sqlite";
-import { beforeEach, expect, it } from "vitest";
+import { constants, StatementSync } from "node:sqlite";
+import { beforeEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   executeSqliteQuerySync,
@@ -27,6 +28,7 @@ import {
   readUserModelAuthProfile,
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
+  type UserProfileAuthLink,
 } from "./user-model-accounts.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
@@ -153,22 +155,38 @@ it("reads current linked credentials together after in-process refresh and unlin
   });
 });
 
-it("refreshes cached default links after committed link and merge writes", async () => {
+it("reads one-statement default links and refreshes cached links after committed writes", async () => {
   const alice = owner();
   const bob = owner("bob@example.test");
   const { authProfileId } = alice.token();
-  await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([
-    expect.objectContaining({ provider: "anthropic", authProfileId }),
-  ]);
+  const { db } = openOpenClawStateDatabase(options);
+  const expectLinks = async (profileId: string, expected: UserProfileAuthLink[]) => {
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    const exec = vi.spyOn(requireNativeSqliteDatabase(db), "exec");
+    try {
+      expect(
+        readUserModelAccountCommand(db, { type: "userModelAccounts.links", profileId }),
+      ).toEqual({
+        type: "userModelAccounts.links",
+        links: expected,
+      });
+      expect(observation.queries).toHaveLength(1);
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      observation.restore();
+      exec.mockRestore();
+    }
+    await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual(expected);
+  };
+  const linked = [{ provider: "anthropic", authProfileId, updatedAt: expect.any(Number) }];
+  await expectLinks(alice.id, linked);
   alice.clear("anthropic");
-  await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
+  await expectLinks(alice.id, []);
   alice.link("anthropic", authProfileId);
-  await expect(listUserProfileAuthLinksAsync(bob.id, options)).resolves.toEqual([]);
+  await expectLinks(bob.id, []);
   mergeProfiles(alice.id, bob.id, options);
   for (const profileId of [alice.id, bob.id]) {
-    await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual([
-      expect.objectContaining({ provider: "anthropic", authProfileId }),
-    ]);
+    await expectLinks(profileId, linked);
   }
 });
 

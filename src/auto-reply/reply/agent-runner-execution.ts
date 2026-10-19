@@ -7,6 +7,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveRunStartupPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import {
   createDeferredEmbeddedRunLifecycleManager,
   type DeferredEmbeddedRunLifecycleManager,
@@ -42,6 +43,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
+import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
@@ -74,13 +76,10 @@ import type {
   AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.types.js";
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
+import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
-import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
-import {
-  createAgentTurnTimingTracker,
-  resolveRunStartupPhase,
-} from "./agent-runner-turn-timing.js";
+import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
@@ -91,10 +90,6 @@ import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import { resolveReplySessionEventDelivery } from "./reply-operation-run-state.js";
-import {
-  markReplyOperationExecutionStarted,
-  retainReplyOperationUntilComplete,
-} from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
@@ -625,7 +620,10 @@ async function executeAgentTurnOutcome(
             executionParams.followupRun.run.skillLibraryAuthoring?.bind(context);
           },
         });
+        const controllerAbortSignal = executionParams.replyOperation?.abortSignal;
+        const callerAbortSignal = executionParams.opts?.abortSignal;
         const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
+          replyOperation: executionParams.replyOperation,
           runId,
           agentId: executionParams.followupRun.run.agentId,
           sessionId: executionParams.followupRun.run.sessionId,
@@ -633,7 +631,9 @@ async function executeAgentTurnOutcome(
           sessionFile: executionParams.followupRun.run.sessionFile,
           abortSignal: resolveFollowupAbortSignal({
             abortSignal:
-              executionParams.replyOperation?.abortSignal ?? executionParams.opts?.abortSignal,
+              controllerAbortSignal && callerAbortSignal
+                ? AbortSignal.any([controllerAbortSignal, callerAbortSignal])
+                : (controllerAbortSignal ?? callerAbortSignal),
             operatorAuthority: executionParams.followupRun.operatorAuthority,
           }),
         });
@@ -697,10 +697,6 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     verboseLevelOverride: params.followupRun.run.verboseLevelOverride,
     resolvedVerboseLevel: params.resolvedVerboseLevel,
   });
-  if (params.replyOperation) {
-    // Cancellation stops execution, but the exact owner must finish committed accounting first.
-    retainReplyOperationUntilComplete(params.replyOperation);
-  }
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };

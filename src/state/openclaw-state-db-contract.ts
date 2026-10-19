@@ -5,6 +5,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v28 retains the requested GitHub PR draft choice across recovery.
 // v27 removes unused replay/skill indexes and narrows the lease-owner index.
 // v26 stores session state heads directly in their composite primary-key tree.
 // v25 prevents older readers from dropping recovered subagent operator restrictions.
@@ -29,7 +30,7 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
 export const MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION = 23;
-export const OPENCLAW_STATE_SCHEMA_VERSION = 27;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 28;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -175,6 +176,7 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "subagent-operator-recovery-v25": "subagent recovery → original operator authority required",
   "session-state-head-layout-v26": "session state heads → composite primary-key storage",
   "state-write-indexes-v27": "replay, skill usage, and lease writes → smaller index maintenance",
+  "github-publication-draft-v28": "GitHub publication requests → durable draft choice",
   "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",

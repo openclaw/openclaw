@@ -111,9 +111,12 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
       if (entry?.execution.status === "terminal") {
         run.terminal.resolve();
       }
+      // A durable retry settles this attempt while retaining the delivery obligation.
       if (
         typeof entry?.cleanupCompletedAt === "number" ||
-        (entry?.cleanupHandled === false && entry.delivery?.nextAttemptAt !== undefined)
+        (entry?.cleanupHandled === false && entry.delivery?.nextAttemptAt !== undefined) ||
+        entry?.delivery?.status === "suspended" ||
+        entry?.delivery?.status === "failed"
       ) {
         run.settled.resolve();
       }

@@ -1,32 +1,20 @@
 import { lazy, Loading } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import { ImageLightboxHost } from "./image-lightbox-context.ts";
+import type { ImageLightboxElement, ImageLightboxProps } from "./image-lightbox.types.ts";
 
 const Content = lazy(() => import("./image-lightbox-content.tsx"), {
   export: "ImageLightboxContent",
 });
 
-export type ImageLightboxProps = {
-  connectVideo?: ImageLightboxItem["connectVideo"];
-  gallery?: ImageLightboxGallery;
-  loadDisplayImage?: ImageLightboxItem["loadDisplayImage"];
-  readOriginalBlob?: ImageLightboxItem["readOriginalBlob"];
-  mediaKind: "image" | "video";
-  src: string;
-  originalSrc: string;
-  imageTitle: string;
-  imageWidth?: number;
-  imageHeight?: number;
-};
-
-export type ImageLightboxElement = SolidBridgeElement<ImageLightboxProps>;
-
 export const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
   "openclaw-image-lightbox",
   (props, host) => (
-    <Loading>
-      <Content {...props} host={host} />
-    </Loading>
+    <ImageLightboxHost value={host}>
+      <Loading>
+        <Content {...props} />
+      </Loading>
+    </ImageLightboxHost>
   ),
   {
     properties: {

@@ -330,7 +330,7 @@ Each branch is the title of an accordion below.
     - `heartbeat skipped` reason `quiet-hours` → outside configured active hours.
     - `heartbeat skipped` reason `empty-heartbeat-file` → heartbeat monitor scratch contains only blank, comment, header, fence, or empty-checklist markup.
     - `heartbeat skipped` reason `alerts-disabled` → `showOk`, `showAlerts`, and `useIndicator` are all off.
-    - `requests-in-flight` → main lane busy; heartbeat wake deferred.
+    - `requests-in-flight` → the heartbeat's target session is busy; heartbeat wake dropped or deferred.
     - `unknown accountId` → heartbeat delivery target account does not exist.
 
     Deep pages: [Cron and heartbeat delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery), [Scheduled tasks: Troubleshooting](/automation/cron-jobs#troubleshooting), [Heartbeat](/gateway/heartbeat)

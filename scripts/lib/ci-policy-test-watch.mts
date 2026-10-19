@@ -525,7 +525,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
     watchGlobs: [
-      "src/agents/embedded-agent-runner/active-run-projections.ts",
+      "src/sessions/session-controller.admission.ts",
+      "src/sessions/session-controller.queries.ts",
+      "src/sessions/session-controller.state.ts",
       "src/agents/embedded-agent-runner/runs.ts",
       "src/channels/message/ingress-drain.ts",
       "src/channels/message/ingress-queue.ts",

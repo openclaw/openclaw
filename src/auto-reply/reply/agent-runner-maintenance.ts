@@ -22,7 +22,6 @@ export function scheduleReplySessionMaintenance(params: {
     !sessionKey ||
     !storePath ||
     !accounting.providerUsed ||
-    !replyOperation.ownerSettlement ||
     !replyOperation.lifecycleGeneration ||
     context.isHeartbeat ||
     accounting.preserveUserFacingSessionState ||

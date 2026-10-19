@@ -363,6 +363,22 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           };
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
+      onRegionElementRef: (element) => {
+        this.sidebarRegionElement = element;
+        return () => {
+          if (this.sidebarRegionElement === element) {
+            this.sidebarRegionElement = null;
+          }
+        };
+      },
+      onRegionViewRef: (element) => {
+        this.sidebarRegionView = element;
+        return () => {
+          if (this.sidebarRegionView === element) {
+            this.sidebarRegionView = null;
+          }
+        };
+      },
       presentationId: this.presentationId,
       conversationTab: { label: chatProps.assistantName, avatar },
       availableWidth: this.paneWidth,

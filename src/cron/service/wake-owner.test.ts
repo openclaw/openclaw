@@ -1,7 +1,6 @@
-import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler,
@@ -13,14 +12,29 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import type { CronJob } from "../types.js";
-import { createCronServiceState } from "./state.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
 import { executeJobCore } from "./timer-execution.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:main";
 const ran = { status: "ran", durationMs: 1 } as const;
+
+const drainEvents = () => drainSystemEventEntries(sessionKey).map((event) => event.text);
+const peekEvents = () => peekSystemEventEntries(sessionKey).map((event) => event.text);
+const drainAndRun = async () => {
+  drainEvents();
+  return ran;
+};
+function retryHandler(reason: string, delay: number, repeat = false) {
+  const deferred = () => ({ status: "skipped" as const, reason, retryAtMs: Date.now() + delay });
+  return vi
+    .fn<HeartbeatWakeHandler>(repeat ? async () => deferred() : drainAndRun)
+    .mockResolvedValueOnce(deferred());
+}
+
+async function advance(ms: number, handler: ReturnType<typeof retryHandler>, calls: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  expect(handler).toHaveBeenCalledTimes(calls);
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -37,12 +51,8 @@ afterEach(async () => {
 function createHarness(handler: HeartbeatWakeHandler) {
   setHeartbeatWakeHandler(handler);
   const wakeQueued = createDeferred();
-  const state = createCronServiceState({
-    scheduler: createTestGatewayScheduler(),
-    cronEnabled: true,
-    storePath: path.join(tempDirs.make("cron-wake-owner-"), "jobs.json"),
-    log: { debug() {}, info() {}, warn() {}, error() {} },
-    nowMs: () => Date.now(),
+  const state = createCronRegressionState({
+    storePath: "/unused/cron-wake-owner/jobs.json",
     enqueueSystemEvent: (text, opts) => {
       const remove = enqueueSystemEventWithReceipt(text, {
         sessionKey,
@@ -50,35 +60,31 @@ function createHarness(handler: HeartbeatWakeHandler) {
       });
       return remove ? { accepted: true, remove } : { accepted: false };
     },
-    requestHeartbeat: vi.fn(),
-    requestHeartbeatAndWait: (wake, lifecycle) =>
-      requestHeartbeatAndWait(
+    requestHeartbeatAndWait: (wake, lifecycle) => {
+      const onQueued = () => {
+        lifecycle?.onQueued?.();
+        wakeQueued.resolve();
+      };
+      return requestHeartbeatAndWait(
         { ...wake, sessionKey, coalesceMs: 0 },
-        {
-          ...lifecycle,
-          onQueued: () => {
-            lifecycle?.onQueued?.();
-            wakeQueued.resolve();
-          },
-        },
-      ),
+        { ...lifecycle, onQueued },
+      );
+    },
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
-  const run = (id = "reminder", signal?: AbortSignal) => {
-    const job: CronJob = {
-      id,
-      name: id,
-      enabled: true,
-      createdAtMs: Date.now(),
-      updatedAtMs: Date.now(),
-      schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
-      payload: { kind: "systemEvent", text: id },
-      sessionTarget: "main",
-      wakeMode: "now",
-      state: {},
-    };
-    return executeJobCore(state, job, signal);
-  };
+  const run = (id = "reminder", signal?: AbortSignal) =>
+    executeJobCore(
+      state,
+      makeCronJob({
+        id,
+        name: id,
+        schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
+        payload: { kind: "systemEvent", text: id },
+        sessionTarget: "main",
+        wakeMode: "now",
+      }),
+      signal,
+    );
   return { state, run, wakeQueued };
 }
 
@@ -86,21 +92,18 @@ it("coalesces two main jobs and settles both only after their shared turn", asyn
   const release = createDeferred();
   const observed: string[][] = [];
   const handler = vi.fn(async () => {
-    observed.push(drainSystemEventEntries(sessionKey).map((event) => event.text));
+    observed.push(drainEvents());
     await release.promise;
     return ran;
   });
   const { run } = createHarness(handler);
-  let finished = false;
-  const pending = Promise.all([run("first"), run("second")]).then((results) => {
-    finished = true;
-    return results;
-  });
+  const pending = Promise.all([run("first"), run("second")]);
+  const settled = vi.fn();
+  void pending.then(settled);
   try {
-    await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
-    expect(handler).toHaveBeenCalledTimes(1);
+    await advance(2 * 60_000 + 1, handler, 1);
     expect(observed).toEqual([["first", "second"]]);
-    expect(finished).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
   } finally {
     release.resolve();
   }
@@ -110,63 +113,38 @@ it("coalesces two main jobs and settles both only after their shared turn", asyn
   ]);
 });
 
-it.each(["requests-in-flight"] as const)(
-  "waits through %s without shortening the queue's retry deadline",
-  async (reason) => {
-    const handler = vi
-      .fn<HeartbeatWakeHandler>()
-      .mockResolvedValueOnce({
-        status: "skipped",
-        reason,
-        ...(reason === "requests-in-flight" ? { retryAtMs: Date.now() + 60_000 } : {}),
-      })
-      .mockImplementation(async () => {
-        drainSystemEventEntries(sessionKey);
-        return ran;
-      });
-    const { run } = createHarness(handler);
-    let finished = false;
-    const pending = run().then((result) => {
-      finished = true;
-      return result;
-    });
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(finished).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(pending).resolves.toMatchObject({ status: "ok" });
-    expect(handler).toHaveBeenCalledTimes(2);
-  },
-);
+it.each([false, true])("preserves the queue deadline, repeated retries=%s", async (repeats) => {
+  const handler = retryHandler("requests-in-flight", 60_000, repeats);
+  const { run } = createHarness(handler);
+  const pending = run();
+  const settled = vi.fn();
+  void pending.then(settled);
+  await advance(repeats ? 119_999 : 59_999, handler, repeats ? 2 : 1);
+  expect(settled).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(pending).resolves.toMatchObject({ status: "ok" });
+  expect(handler).toHaveBeenCalledTimes(repeats ? 3 : 2);
+  if (repeats) {
+    handler.mockImplementation(drainAndRun);
+    await advance(59_999, handler, 3);
+    await advance(1, handler, 4);
+    expect(peekSystemEventEntries(sessionKey)).toHaveLength(0);
+  }
+});
 
-it.each([
-  { reason: "requests-in-flight", retryDelay: 180_000 },
-  { reason: "cron-in-progress", retryDelay: 1_000 },
-])(
+it.each([{ reason: "requests-in-flight", retryDelay: 180_000 }])(
   "detaches the cron waiter while preserving $reason work and its deadline",
   async ({ reason, retryDelay }) => {
-    const handler = vi
-      .fn<HeartbeatWakeHandler>()
-      .mockResolvedValueOnce({
-        status: "skipped",
-        reason,
-        retryAtMs: Date.now() + retryDelay,
-      })
-      .mockImplementation(async () => {
-        drainSystemEventEntries(sessionKey);
-        return ran;
-      });
+    const handler = retryHandler(reason, retryDelay);
     const { state, run } = createHarness(handler);
     const pending = run();
     await vi.advanceTimersByTimeAsync(0);
     await expect(pending).resolves.toEqual({ status: "ok", summary: "reminder" });
     expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     expect(handler.mock.calls[0]?.[0].heartbeat).toEqual({ target: "last" });
-    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual(["reminder"]);
-    await vi.advanceTimersByTimeAsync(retryDelay - 1);
-    expect(handler).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(2);
+    expect(peekEvents()).toEqual(["reminder"]);
+    await advance(retryDelay - 1, handler, 1);
+    await advance(1, handler, 2);
     expect(peekSystemEventEntries(sessionKey)).toHaveLength(0);
   },
 );
@@ -178,7 +156,7 @@ it.each([false, true])("removes only the cancelled job's event, retrying=%s", as
     if (retrying && ++calls === 1) {
       return { status: "skipped", reason: "requests-in-flight" };
     }
-    observed.push(...drainSystemEventEntries(sessionKey).map((event) => event.text));
+    observed.push(...drainEvents());
     return ran;
   });
   enqueueSystemEventWithReceipt("unrelated", { sessionKey, contextKey: "other" });
@@ -190,7 +168,7 @@ it.each([false, true])("removes only the cancelled job's event, retrying=%s", as
   }
   controller.abort();
   await expect(pending).resolves.toMatchObject({ status: "error" });
-  expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual(["unrelated"]);
+  expect(peekEvents()).toEqual(["unrelated"]);
   await vi.advanceTimersByTimeAsync(retrying ? 1_000 : 0);
   expect(observed).toEqual(["unrelated"]);
 });
@@ -201,34 +179,5 @@ it("removes only the failed job's event after terminal wake failure", async () =
   const pending = run();
   await vi.advanceTimersByTimeAsync(0);
   await expect(pending).resolves.toMatchObject({ status: "error", error: "runner refused" });
-  expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual(["unrelated"]);
-});
-
-it("hands off at the original busy budget after repeated retry deadlines", async () => {
-  const handler = vi.fn<HeartbeatWakeHandler>().mockImplementation(async () => ({
-    status: "skipped",
-    reason: "requests-in-flight",
-    retryAtMs: Date.now() + 60_000,
-  }));
-  const { run } = createHarness(handler);
-  let finished = false;
-  const pending = run().then((result) => {
-    finished = true;
-    return result;
-  });
-  await vi.advanceTimersByTimeAsync(119_999);
-  expect(handler).toHaveBeenCalledTimes(2);
-  expect(finished).toBe(false);
-  await vi.advanceTimersByTimeAsync(1);
-  await expect(pending).resolves.toMatchObject({ status: "ok" });
-  expect(handler).toHaveBeenCalledTimes(3);
-  handler.mockImplementation(async () => {
-    drainSystemEventEntries(sessionKey);
-    return ran;
-  });
-  await vi.advanceTimersByTimeAsync(59_999);
-  expect(handler).toHaveBeenCalledTimes(3);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(handler).toHaveBeenCalledTimes(4);
-  expect(peekSystemEventEntries(sessionKey)).toHaveLength(0);
+  expect(peekEvents()).toEqual(["unrelated"]);
 });

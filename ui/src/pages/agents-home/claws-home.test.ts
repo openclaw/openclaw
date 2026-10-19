@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -32,6 +33,25 @@ function createDetail(options: Parameters<typeof createPage>[0]) {
 }
 
 describe("Claws on Agents Home", () => {
+  it.each(["explore", "catalog"])("names the Add target in the %s view", async (surface) => {
+    const { page, navigate } = createPage({ clawsEnabled: true });
+    const queries = getQueriesForElement(page);
+    if (surface === "catalog") {
+      (await queries.findByRole<HTMLButtonElement>("button", { name: "Search Claws" })).click();
+    }
+    const container = surface === "catalog" ? ".claws-catalog" : "[data-claws-explore]";
+    await vi.waitFor(() => expect(page.querySelector(container)).not.toBeNull());
+    const view = getQueriesForElement(page.querySelector(container)!);
+    const add = await view.findByRole<HTMLButtonElement>("button", {
+      name: "Add Workflow Operator",
+    });
+    expect(add.textContent?.trim()).toBe("Add");
+    add.click();
+    expect(navigate).toHaveBeenCalledWith("claws", {
+      pathname: "/agents/claws/workflow-operator",
+    });
+  });
+
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
