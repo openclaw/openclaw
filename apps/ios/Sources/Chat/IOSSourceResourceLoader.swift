@@ -101,7 +101,8 @@ actor IOSSourceResourceLoader {
             required: url.scheme == "https",
             expectedFingerprint: authorization.tlsFingerprint ?? connection.config.tls?.expectedFingerprint,
             allowTOFU: false,
-            storeKey: connection.config.tls?.storeKey)
+            storeKey: connection.config.tls?.storeKey,
+            allowsApprovedAlternates: connection.config.tls?.allowsApprovedAlternates ?? false)
         let session = GatewayTLSPinningSession(
             params: tls, allowsRedirects: false, allowsStoredCredentials: false)
         defer { session.finishTasksAndInvalidate() }

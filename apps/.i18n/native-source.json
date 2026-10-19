@@ -810,6 +810,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Identity.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a4b45b61f9663487","source":"Retry thread groups"},
     {"path":"apps/ios/Sources/Gateway/GatewayConnectionController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b7a51f5ac6098ec5","source":"%@ is not currently discoverable on this network."},
     {"path":"apps/ios/Sources/Gateway/GatewayConnectionController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.01864fb8ff875d34","source":"A TLS certificate fingerprint requires a secure gateway URL."},
+    {"path":"apps/ios/Sources/Gateway/GatewayConnectionController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4a409791bd49e0f9","source":"Could not read gateway certificate approvals"},
     {"path":"apps/ios/Sources/Gateway/GatewayConnectionController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5440c9bc828b91cc","source":"Could not save gateway certificate"},
     {"path":"apps/ios/Sources/Gateway/GatewayConnectionController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.6c192cb704c2f643","source":"Could not save the active gateway selection."},
     {"path":"apps/ios/Sources/Gateway/GatewayConnectionController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.839637d118fd48d8","source":"Could not save the paired gateway."},

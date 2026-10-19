@@ -136,6 +136,9 @@ extension GatewayIngressControllerTests {
         #expect(fixture.profileRows[0].accessOrigin == nil)
         #expect((model.activeGatewayConnectConfig != nil) == ordinary)
         #expect(model.activeGatewayConnectConfig?.ingressAuthorization == nil)
+        if ordinary {
+            #expect(model.activeGatewayConnectConfig?.tls?.allowsApprovedAlternates == true)
+        }
         if !ordinary {
             fixture.release.continuation.finish()
             #expect(await controller.connectManual(
@@ -740,8 +743,10 @@ extension GatewayIngressControllerTests {
         #expect(stored.token == "gateway-token")
     }
 
-    @Test @MainActor
-    func `capability refresh retains ingress and certificate rotation reacquires TLS`() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func `capability refresh retains ingress and certificate rotation reacquires TLS`(
+        durableApprovalSucceeds: Bool) async throws
+    {
         let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
         let state = try TemporaryOpenClawState(instanceID: "access-refresh-\(UUID().uuidString)")
@@ -762,7 +767,10 @@ extension GatewayIngressControllerTests {
         let controller = GatewayConnectionController(
             appModel: model,
             startDiscovery: false,
-            persistTLSFingerprint: { _, _ in true },
+            approveTLSFingerprint: { fingerprint, expected, stableID in
+                durableApprovalSucceeds && fingerprint == "new-certificate" &&
+                    expected == "old-certificate" && stableID == fixture.stableID
+            },
             ingress: ingress)
         let oldTLS = GatewayTLSParams(
             required: true, expectedFingerprint: "old-certificate", allowTOFU: false, storeKey: fixture.stableID)
@@ -781,7 +789,13 @@ extension GatewayIngressControllerTests {
             context: "connect to gateway")
         let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
         let didTrust = await controller.trustRotatedGatewayCertificate(from: problem)
-        #expect(didTrust)
+        #expect(didTrust == durableApprovalSucceeds)
+        if !durableApprovalSucceeds {
+            #expect(model.activeGatewayConnectConfig?.tls == oldTLS)
+            #expect(!fixture.requestRoutes.contains { $0.tls?.expectedFingerprint == "new-certificate" })
+            try await ingress.forget(origin: fixture.application.origin)
+            return
+        }
         let refreshed = try #require(model.activeGatewayConnectConfig)
         #expect(refreshed.tls?.expectedFingerprint == "new-certificate")
         #expect(refreshed.ingressAuthorization?.revision == authorization.revision)

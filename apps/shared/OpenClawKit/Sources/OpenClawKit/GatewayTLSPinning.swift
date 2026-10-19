@@ -8,12 +8,20 @@ public struct GatewayTLSParams: Equatable, Sendable {
     public let expectedFingerprint: String?
     public let allowTOFU: Bool
     public let storeKey: String?
+    public let allowsApprovedAlternates: Bool
 
-    public init(required: Bool, expectedFingerprint: String?, allowTOFU: Bool, storeKey: String?) {
+    public init(
+        required: Bool,
+        expectedFingerprint: String?,
+        allowTOFU: Bool,
+        storeKey: String?,
+        allowsApprovedAlternates: Bool = false)
+    {
         self.required = required
         self.expectedFingerprint = expectedFingerprint
         self.allowTOFU = allowTOFU
         self.storeKey = storeKey
+        self.allowsApprovedAlternates = allowsApprovedAlternates
     }
 }
 
@@ -216,6 +224,18 @@ public enum GatewayTLSServerTrust {
                     port: port),
                 enforcedFingerprint: enforcedFingerprint)
         }
+        // Check durable approval even when the leaf matches this session's last accepted pin:
+        // Forget or an explicit pin reset must retire it on the next TLS handshake.
+        // Setup/configured pins and clients that do not opt in remain single-leaf strict.
+        if params.allowsApprovedAlternates, let expected, let fingerprint, let storeKey = params.storeKey {
+            guard let approved = GatewayTLSStore.approvedFingerprints(stableID: storeKey),
+                  approved.contains(expected), approved.contains(fingerprint)
+            else { return failure(.pinMismatch, expected, nil) }
+            if fingerprint != expected || fingerprint != approved.first {
+                guard systemTrustOk else { return failure(.untrustedCertificate, expected, nil) }
+                return .accept(fingerprint: fingerprint, enforcePin: true)
+            }
+        }
         switch GatewayTLSValidationPolicy.decide(
             expectedFingerprint: expected,
             observedFingerprint: fingerprint,
@@ -282,9 +302,12 @@ public enum GatewayTLSStore {
 
     private enum FingerprintRead {
         case missing
-        case value(String)
+        case value(String, approvedAlternates: [String])
         case unavailable
     }
+
+    /// Keep at most four leaves including the current pin. Retired entries require approval again.
+    private static let maximumApprovedLeaves = 4
 
     private static let baseKeychainService = "ai.openclaw.tls-pinning"
     private static let keychainNamespace = Mutex(GatewayTLSKeychainNamespaceState())
@@ -308,7 +331,7 @@ public enum GatewayTLSStore {
     }
 
     public static func loadFingerprint(stableID: String) -> String? {
-        guard case let .value(fingerprint) = self.loadFingerprintResult(stableID: stableID) else {
+        guard case let .value(fingerprint, _) = self.loadFingerprintResult(stableID: stableID) else {
             return nil
         }
         return fingerprint
@@ -322,7 +345,7 @@ public enum GatewayTLSStore {
     static func claimFirstUseFingerprint(_ value: String, stableID: String) -> String? {
         guard let account = self.keychainAccount(stableID: stableID) else { return nil }
         switch self.loadFingerprintResult(stableID: stableID) {
-        case let .value(existing):
+        case let .value(existing, _):
             self.firstUseClaims.withLock { $0[stableID] = existing }
             return existing
         case .unavailable:
@@ -351,25 +374,85 @@ public enum GatewayTLSStore {
         return self.clearSafeLegacyFingerprint(stableID: stableID)
     }
 
+    /// Called only after a user reviews a hostname-trusted rotation. Preserve the previous
+    /// approved leaves on the same Keychain item; automatic replacement still clears them.
+    @discardableResult
+    public static func approveFingerprint(
+        _ value: String,
+        ifCurrent expectedValue: String,
+        stableID: String) -> Bool
+    {
+        self.replaceFingerprint(value, ifCurrent: expectedValue, stableID: stableID, retainApprovedAlternates: true)
+    }
+
     @discardableResult
     public static func replaceFingerprint(
         _ value: String,
         ifCurrent expectedValue: String,
         stableID: String) -> Bool
     {
-        guard let account = self.keychainAccount(stableID: stableID) else { return false }
-        let expectedData = Data(self.canonicalStoredFingerprint(expectedValue).utf8)
-        let replacementData = Data(self.canonicalStoredFingerprint(value).utf8)
+        self.replaceFingerprint(value, ifCurrent: expectedValue, stableID: stableID, retainApprovedAlternates: false)
+    }
+
+    private static func replaceFingerprint(
+        _ value: String,
+        ifCurrent expectedValue: String,
+        stableID: String,
+        retainApprovedAlternates: Bool) -> Bool
+    {
+        guard let account = self.keychainAccount(stableID: stableID),
+              case let .value(current, alternates) = self.loadFingerprintResult(stableID: stableID),
+              current == self.canonicalStoredFingerprint(expectedValue) ||
+              (retainApprovedAlternates && alternates.contains(self.canonicalStoredFingerprint(expectedValue)))
+        else { return false }
+        let fingerprint = self.canonicalStoredFingerprint(value)
+        let replacementData = Data(fingerprint.utf8)
         var query = self.fingerprintQuery(account: account)
-        query[kSecAttrGeneric as String] = expectedData
+        query[kSecAttrGeneric as String] = Data(current.utf8)
+        // Bind approval metadata to the current scalar pin. Older clients can keep reading
+        // v3; their writes to a different pin invalidate, rather than inherit, this set.
+        let approved = retainApprovedAlternates
+            ? [fingerprint] + ([current] + alternates).filter { $0 != fingerprint }
+            .prefix(self.maximumApprovedLeaves - 1)
+            : []
         let updates: [String: Any] = [
             kSecValueData as String: replacementData,
             kSecAttrGeneric as String: replacementData,
+            kSecAttrComment as String: approved.joined(separator: "\n"),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         guard self.keychainOperations.update(query as CFDictionary, updates as CFDictionary) == errSecSuccess else {
             return false
         }
+        return self.clearSafeLegacyFingerprint(stableID: stableID)
+    }
+
+    static func approvedFingerprints(stableID: String) -> [String]? {
+        guard case let .value(current, alternates) = self.loadFingerprintResult(stableID: stableID)
+        else { return nil }
+        return [current] + alternates
+    }
+
+    public struct ApprovalSnapshot: Sendable {
+        fileprivate let fingerprint: String?
+        fileprivate let alternates: [String]
+    }
+
+    /// Capture the whole approval record before a setup import resets it.
+    public static func snapshot(stableID: String) -> ApprovalSnapshot? {
+        switch self.loadFingerprintResult(stableID: stableID) {
+        case .missing: ApprovalSnapshot(fingerprint: nil, alternates: [])
+        case let .value(current, alternates): ApprovalSnapshot(fingerprint: current, alternates: alternates)
+        case .unavailable: nil
+        }
+    }
+
+    @discardableResult
+    public static func restore(_ snapshot: ApprovalSnapshot, stableID: String) -> Bool {
+        guard let fingerprint = snapshot.fingerprint else { return self.clearFingerprint(stableID: stableID) }
+        guard self.writeCanonicalFingerprint(
+            fingerprint, stableID: stableID, approvedAlternates: snapshot.alternates)
+        else { return false }
         return self.clearSafeLegacyFingerprint(stableID: stableID)
     }
 
@@ -406,9 +489,9 @@ public enum GatewayTLSStore {
     private static func loadFingerprintResult(stableID: String) -> FingerprintRead {
         guard let account = self.keychainAccount(stableID: stableID) else { return .unavailable }
         switch self.readCanonicalFingerprint(account: account) {
-        case let .value(fingerprint):
+        case let .value(fingerprint, alternates):
             _ = self.clearSafeLegacyFingerprint(stableID: stableID)
-            return .value(fingerprint)
+            return .value(fingerprint, approvedAlternates: alternates)
         case .unavailable:
             return .unavailable
         case .missing:
@@ -426,12 +509,12 @@ public enum GatewayTLSStore {
         ].compactMap(\.self)
         for legacyAccount in accounts {
             switch self.readLegacyKeychainFingerprint(account: legacyAccount) {
-            case let .value(fingerprint):
+            case let .value(fingerprint, _):
                 guard let winner = self.createCanonicalFingerprintIfAbsent(fingerprint, account: account) else {
                     return .unavailable
                 }
                 _ = self.clearSafeLegacyFingerprint(stableID: stableID)
-                return .value(winner)
+                return .value(winner, approvedAlternates: [])
             case .unavailable:
                 return .unavailable
             case .missing:
@@ -459,7 +542,13 @@ public enum GatewayTLSStore {
               let comparison = String(data: comparisonData, encoding: .utf8)
         else { return .unavailable }
         let fingerprint = self.canonicalStoredFingerprint(value)
-        return comparison == fingerprint ? .value(fingerprint) : .unavailable
+        guard comparison == fingerprint else { return .unavailable }
+        let approved = (item[kSecAttrComment as String] as? String)?.components(separatedBy: "\n") ?? []
+        let validApprovals = approved.first == fingerprint && approved.count <= self.maximumApprovedLeaves &&
+            Set(approved).count == approved.count && approved.allSatisfy {
+                $0.count == 64 && $0.allSatisfy { "0123456789abcdef".contains($0) }
+            }
+        return .value(fingerprint, approvedAlternates: validApprovals ? Array(approved.dropFirst()) : [])
     }
 
     private static func readLegacyKeychainFingerprint(account: String) -> FingerprintRead {
@@ -476,16 +565,20 @@ public enum GatewayTLSStore {
               let value = String(data: data, encoding: .utf8),
               let fingerprint = value.trimmedNonEmpty
         else { return .unavailable }
-        return .value(fingerprint)
+        return .value(fingerprint, approvedAlternates: [])
     }
 
-    private static func writeCanonicalFingerprint(_ value: String, stableID: String) -> Bool {
+    private static func writeCanonicalFingerprint(
+        _ value: String, stableID: String, approvedAlternates: [String] = []) -> Bool
+    {
         guard let account = self.keychainAccount(stableID: stableID) else { return false }
         let data = Data(self.canonicalStoredFingerprint(value).utf8)
         let query = self.fingerprintQuery(account: account)
         let updates: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrGeneric as String: data,
+            kSecAttrComment as String: approvedAlternates.isEmpty
+                ? "" : ([self.canonicalStoredFingerprint(value)] + approvedAlternates).joined(separator: "\n"),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         let updateStatus = self.keychainOperations.update(query as CFDictionary, updates as CFDictionary)
@@ -493,25 +586,29 @@ public enum GatewayTLSStore {
             return true
         }
         guard updateStatus == errSecItemNotFound else { return false }
-        return self.createCanonicalFingerprintIfAbsent(value, account: account) != nil
+        return self.createCanonicalFingerprintIfAbsent(
+            value, account: account, approvedAlternates: approvedAlternates) != nil
     }
 
     private static func createCanonicalFingerprintIfAbsent(
         _ value: String,
-        account: String) -> String?
+        account: String,
+        approvedAlternates: [String] = []) -> String?
     {
         let fingerprint = self.canonicalStoredFingerprint(value)
         let data = Data(fingerprint.utf8)
         var insert = self.fingerprintQuery(account: account)
         insert[kSecValueData as String] = data
         insert[kSecAttrGeneric as String] = data
+        insert[kSecAttrComment as String] = approvedAlternates.isEmpty
+            ? "" : ([fingerprint] + approvedAlternates).joined(separator: "\n")
         insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let addStatus = self.keychainOperations.add(insert as CFDictionary)
         if addStatus == errSecSuccess {
             return fingerprint
         }
         guard addStatus == errSecDuplicateItem else { return nil }
-        guard case let .value(fingerprint) = self.readCanonicalFingerprint(account: account) else { return nil }
+        guard case let .value(fingerprint, _) = self.readCanonicalFingerprint(account: account) else { return nil }
         return fingerprint
     }
 
