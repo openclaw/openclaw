@@ -15,6 +15,7 @@ import {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { jsonl, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
@@ -143,12 +144,7 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     const pointer = path.join(sessionsDir, "history.trajectory-path.json");
     fs.writeFileSync(
       history,
-      [
-        { type: "session", version: 3, id: "history" },
-        { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n") + "\n",
+      jsonl({ type: "session", version: 3, id: "history" }, messageEvent("old", "user", "old")),
     );
     fs.writeFileSync(trajectory, '{"traceSchema":"openclaw-trajectory"}\n');
     const pointerBytes = Buffer.from(

@@ -26,6 +26,7 @@ import {
   seedStaleDeferredPluginSessionImport,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { expectNoIssue } from "./doctor-session-sqlite.test-support.js";
 
 it.each([2, 32])(
   "bounds manifest reads for a stale receipt with %i archived transcripts",
@@ -185,9 +186,7 @@ it.each([
       const repeated = await runDoctorSessionSqlite({ ...options, mode: "import" });
       expect(repeated.totals.importedTranscriptEvents).toBe(0);
       if (available) {
-        expect(repeated.targets.flatMap((target) => target.issues)).not.toContainEqual(
-          expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
-        );
+        expectNoIssue(repeated, "retained_plugin_receipt_superseded");
       }
     });
   },
@@ -279,9 +278,7 @@ it.each(["changed", "unreadable"] as const)(
       expect(recovered.totals.importedTranscriptEvents).toBe(kind === "unreadable" ? 2 : 0);
       expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toHaveLength(2);
       if (kind === "changed") {
-        expect(recovered.targets.flatMap((target) => target.issues)).not.toContainEqual(
-          expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
-        );
+        expectNoIssue(recovered, "retained_plugin_receipt_superseded");
       }
     });
   },

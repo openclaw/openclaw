@@ -25,10 +25,17 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { jsonl, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
 } from "./doctor-session-sqlite.js";
+import {
+  expectFiles,
+  expectMissing,
+  containsObjects,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
+import { expectNoIssue } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const pluginId = "session-fixture";
@@ -51,12 +58,7 @@ function transcriptEvents(sessionId: string): Array<Record<string, unknown> & { 
       timestamp: "2026-06-01T00:00:00.000Z",
       cwd: "/synthetic-june-workspace",
     },
-    {
-      type: "message",
-      id: `${sessionId}-user`,
-      parentId: null,
-      message: { role: "user", content: "Retained June history" },
-    },
+    messageEvent(`${sessionId}-user`, "user", "Retained June history"),
     {
       type: "message",
       id: `${sessionId}-assistant`,
@@ -88,12 +90,7 @@ async function seedImportedHistory(
     }
     if (history === "missing-delta") {
       for (const id of ["four", "five"]) {
-        original.push({
-          type: "message",
-          id: `${sessionId}-${id}`,
-          parentId: original.at(-1)!.id,
-          message: { role: "user", content: id },
-        });
+        original.push(messageEvent(`${sessionId}-${id}`, "user", id, original.at(-1)!.id));
       }
     }
     const canonical =
@@ -104,19 +101,21 @@ async function seedImportedHistory(
           : [...original];
     if (history === "sqlite-ahead") {
       while (canonical.length < 95) {
-        canonical.push({
-          type: "message",
-          id: `${sessionId}-newer-${canonical.length}`,
-          parentId: canonical.at(-1)!.id,
-          message: { role: "user", content: "New SQLite-only conversation" },
-        });
+        canonical.push(
+          messageEvent(
+            `${sessionId}-newer-${canonical.length}`,
+            "user",
+            "New SQLite-only conversation",
+            canonical.at(-1)!.id,
+          ),
+        );
       }
     }
     if (history === "sqlite-subset") {
       canonical.splice(1, 2, original[2]!, original[1]!);
     }
     const sourcePath = path.join(directory, `${sessionId}.jsonl`);
-    fs.writeFileSync(sourcePath, canonical.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    fs.writeFileSync(sourcePath, jsonl(...canonical));
     await importSqliteSessionRowsBatch([
       {
         ...scope,
@@ -136,7 +135,7 @@ async function seedImportedHistory(
       canonical: loadTranscriptEventsSync({ ...scope, sessionId }),
       sourceEvents,
       sourcePath,
-      bytes: Buffer.from(sourceEvents.map((event) => JSON.stringify(event)).join("\n") + "\n"),
+      bytes: Buffer.from(jsonl(...sourceEvents)),
       entryBefore: loadExactSessionEntry(scope)?.entry,
     });
   }
@@ -188,10 +187,7 @@ it.each([
       );
       const options = { cfg, env: state.env, allAgents: true, mode };
       const duplicateArchives: string[] = [];
-      const duplicateBytes =
-        transcriptEvents("unrelated-history")
-          .map((event) => JSON.stringify(event))
-          .join("\n") + "\n";
+      const duplicateBytes = jsonl(...transcriptEvents("unrelated-history"));
       if (pendingPlugin && mode === "import") {
         const target = {
           agentId: "main",
@@ -246,9 +242,7 @@ it.each([
         expect(report.totals.issues).toBe(0);
         expect(report.supportIssue).toBeUndefined();
       }
-      expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
-        expect.objectContaining({ code: "active_sqlite_transcript_jsonl" }),
-      );
+      expectNoIssue(report, "active_sqlite_transcript_jsonl");
       if (pendingPlugin && mode === "import") {
         expect(report.targets.flatMap((target) => target.issues)).toEqual([
           {
@@ -258,20 +252,20 @@ it.each([
         ]);
         const survivingArchives = duplicateArchives.filter((file) => fs.existsSync(file));
         expect(survivingArchives).toHaveLength(1);
-        expect(fs.readFileSync(survivingArchives[0]!, "utf8")).toBe(duplicateBytes);
+        expectFiles(duplicateBytes, survivingArchives[0]!);
         for (const session of sessions) {
-          expect(fs.existsSync(session.storePath)).toBe(false);
+          expectMissing(session.storePath);
           const indexes = completedTranscriptMoves(state, session.storePath);
           expect(indexes).toHaveLength(1);
           expect(indexes[0]!.artifact?.classification).toBe("imported");
-          expect(fs.readFileSync(indexes[0]!.archivePath, "utf8")).toBe("{}");
+          expectFiles("{}", indexes[0]!.archivePath);
         }
       }
       for (const session of sessions) {
-        expect(fs.existsSync(session.sourcePath)).toBe(false);
+        expectMissing(session.sourcePath);
         const moves = completedTranscriptMoves(state, session.sourcePath);
         expect(moves).toHaveLength(1);
-        expect(fs.readFileSync(moves[0]!.archivePath)).toEqual(session.bytes);
+        expectFiles(session.bytes, moves[0]!.archivePath);
         expect(moves[0]!.artifact?.verification).toBe(
           pendingPlugin
             ? `superseded by SQLite (${session.sourceEvents.length} of ${Math.max(session.canonical.length, session.sourceEvents.length)} events present)`
@@ -315,16 +309,17 @@ it("preserves missing-middle history without committing an invalid merge", async
           allAgents: true,
           mode: "import",
         });
-        expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
-          expect.objectContaining({
+        containsObjects(
+          report.targets.flatMap((target) => target.issues),
+          {
             code: "sqlite_transcript_count_mismatch",
             message: expect.stringContaining(`${session!.sessionId}-user`),
-          }),
+          },
         );
         const events = loadTranscriptEventsSync(session!);
         expect(events).toEqual(session!.canonical);
         expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
-        expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
+        expectFiles(session!.bytes, session!.sourcePath);
         const moves = completedTranscriptMoves(state, session!.sourcePath);
         expect(moves).toEqual([]);
       },
@@ -361,14 +356,12 @@ it("preserves an invalid main transcript without assigning its failure to a clea
           clean.issues.filter((issue) => issue.code !== "plugin_migration_source_retained"),
         ).toEqual([]);
         const failed = report.targets.find((target) => target.agentId === "main")!;
-        expect(failed.issues).toContainEqual(
-          expect.objectContaining({
-            code: "active_sqlite_transcript_verification_failed",
-            sessionKey: main.sessionKey,
-            message: expect.stringContaining(main.sourcePath),
-          }),
-        );
-        expect(fs.readFileSync(main.sourcePath)).toEqual(main.bytes);
+        containsObjects(failed.issues, {
+          code: "active_sqlite_transcript_verification_failed",
+          sessionKey: main.sessionKey,
+          message: expect.stringContaining(main.sourcePath),
+        });
+        expectFiles(main.bytes, main.sourcePath);
         expect(completedTranscriptMoves(state, main.sourcePath)).toEqual([]);
         for (const session of sessions) {
           expect(loadExactSessionEntry(session)?.entry).toEqual(session.entryBefore);

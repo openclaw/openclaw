@@ -22,6 +22,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { countBlockingSessionSqliteIssues } from "./doctor-session-sqlite-types.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { jsonl, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 it("receipts indexless configured history and archives retired history while a plugin is pending", async () => {
@@ -33,23 +34,15 @@ it("receipts indexless configured history and archives retired history while a p
     for (const agentId of ["active", "retired", "trajectory-only"]) {
       const directory = state.sessionsDir(agentId);
       fs.mkdirSync(directory, { recursive: true });
-      const bytes =
-        [
-          {
-            type: "session",
-            version: 3,
-            id: `${agentId}-history`,
-            timestamp: "2026-07-01T00:00:00.000Z",
-          },
-          {
-            type: "message",
-            id: `${agentId}-message`,
-            parentId: null,
-            message: { role: "user", content: `Preserve ${agentId} history` },
-          },
-        ]
-          .map((event) => JSON.stringify(event))
-          .join("\n") + "\n";
+      const bytes = jsonl(
+        {
+          type: "session",
+          version: 3,
+          id: `${agentId}-history`,
+          timestamp: "2026-07-01T00:00:00.000Z",
+        },
+        messageEvent(`${agentId}-message`, "user", `Preserve ${agentId} history`),
+      );
       const source = path.join(
         directory,
         `${agentId}-history${agentId === "trajectory-only" ? ".trajectory" : ""}.jsonl`,
@@ -261,17 +254,10 @@ it("holds an existing unconfigured database before importing legacy sessions wit
     );
     fs.writeFileSync(
       transcriptPath,
-      [
+      jsonl(
         { type: "session", version: 3, id: "legacy-kept" },
-        {
-          type: "message",
-          id: "kept-message",
-          parentId: null,
-          message: { role: "user", content: "keep" },
-        },
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n") + "\n",
+        messageEvent("kept-message", "user", "keep"),
+      ),
     );
     const before = new Map(
       [sqlitePath, storePath, transcriptPath].map((file) => [file, fs.readFileSync(file)]),

@@ -19,6 +19,12 @@ import { doctorCommand } from "./doctor.js";
 
 export type SessionSqliteMigrationManifest = ActiveSessionSqliteMigrationRun["manifest"];
 
+export function expectNoIssue(report: DoctorSessionSqliteReport, code: string) {
+  expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
+    expect.objectContaining({ code }),
+  );
+}
+
 export type TestStore = {
   configPath: string;
   env: NodeJS.ProcessEnv;
@@ -88,20 +94,15 @@ export function isDirectoryDescriptor(fd: number, directory: string): boolean {
 }
 
 export function importLegacyStore(store: TestStore): Promise<DoctorSessionSqliteReport> {
-  return runDoctorSessionSqlite({
-    env: store.env,
-    mode: "import",
-    store: store.storePath,
-  });
+  return runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
 }
 
 export function readMigrationManifest(
   manifestPath: string | undefined,
 ): SessionSqliteMigrationManifest {
-  if (!manifestPath) {
-    throw new Error("expected migration manifest path");
-  }
-  return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as SessionSqliteMigrationManifest;
+  return JSON.parse(
+    fs.readFileSync(requireMigrationManifestPath(manifestPath), "utf-8"),
+  ) as SessionSqliteMigrationManifest;
 }
 
 export function requireMigrationManifestPath(manifestPath: string | undefined): string {
@@ -137,6 +138,10 @@ function restoreEnvValue(key: keyof NodeJS.ProcessEnv, value: string | undefined
     return;
   }
   process.env[key] = value;
+}
+
+function writePrivate(file: string, contents: string) {
+  fs.writeFileSync(file, contents, { mode: 0o600 });
 }
 
 export function useDoctorSessionSqliteTestFixture() {
@@ -203,8 +208,8 @@ export function useDoctorSessionSqliteTestFixture() {
     const trajectoryPath = path.join(sessionDir, "session-1.trajectory.jsonl");
     const unreferencedJsonlPath = path.join(sessionDir, "orphan.jsonl");
     fs.mkdirSync(sessionDir, { recursive: true });
-    fs.writeFileSync(configPath, "{}\n", { mode: 0o600 });
-    fs.writeFileSync(
+    writePrivate(configPath, "{}\n");
+    writePrivate(
       storePath,
       JSON.stringify(
         {
@@ -221,19 +226,13 @@ export function useDoctorSessionSqliteTestFixture() {
         null,
         2,
       ),
-      { mode: 0o600 },
     );
-    fs.writeFileSync(
+    writePrivate(
       transcriptPath,
       `${(params.transcriptLines ?? ['{"type":"session","sessionId":"session-1"}', '{"type":"event","id":"evt-1"}']).join("\n")}\n`,
-      { mode: 0o600 },
     );
-    fs.writeFileSync(trajectoryPath, `${JSON.stringify({ type: "trajectory" })}\n`, {
-      mode: 0o600,
-    });
-    fs.writeFileSync(unreferencedJsonlPath, '{"type":"event"}\n', {
-      mode: 0o600,
-    });
+    writePrivate(trajectoryPath, '{"type":"trajectory"}\n');
+    writePrivate(unreferencedJsonlPath, '{"type":"event"}\n');
     const env = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: configPath,
@@ -310,7 +309,7 @@ export function useDoctorSessionSqliteTestFixture() {
       ],
     };
     const manifestPath = path.join(runsDir, `${manifest.runId}.json`);
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+    writePrivate(manifestPath, `${JSON.stringify(manifest)}\n`);
     const archivePath = expectDefined(
       moves.find((move) => move.kind === "transcript"),
       "historical transcript archive",

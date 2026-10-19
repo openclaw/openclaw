@@ -1,11 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import {
-  loadExactSessionEntry,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.sqlite-entry.js";
-import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import * as emptySourceRecovery from "../infra/deferred-plugin-session-empty.js";
@@ -15,10 +10,15 @@ import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migr
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as transcriptArchives from "./doctor-session-sqlite-archive.js";
-import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { withRetainedSource } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import {
+  expectFiles,
+  containsObjects,
+  expectMissing,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
+import { expectNoIssue } from "./doctor-session-sqlite.test-support.js";
 
 function receipt(env: NodeJS.ProcessEnv) {
   const row = withExistingOpenClawStateDatabaseReadOnly(
@@ -39,18 +39,12 @@ function receipt(env: NodeJS.ProcessEnv) {
   };
 }
 
-describe("retained session receipt recovery", () => {
-  it.each(["current", "legacy"] as const)(
-    "keeps a %s receipt valid after repeated device-number changes",
-    async (format) => {
-      await withOpenClawTestState({ label: "receipt-reboot" }, async (state) => {
-        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
-          state,
-          "default",
-          "brave",
-        );
-        const options = { cfg, env: state.env, allAgents: true };
-        await runDoctorSessionSqlite({ ...options, mode: "import" });
+it.each(["current", "legacy"] as const)(
+  "keeps a %s receipt valid after repeated device-number changes",
+  (format) =>
+    withRetainedSource(
+      async ({ state, storePath, scope, run, readEntry }) => {
+        await run("import");
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
         const file = fs.statSync(sqlitePath, { bigint: true });
         const before = receipt(state.env);
@@ -72,72 +66,54 @@ describe("retained session receipt recovery", () => {
           );
         }
         const lstat = fs.lstatSync;
+        let device = file.dev + 2n;
         const reboot = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, statOptions) => {
           const current = lstat(pathname, statOptions);
           if (pathname === sqlitePath && current) {
-            Object.defineProperty(current, "dev", { value: file.dev + 2n });
+            Object.defineProperty(current, "dev", { value: device });
           }
           return current;
         });
         try {
           if (format === "current") {
-            const validated = await runDoctorSessionSqlite({ ...options, mode: "validate" });
-            expect(validated.targets.flatMap((target) => target.issues)).not.toContainEqual(
-              expect.objectContaining({ code: "retained_plugin_source_conflict" }),
-            );
+            const validated = await run("validate");
+            expectNoIssue(validated, "retained_plugin_source_conflict");
           }
-          const repaired = await runDoctorSessionSqlite({ ...options, mode: "import" });
-          expect(repaired.targets.flatMap((target) => target.issues)).not.toContainEqual(
-            expect.objectContaining({ code: "retained_plugin_source_conflict" }),
-          );
+          const repaired = await run("import");
+          expectNoIssue(repaired, "retained_plugin_source_conflict");
           const upgraded = receipt(state.env);
           expect(upgraded.sources).toEqual(before.sources);
           await upsertSessionEntryCore(
             { ...scope, sessionKey: "agent:main:kept" },
             { label: "Current metadata after reboot" },
           );
-          reboot.mockImplementation((pathname, statOptions) => {
-            const current = lstat(pathname, statOptions);
-            if (pathname === sqlitePath && current) {
-              Object.defineProperty(current, "dev", { value: file.dev + 3n });
-            }
-            return current;
-          });
-          const validated = await runDoctorSessionSqlite({ ...options, mode: "validate" });
-          expect(validated.targets.flatMap((target) => target.issues)).not.toContainEqual(
-            expect.objectContaining({ code: "retained_plugin_source_conflict" }),
-          );
-          const repeated = await runDoctorSessionSqlite({ ...options, mode: "import" });
-          expect(repeated.targets.flatMap((target) => target.issues)).not.toContainEqual(
-            expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
-          );
+          device = file.dev + 3n;
+          const validated = await run("validate");
+          expectNoIssue(validated, "retained_plugin_source_conflict");
+          const repeated = await run("import");
+          expectNoIssue(repeated, "retained_plugin_source_index_rebuilt");
           expect(receipt(state.env)).toEqual(upgraded);
           expect(upgraded.databaseIdentity).toMatch(new RegExp(`^inode:${file.ino}:birthtime:`));
           expect(repeated.totals.importedEntries).toBe(0);
           expect(repeated.totals.importedTranscriptEvents).toBe(0);
-          expect(
-            loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
-          ).toBe("Current metadata after reboot");
+          expect(readEntry("agent:main:kept")?.entry.label).toBe("Current metadata after reboot");
         } finally {
           reboot.mockRestore();
         }
-      });
-    },
-  );
-  it.each(["verification", "archive"] as const)(
-    "protects newer history when an empty source changes before %s",
-    async (phase) => {
-      await withOpenClawTestState({ label: "receipt-empty-source-change" }, async (state) => {
-        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
-          state,
-          "default",
-          "brave",
-        );
-        const options = { cfg, env: state.env, allAgents: true };
-        await runDoctorSessionSqlite({ ...options, mode: "import" });
-        const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      },
+      "default",
+      "brave",
+    ),
+);
+it.each(["verification", "archive"] as const)(
+  "protects newer history when an empty source changes before %s",
+  (phase) =>
+    withRetainedSource(
+      async ({ storePath, scope, run, file, readEvents }) => {
+        await run("import");
+        const source = file("legacy-kept.jsonl");
         const bytes = fs.readFileSync(source, "utf8");
-        const events = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
+        const events = readEvents("legacy-kept");
         fs.writeFileSync(`${source}.bak-15767-200`, bytes);
         fs.writeFileSync(source, "");
         closeOpenClawAgentDatabasesForTest();
@@ -180,81 +156,66 @@ describe("retained session receipt recovery", () => {
                   return move;
                 });
         try {
-          await runDoctorSessionSqlite({ ...options, mode: "recover" });
+          await run("recover");
         } finally {
           spy.mockRestore();
         }
         expect(changed).toBe(true);
-        expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual(
-          phase === "verification" ? [] : events,
-        );
+        expect(readEvents("legacy-kept")).toEqual(phase === "verification" ? [] : events);
         if (phase === "archive") {
           expect(fs.existsSync(source)).toBe(true);
-          expect(fs.readFileSync(source, "utf8")).toBe(newer);
+          expectFiles(newer, source);
         }
-      });
-    },
-  );
-  it("recovers an empty unindexed original from its retained backups", async () => {
-    await withOpenClawTestState({ label: "receipt-empty-transcript" }, async (state) => {
-      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
-        state,
-        "default",
-        "brave",
-      );
-      const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      },
+      "default",
+      "brave",
+    ),
+);
+it("recovers an empty unindexed original from its retained backups", () =>
+  withRetainedSource(
+    async ({ storePath, run, file, readEvents }) => {
+      const source = file("legacy-kept.jsonl");
 
       const index = JSON.parse(fs.readFileSync(storePath, "utf8"));
 
       delete index["agent:main:kept"];
 
       fs.writeFileSync(storePath, JSON.stringify(index));
-
-      const options = { cfg, env: state.env, allAgents: true };
-      await runDoctorSessionSqlite({ ...options, mode: "import" });
+      await run("import");
       const bytes = fs.readFileSync(source, "utf8");
-      const originalEvents = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
+      const originalEvents = readEvents("legacy-kept");
       const backupPaths = [`${source}.bak-15767-100`, `${source}.bak-15767-200`];
 
       fs.writeFileSync(backupPaths[0]!, bytes.split("\n")[0]! + "\n");
       fs.writeFileSync(backupPaths[1]!, bytes);
 
       fs.writeFileSync(source, "");
-      const recovered = await runDoctorSessionSqlite({ ...options, mode: "recover" });
+      const recovered = await run("recover");
       const issues = recovered.targets.flatMap((target) => target.issues);
       expect(issues).not.toContainEqual(
         expect.objectContaining({ code: "retained_plugin_source_conflict" }),
       );
-      expect(issues).toContainEqual(
-        expect.objectContaining({ code: "retained_empty_transcript_superseded" }),
-      );
+      containsObjects(issues, { code: "retained_empty_transcript_superseded" });
       const archives = recovered.targets.flatMap((target) => target.archivedTranscriptFiles);
       expect(archives).toHaveLength(1);
-      expect(fs.readFileSync(archives[0]!, "utf8")).toBe("");
-      expect(fs.existsSync(source)).toBe(false);
-      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual(
-        originalEvents,
-      );
+      expectFiles("", archives[0]!);
+      expectMissing(source);
+      expect(readEvents("legacy-kept")).toEqual(originalEvents);
 
-      expect(fs.readFileSync(backupPaths[1]!, "utf8")).toBe(bytes);
+      expectFiles(bytes, backupPaths[1]!);
       expect(issues.map((issue) => issue.message).join("\n")).toContain(backupPaths[1]);
 
-      const again = await runDoctorSessionSqlite({ ...options, mode: "recover" });
-      expect(again.targets.flatMap((target) => target.issues)).not.toContainEqual(
-        expect.objectContaining({ code: "retained_plugin_source_conflict" }),
-      );
-    });
-  });
-  it("reports missing history while superseding a foreign empty-source receipt", async () => {
-    await withOpenClawTestState({ label: "receipt-empty-missing-history" }, async (state) => {
-      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
-        state,
-        "default",
-        "brave",
-      );
-      const options = { cfg, env: state.env, allAgents: true };
-      await runDoctorSessionSqlite({ ...options, mode: "import" });
-      const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      const again = await run("recover");
+      expectNoIssue(again, "retained_plugin_source_conflict");
+    },
+    "default",
+    "brave",
+  ));
+it("reports missing history while superseding a foreign empty-source receipt", () =>
+  withRetainedSource(
+    async ({ state, storePath, scope, run, file, readEvents }) => {
+      await run("import");
+      const source = file("legacy-kept.jsonl");
       fs.writeFileSync(source, "");
       closeOpenClawAgentDatabasesForTest();
       const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
@@ -265,34 +226,25 @@ describe("retained session receipt recovery", () => {
       db.close();
       const before = receipt(state.env);
 
-      const recovered = await runDoctorSessionSqlite({ ...options, mode: "recover" });
+      const recovered = await run("recover");
       const issues = recovered.targets.flatMap((target) => target.issues);
-      expect(issues).toContainEqual(
-        expect.objectContaining({
-          code: "historical_transcript_deferred",
-          message: expect.stringContaining(source),
-        }),
-      );
+      containsObjects(issues, {
+        code: "historical_transcript_deferred",
+        message: expect.stringContaining(source),
+      });
       expect(issues.map((issue) => issue.message).join("\n")).toContain(sqlitePath);
       expect(recovered.totals.archivedTranscriptFiles).toBe(0);
-      expect(fs.readFileSync(source, "utf8")).toBe("");
-      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual([]);
+      expectFiles("", source);
+      expect(readEvents("legacy-kept")).toEqual([]);
       expect(receipt(state.env)).toMatchObject({ ...before, superseded: "different-database" });
-    });
-  });
-  it("protects retained history when replacement events are reordered", async () => {
-    await withOpenClawTestState({ label: "receipt-incomplete-database" }, async (state) => {
-      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
-        state,
-        "default",
-        "brave",
-      );
-      const imported = await runDoctorSessionSqlite({
-        cfg,
-        env: state.env,
-        allAgents: true,
-        mode: "import",
-      });
+    },
+    "default",
+    "brave",
+  ));
+it("protects retained history when replacement events are reordered", () =>
+  withRetainedSource(
+    async ({ state, cfg, storePath, scope, run, readEvents }) => {
+      const imported = await run("import");
       const before = receipt(state.env);
       closeOpenClawAgentDatabasesForTest();
       const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
@@ -310,7 +262,7 @@ describe("retained session receipt recovery", () => {
       db.exec("COMMIT;");
 
       db.close();
-      const reordered = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
+      const reordered = readEvents("legacy-kept");
       const manifest = readSessionSqliteMigrationManifest(imported.migrationRun!.manifestPath)!;
       manifest.failedAt = new Date().toISOString();
       const historicalIssues = Array.from({ length: 11 }, (_, index) => ({
@@ -326,12 +278,13 @@ describe("retained session receipt recovery", () => {
         agent: "main",
         mode: "recover",
       });
-      expect(recovered.targets.flatMap((target) => target.issues)).toContainEqual(
-        expect.objectContaining({
+      containsObjects(
+        recovered.targets.flatMap((target) => target.issues),
+        {
           code: "retained_plugin_receipt_superseded",
-        }),
+        },
       );
-      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual(reordered);
+      expect(readEvents("legacy-kept")).toEqual(reordered);
       const superseded = withExistingOpenClawStateDatabaseReadOnly(
         ({ db: stateDb }) =>
           stateDb
@@ -357,14 +310,16 @@ describe("retained session receipt recovery", () => {
         ...historicalIssues,
         ...recovered.targets.flatMap((target) => target.issues),
       ]) {
-        expect(jsonReport.targets.flatMap((target) => target.issues)).toContainEqual(
-          expect.objectContaining({ code: issue.code }),
+        containsObjects(
+          jsonReport.targets.flatMap((target) => target.issues),
+          { code: issue.code },
         );
         expect(markdownReport).toContain(`[${issue.code}]`);
         expect(recovered.supportIssue?.body).toContain(`[${issue.code}]`);
       }
       expect(markdownReport).toContain("doctor recover completed with remaining issues");
       expect(markdownReport).not.toContain("restored and validated");
-    });
-  });
-});
+    },
+    "default",
+    "brave",
+  ));
