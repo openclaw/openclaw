@@ -1,5 +1,6 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
+import { readMissingScopeError } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -208,7 +209,11 @@ function resolveGatewayDiagnosticsTimeouts(timeoutMs: number, statusElapsedMs: n
 }
 
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
-  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
+  return (
+    isGatewayCredentialsRequiredError(error) ||
+    isGatewaySecretRefUnavailableError(error) ||
+    readMissingScopeError(error) !== null
+  );
 }
 
 function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {

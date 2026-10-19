@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import {
@@ -169,7 +169,11 @@ it.each(["migrate", "ensure"])(
     }
     expect(Boolean(loadDeviceIdentityIfPresent({ env: f.env }))).toBe(false);
     expect(loadDeviceIdentityIfPresent({ env: f.env, identityKey: "node" })).toEqual(nodeIdentity);
-    expect(await f.monitor()).toEqual(expect.objectContaining({ payload: { kind: "heartbeat" } }));
+    const monitor = await f.monitor();
+    expect(monitor).toEqual(expect.objectContaining({ payload: { kind: "heartbeat" } }));
+    vi.spyOn(process, "cwd").mockReturnValue(await makeRoot());
+    expect(await f.migrate()).toEqual({ changes: [], warnings: [] });
+    expect((await f.monitor())?.schedule).toEqual(monitor?.schedule);
   },
 );
 
