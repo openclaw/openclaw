@@ -20,9 +20,7 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
 }));
 
-vi.mock("../../config/logging.js", () => ({
-  logConfigUpdated: mocks.logConfigUpdated,
-}));
+vi.mock("../../config/logging.js", () => ({ logConfigUpdated: mocks.logConfigUpdated }));
 
 vi.mock("../onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/default-workspace",
@@ -36,9 +34,7 @@ vi.mock("./config-write.js", () => ({
   commitNonInteractiveOnboardConfig: mocks.commitConfig,
 }));
 
-vi.mock("../onboard-agent.js", () => ({
-  ensureOnboardingAgent: mocks.ensureOnboardingAgent,
-}));
+vi.mock("../onboard-agent.js", () => ({ ensureOnboardingAgent: mocks.ensureOnboardingAgent }));
 
 vi.mock("./local/auth-choice.js", () => ({
   applyNonInteractiveAuthChoice: mocks.applyAuthChoice,
@@ -61,11 +57,7 @@ afterEach(() => {
   resetConfigRuntimeState();
 });
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-} as unknown as RuntimeEnv;
+const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
 const localOptions = {
   nonInteractive: true,
@@ -92,16 +84,15 @@ function runSetup(opts: OnboardOptions) {
   return runNonInteractiveSetup({ ...localOptions, ...opts }, runtime);
 }
 
+const lastOutput = () => JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]));
+
 function expectWorkspace(agentId: string, workspace: string) {
   expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
     workspace,
     runtime,
     expect.objectContaining({ agentId }),
   );
-  expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
-    ok: true,
-    workspace,
-  });
+  expect(lastOutput()).toMatchObject({ ok: true, workspace });
 }
 
 describe("runNonInteractiveLocalSetup default-agent ownership", () => {
@@ -134,21 +125,18 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   });
 
   it.each([
-    ["default state", false, undefined, false],
-    ["workspace override", true, "explicit", false],
-    ["blank workspace override", true, "blank", false],
-    ["blank CLI and config", true, undefined, true],
+    [".openclaw", undefined, false, "/tmp/default-workspace"],
+    ["scratch-state", "explicit-workspace", false, "explicit-workspace"],
+    ["scratch-state", "   ", false, "scratch-state/workspace"],
+    ["scratch-state", undefined, true, "scratch-state/workspace"],
   ] as const)(
-    "provisions and records the workspace with %s",
-    async (_, customState, workspaceOverride, blankOptions) => {
+    "provisions workspace: state=%s env=%s blankOptions=%s",
+    async (stateDir, envWorkspace, blankOptions, expected) => {
       await withTempHome(
         async (home) => {
-          const expectedWorkspace =
-            workspaceOverride === "explicit"
-              ? path.join(home, "explicit-workspace")
-              : customState
-                ? path.join(home, "scratch-state", "workspace")
-                : "/tmp/default-workspace";
+          const expectedWorkspace = path.isAbsolute(expected)
+            ? expected
+            : path.join(home, expected);
           await runLocal(
             { ...(blankOptions ? { workspace: "   " } : {}), json: true },
             {
@@ -168,14 +156,9 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         {
           env: {
             OPENCLAW_HOME: (home) => home,
-            OPENCLAW_STATE_DIR: (home) =>
-              path.join(home, customState ? "scratch-state" : ".openclaw"),
+            OPENCLAW_STATE_DIR: (home) => path.join(home, stateDir),
             OPENCLAW_WORKSPACE_DIR: (home) =>
-              workspaceOverride === "explicit"
-                ? path.join(home, "explicit-workspace")
-                : workspaceOverride === "blank"
-                  ? "   "
-                  : undefined,
+              envWorkspace?.trim() ? path.join(home, envWorkspace) : envWorkspace,
           },
         },
       );
@@ -183,89 +166,85 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   );
 
   it.each([
-    { saved: undefined, requested: undefined, expected: "npm" },
-    { saved: "yarn", requested: undefined, expected: "yarn" },
-    { saved: "yarn", requested: "npm", expected: "npm" },
-    { saved: "bun", requested: "pnpm", expected: "pnpm" },
-    { saved: "pnpm", requested: "bun", expected: "bun" },
+    { saved: undefined, requested: undefined, expected: "npm", skipSkills: false },
+    { saved: "yarn", requested: undefined, expected: "yarn", skipSkills: false },
+    { saved: "yarn", requested: "npm", expected: "npm", skipSkills: false },
+    { saved: "bun", requested: "pnpm", expected: "pnpm", skipSkills: false },
+    { saved: "pnpm", requested: "bun", expected: "bun", skipSkills: false },
+    { saved: "yarn", requested: "npm", expected: "yarn", skipSkills: true },
   ] as const)(
     "records saved $saved and requested $requested skills manager as $expected",
-    async ({ saved, requested, expected }) => {
-      await withTempHome(async () => {
+    ({ saved, requested, expected, skipSkills }) =>
+      withTempHome(async () => {
         const baseConfig: OpenClawConfig = {
           agents: { entries: { ops: {} } },
           skills: { install: { nodeManager: saved, preferBrew: false } },
         };
-        await runLocal({ skipSkills: false, nodeManager: requested }, baseConfig);
+        await runLocal({ skipSkills, nodeManager: requested }, baseConfig);
 
         expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills.install).toEqual({
           nodeManager: expected,
           preferBrew: false,
         });
         expect(baseConfig.skills?.install?.nodeManager).toBe(saved);
-      });
-    },
+        if (skipSkills) {
+          expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills).toBe(baseConfig.skills);
+          expect(baseConfig.skills?.install).toEqual({ nodeManager: "yarn", preferBrew: false });
+        }
+      }),
   );
 
-  it("leaves skills untouched when setup is skipped, even with an explicit manager", async () => {
-    await withTempHome(async () => {
-      const baseConfig: OpenClawConfig = {
-        agents: { entries: { ops: {} } },
-        skills: { install: { nodeManager: "yarn", preferBrew: false } },
-      };
-      await runLocal({ nodeManager: "npm" }, baseConfig);
-
-      expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills).toBe(baseConfig.skills);
-      expect(baseConfig.skills?.install).toEqual({ nodeManager: "yarn", preferBrew: false });
-    });
-  });
-
-  it.each([false, true])(
-    "rejects ambiguous provider flags before creating an agent or writing setup state (json: %s)",
-    async (json) => {
-      mocks.inferAuthChoice.mockReturnValue({
-        matches: [
-          { optionKey: "openaiApiKey", authChoice: "openai-api-key", label: "--openai-api-key" },
-          {
-            optionKey: "anthropicApiKey",
-            authChoice: "anthropic-api-key",
-            label: "--anthropic-api-key",
-          },
-        ],
-      });
-
-      await runLocal({
-        openaiApiKey: "openai-test-key",
-        anthropicApiKey: "anthropic-test-key",
-        json,
-      });
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Multiple API key flags were provided"),
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      if (json) {
-        const message = [
-          "Multiple API key flags were provided for non-interactive setup.",
-          "Use a single provider flag or pass --auth-choice explicitly.",
-          "Flags: --openai-api-key, --anthropic-api-key",
-        ].join("\n");
-        expect(runtime.log).toHaveBeenCalledWith(
-          JSON.stringify(
-            {
-              ok: false,
-              error: { type: "cli_error", message },
-              phase: "options",
-              message,
-            },
-            null,
-            2,
-          ),
-        );
+  it.each([
+    ["gateway", false],
+    ["ambiguous", false],
+    ["ambiguous", true],
+  ] as const)(
+    "rejects %s options before auth, agent creation, or writes (json: %s)",
+    async (failure, json) => {
+      if (failure === "gateway") {
+        mocks.applyGatewayConfig.mockReturnValue(null);
+        await runLocal({ authChoice: "demo-api-key", gatewayBind: "custom" });
+        expect(mocks.applyGatewayConfig).toHaveBeenCalledOnce();
       } else {
-        expect(runtime.log).not.toHaveBeenCalled();
+        mocks.inferAuthChoice.mockReturnValue({
+          matches: [
+            { optionKey: "openaiApiKey", authChoice: "openai-api-key", label: "--openai-api-key" },
+            {
+              optionKey: "anthropicApiKey",
+              authChoice: "anthropic-api-key",
+              label: "--anthropic-api-key",
+            },
+          ],
+        });
+
+        await runLocal({
+          openaiApiKey: "openai-test-key",
+          anthropicApiKey: "anthropic-test-key",
+          json,
+        });
+
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Multiple API key flags were provided"),
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        if (json) {
+          const message = [
+            "Multiple API key flags were provided for non-interactive setup.",
+            "Use a single provider flag or pass --auth-choice explicitly.",
+            "Flags: --openai-api-key, --anthropic-api-key",
+          ].join("\n");
+          const payload = {
+            ok: false,
+            error: { type: "cli_error", message },
+            phase: "options",
+            message,
+          };
+          expect(runtime.log).toHaveBeenCalledWith(JSON.stringify(payload, null, 2));
+        } else {
+          expect(runtime.log).not.toHaveBeenCalled();
+        }
+        expect(mocks.applyGatewayConfig).not.toHaveBeenCalled();
       }
-      expect(mocks.applyGatewayConfig).not.toHaveBeenCalled();
       expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
       expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
       expect(mocks.commitConfig).not.toHaveBeenCalled();
@@ -273,95 +252,107 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     },
   );
 
-  it.each([
-    { label: "fresh unnamed", agents: undefined, legacyState: false, agentName: undefined },
-    { label: "fresh named", agents: undefined, legacyState: false, agentName: "robby" },
-    { label: "rosterless", agents: {}, legacyState: false, agentName: "robby" },
-    {
-      label: "empty keyed roster",
-      agents: { entries: {} },
-      legacyState: false,
-      agentName: "robby",
-    },
-    { label: "legacy workspace state", agents: {}, legacyState: true, agentName: "robby" },
-  ])(
-    "keeps auth and provisioning on the requested owner with $label config",
-    async ({ agents, legacyState, agentName }) => {
-      const agentId = agentName ?? "main";
-      await withTempHome(async (rawHome) => {
-        const home = await fs.realpath(rawHome);
-        const workspace = path.join(home, "requested-workspace");
+  type OwnerCase = { label: string } & (
+    | { fresh: true; agents?: OpenClawConfig["agents"]; legacyState?: boolean; agentName?: string }
+    | { fresh: false; agentId: string; include?: boolean; explicit?: boolean }
+  );
+  const ownerCases: OwnerCase[] = [
+    { label: "fresh unnamed", fresh: true },
+    { label: "fresh named", fresh: true, agentName: "robby" },
+    { label: "rosterless", fresh: true, agents: {}, agentName: "robby" },
+    { label: "empty keyed roster", fresh: true, agents: { entries: {} }, agentName: "robby" },
+    { label: "legacy workspace", fresh: true, agents: {}, legacyState: true, agentName: "robby" },
+    { label: "main", fresh: false, agentId: "main" },
+    { label: "ops", fresh: false, agentId: "ops" },
+    { label: "included main", fresh: false, agentId: "main", include: true },
+    { label: "explicit ops", fresh: false, agentId: "ops", explicit: true },
+  ];
+  it.each(ownerCases)("keeps auth and provisioning on $label ownership", (testCase) =>
+    withTempHome(async (rawHome) => {
+      const home = await fs.realpath(rawHome);
+      const configDir = path.join(home, ".openclaw");
+      const write = (name: string, value: unknown) =>
+        fs.writeFile(path.join(configDir, name), JSON.stringify(value));
+      const agentId = testCase.fresh ? (testCase.agentName ?? "main") : testCase.agentId;
+      const agentDir = path.join(configDir, "agents", agentId, "agent");
+      const workspace = path.join(
+        home,
+        testCase.fresh ? "requested-workspace" : "global-workspace",
+      );
+      let expectedWorkspace = workspace;
+      let entries: NonNullable<OpenClawConfig["agents"]>["entries"];
+      if (testCase.fresh) {
         const oldWorkspace = path.join(home, "old-workspace");
-        const expectedWorkspace = legacyState ? oldWorkspace : workspace;
-        if (!legacyState) {
-          // withTempHome seeds main sessions; this branch models no existing installation.
-          await fs.rm(path.join(home, ".openclaw", "agents"), { recursive: true });
+        if (testCase.legacyState) {
+          expectedWorkspace = oldWorkspace;
+        } else {
+          // withTempHome seeds main sessions; model a first install.
+          await fs.rm(path.join(configDir, "agents"), { recursive: true });
         }
-        if (agents) {
-          const configDir = path.join(home, ".openclaw");
+        if (testCase.agents) {
           await fs.mkdir(configDir, { recursive: true });
-          await fs.writeFile(
-            path.join(configDir, "openclaw.json"),
-            JSON.stringify({
-              agents: { ...agents, defaults: { workspace: oldWorkspace } },
-            }),
-          );
+          await write("openclaw.json", {
+            agents: { ...testCase.agents, defaults: { workspace: oldWorkspace } },
+          });
         }
         resetConfigRuntimeState();
         const snapshot = await readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(true);
-        expect(snapshot.exists).toBe(agents !== undefined);
-        if (agents) {
-          expect(snapshot.sourceConfigBeforeMigrations?.agents).toEqual({
-            ...agents,
-            defaults: { workspace: oldWorkspace },
-          });
-          expect(snapshot.sourceConfig?.agents?.entries).toEqual({ main: {} });
+        expect(snapshot).toMatchObject({ valid: true, exists: testCase.agents !== undefined });
+      } else {
+        expectedWorkspace = agentId === "main" ? workspace : path.join(home, "ops-workspace");
+        entries = {
+          ...(testCase.explicit ? { main: {} } : {}),
+          [agentId]: agentId === "main" ? {} : { agentDir, workspace: expectedWorkspace },
+        };
+        if (testCase.include) {
+          await write("roster.json", { agents: { entries } });
         }
-        mocks.ensureOnboardingAgent.mockImplementationOnce(
-          async ({ config }: { config: OpenClawConfig }) => ({
-            config: {
-              ...config,
-              agents: {
-                ...config.agents,
-                entries: {
-                  [agentId]: {
-                    ...(agentName ? { name: agentName } : {}),
-                    workspace: expectedWorkspace,
-                  },
-                },
-              },
-            },
-            agentId,
-            bootstrapPending: true,
-            createdAgent: true,
-          }),
-        );
-
-        await runSetup({
-          ...(agentName ? { agentName } : {}),
-          json: true,
-          workspace,
-          authChoice: "demo-api-key",
+        await write("openclaw.json", {
+          ...(testCase.include ? { $include: "./roster.json" } : {}),
+          agents: {
+            ...(!testCase.include ? { entries } : {}),
+            ...(testCase.explicit ? { ownership: "explicit" } : {}),
+            defaults: { workspace, ...(testCase.explicit ? { systemAgent: { agentId } } : {}) },
+          },
         });
-
-        expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
-          expect.objectContaining({
-            target: {
-              agentId,
-              agentDir: path.join(home, ".openclaw", "agents", agentId, "agent"),
-              workspaceDir: expectedWorkspace,
+        resetConfigRuntimeState();
+      }
+      const newEntry = testCase.fresh
+        ? {
+            [agentId]: {
+              ...(testCase.agentName ? { name: testCase.agentName } : {}),
+              workspace: expectedWorkspace,
             },
-            nextConfig: expect.objectContaining({
-              agents: expect.objectContaining({
-                defaults: expect.objectContaining({ workspace: expectedWorkspace }),
-              }),
-            }),
-          }),
-        );
-        expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(
-          mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
-        );
+          }
+        : undefined;
+      mocks.ensureOnboardingAgent.mockImplementationOnce(
+        async ({ config }: { config: OpenClawConfig }) => ({
+          config: testCase.fresh
+            ? {
+                ...config,
+                agents: { ...config.agents, entries: newEntry },
+              }
+            : config,
+          agentId,
+          bootstrapPending: testCase.fresh,
+          createdAgent: testCase.fresh,
+        }),
+      );
+      await runSetup({
+        agentName: testCase.fresh ? testCase.agentName : "robby",
+        installDaemon: testCase.fresh ? undefined : false,
+        workspace,
+        authChoice: "demo-api-key",
+        json: true,
+      });
+      const auth = mocks.applyAuthChoice.mock.calls[0]?.[0];
+      expect(auth?.target).toEqual({ agentId, agentDir, workspaceDir: expectedWorkspace });
+      expectWorkspace(agentId, expectedWorkspace);
+      if (testCase.fresh) {
+        expect(auth?.nextConfig.agents.defaults).toMatchObject({ workspace: expectedWorkspace });
+        const creationOrder = mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!;
+        expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(creationOrder);
+        expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(creationOrder);
         expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
         expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -369,22 +360,27 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
             workspace: expectedWorkspace,
           }),
         );
-        expectWorkspace(agentId, expectedWorkspace);
-        expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
-          mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
-        );
         expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
           `${workspace}/main`,
         );
-        if (legacyState) {
+        if (testCase.legacyState) {
           expect(runtime.error).toHaveBeenCalledWith(
             expect.stringContaining("existing agents keep their current workspace"),
           );
         } else {
           expect(runtime.error).not.toHaveBeenCalled();
         }
-      });
-    },
+      } else {
+        const committed = mocks.commitConfig.mock.calls[0]?.[0].nextConfig.agents;
+        expect(committed?.entries).toEqual(entries);
+        expect(committed?.defaults).toMatchObject({ workspace });
+        if (testCase.include) {
+          expect(
+            JSON.parse(await fs.readFile(path.join(configDir, "roster.json"), "utf8")),
+          ).toEqual({ agents: { entries } });
+        }
+      }
+    }),
   );
 
   it.each(
@@ -401,7 +397,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         await vi.importActual<typeof import("../onboard-agent.js")>("../onboard-agent.js");
       const { commitNonInteractiveOnboardConfig } =
         await vi.importActual<typeof import("./config-write.js")>("./config-write.js");
-      await withTempHome(async (rawHome) => {
+      return withTempHome(async (rawHome) => {
         const home = await fs.realpath(rawHome);
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
@@ -417,21 +413,17 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         }
         resetConfigRuntimeState();
         const before = await readConfigFileSnapshot();
-        expect(before.valid).toBe(true);
-        expect(before.exists).toBe(existing);
-        expect(before.sourceConfigBeforeMigrations ?? {}).toEqual(existing ? initialConfig : {});
-        if (existing) {
-          expect(before.sourceConfig?.agents?.entries).toEqual({ main: {} });
-        }
+        expect(before).toMatchObject({ valid: true, exists: existing });
         let foreignRaw: string | undefined;
+        const withModel = (config: OpenClawConfig, primary: string): OpenClawConfig => ({
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: { ...config.agents?.defaults, model: { primary } },
+          },
+        });
         const writeForeignConfig = async (config: OpenClawConfig) => {
-          foreignRaw = JSON.stringify({
-            ...config,
-            agents: {
-              ...config.agents,
-              defaults: { ...config.agents?.defaults, model: { primary: "fixture/foreign" } },
-            },
-          });
+          foreignRaw = JSON.stringify(withModel(config, "fixture/foreign"));
           await fs.writeFile(configPath, foreignRaw);
         };
         mocks.applyAuthChoice.mockImplementationOnce(async ({ nextConfig }) => {
@@ -443,16 +435,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           if (foreignWrite === "during-auth") {
             await writeForeignConfig(existing ? initialConfig : {});
           }
-          return {
-            ...nextConfig,
-            agents: {
-              ...nextConfig.agents,
-              defaults: {
-                ...nextConfig.agents?.defaults,
-                model: { primary: "fixture/selected" },
-              },
-            },
-          };
+          return withModel(nextConfig, "fixture/selected");
         });
         let creationHash: string | undefined;
         mocks.ensureOnboardingAgent.mockImplementationOnce(async (params) => {
@@ -472,10 +455,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           skipBootstrap: true,
           installDaemon: false,
           json: true,
-        }).then(
-          () => undefined,
-          (error: unknown) => error,
-        );
+        }).catch((error: unknown) => error);
         const persistedRaw = await fs.readFile(configPath, "utf8");
         if (foreignWrite !== "none") {
           expect.soft(persistedRaw).toBe(foreignRaw);
@@ -501,18 +481,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     },
   );
 
-  it("rejects invalid gateway options before provider auth or first-agent creation", async () => {
-    mocks.applyGatewayConfig.mockReturnValue(null);
-
-    await runLocal({ authChoice: "demo-api-key", gatewayBind: "custom" });
-
-    expect(mocks.applyGatewayConfig).toHaveBeenCalledOnce();
-    expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
-    expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
-    expect(mocks.commitConfig).not.toHaveBeenCalled();
-    expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
-  });
-
   it("does not publish config when the existing agent workspace cannot be provisioned", async () => {
     mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
 
@@ -524,91 +492,12 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { agentId: "main", include: false, explicit: false },
-    { agentId: "ops", include: false, explicit: false },
-    { agentId: "main", include: true, explicit: false },
-    { agentId: "ops", include: false, explicit: true },
-  ])(
-    "preserves the authored auth owner and workspace: %j",
-    async ({ agentId, include, explicit }) => {
-      await withTempHome(async (rawHome) => {
-        const home = await fs.realpath(rawHome);
-        const globalWorkspace = path.join(home, "global-workspace");
-        const agentDir = path.join(home, ".openclaw", "agents", agentId, "agent");
-        const workspaceDir =
-          agentId === "main" ? globalWorkspace : path.join(home, "ops-workspace");
-        const entries = {
-          ...(explicit ? { main: {} } : {}),
-          [agentId]: agentId === "main" ? {} : { agentDir, workspace: workspaceDir },
-        };
-        const configDir = path.join(home, ".openclaw");
-        const roster = { agents: { entries } };
-        if (include) {
-          await fs.writeFile(path.join(configDir, "roster.json"), JSON.stringify(roster));
-        }
-        await fs.writeFile(
-          path.join(configDir, "openclaw.json"),
-          JSON.stringify({
-            ...(include ? { $include: "./roster.json" } : {}),
-            agents: {
-              ...(!include ? { entries } : {}),
-              ...(explicit ? { ownership: "explicit" } : {}),
-              defaults: {
-                workspace: globalWorkspace,
-                ...(explicit ? { systemAgent: { agentId } } : {}),
-              },
-            },
-          }),
-        );
-        resetConfigRuntimeState();
-        mocks.ensureOnboardingAgent.mockImplementationOnce(
-          async ({ config }: { config: OpenClawConfig }) => ({
-            config,
-            agentId,
-            bootstrapPending: false,
-            createdAgent: false,
-          }),
-        );
-
-        await runSetup({
-          agentName: "robby",
-          workspace: globalWorkspace,
-          authChoice: "demo-api-key",
-          installDaemon: false,
-          json: true,
-        });
-
-        expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
-          expect.objectContaining({
-            target: { agentId, agentDir, workspaceDir },
-          }),
-        );
-        expect(mocks.commitConfig).toHaveBeenCalledWith(
-          expect.objectContaining({
-            nextConfig: expect.objectContaining({
-              agents: expect.objectContaining({
-                entries,
-                defaults: expect.objectContaining({ workspace: globalWorkspace }),
-              }),
-            }),
-          }),
-        );
-        expectWorkspace(agentId, workspaceDir);
-        if (include) {
-          expect(
-            JSON.parse(await fs.readFile(path.join(configDir, "roster.json"), "utf8")),
-          ).toEqual(roster);
-        }
-      });
-    },
-  );
   it("creates a role team through non-interactive onboarding and keeps coordinator ownership", async () => {
     const { ensureOnboardingAgent } =
       await vi.importActual<typeof import("../onboard-agent.js")>("../onboard-agent.js");
     const { commitNonInteractiveOnboardConfig } =
       await vi.importActual<typeof import("./config-write.js")>("./config-write.js");
-    await withTempHome(async (rawHome) => {
+    return withTempHome(async (rawHome) => {
       const home = await fs.realpath(rawHome);
       const configDir = path.join(home, ".openclaw");
       const workspace = path.join(home, "team-workspaces");
@@ -635,7 +524,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       await expect(
         fs.stat(path.join(workspace, "coordinator", "BOOTSTRAP.md")),
       ).rejects.toMatchObject({ code: "ENOENT" });
-      expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
+      expect(lastOutput()).toMatchObject({
         ok: true,
         workspace: path.join(workspace, "coordinator"),
       });

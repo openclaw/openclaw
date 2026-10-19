@@ -24,6 +24,14 @@ describe("runNonInteractiveRemoteSetup", () => {
     },
   };
   const remoteUrl = "wss://gateway.example.test";
+  const tokenRef = { source: "env", provider: "default", id: "OLD_REMOTE_TOKEN" } as const;
+  const tlsFingerprint = "sha256:test-fingerprint";
+  const edgeAuth = { "X-Edge-Auth": "existing-edge-secret" };
+  const remoteConfig = (
+    remote: NonNullable<OpenClawConfig["gateway"]>["remote"],
+  ): OpenClawConfig => ({
+    gateway: { mode: "remote", remote },
+  });
 
   async function setup(opts: Partial<OnboardOptions>, baseConfig: OpenClawConfig) {
     await runNonInteractiveRemoteSetup({
@@ -47,39 +55,29 @@ describe("runNonInteractiveRemoteSetup", () => {
     },
     {
       name: "a token SecretRef on the same endpoint",
-      baseConfig: {
-        gateway: {
-          mode: "remote" as const,
-          remote: {
-            url: remoteUrl,
-            token: { source: "env" as const, provider: "default", id: "OLD_REMOTE_TOKEN" },
-            tlsFingerprint: "sha256:test-fingerprint",
-            edgeAuth: { "X-Edge-Auth": "existing-edge-secret" },
-          },
-        },
-      },
+      baseConfig: remoteConfig({
+        url: remoteUrl,
+        token: tokenRef,
+        tlsFingerprint,
+        edgeAuth,
+      }),
       expectedRemote: {
         url: remoteUrl,
         password: "replacement-password",
-        tlsFingerprint: "sha256:test-fingerprint",
-        edgeAuth: { "X-Edge-Auth": "existing-edge-secret" },
+        tlsFingerprint,
+        edgeAuth,
       },
     },
     {
       name: "credentials and routing from a different endpoint",
-      baseConfig: {
-        gateway: {
-          mode: "remote" as const,
-          remote: {
-            url: "wss://old-gateway.example.test",
-            token: { source: "env" as const, provider: "default", id: "OLD_REMOTE_TOKEN" },
-            password: { source: "env" as const, provider: "default", id: "OLD_REMOTE_PASSWORD" },
-            tlsFingerprint: "sha256:old-fingerprint",
-            sshTarget: "operator@old-gateway.example.test",
-            edgeAuth: { "X-Edge-Auth": "old-edge-secret" },
-          },
-        },
-      },
+      baseConfig: remoteConfig({
+        url: "wss://old-gateway.example.test",
+        token: tokenRef,
+        password: { source: "env" as const, provider: "default", id: "OLD_REMOTE_PASSWORD" },
+        tlsFingerprint: "sha256:old-fingerprint",
+        sshTarget: "operator@old-gateway.example.test",
+        edgeAuth: { "X-Edge-Auth": "old-edge-secret" },
+      }),
       expectedRemote: { url: remoteUrl, password: "replacement-password" },
     },
   ])("stores a remote password while replacing $name", async ({ baseConfig, expectedRemote }) => {
@@ -89,23 +87,11 @@ describe("runNonInteractiveRemoteSetup", () => {
   });
 
   it.each([
-    {
-      name: "token",
-      option: "remoteToken" as const,
-      field: "token" as const,
-      envName: "OPENCLAW_GATEWAY_TOKEN",
-      previousField: "password" as const,
-    },
-    {
-      name: "password",
-      option: "remotePassword" as const,
-      field: "password" as const,
-      envName: "OPENCLAW_GATEWAY_PASSWORD",
-      previousField: "token" as const,
-    },
-  ])(
-    "stores a remote $name as a configured-provider env reference and clears the old credential",
-    async ({ option, field, envName, previousField }) => {
+    ["remoteToken", "token", "OPENCLAW_GATEWAY_TOKEN", "password"],
+    ["remotePassword", "password", "OPENCLAW_GATEWAY_PASSWORD", "token"],
+  ] as const)(
+    "stores %s as a configured-provider env reference and clears the old credential",
+    async (option, field, envName, previousField) => {
       await withEnvAsync({ [envName]: "replacement-credential" }, async () => {
         const remote = await setup(
           { [option]: "replacement-credential", secretInputMode: "ref" },
@@ -114,25 +100,22 @@ describe("runNonInteractiveRemoteSetup", () => {
               defaults: { env: "gatewayenv" },
               providers: { gatewayenv: { source: "env" } },
             },
-            gateway: {
-              mode: "remote",
-              remote: {
-                url: remoteUrl,
-                [previousField]: {
-                  source: "env",
-                  provider: "default",
-                  id: "OLD_GATEWAY_CREDENTIAL",
-                },
-                tlsFingerprint: "sha256:test-fingerprint",
+            ...remoteConfig({
+              url: remoteUrl,
+              [previousField]: {
+                source: "env",
+                provider: "default",
+                id: "OLD_GATEWAY_CREDENTIAL",
               },
-            },
+              tlsFingerprint,
+            }),
           },
         );
 
         expect(remote).toEqual({
           url: remoteUrl,
           [field]: { source: "env", provider: "gatewayenv", id: envName },
-          tlsFingerprint: "sha256:test-fingerprint",
+          tlsFingerprint,
         });
       });
     },
@@ -141,22 +124,17 @@ describe("runNonInteractiveRemoteSetup", () => {
   it("clears a stale password when a token replaces auth for the same endpoint", async () => {
     const remote = await setup(
       { remoteToken: "replacement-token" },
-      {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: remoteUrl,
-            password: "old-password",
-            tlsFingerprint: "sha256:test-fingerprint",
-          },
-        },
-      },
+      remoteConfig({
+        url: remoteUrl,
+        password: "old-password",
+        tlsFingerprint,
+      }),
     );
 
     expect(remote).toEqual({
       url: remoteUrl,
       token: "replacement-token",
-      tlsFingerprint: "sha256:test-fingerprint",
+      tlsFingerprint,
     });
   });
 
@@ -165,11 +143,9 @@ describe("runNonInteractiveRemoteSetup", () => {
       url: remoteUrl,
       token: "existing-token",
       password: { source: "env" as const, provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
-      tlsFingerprint: "sha256:test-fingerprint",
+      tlsFingerprint,
     };
 
-    expect(
-      await setup({ secretInputMode: "ref" }, { gateway: { mode: "remote", remote } }),
-    ).toEqual(remote);
+    expect(await setup({ secretInputMode: "ref" }, remoteConfig(remote))).toEqual(remote);
   });
 });

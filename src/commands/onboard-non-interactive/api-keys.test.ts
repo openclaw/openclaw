@@ -9,23 +9,17 @@ vi.mock("../../agents/model-auth.js", () => ({
   resolveEnvApiKey,
 }));
 
-const authStore = vi.hoisted(
-  () =>
-    ({
-      version: 1,
-      profiles: {} as Record<string, { type: "api_key"; provider: string; key: string }>,
-    }) as const,
-);
-const resolveApiKeyForProfile = vi.hoisted(() =>
-  vi.fn(async (params: { profileId: string }) => {
-    const profile = authStore.profiles[params.profileId];
-    return profile?.type === "api_key" ? { apiKey: profile.key, source: "profile" } : null;
-  }),
-);
+const authStore = vi.hoisted(() => ({
+  version: 1 as const,
+  profiles: {} as Record<string, { type: "api_key"; provider: string; key: string }>,
+}));
 // mock-isolation: Key-precedence tests inspect synthetic accounts without reading host secrets.
 vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStoreAsync: vi.fn(async () => authStore),
-  resolveApiKeyForProfile,
+  resolveApiKeyForProfile: vi.fn(async ({ profileId }: { profileId: string }) => {
+    const profile = authStore.profiles[profileId];
+    return profile?.type === "api_key" ? { apiKey: profile.key, source: "profile" } : null;
+  }),
   resolveAuthProfileOrder: vi.fn(() => Object.keys(authStore.profiles)),
 }));
 
@@ -47,6 +41,16 @@ function resolveKey(options: Partial<Parameters<typeof resolveNonInteractiveApiK
     ...options,
     runtime,
   });
+}
+
+const zaiOptions = { provider: "zai", flagName: "--zai-api-key", envVar: "ZAI_API_KEY" };
+const commandError = "Paste the API key value, not an OpenClaw onboarding command.";
+
+function expectRejected(result: unknown, message: string, envCalls = 0) {
+  expect(result).toBeNull();
+  expect(resolveEnvApiKey).toHaveBeenCalledTimes(envCalls);
+  expect(runtime.error).toHaveBeenCalledWith(message);
+  expect(runtime.exit).toHaveBeenCalledWith(1);
 }
 
 describe("resolveNonInteractiveApiKey", () => {
@@ -116,21 +120,16 @@ describe("resolveNonInteractiveApiKey", () => {
       }
 
       const result = await resolveKey({
-        provider: "zai",
+        ...zaiOptions,
         flagValue: resolvedEnv ? undefined : malformedKey,
-        flagName: "--zai-api-key",
-        envVar: "ZAI_API_KEY",
         secretInputMode,
       });
 
-      expect(result).toBeNull();
-      expect(resolveEnvApiKey).toHaveBeenCalledTimes(resolvedEnv ? 1 : 0);
-      expect(runtime.error).toHaveBeenCalledWith(
-        resolvedEnv
-          ? "Paste the API key value, not an OpenClaw onboarding command. Check ZAI_API_KEY."
-          : "Paste the API key value, not an OpenClaw onboarding command.",
+      expectRejected(
+        result,
+        resolvedEnv ? `${commandError} Check ZAI_API_KEY.` : commandError,
+        resolvedEnv ? 1 : 0,
       );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
     },
   );
 
@@ -143,19 +142,12 @@ describe("resolveNonInteractiveApiKey", () => {
       { ZAI_API_KEY: "openclaw onboard --non-interactive --auth-choice zai-api-key" },
       async () => {
         const result = await resolveKey({
-          provider: "zai",
+          ...zaiOptions,
           flagValue: "zai-flag-key",
-          flagName: "--zai-api-key",
-          envVar: "ZAI_API_KEY",
           secretInputMode: "ref",
         });
 
-        expect(result).toBeNull();
-        expect(resolveEnvApiKey).not.toHaveBeenCalled();
-        expect(runtime.error).toHaveBeenCalledWith(
-          "Paste the API key value, not an OpenClaw onboarding command. Check ZAI_API_KEY.",
-        );
-        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expectRejected(result, `${commandError} Check ZAI_API_KEY.`);
       },
     );
   });
@@ -183,42 +175,30 @@ describe("resolveNonInteractiveApiKey", () => {
     });
   });
 
-  it("returns explicit env fallback keys when provider env discovery misses", async () => {
+  it.each([
+    ["env", { key: "custom-env-key", source: "env", envVarName: "CUSTOM_API_KEY" }],
+    ["profile", { key: "fixture-profile-key", source: "profile" }],
+    ["optional", null],
+  ] as const)("falls back to %s when provider env discovery misses", async (source, expected) => {
+    const key = expected?.key;
     resolveEnvApiKey.mockReturnValue(null);
-    await withEnvAsync({ CUSTOM_API_KEY: "custom-env-key" }, async () => {
-      const result = await resolveKey({ envVarName: "CUSTOM_API_KEY" });
-
-      expect(result).toEqual({
-        key: "custom-env-key",
-        source: "env",
-        envVarName: "CUSTOM_API_KEY",
-      });
+    if (source === "profile" && key) {
+      authStore.profiles["custom-models-custom-local:default"] = createApiKeyCredential(
+        "custom-models-custom-local",
+        key,
+      );
+    }
+    await withEnvAsync({ CUSTOM_API_KEY: source === "env" ? key : undefined }, async () => {
+      expect(
+        await resolveKey({
+          envVarName: "CUSTOM_API_KEY",
+          required: source !== "optional",
+          secretInputMode: source === "env" ? undefined : "ref",
+        }),
+      ).toEqual(expected);
+      expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
     });
-  });
-
-  it("retains existing profile reuse in secret-ref mode without inventing an env reference", async () => {
-    authStore.profiles["custom-models-custom-local:default"] = createApiKeyCredential(
-      "custom-models-custom-local",
-      "fixture-profile-key",
-    );
-    resolveEnvApiKey.mockReturnValue(null);
-
-    const result = await resolveKey({ secretInputMode: "ref" });
-
-    expect(result).toEqual({ key: "fixture-profile-key", source: "profile" });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("keeps intentionally keyless providers optional in secret-ref mode", async () => {
-    resolveEnvApiKey.mockReturnValue(null);
-
-    const result = await resolveKey({ required: false, secretInputMode: "ref" });
-
-    expect(result).toBeNull();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
