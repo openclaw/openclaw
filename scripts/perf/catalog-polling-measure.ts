@@ -372,7 +372,7 @@ async function measureLoads(runs: number) {
                     thinkingLevel: "off",
                   }
                 : kind === 4
-                  ? { id: activityCronJobId, mode: "force" }
+                  ? { id: activityCronJobId, mode: "force", waitTimeoutMs: 30_000 }
                   : {
                       sessionKey: key,
                       message: "Reply with a short synthetic measurement response.",
@@ -380,21 +380,43 @@ async function measureLoads(runs: number) {
                       idempotencyKey: randomUUID(),
                     };
           const result = await activityRpc(method, params);
-          let terminal: Record<string, unknown> | undefined;
+          let completionStatus: string | undefined;
           if (method === "chat.send") {
             if (typeof result?.runId !== "string") {
               throw new Error("chat.send did not return a run ID");
             }
-            terminal = await activityRpc("agent.wait", { runId: result.runId, timeoutMs: 30_000 });
+            const terminal = await activityRpc("agent.wait", {
+              runId: result.runId,
+              timeoutMs: 30_000,
+            });
             if (terminal?.status !== "ok") {
               throw new Error(`Synthetic turn did not complete: ${JSON.stringify(terminal)}`);
             }
+            completionStatus = terminal.status;
+          } else if (method === "cron.run") {
+            if (typeof result?.runId !== "string" || (!result.finished && !result.run)) {
+              throw new Error("Cron run did not finish within the bounded wait");
+            }
+            await page.waitForFunction(
+              (runId) =>
+                Reflect.get(window, "__catalogLoad").events.some(
+                  (event: { event: string; payload: { action?: string; runId?: string } }) =>
+                    event.event === "cron" &&
+                    event.payload.action === "finished" &&
+                    event.payload.runId === runId,
+                ),
+              result.runId,
+              { timeout: 30_000 },
+            );
+            completionStatus = "finished";
           }
           activity.push({
             method,
             atMs,
             elapsedMs: Date.now() - started,
-            result: terminal ? { runId: result?.runId, status: terminal.status } : undefined,
+            result: completionStatus
+              ? { runId: result?.runId, status: completionStatus }
+              : undefined,
           });
         }
         await page.waitForTimeout(Math.max(0, startedAt + durationMs - Date.now()));

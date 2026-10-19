@@ -235,6 +235,8 @@ status/pinning/thinking patch, and a real chat turn. Models default to
 synthetic configuration. Each turn must finish successfully through `agent.wait`.
 Add `--activity-cron --open-details` to include forced runs of a temporary disabled
 cron job while Details is visible; this requires an `agent:<agent-id>:main` session.
+Each cron run must finish within a bounded wait and reach the browser as a matching
+finished event before the driver records success.
 The driver binds the job to that agent and session and removes it afterward;
 cleanup failures remain in the report.
 Use `/dashboard/main` to exercise the same session's board surface.
