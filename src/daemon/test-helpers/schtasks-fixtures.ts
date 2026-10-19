@@ -55,22 +55,19 @@ export function resetSchtasksBaseMocks() {
   killProcessTreeMock.mockReset();
 }
 
+async function writeScript(scriptPath: string, lines: string[]) {
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(scriptPath, ["@echo off", ...lines, ""].join("\r\n"), "utf8");
+}
+
 export async function writeGatewayScript(
   env: Record<string, string>,
   port = Number(env.OPENCLAW_GATEWAY_PORT || "18789"),
 ) {
-  const scriptPath = resolveTaskScriptPath(env);
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(
-    scriptPath,
-    [
-      "@echo off",
-      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
-      "",
-    ].join("\r\n"),
-    "utf8",
-  );
+  await writeScript(resolveTaskScriptPath(env), [
+    `set "OPENCLAW_GATEWAY_PORT=${port}"`,
+    `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
+  ]);
 }
 
 export function resolveStartupFixturePath(env: Record<string, string>, extension = "cmd") {
@@ -88,25 +85,16 @@ export function resolveStartupFixturePath(env: Record<string, string>, extension
 
 export async function writeStartupFallbackEntry(env: Record<string, string>, extension = "cmd") {
   const startupEntryPath = resolveStartupFixturePath(env, extension);
-  await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-  await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
+  await writeScript(startupEntryPath, []);
   return startupEntryPath;
 }
 
 export async function writeNodeScript(env: Record<string, string>, port = "18789") {
-  const scriptPath = resolveTaskScriptPath(env);
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.writeFile(
-    scriptPath,
-    [
-      "@echo off",
-      `set "OPENCLAW_SERVICE_KIND=node"`,
-      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-      `"C:\\bin\\openclaw.cmd" node run --host 127.0.0.1 --port ${port}`,
-      "",
-    ].join("\r\n"),
-    "utf8",
-  );
+  await writeScript(resolveTaskScriptPath(env), [
+    `set "OPENCLAW_SERVICE_KIND=node"`,
+    `set "OPENCLAW_GATEWAY_PORT=${port}"`,
+    `"C:\\bin\\openclaw.cmd" node run --host 127.0.0.1 --port ${port}`,
+  ]);
 }
 
 export type SpawnSyncResult = {
@@ -168,8 +156,8 @@ export function runningTaskSnapshot(): TaskSnapshot {
 
 /** Native registration/process facts remain stable across repeated inspection reads. */
 export function createSchtasksNativeFixture(getEnv: () => Record<string, string>) {
-  const queuedProbes: TaskProbeResult[] = [];
-  let currentProbe = { status: 0, stdout: JSON.stringify(notYetRunTaskSnapshot()) };
+  const queuedProbes: string[] = [];
+  let currentProbe = JSON.stringify(notYetRunTaskSnapshot());
   const advance = () => {
     if (schtasksCalls.some(([action]) => action === "/Run")) {
       currentProbe = queuedProbes.shift() ?? currentProbe;
@@ -180,7 +168,7 @@ export function createSchtasksNativeFixture(getEnv: () => Record<string, string>
     queue: (...responses: NativeResponse[]) => {
       for (const response of responses) {
         if ("state" in response) {
-          const probe = { status: 0, stdout: JSON.stringify(response) };
+          const probe = JSON.stringify(response);
           if (schtasksResponses.length === 0) {
             currentProbe = probe;
           } else {
@@ -195,11 +183,10 @@ export function createSchtasksNativeFixture(getEnv: () => Record<string, string>
       if (schtasksRegistration.response?.code !== 0) {
         return { status: 1, stdout: "-2147024894" };
       }
-      const snapshot = JSON.parse(currentProbe.stdout);
       return {
-        ...currentProbe,
+        status: 0,
         stdout: JSON.stringify({
-          ...snapshot,
+          ...JSON.parse(currentProbe),
           enabled: !schtasksRegistration.response.stdout.includes("<Enabled>false</Enabled>"),
           taskPath: getEnv().OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway",
           actions: [
@@ -215,14 +202,14 @@ export function createSchtasksNativeFixture(getEnv: () => Record<string, string>
           "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>C:\\fixture\\gateway.cmd</Command></Exec></Actions></Task>",
         stderr: "",
       };
-      currentProbe = { status: 0, stdout: JSON.stringify(notYetRunTaskSnapshot()) };
+      currentProbe = JSON.stringify(notYetRunTaskSnapshot());
       queuedProbes.length = 0;
       schtasksRegistration.onCommand = (argv, response) => {
         if (response.code === 0 && argv[0] === "/Run") {
           advance();
         }
         if (response.code === 0 && argv[0] === "/End") {
-          currentProbe = { status: 0, stdout: JSON.stringify(cleanExitTaskSnapshot()) };
+          currentProbe = JSON.stringify(cleanExitTaskSnapshot());
         }
       };
       // Keep native absolute-path admission while storing launcher bytes in the host temp directory.
