@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -15,15 +14,11 @@ import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-w
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import * as registry from "./template-registry-async.js";
 import type { WorktreeTemplateRecord } from "./template-registry.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useWorktreeStateRoots();
 let env: NodeJS.ProcessEnv;
 let template: WorktreeTemplateRecord & { status: "preparing" };
 const guard = () => {};

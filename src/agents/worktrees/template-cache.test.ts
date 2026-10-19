@@ -1,32 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
-import * as workerStore from "../../state/openclaw-state-worker-store.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import * as allocation from "./allocation.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import { collectWorktreeTemplates, prepareWorktreeTemplate } from "./template-cache.js";
 import * as templateRegistry from "./template-registry-async.js";
-import { listTemplatesAsync } from "./template-registry-async.js";
+import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
-const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const directories = useWorktreeStateRoots();
 const options = { commitGuard: () => {} };
 let env: NodeJS.ProcessEnv;
 let params: Parameters<typeof prepareWorktreeTemplate>[0];
-
 const prepare = (overrides: Partial<typeof params> = {}) =>
   prepareWorktreeTemplate({ ...params, ...overrides });
 const collect = (onError?: Parameters<typeof collectWorktreeTemplates>[3]) =>
   collectWorktreeTemplates(env, 101, options, onError);
-const list = () => listTemplatesAsync(env);
+const list = () => templateRegistry.listTemplatesAsync(env);
 const source = (record: { path: string }) => fs.readFile(path.join(record.path, "source"), "utf8");
 async function idle() {
   const record = await prepare();
@@ -79,10 +70,8 @@ beforeEach(() => {
     backend: "btrfs",
     requireSpace: async () => {},
     validate: async (record) => (await source(record)) === "source",
-    prepare: async (record) => {
-      await fs.mkdir(record.path);
-      await fs.writeFile(path.join(record.path, "source"), "source");
-    },
+    prepare: (record) =>
+      fs.mkdir(record.path).then(() => fs.writeFile(path.join(record.path, "source"), "source")),
   };
 });
 
@@ -102,12 +91,15 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   expect(left).toMatchObject({ id: right?.id, status: "ready" });
   expect(right).toMatchObject({ status: "ready" });
   expect(build).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
-  expect(validate).toHaveBeenCalledTimes(state === "idle" ? 1 : 0);
   expect(mutate).toHaveBeenCalledTimes(1);
-
-  if (!left || !right) {
-    throw new Error("Both callers must acquire the prepared template");
-  }
+  assert(left && right, "Both callers must acquire the prepared template");
+  const warm = await allocation.withWorktreeMutationLease(
+    { env, ...options, id: `template:${params.cacheKey}` },
+    () => prepare({ validate, options: { ...options, waitBudget: { remainingMs: 0 } } }),
+  );
+  expect(warm).toMatchObject({ id: left.id, path: left.path, status: "ready" });
+  expect(validate).toHaveBeenCalledTimes(state === "idle" ? 1 : 0);
+  await warm?.release();
   await collect();
   expect(await source(left)).toBe("source");
   expect(await prepare({ contentKey: "commit-2" })).toBeUndefined();
@@ -142,7 +134,6 @@ it.each([false, true])("settles refresh before publication (fail=%s)", async (fa
     status: "preparing",
     contentKey: params.contentKey,
   });
-  // Another request cannot consume the old tree while the new one is being written.
   const concurrent = prepare(next);
   const rejected = fail ? expect(refreshing).rejects.toBe(failure) : undefined;
   finish();
@@ -211,31 +202,6 @@ it("keeps recovery guidance when the preparation wait budget expires", async () 
   }
 });
 
-it("reuses retained generations, revalidating after readers settle", async () => {
-  const first = await prepare();
-  expect(first).toBeDefined();
-  const unavailableValidation = async () => {
-    throw new Error("validation must not hold up a concurrent clone");
-  };
-  const second = await allocation.withWorktreeMutationLease(
-    { env, ...options, id: `template:${params.cacheKey}` },
-    async () =>
-      prepare({
-        validate: unavailableValidation,
-        options: { ...options, waitBudget: { remainingMs: 0 } },
-      }),
-  );
-  expect(second?.id).toBe(first?.id);
-  expect(await source(second!)).toBe("source");
-  await first?.release();
-  await second?.release();
-  await fs.writeFile(path.join(first!.path, "source"), "changed");
-  const next = await prepare();
-  expect(next?.id).not.toBe(first?.id);
-  expect(await source(next!)).toBe("source");
-  await next?.release();
-});
-
 it.each([
   { phase: "build", uncertain: false },
   { phase: "build", uncertain: true },
@@ -243,28 +209,18 @@ it.each([
   { phase: "retire", uncertain: true },
 ])("retains $phase custody ($uncertain)", async ({ phase, uncertain }) => {
   const prepared = phase === "build" ? undefined : await idle();
-  const failure = uncertain
-    ? new CommandProcessCleanupError()
-    : new Error("native failure settled");
+  const failure = uncertain ? new CommandProcessCleanupError() : new Error("settled");
   if (phase === "retire") {
     vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
     const onError = vi.fn();
     await collect(onError);
     expect(onError).toHaveBeenCalledWith(failure, prepared?.id);
   } else {
-    const fail = async () => {
-      throw failure;
-    };
-    const overrides: Partial<typeof params> =
-      phase === "build"
-        ? {
-            prepare: async (...args) => {
-              await params.prepare(...args);
-              throw failure;
-            },
-          }
-        : { validate: fail };
-    await expect(prepare(overrides)).rejects.toBe(failure);
+    const fail = () => Promise.reject(failure);
+    const build: typeof params.prepare = (...args) => params.prepare(...args).then(fail);
+    await expect(prepare(phase === "build" ? { prepare: build } : { validate: fail })).rejects.toBe(
+      failure,
+    );
   }
   const [record] = await list();
   expect(record?.status).toBe("preparing");
@@ -303,9 +259,8 @@ it.each(["reservation", "lease"])("releases canceled %s handoffs", async (bounda
             return result;
           }),
         );
-  await expect(
-    prepare({ options: { ...options, signal: controller.signal } }),
-  ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+  const pending = prepare({ options: { ...options, signal: controller.signal } });
+  await expect(pending).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
   handoff.mockRestore();
   await collect();
   expect(await list()).toEqual([]);
@@ -313,24 +268,18 @@ it.each(["reservation", "lease"])("releases canceled %s handoffs", async (bounda
 
 it("propagates unknown settlement after registry delivery", async () => {
   const prepared = await idle();
-  const execute = workerStore.runOpenClawStateWorkerOperation;
   const failure = new Error("native cleanup receipt missing");
-  vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
-    (context, operation, operationOptions) => {
-      const createAdmission = operationOptions?.createAdmission;
-      return execute(context, operation, {
-        ...operationOptions,
-        createAdmission: createAdmission
-          ? (retained) =>
-              createAdmission({
-                ...retained,
-                settled: retained.settled.then(() => ({
-                  kind: "unknown" as const,
-                  error: failure,
-                })),
-              })
-          : undefined,
-      });
+  const unknown = { kind: "unknown" as const, error: failure };
+  interceptWorktreeWorkerOperation(
+    (execute) => execute,
+    (input) => {
+      const admit = input?.createAdmission;
+      assert(admit);
+      return {
+        ...input,
+        createAdmission: (retained) =>
+          admit({ ...retained, settled: retained.settled.then(() => unknown) }),
+      };
     },
   );
   await expect(
