@@ -337,10 +337,9 @@ export function createConfigPage(
     }
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = null;
-      const target = [...(host().querySelectorAll<HTMLElement>("[id]") ?? [])].find(
-        (element) => element.id === targetBlockId,
-      );
-      if (!target) {
+      // Settings routes share one live page; keep the document's ID lookup scoped to it.
+      const target = targetBlockId ? host().ownerDocument.getElementById(targetBlockId) : null;
+      if (!target || !host().contains(target)) {
         return;
       }
       target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
@@ -897,7 +896,6 @@ export function createConfigPage(
       customThemeImportBusy: customThemeImportOwner.snapshot.busy,
       customThemeImportMessage: customThemeImportOwner.snapshot.message,
       customThemeImportExpanded: customThemeImportOwner.snapshot.expanded,
-      customThemeImportFocusToken: customThemeImportOwner.snapshot.focusToken,
       onCustomThemeImportUrlChange: (next) => customThemeImportOwner.setUrl(next),
       onImportCustomTheme: () => void importCustomTheme(),
       onClearCustomTheme: () => clearCustomTheme(),

@@ -230,6 +230,10 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
     this.#owner.focusTriggerWithoutOpening(target, options);
   }
 
+  containsRichContent(target: Node): boolean {
+    return this.#contentSlot.assignedNodes({ flatten: true }).some((node) => node.contains(target));
+  }
+
   #scheduleUpdate() {
     this.#pendingUpdate ??= Promise.resolve().then(() => {
       this.#pendingUpdate = undefined;
