@@ -56,14 +56,16 @@ function statuses(items: unknown[] = [], commit = sha) {
   return json({ sha: commit, total_count: items.length, statuses: items });
 }
 function publicFetch(
-  checks = runs(),
+  checks: Response | (() => Promise<Response>) = runs(),
   legacy = statuses(),
   item = pull(),
-  fetchMock = vi.fn<typeof fetch>(),
 ) {
+  const fetchMock = vi.fn<typeof fetch>();
   const pages = [json({ private: false, visibility: "public" }), json(item), checks, legacy];
   for (const response of pages) {
-    fetchMock.mockResolvedValueOnce(response);
+    fetchMock.mockImplementationOnce(async () =>
+      typeof response === "function" ? response() : response,
+    );
   }
   return fetchMock;
 }
@@ -195,7 +197,6 @@ describe("GitHub PR checks through the document loader", () => {
         truncated: true,
         items: [{ state: legacy, detail: label }],
       });
-      expect(detail.checks?.items).toHaveLength(1);
       expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
     },
   );
@@ -278,27 +279,16 @@ describe("GitHub PR checks through the document loader", () => {
         runs([run({ html_url: url })]),
         statuses([commitStatus({ target_url: url })]),
       );
-      expect(result.checks?.items).toHaveLength(2);
-      expect(result.checks?.items.every((item) => item.url === undefined)).toBe(true);
+      expect(result.checks?.items).toMatchObject([{ url: undefined }, { url: undefined }]);
     },
   );
 
   it("does not let a late old-head read overwrite the refreshed document cache", async () => {
     const deferred = createDeferred<Response>();
     const requested = createDeferred<void>();
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (url) => {
-      const path = new URL(url instanceof Request ? url.url : url).pathname;
-      if (path.endsWith("/pulls/1")) {
-        return json(pull());
-      }
-      if (path.endsWith("/check-runs")) {
-        requested.resolve();
-        return deferred.promise;
-      }
-      if (path.endsWith("/status")) {
-        return statuses();
-      }
-      return json({ private: false, visibility: "public" });
+    const fetchMock = publicFetch(() => {
+      requested.resolve();
+      return deferred.promise;
     });
     const read = reader(fetchMock);
     const older = read();
@@ -323,7 +313,7 @@ describe("GitHub PR checks through the document loader", () => {
     const first = await read();
     now.mockReturnValue(30_999);
     expect(await read()).toBe(first);
-    publicFetch(runs([run()]), statuses(), pull(), fetchMock);
+    fetchMock.mockImplementation(publicFetch(runs([run()])));
     now.mockReturnValue(31_001);
     expect((await read()).checks?.state).toBe("success");
     expect(fetchMock).toHaveBeenCalledTimes(8);
