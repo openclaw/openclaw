@@ -82,15 +82,9 @@ function request<T = Record<string, unknown>>(method: string, params?: Record<st
 function history<T = Record<string, unknown>>(params: Record<string, unknown>) {
   return request<T>("chat.history", { sessionKey: "agent:main:main", ...params });
 }
-async function rejectHistory(params: Record<string, unknown>, message: string) {
-  await expect(history(params)).rejects.toThrow(message);
-  expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
-}
 
 // The prepared resolver owns readiness; the stub retains its host binding.
-const projection = {
-  ensureMaterialized: async () => {},
-} as SessionRowProjection;
+const projection = { ensureMaterialized: async () => {} } as SessionRowProjection;
 let unbindProjection: () => void;
 beforeEach(() => {
   unbindProjection = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
@@ -127,22 +121,25 @@ it("keeps a replacement host bound when the earlier host stops", async () => {
   );
 });
 
-it("resolves sessions through the gateway session resolver", async () => {
-  runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
-    ok: true,
-    key: "agent:main:main",
-  });
-
-  const result = await request<{ ok: true; key: string }>("sessions.resolve", {
-    sessionId: "sess-main",
-    includeGlobal: true,
-  });
-
-  expect(result).toEqual({ ok: true, key: "agent:main:main" });
+const resolved = { ok: true, key: "agent:main:main" };
+const candidates = [
+  { key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001", displayName: "One" },
+  { key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002", displayName: "Two" },
+];
+it.each([
+  { params: { sessionId: "sess-main", includeGlobal: true }, reply: resolved, expected: resolved },
+  {
+    params: { shortId: "12345678" },
+    reply: { ok: true, ambiguous: true, candidates },
+    expected: { ok: false, candidates },
+  },
+])("resolves sessions and preserves ambiguity: $params", async ({ params, reply, expected }) => {
+  runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce(reply);
+  await expect(request("sessions.resolve", params)).resolves.toEqual(expected);
   expect(runtime.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
     projection,
     client: null,
-    p: { sessionId: "sess-main", includeGlobal: true },
+    p: params,
   });
 });
 
@@ -153,10 +150,7 @@ it("rejects a host replacement while session resolution prepares rows", async ()
     preparing.resolve();
     await release.promise;
   });
-  runtime.resolveSessionKeyFromResolveParams.mockReturnValue({
-    ok: true,
-    key: "agent:main:main",
-  });
+  runtime.resolveSessionKeyFromResolveParams.mockReturnValue(resolved);
   const pending = request("sessions.resolve", { sessionId: "sess-main" });
   const settled = Promise.allSettled([pending]);
   let unbindReplacement: (() => void) | undefined;
@@ -172,23 +166,6 @@ it("rejects a host replacement while session resolution prepares rows", async ()
     prepare.mockRestore();
     unbindReplacement?.();
   }
-});
-
-it("preserves short-id ambiguity as a successful embedded response", async () => {
-  const candidates = [
-    { key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001", displayName: "One" },
-    { key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002", displayName: "Two" },
-  ];
-  runtime.resolveSessionKeyFromResolveParams.mockReturnValueOnce({
-    ok: true,
-    ambiguous: true,
-    candidates,
-  });
-
-  await expect(request("sessions.resolve", { shortId: "12345678" })).resolves.toEqual({
-    ok: false,
-    candidates,
-  });
 });
 
 it("throws resolver errors for unresolved sessions", async () => {
@@ -219,16 +196,9 @@ it.each([undefined, "/stores/{agentId}.sqlite"])(
       limit: 3,
     });
 
-    expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(1, {
-      cfg,
-      agentId: "main",
-      sessionKey: "main",
-    });
-    expect(runtime.resolveStoredSessionKeyForAgentStore).toHaveBeenNthCalledWith(2, {
-      cfg,
-      agentId: "main",
-      sessionKey: "agent:main:other",
-    });
+    expect(runtime.resolveStoredSessionKeyForAgentStore.mock.calls).toEqual(
+      ["main", "agent:main:other"].map((sessionKey) => [{ cfg, agentId: "main", sessionKey }]),
+    );
     expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
       agentId: "main",
       query: "needle",
@@ -299,19 +269,6 @@ it("rejects an explicit agent that conflicts with an unscoped store owner", asyn
   expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
 });
 
-it("reads embedded history through the canonical Gateway history owner", async () => {
-  const messages = [{ role: "assistant", content: "visible past a silent tail" }];
-  runtime.readChatHistoryPage.mockResolvedValueOnce({
-    messages,
-    pagination: { offset: 0, totalMessages: 81, rawPageMessages: 81 },
-  });
-
-  const result = await history<{ messages: unknown[] }>({ limit: 1 });
-
-  expect(result.messages).toEqual(messages);
-  expect(result).not.toHaveProperty("offset");
-});
-
 it.each([
   { sessionKey: "global", agentId: "work" },
   { sessionKey: "agent:work:main", agentId: undefined },
@@ -330,25 +287,28 @@ it.each([
   });
 });
 
-it("preserves bounded offset metadata from the shared visible-history scanner", async () => {
-  const messages = [{ role: "assistant", content: "older visible", __openclaw: { seq: 2 } }];
+it.each([undefined, 1])("preserves visible history and offset metadata: %s", async (offset) => {
+  const messages = [
+    { role: "assistant", content: "visible", ...(offset ? { __openclaw: { seq: 2 } } : {}) },
+  ];
   runtime.readChatHistoryPage.mockResolvedValueOnce({
     messages,
-    pagination: { offset: 1, totalMessages: 82, rawPageMessages: 80 },
+    pagination: {
+      offset: offset ?? 0,
+      totalMessages: offset ? 82 : 81,
+      rawPageMessages: offset ? 80 : 81,
+    },
   });
-
-  const result = await history({ limit: 1, offset: 1 });
-
-  expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
-    expect.objectContaining({ offset: 1, max: 1 }),
-  );
-  expect(result).toMatchObject({
-    messages,
-    offset: 1,
-    nextOffset: 81,
-    hasMore: true,
-    totalMessages: 82,
-  });
+  const result = await history({ limit: 1, offset });
+  expect(result).toHaveProperty("messages", messages);
+  if (offset === undefined) {
+    expect(result).not.toHaveProperty("offset");
+  } else {
+    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
+      expect.objectContaining({ offset, max: 1 }),
+    );
+    expect(result).toMatchObject({ offset, nextOffset: 81, hasMore: true, totalMessages: 82 });
+  }
 });
 
 it.each([undefined, "205000"])(
@@ -430,23 +390,21 @@ it("continues a retained anchored page through its original transcript source", 
   );
 });
 
-it.each([
-  { cursor: "delta:current", message: "delta cursors require a running gateway" },
-  { cursor: "history-page:invalid", message: "invalid history page cursor" },
-])("rejects cursor $cursor before reading", async ({ cursor, message }) => {
-  await rejectHistory({ cursor }, message);
-});
-
 it("normalizes string history limits before calling the shared owner", async () => {
   await history({ limit: "2" });
 
   expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(expect.objectContaining({ max: 2 }));
 });
 
-it.each(["2.5", -1])("rejects malformed history limit %j before reading", async (limit) => {
-  await rejectHistory({ limit }, "limit must be a positive integer");
-});
-
-it.each([-1, 1.5, "1abc"])("rejects history offset %j before reading", async (offset) => {
-  await rejectHistory({ offset }, "offset must be a non-negative integer");
+it.each([
+  ["cursor", "delta:current", "delta cursors require a running gateway"],
+  ["cursor", "history-page:invalid", "invalid history page cursor"],
+  ["limit", "2.5", "limit must be a positive integer"],
+  ["limit", -1, "limit must be a positive integer"],
+  ["offset", -1, "offset must be a non-negative integer"],
+  ["offset", 1.5, "offset must be a non-negative integer"],
+  ["offset", "1abc", "offset must be a non-negative integer"],
+] as const)("rejects history %s=%s before reading", async (field, value, message) => {
+  await expect(history({ [field]: value })).rejects.toThrow(message);
+  expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
 });

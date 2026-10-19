@@ -17,39 +17,30 @@ import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createCatalogCodeModeHarness,
+  expectCompleted,
   resetCodeModeTestState,
   waitUntilCompleted,
 } from "../code-mode.test-support.js";
 import { createCronTool } from "./cron-tool.js";
 
-const job: CronJob = {
-  id: "invoice-check",
+const createJob = {
   name: "Check unpaid invoices",
+  schedule: { kind: "every" as const, everyMs: 60_000 },
+  sessionTarget: "main" as const,
+  wakeMode: "next-heartbeat" as const,
+  payload: { kind: "systemEvent" as const, text: "Check unpaid invoices" },
+};
+const job: CronJob = {
+  ...createJob,
+  id: "invoice-check",
   enabled: true,
   createdAtMs: 1_800_000_000_000,
   updatedAtMs: 1_800_000_000_000,
-  schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "main",
-  wakeMode: "next-heartbeat",
-  payload: { kind: "systemEvent", text: "Check unpaid invoices" },
   state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
 };
-const page = {
-  total: 1,
-  offset: 0,
-  limit: 50,
-  hasMore: false,
-  nextOffset: null,
-};
-const deliveryPreview = { label: "Current conversation", detail: "No external delivery" };
-const createJob = {
-  name: job.name,
-  schedule: job.schedule,
-  sessionTarget: job.sessionTarget,
-  wakeMode: job.wakeMode,
-  payload: job.payload,
-};
-function createCronService(storePath: string) {
+const page = { total: 1, offset: 0, limit: 50, hasMore: false, nextOffset: null };
+async function createCronService() {
+  const { storePath } = await makeStorePath();
   return new CronService({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => Date.now(),
@@ -74,24 +65,6 @@ function codeMode(gatewayCall: ReturnType<typeof vi.fn>) {
       waitTool: expectDefined(h.tools[1], "Code Mode wait"),
     });
 }
-function legacyGateway(method: string, field: string, reply: unknown) {
-  const gatewayCall = vi
-    .fn()
-    .mockRejectedValueOnce(
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: `invalid ${method} params: unexpected property '${field}'`,
-      }),
-    )
-    .mockResolvedValueOnce(reply);
-  return { gatewayCall, tool: createCronTool(undefined, { callGatewayTool: gatewayCall }) };
-}
-function expectValid(tool: ReturnType<typeof createCronTool>, details: unknown) {
-  expect(
-    Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), details),
-  ).toEqual([]);
-}
-
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-code-mode-output-" });
 
 beforeEach(() => {
@@ -101,8 +74,7 @@ beforeEach(() => {
 
 it("accepts removal with pending session cleanup without retrying", async () => {
   onTestFinished(resetCodeModeTestState);
-  const { storePath } = await makeStorePath();
-  const cron = createCronService(storePath);
+  const cron = await createCronService();
   const input = {
     ...createJob,
     id: "code-mode-cleanup-current",
@@ -122,14 +94,11 @@ it("accepts removal with pending session cleanup without retrying", async () => 
     expect(gatewayCall).toHaveBeenCalledOnce();
     expect(gatewayCall.mock.calls[0]?.[0]).toBe("cron.remove");
     expect(cron.getJob(activeJob.id)).toBeUndefined();
-    expect(result, JSON.stringify(result)).toMatchObject({
-      status: "completed",
-      value: {
-        ok: true,
-        removed: true,
-        activeRunCancellationRequested: true,
-        sessionCleanup: "pending",
-      },
+    expectCompleted(result, {
+      ok: true,
+      removed: true,
+      activeRunCancellationRequested: true,
+      sessionCleanup: "pending",
     });
   } finally {
     clearCronJobActive(activeJob.id, marker);
@@ -139,41 +108,51 @@ it("accepts removal with pending session cleanup without retrying", async () => 
   }
 });
 
-it("keeps older full inventories valid after compact fallback", async () => {
-  const { tool, gatewayCall } = legacyGateway("cron.list", "compact", {
-    ...page,
-    snapshotRevision: "old-inventory",
-    jobs: [{ ...job, effectiveAgentId: "main" }],
-    deliveryPreviews: { [job.id]: deliveryPreview },
+it.each([
+  [
+    "list",
+    "compact",
+    {
+      ...page,
+      snapshotRevision: "old-inventory",
+      jobs: [{ ...job, effectiveAgentId: "main" }],
+      deliveryPreviews: {
+        [job.id]: { label: "Current conversation", detail: "No external delivery" },
+      },
+    },
+  ],
+  ["run", "waitTimeoutMs", { ok: true, enqueued: true, runId: "manual:job:1" }],
+] as const)("validates %s output after older Gateway rejects %s", async (action, field, reply) => {
+  const gatewayCall = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: `invalid cron.${action} params: unexpected property '${field}'`,
+      }),
+    )
+    .mockResolvedValueOnce(reply);
+  const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+  const result = await tool.execute("fallback", {
+    action,
+    ...(action === "run" ? { jobId: "job", runMode: "force" } : {}),
   });
-  const result = await tool.execute("call-full", { action: "list" });
   expect(gatewayCall).toHaveBeenCalledTimes(2);
-  expectValid(tool, result.details);
-});
-
-it("still runs on a shipped Gateway that rejects the run wait", async () => {
-  const { tool, gatewayCall } = legacyGateway("cron.run", "waitTimeoutMs", {
-    ok: true,
-    enqueued: true,
-    runId: "manual:job:1",
-  });
-  const result = await tool.execute("call-run", {
-    action: "run",
-    jobId: "job",
-    runMode: "force",
-  });
-  expect(gatewayCall.mock.calls.map((call) => call[2])).toEqual([
-    { id: "job", mode: "force", waitTimeoutMs: 60_000 },
-    { id: "job", mode: "force" },
-  ]);
-  expect(result.details).toMatchObject({ runId: "manual:job:1", note: expect.any(String) });
-  expectValid(tool, result.details);
+  if (action === "run") {
+    expect(gatewayCall.mock.calls.map((call) => call[2])).toEqual([
+      { id: "job", mode: "force", waitTimeoutMs: 60_000 },
+      { id: "job", mode: "force" },
+    ]);
+    expect(result.details).toMatchObject({ runId: "manual:job:1", note: expect.any(String) });
+  }
+  expect(
+    Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
+  ).toEqual([]);
 });
 
 it("composes action results through generated declarations and JavaScript", async () => {
   onTestFinished(resetCodeModeTestState);
-  const { storePath } = await makeStorePath();
-  const cron = createCronService(storePath);
+  const cron = await createCronService();
   onTestFinished(() => cron.stop());
   const compactJob = {
     ...job,
@@ -186,12 +165,11 @@ it("composes action results through generated declarations and JavaScript", asyn
   };
   const source = {
     ...page,
-    jobs: [freezeJsonSnapshot(structuredClone(compactJob))],
     snapshotRevision: "inventory-revision",
+    jobs: [freezeJsonSnapshot(structuredClone(compactJob))],
   };
-  const list = { ...source, jobs: projectCronListJobs(cron, source, true) };
   const replies: Record<string, unknown> = {
-    "cron.list": list,
+    "cron.list": { ...source, jobs: projectCronListJobs(cron, source, true) },
     "cron.status": { enabled: true, jobs: 1 },
     "cron.get": job,
     "cron.runs": {
@@ -268,17 +246,14 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
 `;
   expect(typeCheckSources({ "/automations-consumer.ts": declarationSource })).toEqual([]);
   const composed = await run(`${composition}\nreturn await consume();`);
-  expect(composed, JSON.stringify(composed)).toMatchObject({
-    status: "completed",
-    value: {
-      names: [job.name],
-      next: null,
-      enabled: true,
-      jobCount: 1,
-      name: job.name,
-      scheduleErrorCount: 3,
-      summaries: ["Three unpaid invoices"],
-    },
+  expectCompleted(composed, {
+    names: [job.name],
+    next: null,
+    enabled: true,
+    jobCount: 1,
+    name: job.name,
+    scheduleErrorCount: 3,
+    summaries: ["Three unpaid invoices"],
   });
   expect(gatewayCall).toHaveBeenCalledTimes(4);
 });
