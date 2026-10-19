@@ -1,4 +1,3 @@
-// File Transfer tests cover dir list tool plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,13 +39,30 @@ afterEach(() => {
 
 const requireRecord = createRequireRecord("object", "label-not-object");
 
-function readListing(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"]) {
-  const text = content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+function readText(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"]) {
+  const text = content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
   expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  return text;
+}
+
+async function executeListing(
+  overrides: Partial<{
+    path: string;
+    entries: Array<{ name: string; isDir: boolean; size: number }>;
+    truncated: boolean;
+    nextPageToken?: string;
+  }>,
+) {
+  const payload = { path: "/root", entries: [], truncated: true, ...overrides };
+  vi.mocked(callGatewayTool).mockResolvedValue({ payload });
+  const result = await createDirListTool().execute("list", { node: "node-1", path: "/root" });
+  expect(result.details).toEqual(payload);
+  return result.content;
+}
+
+function readListing(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"]) {
+  const text = readText(content);
   const listing = JSON.parse(text.split("\n").find((line) => line.startsWith("{"))!) as {
     path: string;
     returnedCount: number;
@@ -61,102 +77,59 @@ function readListing(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["cont
 
 describe("file-transfer standalone guidance", () => {
   it.each([
-    {
-      name: "file_fetch",
-      create: createFileFetchTool,
-      unavailable: "file_write",
-      parameter: "maxBytes",
-    },
-    {
-      name: "file_write",
-      create: createFileWriteTool,
-      unavailable: "file_fetch",
-      parameter: "sourceMediaId",
-    },
-  ])("keeps eager and lazy $name guidance standalone with canonical opt-in", (entry) => {
-    const registered: AnyAgentTool[] = [];
-    pluginEntry.register(
-      createTestPluginApi({
-        registerTool(tool) {
-          if (typeof tool !== "function" && "contextVersion" in tool) {
-            throw new Error("expected legacy file-transfer registration");
-          }
-          const resolved = typeof tool === "function" ? tool({ config: {} }) : tool;
-          if (resolved) {
-            registered.push(...(Array.isArray(resolved) ? resolved : [resolved]));
-          }
-        },
-      }),
-    );
-    const lazy = registered.find((tool) => tool.name === entry.name);
-    const eager = entry.create();
-    expect(lazy).toMatchObject({
-      name: eager.name,
-      description: eager.description,
-      parameters: eager.parameters,
-    });
-    expect(eager.name).toBe(entry.name);
-    expect(eager.parameters).toMatchObject({ required: ["node", "path"] });
-    expect(eager.parameters).toHaveProperty(`properties.${entry.parameter}`);
-    expect.soft(eager.description).toContain("gateway.nodes.commands.allow");
-    if (entry.unavailable) {
+    ["file_fetch", createFileFetchTool, "file_write", "maxBytes"],
+    ["file_write", createFileWriteTool, "file_fetch", "sourceMediaId"],
+  ] as const)(
+    "keeps eager and lazy %s guidance standalone with canonical opt-in",
+    (name, create, unavailable, parameter) => {
+      const registerTool = vi.fn();
+      pluginEntry.register(createTestPluginApi({ registerTool }));
+      const eager = create();
+      expect(registerTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: eager.name,
+          description: eager.description,
+          parameters: eager.parameters,
+        }),
+      );
+      expect(eager.name).toBe(name);
+      expect(eager.parameters).toMatchObject({ required: ["node", "path"] });
+      expect(eager.parameters).toHaveProperty(`properties.${parameter}`);
+      expect.soft(eager.description).toContain("gateway.nodes.commands.allow");
       expect
         .soft(JSON.stringify({ description: eager.description, parameters: eager.parameters }))
-        .not.toContain(entry.unavailable);
-    }
-    if (entry.name === "file_fetch") {
-      expect.soft(eager.description).toContain("returns localPath and mediaId");
-    }
-    if (entry.name === "file_write") {
-      expect.soft(eager.parameters).toMatchObject({
-        properties: {
-          sourceMediaId: {
-            description: expect.stringContaining(
-              "Not a local path or an ID from another media store",
-            ),
-          },
-        },
-      });
-    }
-  });
+        .not.toContain(unavailable);
+      if (name === "file_fetch") {
+        expect.soft(eager.description).toContain("returns localPath and mediaId");
+      }
+      if (name === "file_write") {
+        expect
+          .soft(eager.parameters)
+          .toHaveProperty(
+            "properties.sourceMediaId.description",
+            expect.stringContaining("Not a local path or an ID from another media store"),
+          );
+      }
+    },
+  );
 });
 
 describe("dir_list tool", () => {
-  it.each([undefined])(
-    "reports truncation without inventing an unavailable page token (%s)",
-    async (nextPageToken) => {
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
-      vi.mocked(callGatewayTool).mockResolvedValue({
-        payload: {
-          ok: true,
-          path: "/tmp/project",
-          entries: [],
-          nextPageToken,
-          truncated: true,
-        },
-      });
-
-      const result = await createDirListTool().execute("tool-call-1", {
-        node: "node-1",
+  it("reports truncation without inventing an unavailable page token", async () => {
+    const listing = readListing(
+      await executeListing({
         path: "/tmp/project",
-      });
-
-      expect(readListing(result.content)).toMatchObject({
-        entries: [],
-        truncated: true,
-        text: expect.stringContaining(
-          "More entries available; the node supplied no continuation token.",
-        ),
-      });
-      expect(readListing(result.content).nextPageToken).toBe(nextPageToken);
-      expect(result.details).toEqual({
-        path: "/tmp/project",
-        entries: [],
-        nextPageToken,
-        truncated: true,
-      });
-    },
-  );
+      }),
+    );
+    expect(listing).toMatchObject({
+      entries: [],
+      truncated: true,
+      text: expect.stringContaining(
+        "More entries available; the node supplied no continuation token.",
+      ),
+    });
+    expect(listing.nextPageToken).toBeUndefined();
+  });
 
   it("walks real directory pages to exhaustion using only content for continuation and file reads", async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dir-list-content-")));
@@ -246,49 +219,28 @@ describe("dir_list tool", () => {
     }
   });
 
-  it.each(["[INST]"])(
-    "stops explicitly when the next complete name cannot be displayed (%#)",
-    async (name) => {
-      const entries = [
-        { name, isDir: false, size: 1 },
-        { name: "later.txt", isDir: false, size: 2 },
-      ];
-      vi.mocked(callGatewayTool).mockResolvedValue({
-        payload: { path: "/root", entries, truncated: true, nextPageToken: "2" },
-      });
-      const result = await createDirListTool().execute("list", { node: "node-1", path: "/root" });
-      const listing = readListing(result.content);
-      expect(listing.entries).toEqual([]);
-      expect(listing.nextPageToken).toBeUndefined();
-      expect(listing.truncated).toBe(true);
-      expect(listing.text).toContain("Pagination cannot advance");
-      expect(listing.text).not.toContain("later.txt");
-      expect(result.details).toEqual({
-        path: "/root",
-        entries,
-        nextPageToken: "2",
-        truncated: true,
-      });
-    },
-  );
+  it("stops explicitly when the next complete name cannot be displayed", async () => {
+    const entries = [
+      { name: "[INST]", isDir: false, size: 1 },
+      { name: "later.txt", isDir: false, size: 2 },
+    ];
+    const listing = readListing(await executeListing({ entries, nextPageToken: "2" }));
+    expect(listing.entries).toEqual([]);
+    expect(listing.nextPageToken).toBeUndefined();
+    expect(listing.truncated).toBe(true);
+    expect(listing.text).toContain("Pagination cannot advance");
+    expect(listing.text).not.toContain("later.txt");
+  });
 
   it("bounds oversized path without a partial usable value", async () => {
-    const payload = {
-      path: "雪".repeat(8192),
-      entries: [],
-      truncated: true,
-      nextPageToken: "2",
-    };
-    vi.mocked(callGatewayTool).mockResolvedValue({ payload });
-    const result = await createDirListTool().execute("list", { node: "node-1", path: "/root" });
-    const text = result.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
+    const text = readText(
+      await executeListing({
+        path: "雪".repeat(8192),
+        nextPageToken: "2",
+      }),
+    );
     expect(text).toContain("No usable paths or continuation token");
     expect(text).not.toContain("雪");
-    expect(result.details).toEqual(payload);
   });
 
   it("reports missing paired nodes before retrying guessed local node names", async () => {
