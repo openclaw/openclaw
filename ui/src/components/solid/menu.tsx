@@ -435,15 +435,26 @@ export function Menu(props: BranchProps): JSX.Element {
           const current = entry();
           return current.kind === "group" ? current : undefined;
         };
+        const groupMount = createMemo<
+          { id: string; render?: (children: JSX.Element) => JSX.Element } | undefined
+        >((previous) => {
+          const current = group();
+          if (!current) {
+            return undefined;
+          }
+          // The keyed group keeps its renderer while its rows and presentation update.
+          return previous?.id === current.id
+            ? previous
+            : { id: current.id, render: current.render };
+        });
         const fallback = (
-          <Show when={group()} fallback={content()}>
-            {(section) => {
-              const initialRenderCustom = untrack(() => section().render);
-              const children = renderEntries(() => section().items);
-              return initialRenderCustom ? (
-                initialRenderCustom(children)
+          <Show when={groupMount()} keyed fallback={content()}>
+            {(mount) => {
+              const children = renderEntries(() => group()?.items ?? []);
+              return mount.render ? (
+                mount.render(children)
               ) : (
-                <div class={section().class}>{children}</div>
+                <div class={group()?.class}>{children}</div>
               );
             }}
           </Show>
