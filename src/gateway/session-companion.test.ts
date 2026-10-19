@@ -120,7 +120,7 @@ function createHarness(overrides?: {
 }
 
 function expectEmpty(service: Companion) {
-  expect(service.state(target)).toEqual({ exchanges: [] });
+  expect(service.state(target).exchanges).toEqual([]);
 }
 function savedExchange(question: string, response = answer) {
   return { question, answer: response, ts: 100 };
@@ -278,7 +278,7 @@ it.each(["execution", "reply"] as const)(
       release.resolve();
       await expect(pending).resolves.toMatchObject({ reason: "session-missing" });
       expect(harness.run).toHaveBeenCalledTimes(phase === "execution" ? 0 : 1);
-      expect(harness.service.state(askRequest("What changed?"))).toEqual({ exchanges: [] });
+      expect(harness.service.state(askRequest("What changed?")).exchanges).toEqual([]);
     } finally {
       release.resolve();
       await pending;
@@ -387,7 +387,7 @@ it.each(["global", "agent:work:selected"])(
       previous: { sessionId: "session-1", sessionKeys: [sessionKey] },
     });
 
-    expect(harness.service.state(selected)).toEqual({ exchanges: [] });
+    expect(harness.service.state(selected).exchanges).toEqual([]);
     expect(harness.service.state(other).exchanges).toEqual([
       expect.objectContaining({ question: "Main?" }),
     ]);
@@ -544,9 +544,9 @@ it("cancels a disconnected request before a late model result can commit", async
   await expect(active).rejects.toMatchObject({
     reason: "unavailable",
   });
-  expect(harness.service.state(target)).toEqual({
-    exchanges: [savedExchange("What is already known?", "existing answer")],
-  });
+  expect(harness.service.state(target).exchanges).toEqual([
+    savedExchange("What is already known?", "existing answer"),
+  ]);
 });
 
 it("keeps provider failures terminal after one model call", async () => {
@@ -560,9 +560,9 @@ it("keeps provider failures terminal after one model call", async () => {
     reason: "unavailable",
   } satisfies Partial<SessionCompanionAskError>);
   expect(harness.run).toHaveBeenCalledOnce();
-  expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
-    exchanges: [],
-  });
+  expect(
+    harness.service.state({ agentId: "main", sessionKey: "agent:main:main" }).exchanges,
+  ).toEqual([]);
   harness.service.dispose();
 });
 
@@ -575,8 +575,8 @@ it("clears a thread when the committed gateway reset path notifies", async () =>
 
   notifyGatewaySessionReset("agent:main:main", "main");
 
-  expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
-    exchanges: [],
-  });
+  expect(
+    harness.service.state({ agentId: "main", sessionKey: "agent:main:main" }).exchanges,
+  ).toEqual([]);
   harness.service.dispose();
 });

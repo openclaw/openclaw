@@ -3062,11 +3062,6 @@ export const en: TranslationMap & {
       checksPending: "{count} running",
       finished: "Finished {time}",
       empty: "Answers come from this session's transcript and its project files.",
-      starters: {
-        changed: "What changed?",
-        stopped: "Why did it stop?",
-        remaining: "What's left?",
-      },
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
@@ -3080,7 +3075,7 @@ export const en: TranslationMap & {
       askMissing: "This session is no longer available.",
       askModelUnavailable: "No utility model is configured for this session.",
       askImageUnsupported:
-        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
