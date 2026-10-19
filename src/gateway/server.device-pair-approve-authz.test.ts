@@ -20,11 +20,6 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-await Promise.all([
-  import("./server.js"),
-  import("../infra/device-identity.js"),
-  import("../infra/device-pairing.js"),
-]);
 
 const CONTROL_UI_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -146,22 +141,14 @@ describe("gateway device.pair.approve caller scope guard", () => {
       },
     );
   });
-  test("rejects mixed operator/node approval from a non-admin shared-auth session", async () => {
-    await withPairingSession(
-      {
-        name: "approve-shared-mixed-attacker",
-        auth: "shared",
-        roles: ["operator", "node"],
-      },
-      expectApprovalDenied,
-    );
-  });
-  test("rejects node-role approval from a non-admin trusted-proxy Control UI session", async () => {
-    await withPairingSession(
-      { name: "approve-proxy-node-attacker", auth: "proxy", role: "node", scopes: [] },
-      expectApprovalDenied,
-    );
-  });
+  test.each([
+    { name: "shared mixed-role approval", auth: "shared", roles: ["operator", "node"] },
+    { name: "proxy node approval", auth: "proxy", role: "node", scopes: [] },
+    { name: "cross-device approval", auth: "device" },
+  ] satisfies Parameters<typeof withPairingSession>[0][])(
+    "rejects $name without admin",
+    (options) => withPairingSession(options, expectApprovalDenied),
+  );
   test("allows node-role approval from an admin trusted-proxy Control UI session", async () => {
     await withPairingSession(
       { name: "approve-proxy-node-admin", auth: "proxy", admin: true, role: "node", scopes: [] },
@@ -170,12 +157,6 @@ describe("gateway device.pair.approve caller scope guard", () => {
         const paired = await getPairedDevice(deviceId);
         expect(paired).toMatchObject({ role: "node", tokens: { node: { role: "node" } } });
       },
-    );
-  });
-  test("rejects approving another device from a non-admin paired-device session", async () => {
-    await withPairingSession(
-      { name: "approve-cross-device-attacker", auth: "device" },
-      expectApprovalDenied,
     );
   });
   test("rejects rejecting another device from a non-admin paired-device session", async () => {

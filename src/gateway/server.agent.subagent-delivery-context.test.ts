@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import type { SubagentAdminKillResult } from "../agents/subagents/registry/subagent-control.types.js";
@@ -58,9 +58,7 @@ async function prepareSessionStore(entries: StoreEntries = {}): Promise<void> {
 }
 
 async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
-  const entry = loadSessionEntry({ sessionKey: key, storePath: gatewaySuite.sessionStorePath }) as
-    | StoredEntry
-    | undefined;
+  const entry = loadSessionEntry({ sessionKey: key, storePath: gatewaySuite.sessionStorePath });
   if (!entry) {
     throw new Error(`expected stored entry ${key}`);
   }
@@ -81,140 +79,131 @@ async function sendAgentRequest(params: Record<string, unknown>): Promise<void> 
   gatewaySuite.ws.send(
     JSON.stringify({ type: "req", id, method: "agent", params: { deliver: false, ...params } }),
   );
-  const res = await final;
-  expect(res).toMatchObject({ ok: true, payload: { status: "ok" } });
+  expect(await final).toMatchObject({ ok: true, payload: { status: "ok" } });
 }
 
-describe("subagent session deliveryContext from spawn request params", () => {
-  test("existing session route metadata survives agent request delivery normalization", async () => {
-    const key = "agent:main:subagent:existing-route-metadata";
-    const deliveryContext = {
-      channel: "slack",
-      to: "channel:C0AF8TW48UQ",
-      accountId: "default",
-      threadId: "1771242986.529939",
-    };
-    const route = {
-      channel: "slack",
-      accountId: "default",
-      target: { to: "channel:C0AF8TW48UQ", rawTo: "slack://C0AF8TW48UQ", chatType: "channel" },
-      thread: { id: "1771242986.529939", kind: "thread", source: "target" },
-    } satisfies NonNullable<StoredEntry["route"]>;
+test("existing session route metadata survives agent request delivery normalization", async () => {
+  const key = "agent:main:subagent:existing-route-metadata";
+  const deliveryContext = {
+    channel: "slack",
+    to: "channel:C0AF8TW48UQ",
+    accountId: "default",
+    threadId: "1771242986.529939",
+  };
+  const route = {
+    channel: "slack",
+    accountId: "default",
+    target: { to: "channel:C0AF8TW48UQ", rawTo: "slack://C0AF8TW48UQ", chatType: "channel" },
+    thread: { id: "1771242986.529939", kind: "thread", source: "target" },
+  } satisfies NonNullable<StoredEntry["route"]>;
+  await prepareSessionStore({
+    [key]: {
+      sessionId: "sess-existing-route",
+      updatedAt: Date.now(),
+      route: structuredClone(route),
+      deliveryContext,
+    },
+  });
+
+  await sendAgentRequest({
+    message: "follow-up",
+    sessionKey: key,
+    ...deliveryContext,
+    idempotencyKey: "idem-subagent-delivery-route-metadata",
+  });
+
+  expect((await readStoredSessionEntry(key)).route).toEqual(route);
+});
+
+test.for(["completed", "self-stopped"] as const)(
+  "pre-created subagent session inherits deliveryContext from agent request (%s)",
+  async (ending, { signal }) => {
+    // Spawn persists lineage first; the agent request must fill the missing delivery context.
     await prepareSessionStore({
-      [key]: {
-        sessionId: "sess-existing-route",
+      "agent:main:subagent:pre-patched": {
+        sessionId: "sess-pre-patched",
+        lifecycleRevision: "pre-patched-revision",
         updatedAt: Date.now(),
-        route: structuredClone(route),
-        deliveryContext,
-        lastChannel: "slack",
-        lastTo: "channel:C0AF8TW48UQ",
-        lastAccountId: "default",
-        lastThreadId: "1771242986.529939",
+        spawnDepth: 1,
+        spawnedBy: "agent:main:slack:direct:u07fdr83w6n:thread:1775577152.364109",
       },
     });
 
-    await sendAgentRequest({
-      message: "follow-up",
-      sessionKey: key,
-      ...deliveryContext,
-      idempotencyKey: "idem-subagent-delivery-route-metadata",
-    });
-
-    expect((await readStoredSessionEntry(key)).route).toEqual(route);
-  });
-
-  test.for(["completed", "self-stopped"] as const)(
-    "pre-created subagent session inherits deliveryContext from agent request (%s)",
-    async (ending, { signal }) => {
-      // Spawn persists lineage first; the agent request must fill the missing delivery context.
-      await prepareSessionStore({
-        "agent:main:subagent:pre-patched": {
-          sessionId: "sess-pre-patched",
-          lifecycleRevision: "pre-patched-revision",
-          updatedAt: Date.now(),
-          spawnDepth: 1,
-          spawnedBy: "agent:main:slack:direct:u07fdr83w6n:thread:1775577152.364109",
-        },
+    const runId = `idem-subagent-delivery-ctx-prepatched-${ending}`;
+    const request = {
+      message: "[Subagent Task]: investigate data",
+      sessionKey: "agent:main:subagent:pre-patched",
+      channel: "slack",
+      to: "user:U07FDR83W6N",
+      accountId: "default",
+      threadId: "1775577152.364109",
+      idempotencyKey: runId,
+    };
+    if (ending === "self-stopped") {
+      await registerSubagentRun({
+        runId,
+        childSessionKey: "agent:main:subagent:pre-patched",
+        childAgentId: "main",
+        sessionEntry: await readStoredSessionEntry(request.sessionKey),
+        requesterSessionKey: "agent:main:slack:direct:u07fdr83w6n:thread:1775577152.364109",
+        requesterAgentId: "main",
+        requesterDisplayKey: "main",
+        task: "Stop this child from its own running command",
+        cleanup: "keep",
+        expectsCompletionMessage: false,
       });
-
-      const runId = `idem-subagent-delivery-ctx-prepatched-${ending}`;
-      const request = {
-        message: "[Subagent Task]: investigate data",
-        sessionKey: "agent:main:subagent:pre-patched",
-        channel: "slack",
-        to: "user:U07FDR83W6N",
-        accountId: "default",
-        threadId: "1775577152.364109",
-        idempotencyKey: runId,
-      };
-      if (ending === "self-stopped") {
-        await registerSubagentRun({
-          runId,
-          childSessionKey: "agent:main:subagent:pre-patched",
-          childAgentId: "main",
-          sessionEntry: await readStoredSessionEntry(request.sessionKey),
-          requesterSessionKey: "agent:main:slack:direct:u07fdr83w6n:thread:1775577152.364109",
-          requesterAgentId: "main",
-          requesterDisplayKey: "main",
-          task: "Stop this child from its own running command",
-          cleanup: "keep",
-          expectsCompletionMessage: false,
-        });
-        const stopped = createDeferred<SubagentAdminKillResult>();
-        const releaseCommand = createDeferred();
-        agentCommandMock.mockImplementationOnce(async (options) => {
-          const abortSignal = asOptionalRecord(options)?.abortSignal;
-          if (!(abortSignal instanceof AbortSignal)) {
-            throw new Error("Expected the admitted child command's cancellation signal");
-          }
-          try {
-            stopped.resolve(
-              await killSubagentRunAdmin({
-                cfg: getRuntimeConfig(),
-                sessionKey: request.sessionKey,
-                expectedRunId: runId,
-              }),
-            );
-            expect(abortSignal.aborted).toBe(true);
-            await releaseCommand.promise;
-            abortSignal.throwIfAborted();
-          } catch (error) {
-            stopped.reject(error);
-            throw error;
-          }
-        });
-        await prepareGatewayReplyRuntimeForTest();
-        try {
-          const accepted = await rpcReq(gatewaySuite.ws, "agent", { deliver: false, ...request });
-          expect(accepted).toMatchObject({ ok: true, payload: { status: "accepted", runId } });
-          expect(await withinTest(stopped.promise, signal)).toMatchObject({
-            found: true,
-            killed: true,
-          });
-          const final = finalResponse(accepted.id);
-          releaseCommand.resolve();
-          expect(await final).toMatchObject({ ok: true, payload: { status: "timeout" } });
-        } finally {
-          releaseCommand.resolve();
+      const stopped = createDeferred<SubagentAdminKillResult>();
+      const releaseCommand = createDeferred();
+      agentCommandMock.mockImplementationOnce(async (options) => {
+        const abortSignal = asOptionalRecord(options)?.abortSignal;
+        if (!(abortSignal instanceof AbortSignal)) {
+          throw new Error("Expected the admitted child command's cancellation signal");
         }
-      } else {
-        await sendAgentRequest(request);
+        try {
+          stopped.resolve(
+            await killSubagentRunAdmin({
+              cfg: getRuntimeConfig(),
+              sessionKey: request.sessionKey,
+              expectedRunId: runId,
+            }),
+          );
+          expect(abortSignal.aborted).toBe(true);
+          await releaseCommand.promise;
+          abortSignal.throwIfAborted();
+        } catch (error) {
+          stopped.reject(error);
+          throw error;
+        }
+      });
+      await prepareGatewayReplyRuntimeForTest();
+      try {
+        const accepted = await rpcReq(gatewaySuite.ws, "agent", { deliver: false, ...request });
+        expect(accepted).toMatchObject({ ok: true, payload: { status: "accepted", runId } });
+        const killed = await withinTest(stopped.promise, signal);
+        expect(killed).toMatchObject({ found: true, killed: true });
+        const final = finalResponse(accepted.id);
+        releaseCommand.resolve();
+        expect(await final).toMatchObject({ ok: true, payload: { status: "timeout" } });
+      } finally {
+        releaseCommand.resolve();
       }
+    } else {
+      await sendAgentRequest(request);
+    }
 
-      const entry = await readStoredSessionEntry("agent:main:subagent:pre-patched");
-      expect(entry.deliveryContext).toMatchObject({
-        channel: "slack",
-        to: "user:U07FDR83W6N",
-        threadId: "1775577152.364109",
-        accountId: "default",
-      });
-      expect(entry.route).toEqual({
-        channel: "slack",
-        accountId: "default",
-        target: { to: "user:U07FDR83W6N" },
-        thread: { id: "1775577152.364109" },
-      });
-      expect(entry.lastThreadId).toBe("1775577152.364109");
-    },
-  );
-});
+    const entry = await readStoredSessionEntry("agent:main:subagent:pre-patched");
+    expect(entry.deliveryContext).toMatchObject({
+      channel: "slack",
+      to: "user:U07FDR83W6N",
+      threadId: "1775577152.364109",
+      accountId: "default",
+    });
+    expect(entry.route).toEqual({
+      channel: "slack",
+      accountId: "default",
+      target: { to: "user:U07FDR83W6N" },
+      thread: { id: "1775577152.364109" },
+    });
+    expect(entry.lastThreadId).toBe("1775577152.364109");
+  },
+);

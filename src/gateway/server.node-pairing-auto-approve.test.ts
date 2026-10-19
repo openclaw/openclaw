@@ -8,15 +8,35 @@ import {
   listDevicePairing,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
+import type { loadDeviceIdentity } from "./device-authz.test-helpers.js";
 import { installGatewayTestHooks } from "./test-helpers.js";
 import { describeWithLanNodePairingServer } from "./test-helpers.lan-pairing.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-const configureCidr = (lanIp: string) =>
+const configurePairing = (lanIp?: string, sshVerify?: false) =>
   writeConfigFile({
-    gateway: { nodes: { pairing: { autoApproveCidrs: [`${lanIp}/32`], sshVerify: false } } },
+    gateway: {
+      nodes: { pairing: { autoApproveCidrs: lanIp ? [`${lanIp}/32`] : undefined, sshVerify } },
+    },
   });
+
+async function approveIdentity(
+  loaded: ReturnType<typeof loadDeviceIdentity>,
+  role: "node" | "operator",
+  approvedVia?: "silent",
+) {
+  const request = await requestDevicePairing({
+    deviceId: loaded.identity.deviceId,
+    publicKey: loaded.publicKey,
+    role,
+    scopes: [],
+  });
+  await pairingApprovals.approveDevicePairing(request.request.requestId, {
+    callerScopes: [],
+    approvedVia,
+  });
+}
 
 function expectPendingSurface(paired: Awaited<ReturnType<typeof getPairedDevice>>) {
   expect(paired?.nodeSurface).toBeUndefined();
@@ -24,42 +44,22 @@ function expectPendingSurface(paired: Awaited<ReturnType<typeof getPairedDevice>
 }
 
 describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve", (attempt) => {
-  test("does not reuse earlier silent provenance for a remote initial capability surface", async () => {
-    await attempt({
+  test.each([
+    {
       identityName: "remote-node-earlier-silent-approval",
       run: async ({ loaded, connectNode }) => {
-        const request = await requestDevicePairing({
-          deviceId: loaded.identity.deviceId,
-          publicKey: loaded.publicKey,
-          role: "node",
-          scopes: [],
-        });
-        await pairingApprovals.approveDevicePairing(request.request.requestId, {
-          callerScopes: [],
-          approvedVia: "silent",
-        });
+        await approveIdentity(loaded, "node", "silent");
         expect(await connectNode()).toMatchObject({ ok: true });
         const paired = await getPairedDevice(loaded.identity.deviceId);
         expect(paired?.approvedVia).toBe("silent");
         expectPendingSurface(paired);
       },
-    });
-  });
-
-  test("keeps an existing operator's node role upgrade pending from a matching CIDR", async () => {
-    await attempt({
+    },
+    {
       identityName: "trusted-cidr-node-role-upgrade",
-      configure: configureCidr,
+      configure: (lanIp) => configurePairing(lanIp, false),
       run: async ({ loaded, connectNode }) => {
-        const pairing = await requestDevicePairing({
-          deviceId: loaded.identity.deviceId,
-          publicKey: loaded.publicKey,
-          role: "operator",
-          scopes: [],
-        });
-        await pairingApprovals.approveDevicePairing(pairing.request.requestId, {
-          callerScopes: [],
-        });
+        await approveIdentity(loaded, "operator");
         expect(await connectNode()).toMatchObject({
           ok: false,
           error: { details: { reason: "role-upgrade" } },
@@ -73,13 +73,10 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
           }),
         ]);
       },
-    });
-  });
-
-  test("keeps a pending request when its CIDR permission is removed before approval", async () => {
-    await attempt({
+    },
+    {
       identityName: "trusted-cidr-revoked-before-approval",
-      configure: configureCidr,
+      configure: (lanIp) => configurePairing(lanIp, false),
       run: async ({ loaded, connectNode }) => {
         const approve = pairingApprovals.approveDevicePairing;
         const approval = vi
@@ -110,18 +107,11 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
           approval.mockRestore();
         }
       },
-    });
-  });
-
-  test("keeps a direct non-loopback node retrying until manual approval", async () => {
-    await attempt({
+    },
+    {
       identityName: "trusted-cidr-default-off",
-      configure: async () => {
-        // Exercise the CIDR default without a real SSH probe to the runner.
-        await writeConfigFile({
-          gateway: { nodes: { pairing: { sshVerify: false } } },
-        });
-      },
+      // Disable SSH so the CIDR default never probes the runner itself.
+      configure: () => configurePairing(undefined, false),
       run: async ({ loaded, connectNode }) => {
         const res = await connectNode();
         expect(res.ok).toBe(false);
@@ -162,17 +152,10 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
         });
         expectPendingSurface(await getPairedDevice(loaded.identity.deviceId));
       },
-    });
-  });
-
-  test("auto-approves first-time node pairing from a matching direct non-loopback CIDR", async () => {
-    await attempt({
+    },
+    {
       identityName: "trusted-cidr-direct-lan-auto-approve",
-      configure: async (lanIp) => {
-        await writeConfigFile({
-          gateway: { nodes: { pairing: { autoApproveCidrs: [`${lanIp}/32`] } } },
-        });
-      },
+      configure: configurePairing,
       run: async ({ loaded, connectNode }) => {
         const res = await connectNode();
         expect(res).toMatchObject({ ok: true, payload: { type: "hello-ok" } });
@@ -187,6 +170,6 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
         // stay on the manual operator prompt (#128446 documents the flow).
         expectPendingSurface(paired);
       },
-    });
-  });
+    },
+  ] satisfies Parameters<typeof attempt>[0][])("$identityName", (scenario) => attempt(scenario));
 });

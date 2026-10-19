@@ -24,19 +24,6 @@ vi.mock("@openclaw/ai/internal/runtime", async () => {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-type HookEvent = {
-  sessionKey?: string;
-  nextSessionKey?: string;
-};
-
-function firstHookEvent(mock: { mock: { calls: unknown[][] } }): HookEvent {
-  const call = mock.mock.calls.at(0);
-  if (!call) {
-    throw new Error("Expected hook call");
-  }
-  return call[0] as HookEvent;
-}
-
 async function seedParent(sessionId: string) {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
@@ -52,27 +39,40 @@ async function seedParent(sessionId: string) {
   return { storePath };
 }
 
-async function startHeldControllerTurn(params: { sessionId: string; storePath: string }) {
+async function holdControllerTurn(
+  sessionId: string,
+  existing?: ReturnType<typeof captureSessionTarget>,
+) {
+  const target =
+    existing ??
+    captureSessionTarget({
+      storeScope: (await seedParent(sessionId)).storePath,
+      sessionKey: "agent:main:main",
+      aliases: ["main", sessionId],
+      incarnation: sessionId,
+      agentId: "main",
+    });
   const release = createDeferredCore();
   const started = createDeferredCore();
   const interrupted = createDeferredCore();
-  const target = captureSessionTarget({
-    storeScope: params.storePath,
-    sessionKey: "agent:main:main",
-    aliases: ["main", params.sessionId],
-    incarnation: params.sessionId,
-    agentId: "main",
-  });
+  let running = false;
   const work = withSessionTurn(
-    { sessionKey: target.sessionKey, sessionId: params.sessionId, target },
+    { sessionKey: target.sessionKey, sessionId, target },
     async (_operation, signal) => {
       signal.addEventListener("abort", () => interrupted.resolve(), { once: true });
+      running = true;
       started.resolve();
       await release.promise;
     },
   );
-  await started.promise;
-  return { interrupted: interrupted.promise, release: release.resolve, target, work };
+  return {
+    started: started.promise,
+    interrupted: interrupted.promise,
+    release: release.resolve,
+    target,
+    work,
+    isRunning: () => running,
+  };
 }
 
 test("sessions.create keeps the parent active for an explicit parallel child", async () => {
@@ -89,28 +89,20 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
   expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
-    result.payload?.key,
-  );
+  expect(sessionLifecycleHookMocks.runSessionStart.mock.calls[0]?.[0]).toMatchObject({
+    sessionKey: result.payload?.key,
+  });
 });
 
 test.each([
-  {
-    message: /fork/i,
-    parent: true,
-    params: { parentSessionKey: "main", emitCommandHooks: true, fork: true, succeedsParent: true },
-  },
-  {
-    message: /parentSessionKey/i,
-    parent: false,
-    params: { emitCommandHooks: true, succeedsParent: false },
-  },
-  {
-    message: /emitCommandHooks/i,
-    parent: true,
-    params: { parentSessionKey: "main", succeedsParent: false },
-  },
-])("sessions.create rejects invalid disposition: $message", async ({ message, parent, params }) => {
+  [
+    /fork/i,
+    true,
+    { parentSessionKey: "main", emitCommandHooks: true, fork: true, succeedsParent: true },
+  ],
+  [/parentSessionKey/i, false, { emitCommandHooks: true, succeedsParent: false }],
+  [/emitCommandHooks/i, true, { parentSessionKey: "main", succeedsParent: false }],
+] as const)("sessions.create rejects invalid disposition: %s", async (message, parent, params) => {
   if (parent) {
     await seedParent("sess-invalid-disposition");
   } else {
@@ -126,8 +118,8 @@ test.each([
 
 test("sessions.reset waits for captured turn settlement before same-id cleanup", async () => {
   const sessionId = "sess-provider-cleanup";
-  const { storePath } = await seedParent(sessionId);
-  const active = await startHeldControllerTurn({ sessionId, storePath });
+  const active = await holdControllerTurn(sessionId);
+  await active.started;
   let resetSettled = false;
   const resetPromise = directSessionReq("sessions.reset", { key: "main", reason: "new" }).finally(
     () => {
@@ -152,9 +144,9 @@ test("sessions.reset waits for captured turn settlement before same-id cleanup",
 
 test("sessions.reset blocks same-id replacement until retirement completes", async () => {
   const sessionId = "sess-provider-ended-replacement";
-  const { storePath } = await seedParent(sessionId);
   providerRuntimeMocks.cleanupSessionResources.mockClear();
-  const active = await startHeldControllerTurn({ sessionId, storePath });
+  const active = await holdControllerTurn(sessionId);
+  await active.started;
   const retirement = createDeferredCore();
   const retirementStarted = createDeferredCore();
   bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
@@ -169,27 +161,15 @@ test("sessions.reset blocks same-id replacement until retirement completes", asy
   await active.work;
   await retirementStarted.promise;
 
-  const replacementStarted = createDeferredCore();
-  const releaseReplacement = createDeferredCore();
-  const replacement = withSessionTurn(
-    { sessionKey: active.target.sessionKey, sessionId, target: active.target },
-    async () => {
-      replacementStarted.resolve();
-      await releaseReplacement.promise;
-    },
-  );
-  let replacementIsRunning = false;
-  void replacementStarted.promise.then(() => {
-    replacementIsRunning = true;
-  });
+  const replacement = await holdControllerTurn(sessionId, active.target);
   await Promise.resolve();
-  expect(replacementIsRunning).toBe(false);
+  expect(replacement.isRunning()).toBe(false);
   expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
 
   retirement.resolve();
   expect((await reset).ok).toBe(true);
   expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledOnce();
-  await replacementStarted.promise;
-  releaseReplacement.resolve();
-  await replacement;
+  await replacement.started;
+  replacement.release();
+  await replacement.work;
 });

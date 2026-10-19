@@ -27,39 +27,31 @@ test.for(["delete", "archive", "recover"] as const)(
     const { storePath } = await createSessionStoreDir();
     const sessionId = `lifecycle-order-${action}`;
     const sessionKey = `agent:main:${sessionId}`;
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          worktree: { id: "order-worktree", branch: "order-branch", repoRoot: "/fixture/repo" },
-          lifecycleRevision: "original-lifecycle",
-          ...(action === "recover"
-            ? {
-                status: "failed" as const,
-                abortedLastRun: true,
-                mainRestartRecovery: {
-                  cycleId: "order-cycle",
-                  revision: 1,
-                  chargedAttempts: 3,
-                  tombstone: { reason: "automatic recovery exhausted" },
-                },
-              }
-            : {}),
-        }),
-      },
+    const identity = { sessionId, sessionKey, agentId: "main" };
+    const seed = sessionStoreEntry(sessionId, {
+      worktree: { id: "order-worktree", branch: "order-branch", repoRoot: "/fixture/repo" },
+      lifecycleRevision: "original-lifecycle",
     });
     if (action === "recover") {
+      seed.status = "failed";
+      seed.abortedLastRun = true;
+      seed.mainRestartRecovery = {
+        cycleId: "order-cycle",
+        revision: 1,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      };
+    }
+    await writeSessionStore({ entries: { [sessionKey]: seed } });
+    if (action === "recover") {
       await seedSessionTranscript({
-        agentId: "main",
-        sessionId,
-        sessionKey,
+        ...identity,
         storePath,
         messages: [{ role: "user", content: "recover this session" }],
       });
     }
     let placement = {
-      sessionId,
-      sessionKey,
-      agentId: "main",
+      ...identity,
       state: "active",
       generation: 4,
       environmentId: "order-environment",
@@ -107,9 +99,7 @@ test.for(["delete", "archive", "recover"] as const)(
         resumeProvisioning: unexpectedPlacementOperation,
         move: async () => {
           await moveBarrier({
-            sessionId,
-            sessionKey,
-            agentId: "main",
+            ...identity,
             sourceDisposition: "reconcile",
             begin: async () => {
               moveAcquired = true;
@@ -138,9 +128,7 @@ test.for(["delete", "archive", "recover"] as const)(
     );
     const moving = service
       .move({
-        sessionId,
-        sessionKey,
-        agentId: "main",
+        ...identity,
         source: { generation: 4, environmentId: "order-environment", ownerEpoch: 2 },
         target: { kind: "gateway" },
       })
