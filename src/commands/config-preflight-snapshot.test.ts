@@ -496,7 +496,7 @@ it.each([
         runStartupConfigPreflight({ gateway: true, observe: false }),
       ).rejects.toMatchObject({
         code: 78,
-        message: expect.stringContaining("Legacy device identity exists"),
+        message: expect.stringContaining("Legacy client credentials require migration"),
       });
       expect(fs.readFileSync(identityPath, "utf8")).toBe(identityRaw);
     } else {

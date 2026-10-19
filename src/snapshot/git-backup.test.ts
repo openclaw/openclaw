@@ -744,11 +744,14 @@ it("omits secret tables and reports the restore gap", async () => {
           "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memory_vec', 'session_transcript_index_state')",
         ),
       ).toEqual([]);
-      for (const table of ["device_auth_tokens", "channel_pairing_requests"]) {
-        expect(restoredDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
-          count: 0,
-        });
-      }
+      expect(
+        restoredDatabase
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'device_auth_tokens'")
+          .all(),
+      ).toEqual([]);
+      expect(
+        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM channel_pairing_requests").get(),
+      ).toEqual({ count: 0 });
     },
     { readOnly: true },
   );

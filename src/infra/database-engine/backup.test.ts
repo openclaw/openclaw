@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { expect, it, vi } from "vitest";
-import { z } from "zod";
 import "./backup-worker.test-support.js";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,23 +28,13 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
-import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "../client-credential-schema.js";
-import { resolveClientCredentialStorePath } from "../client-credential-store.js";
+import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
+import { openClientCredentialCustody } from "../client-credential-store.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshotSource from "../sqlite-snapshot-source.js";
-import { createUpdateStateInspectionDiagnostics } from "../update-candidate-state.diagnostics.js";
-import * as inspection from "../update-candidate-state.inspection.js";
-import {
-  discoverUpdateStateSchemaInspectionInProcess,
-  UpdateStateSchemaInspectionPlanSchema,
-} from "../update-candidate-state.js";
-import * as databaseSizes from "../update-candidate-state.sizes.js";
-import {
-  createUpdateDatabaseBackup,
-  createUpdateDatabaseBackupInProcess,
-} from "../update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { createUpdateRun } from "../update-run-ledger.js";
+import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture.test-support.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import { workboardPortFixture, writePortAnchor } from "./port-backup.test-support.js";
@@ -137,13 +126,15 @@ it.skipIf(!connection)(
         openOpenClawStateDatabase({ env: state.env });
         await closeOpenClawStateDatabaseAsync();
         const credentialsPath = resolveClientCredentialStorePath(state.env);
-        await fs.mkdir(path.dirname(credentialsPath), { recursive: true, mode: 0o700 });
         {
-          using credentials = openNodeSqliteDatabase(credentialsPath);
-          credentials.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
-          credentials.exec(`PRAGMA user_version = 1;
-            INSERT INTO device_auth_tokens VALUES ('synthetic-device', 'operator', 'synthetic-token', '[]', 1);
-            INSERT INTO native_exec_socket_credentials VALUES ('current', '/synthetic/native.sock', 'synthetic-socket-token', 1);`);
+          using credentials = openClientCredentialCustody(state.env, { createIfMissing: true });
+          assert(credentials);
+          credentials.database
+            .prepare("INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)")
+            .run("synthetic-device", "operator", "synthetic-token", "[]", 1);
+          credentials.database
+            .prepare("INSERT INTO native_exec_socket_credentials VALUES (?, ?, ?, ?)")
+            .run("current", "/synthetic/native.sock", "synthetic-socket-token", 1);
         }
         const inventory = resolveActivatedPluginBackupInventory({
           config,
@@ -403,46 +394,7 @@ it.skipIf(!connection)(
             env: state.env,
             stopped: true,
           };
-          // Keep public discovery/wiring; only replace its two subprocess launches.
-          const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
-          const sizes = vi
-            .spyOn(databaseSizes, "readUpdateStateDatabaseSizes")
-            .mockImplementation((files, options) =>
-              databaseSizes.readUpdateStateDatabaseSizesInProcess(files, options.signal),
-            );
-          worker.mockImplementation(async (params) => {
-            const captured = {
-              ...input,
-              stagingRoot: params.stagingRoot,
-              additionalPaths: z.array(z.string()).parse(params.input.additionalPaths),
-            };
-            const result =
-              params.input.mode === "discover"
-                ? await discoverUpdateStateSchemaInspectionInProcess(captured)
-                : await createUpdateDatabaseBackupInProcess({
-                    ...captured,
-                    inspectionPlan: UpdateStateSchemaInspectionPlanSchema.parse(
-                      params.input.inspectionPlan,
-                    ),
-                  });
-            return {
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-              stdout: JSON.stringify(result),
-              stderr: "",
-              inspection: createUpdateStateInspectionDiagnostics({
-                operation: "State schema inspection",
-                phase: String(params.input.mode),
-                paths: captured.additionalPaths,
-              }),
-            };
-          });
-          const backup = await createUpdateDatabaseBackup(input).finally(() => {
-            worker.mockRestore();
-            sizes.mockRestore();
-          });
+          const backup = await createUpdateDatabaseBackupWithFixtureTransport(input);
           const entry = backup.databases.find((item) => item.path === anchorPath);
           expect(entry).toMatchObject({ engine: "postgres", namespace, storeId });
           const credentialsBackup = backup.databases.find((item) => item.path === credentialsPath);

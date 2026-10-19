@@ -238,7 +238,9 @@ async function readRequestBody(request: AsyncIterable<unknown>): Promise<string>
   return Buffer.concat(chunks).toString("utf8");
 }
 
-export async function startMidturnProvider() {
+export async function startMidturnProvider(
+  options: { beforeBaselineReply?: () => Promise<void> } = {},
+) {
   let midturnRequestCount = 0;
   let contextRequest = "";
   const partialStarted = createDeferred();
@@ -372,6 +374,9 @@ export async function startMidturnProvider() {
           response.end("data: [DONE]\n\n");
         }
         return;
+      }
+      if (raw.includes(BASELINE_PROMPT)) {
+        await options.beforeBaselineReply?.();
       }
       writeCompletedAssistant(response, BASELINE_REPLY, "msg_cloud_midturn_baseline");
     })().catch((error: unknown) => {

@@ -17,6 +17,7 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "./runtime-pin-schema.js";
 
 export const DAEMON_RUNTIME_PIN_SCHEMA_VERSION = 1;
@@ -53,8 +54,9 @@ function withDaemonRuntimePinDatabase<T>(
   if (!parent && !writable) {
     return undefined;
   }
+  let created = false;
   if (writable) {
-    preparePrivateStoreFileSync(pathname, Boolean(parent));
+    created = preparePrivateStoreFileSync(pathname, Boolean(parent));
   }
   const opened = openRootFileSync({
     absolutePath: pathname,
@@ -76,14 +78,20 @@ function withDaemonRuntimePinDatabase<T>(
     ) {
       throw new Error("Runtime pin store owner is unsafe.");
     }
-    using db = openNodeSqliteDatabase(
+    const db = openNodeSqliteDatabase(
       writable ? resolveExistingSqliteFileUri(pathname) : pathname,
       {
         readOnly: !writable,
         timeout: 5000,
       },
     );
-    return operation(db);
+    try {
+      return writable
+        ? runUpdateSqliteMigration(db, pathname, () => operation(db), { created })
+        : operation(db);
+    } finally {
+      db.close();
+    }
   } finally {
     fs.closeSync(opened.fd);
   }

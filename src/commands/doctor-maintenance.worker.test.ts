@@ -14,11 +14,12 @@ import {
   resetAutoMigrateLegacyStateDirForTest,
 } from "../infra/state-migrations.state-dir.js";
 import * as updateState from "../infra/update-candidate-state.js";
-import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { addPreCutoverClientCredentialTablesForTest } from "../state/openclaw-state-schema.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -127,6 +128,9 @@ describe("Doctor maintenance with shared-state workers", () => {
         async (state) => {
           const { db } = openOpenClawStateDatabase();
           const version = OPENCLAW_STATE_SCHEMA_VERSION - (scenario === "resident-worker" ? 0 : 1);
+          if (version < OPENCLAW_STATE_SCHEMA_VERSION) {
+            addPreCutoverClientCredentialTablesForTest(db);
+          }
           db.exec(`
           PRAGMA user_version = ${version};
           UPDATE schema_meta SET schema_version = ${version}

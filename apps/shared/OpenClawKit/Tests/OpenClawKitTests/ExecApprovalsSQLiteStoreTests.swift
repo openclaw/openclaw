@@ -15,18 +15,18 @@ struct ExecApprovalsSQLiteStoreTests {
     @Test
     func `document round trips and update replaces singleton`() throws {
         try self.withStateDirectory { stateDirectoryURL in
-            let original = Self.document(token: "first-token", agentCount: 1)
+            let original = Self.document(agentCount: 1)
             try ExecApprovalsSQLiteStore.write(original, stateDirectoryURL: stateDirectoryURL)
             #expect(try ExecApprovalsSQLiteStore.read(
                 stateDirectoryURL: stateDirectoryURL)?.document == original)
 
-            let updated = Self.document(token: "second-token", agentCount: 2)
+            let updated = Self.document(agentCount: 2)
             try ExecApprovalsSQLiteStore.write(updated, stateDirectoryURL: stateDirectoryURL)
             let stored = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: stateDirectoryURL)
             let record = try #require(stored)
             #expect(record.document == updated)
             #expect(record.rawJSON.contains("\"version\" : 1"))
-            #expect(record.rawJSON.contains("\"socket\""))
+            #expect(!record.rawJSON.contains("\"socket\""))
             #expect(record.rawJSON.contains("\"defaults\""))
             #expect(record.rawJSON.contains("\"agents\""))
         }
@@ -60,8 +60,8 @@ struct ExecApprovalsSQLiteStoreTests {
             let projection = try Self.readProjection(
                 ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: stateDirectoryURL))
             #expect(projection == Projection(
-                socketPath: "/tmp/openclaw.sock",
-                hasSocketToken: 1,
+                socketPath: nil,
+                hasSocketToken: 0,
                 defaultSecurity: "allowlist",
                 defaultAsk: "on-miss",
                 defaultAskFallback: "deny",
@@ -75,7 +75,7 @@ struct ExecApprovalsSQLiteStoreTests {
     @Test
     func `deletion journal fences only the affected agent`() throws {
         try self.withStateDirectory { stateDirectoryURL in
-            var original = Self.document(token: "original", agentCount: 1)
+            var original = Self.document(agentCount: 1)
             let originalAgent = original.agents?.removeValue(forKey: "agent-0")
             original.agents?["Agent A"] = originalAgent
             try ExecApprovalsSQLiteStore.write(original, stateDirectoryURL: stateDirectoryURL)
@@ -113,7 +113,7 @@ struct ExecApprovalsSQLiteStoreTests {
             PRAGMA user_version = 6;
             """)
 
-            var replacement = Self.document(token: "replacement", agentCount: 2)
+            var replacement = Self.document(agentCount: 2)
             let replacementAgent = replacement.agents?.removeValue(forKey: "agent-0")
             replacement.agents?["Agent A"] = replacementAgent
             replacement.agents?["Agent A"]?.security = .deny
@@ -129,7 +129,7 @@ struct ExecApprovalsSQLiteStoreTests {
                 stateDirectoryURL: stateDirectoryURL)?.document == original)
 
             var unrelated = original
-            unrelated.socket?.token = "unrelated"
+            unrelated.agents?["Other"] = ExecApprovalsAgentDocument(allowlist: [])
             try ExecApprovalsSQLiteStore.write(unrelated, stateDirectoryURL: stateDirectoryURL)
             #expect(try ExecApprovalsSQLiteStore.read(
                 stateDirectoryURL: stateDirectoryURL)?.document == unrelated)
@@ -163,7 +163,7 @@ struct ExecApprovalsSQLiteStoreTests {
 
             let projection = try Self.readProjection(
                 ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: stateDirectoryURL))
-            #expect(projection.socketPath == "/tmp/openclaw.sock")
+            #expect(projection.socketPath == nil)
             #expect(projection.hasSocketToken == 0)
             #expect(projection.agentCount == 1)
             #expect(projection.allowlistCount == 1)
@@ -174,7 +174,7 @@ struct ExecApprovalsSQLiteStoreTests {
     func `malformed raw json fails closed`() throws {
         try self.withStateDirectory { stateDirectoryURL in
             try ExecApprovalsSQLiteStore.write(
-                Self.document(token: "token", agentCount: 1),
+                Self.document(agentCount: 1),
                 stateDirectoryURL: stateDirectoryURL)
             try Self.execute(
                 ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: stateDirectoryURL),
@@ -256,7 +256,7 @@ struct ExecApprovalsSQLiteStoreTests {
         let updatedAtMilliseconds: Int64
     }
 
-    private static func document(token: String, agentCount: Int) -> ExecApprovalsDocument {
+    private static func document(agentCount: Int) -> ExecApprovalsDocument {
         let agents = Dictionary(uniqueKeysWithValues: (0..<agentCount).map { index in
             ("agent-\(index)", ExecApprovalsAgentDocument(
                 allowlist: [ExecApprovalsAllowlistEntry(
@@ -265,7 +265,7 @@ struct ExecApprovalsSQLiteStoreTests {
         })
         return ExecApprovalsDocument(
             version: 1,
-            socket: ExecApprovalsSocketDocument(path: "/tmp/openclaw.sock", token: token),
+            socket: nil,
             defaults: ExecApprovalsDefaultsDocument(
                 security: .full,
                 ask: .off,
@@ -326,7 +326,8 @@ struct ExecApprovalsSQLiteStoreTests {
     private func withStateDirectory(
         _ body: (URL) throws -> Void) throws
     {
-        let stateDirectoryURL = FileManager.default.temporaryDirectory
+        let stateDirectoryURL = URL(
+            fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
             at: stateDirectoryURL,

@@ -206,6 +206,8 @@ export function createFixture(
     "tsx",
     "esbuild",
     "import-meta-resolve",
+    "tar",
+    "yaml",
   ]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -230,6 +232,7 @@ export function createFixture(
     '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
   );
   write("pnpm-workspace.yaml", "packages: []\n");
+  write("pnpm-lock.yaml", fs.readFileSync(path.join(sourceRoot, "pnpm-lock.yaml"), "utf8"));
   // tsdown.config.ts passes this path to package declaration builds as compiler configuration, not an import edge.
   write(
     "tsconfig.packages.json",
@@ -254,6 +257,7 @@ export function createFixture(
     "src/plugin-sdk/facade-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
+    "src/infra/sealed-runtime-bootstrap.ts",
     "src/infra/command-explainer/tree-sitter-runtime.ts",
     "packages/gateway-client/src/websocket.ts",
     "src/gateway/desktop/node-stream-broker.ts",

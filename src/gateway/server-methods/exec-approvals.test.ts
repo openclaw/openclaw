@@ -283,13 +283,12 @@ describe("exec approvals gateway methods", () => {
       expect.objectContaining({ baseHash: missingSnapshot.hash }),
       expect.anything(),
     );
-    expect(createdFile?.socket?.path).toBeTruthy();
-    expect(createdFile?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(createdFile?.socket).toBeUndefined();
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         hash: "sha256:created",
-        file: expect.objectContaining({ socket: { path: createdFile?.socket?.path } }),
+        file: expect.objectContaining({ version: 1, agents: { main: {} } }),
       }),
       undefined,
     );

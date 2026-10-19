@@ -144,6 +144,7 @@ export const databaseEngineAdapters: {
             },
             snapshot,
           );
+          store.beforeMigrate?.(db, version - 1);
           db.exec(migration.sql);
           db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
             version,

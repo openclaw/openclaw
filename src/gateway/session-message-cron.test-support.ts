@@ -27,7 +27,7 @@ export function registerCronSessionCompletionEventTests({
   connectSessionClient: (
     ws: WebSocket,
     storePath: string,
-    identityFile: string,
+    identityName: string,
     kind: "web",
   ) => Promise<void>;
   waitForSessionMessageEvent: (ws: WebSocket, sessionKey: string) => ReturnType<typeof onceMessage>;
@@ -53,7 +53,7 @@ export function registerCronSessionCompletionEventTests({
       const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
       let reconnectedWebWs: Awaited<ReturnType<typeof harness.openWs>> | undefined;
       try {
-        await connectSessionClient(webWs, storePath, "current-cron-web-device.json", "web");
+        await connectSessionClient(webWs, storePath, "current-cron-web-device", "web");
         await rpcReq(webWs, "sessions.messages.subscribe", { key: sessionKey });
 
         const job: CronStoredJob = {
@@ -147,12 +147,7 @@ export function registerCronSessionCompletionEventTests({
 
         webWs.close();
         reconnectedWebWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
-        await connectSessionClient(
-          reconnectedWebWs,
-          storePath,
-          "current-cron-web-device.json",
-          "web",
-        );
+        await connectSessionClient(reconnectedWebWs, storePath, "current-cron-web-device", "web");
         const history = await rpcReq<{ messages?: unknown[] }>(reconnectedWebWs, "chat.history", {
           sessionKey,
         });

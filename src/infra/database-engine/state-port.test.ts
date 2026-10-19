@@ -1,8 +1,11 @@
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSchemaMigrationBackupTables } from "../../state/schema-migration-backup-scope.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitDatabasePortDescriptor } from "./port-descriptor.js";
+import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import { resolveStatePortRoots, statePortProvider } from "./state-port.js";
 
 const stateDir = path.resolve("/synthetic/selected");
@@ -69,7 +72,7 @@ it.each<{
 });
 
 it.each(
-  [24, 25, 26].flatMap((version) => [
+  [24, 25, 26, 27, 28].flatMap((version) => [
     { version, profiles: false },
     { version, profiles: true },
   ]),
@@ -110,5 +113,62 @@ it.each(
         },
       ]);
     }
+    expect(
+      source
+        .prepare("PRAGMA index_info(idx_state_leases_owner)")
+        .all()
+        .map((row) => row.name),
+    ).toEqual(version < 27 ? ["owner", "updated_at"] : ["owner"]);
+    expect(
+      source
+        .prepare(`SELECT name FROM sqlite_schema WHERE name IN
+          ('idx_acp_replay_events_session_seq', 'idx_skill_usage_key') ORDER BY name`)
+        .all()
+        .map((row) => row.name),
+    ).toEqual(version < 27 ? ["idx_acp_replay_events_session_seq", "idx_skill_usage_key"] : []);
   },
 );
+it("retains the exact predecessor credential tables for PostgreSQL update recovery", async () => {
+  const predecessor = await loadStatePortDescriptor(28);
+  const current = await loadStatePortDescriptor();
+  const tables = ["device_identities", "device_auth_tokens", "gateway_origin_device_tokens"];
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(predecessor.sqlite);
+    db.prepare(`INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)`).run(
+      "primary",
+      "retained-device",
+      "public-bytes",
+      "private-bytes",
+      1,
+      2,
+    );
+    expect(db.prepare("SELECT private_key_pem FROM device_identities").get()).toEqual({
+      private_key_pem: "private-bytes",
+    });
+    for (const table of tables) {
+      expect(predecessor.tables.some((entry) => entry.name === table)).toBe(true);
+      expect(predecessor.preData).toContain(`CREATE TABLE "${table}"`);
+      expect(current.tables.some((entry) => entry.name === table)).toBe(false);
+      expect(current.preData).not.toContain(`CREATE TABLE "${table}"`);
+    }
+    expect(current.tables.some((entry) => entry.name === "exec_approvals_config")).toBe(true);
+  } finally {
+    db.close();
+  }
+});
+
+it("captures only the credential retirement scope plus required schema metadata and statistics", () => {
+  expect(
+    resolveSchemaMigrationBackupTables({ kind: "state", foundVersion: 28, supportedVersion: 29 }),
+  ).toEqual([
+    "config_machine_state",
+    "device_auth_tokens",
+    "device_identities",
+    "exec_approvals_config",
+    "gateway_origin_device_tokens",
+    "schema_meta",
+    "sqlite_stat1",
+    "sqlite_stat4",
+  ]);
+});

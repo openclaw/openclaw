@@ -72,7 +72,7 @@ function expectInvalid(result: Awaited<ReturnType<typeof directSessionReq>>, mes
 async function openWorkspaceClient(root: string, scope = "operator.admin", name = "device") {
   const client = await openClient({
     scopes: [scope],
-    deviceIdentityPath: path.join(root, `${name}.json`),
+    deviceIdentityPath: path.join(root, name, "client", "credentials.sqlite"),
   });
   return {
     ...client,

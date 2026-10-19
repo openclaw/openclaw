@@ -641,40 +641,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   expires_at_ms INTEGER
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS device_identities (
-  identity_key TEXT NOT NULL PRIMARY KEY,
-  device_id TEXT NOT NULL,
-  public_key_pem TEXT NOT NULL,
-  private_key_pem TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_identities_device
-  ON device_identities(device_id, updated_at_ms DESC);
-
-CREATE TABLE IF NOT EXISTS device_auth_tokens (
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (device_id, role)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
-  ON device_auth_tokens(updated_at_ms DESC, device_id, role);
-
-CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
-  gateway_scope TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (gateway_scope, device_id, role)
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,

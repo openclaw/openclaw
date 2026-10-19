@@ -151,7 +151,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],
             deviceIdentity: loadOrCreateDeviceIdentity({
-              path: instance.state.path("placement-client.sqlite"),
+              path: instance.state.path("placement-client", "client", "credentials.sqlite"),
             }),
             onEvent: (event) => {
               const payload = event.payload;

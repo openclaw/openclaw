@@ -175,7 +175,9 @@ it(
         return { client, closed: closed.promise };
       };
       const pair = async (name: string, scopes: string[]) => {
-        const identity = loadOrCreateDeviceIdentity({ path: state.path(`${name}.sqlite`) });
+        const identity = loadOrCreateDeviceIdentity({
+          path: state.path(name, "client", "credentials.sqlite"),
+        });
         const pending = await requestDevicePairing({
           deviceId: identity.deviceId,
           publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
