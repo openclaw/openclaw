@@ -204,6 +204,9 @@ new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
 
+If a capacity refresh fails, the node logs a warning and advertises no available
+slots. Restart the node host if its capacity does not recover.
+
 Capacity, host-stat, and skill-bin updates do not interrupt active node work or
 change its pairing authority. This behavior requires an updated Gateway; node
 configuration and stored pairings remain unchanged.
