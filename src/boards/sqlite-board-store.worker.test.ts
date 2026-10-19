@@ -18,50 +18,42 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import * as workerStore from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
+import {
+  boardFixture,
+  closeBoardDatabases,
+  htmlWidget,
+  mcpContent,
+} from "./board-store.fixtures.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeBoardDatabases();
     cleanup();
   }),
 );
 
 function fixture() {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("board-worker-mutations-") };
-  const sessionKey = "agent:main:board";
-  const database = openOpenClawAgentDatabase({
-    agentId: "main",
-    env,
-  });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey, storePath: database.path },
-    { sessionId: "board-worker-session", updatedAt: 1 },
-  );
-  const options = { agentId: "main", path: database.path, env };
-  const target = { sessionKey };
+  const seeded = boardFixture(tempDirs.make("board-worker-mutations-"));
   const store = new SqliteBoardStore({
-    resolveSession: () => ({ ...options, sessionKey }),
-    env,
+    resolveSession: () => ({ ...seeded.options, sessionKey: seeded.sessionKey }),
+    env: seeded.env,
   });
-  return { database, env, options, store, target };
+  return {
+    ...seeded,
+    store,
+    putHtml: (name: string, html = `<p>${name}</p>`) =>
+      store.putWidget(htmlWidget(seeded.sessionKey, name, html)),
+  };
 }
 
 async function holdWriter(options: Parameters<typeof runOpenClawAgentWorkerWrite>[0]) {
@@ -85,9 +77,7 @@ it("admits Board writes and request authority without reading SQLite on the call
     });
     const put = await store.putWidget(
       {
-        ...target,
-        name: "status",
-        content: { kind: "html", html: "<p>status</p>" },
+        ...htmlWidget(target.sessionKey, "status", "<p>status</p>"),
         declared: { tools: ["health"] },
       },
       { assertCurrent },
@@ -140,16 +130,7 @@ it.each([false, true])(
       {
         ...target,
         name: "app",
-        content: {
-          kind: "mcp-app",
-          descriptor: {
-            serverName: "server",
-            toolName: "tool",
-            uiResourceUri: "ui://app",
-            toolCallId: "call",
-          },
-          interactive: true,
-        },
+        content: mcpContent(),
       },
       {
         assertCurrent,
@@ -208,9 +189,7 @@ it("executes Board mutations off the host and publishes each committed change on
     ).toMatchObject({ revision: 1, tabs: [{ tabId: "main" }] });
     expectPublication(1);
     const put = await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "<p>committed</p>" },
+      ...htmlWidget(target.sessionKey, "status", "<p>committed</p>"),
       declared: { tools: ["health"] },
     });
     expect(put).toMatchObject({ revision: 2, widgets: [{ revision: 1, grantState: "pending" }] });
@@ -243,12 +222,12 @@ it("executes Board mutations off the host and publishes each committed change on
 });
 
 it("preserves untouched widget rows while persisting later layout changes", async () => {
-  const { database, store, target } = fixture();
+  const { database, store, target, putHtml } = fixture();
   const readRows = () =>
     database.db.prepare("SELECT name, size_w, updated_at FROM board_widgets ORDER BY name").all();
-  await store.putWidget({ ...target, name: "first", content: { kind: "html", html: "first" } });
+  await putHtml("first", "first");
   database.db.prepare("UPDATE board_widgets SET updated_at = 100 WHERE name = 'first'").run();
-  await store.putWidget({ ...target, name: "second", content: { kind: "html", html: "second" } });
+  await putHtml("second", "second");
   const before = readRows();
   expect(before).toMatchObject([{ name: "first", updated_at: 100 }, { name: "second" }]);
   await store.applyOps(target, [{ kind: "widget_resize", name: "first", sizeW: 8, sizeH: 6 }]);
@@ -274,9 +253,7 @@ it.each([false, true])(
     });
     let current = true;
     const params: BoardWidgetMaterializedPutParams = {
-      ...target,
-      name: "captured",
-      content: { kind: "html", html: "<p>captured</p>" },
+      ...htmlWidget(target.sessionKey, "captured", "<p>captured</p>"),
     };
     const pending = store.putWidget(params, {
       assertCurrent() {
@@ -316,7 +293,7 @@ it.each([false, true])(
 );
 
 it("preserves committed Boards and admits followers after publication cleanup is refused", async () => {
-  const { database, store, target } = fixture();
+  const { database, store, target, putHtml: put } = fixture();
   const changes: SessionRowChange[] = [];
   const unsubscribe = sessionChanges.subscribe((change) => {
     if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
@@ -336,8 +313,6 @@ it("preserves committed Boards and admits followers after publication cleanup is
       refuseCleanup = true;
     }
   });
-  const put = (name: string) =>
-    store.putWidget({ ...target, name, content: { kind: "html", html: `<p>${name}</p>` } });
   const first = put("first");
   const queued = put("queued");
   void first.catch(() => undefined);
@@ -381,16 +356,7 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
       store.putWidget({
         ...target,
         name: "app",
-        content: {
-          kind: "mcp-app",
-          descriptor: {
-            serverName: "server",
-            toolName: "tool",
-            uiResourceUri: "ui://app",
-            toolCallId,
-          },
-          interactive: false,
-        },
+        content: mcpContent({ toolCallId }, false),
       });
     await put("initial");
     const { release, held } = await holdWriter(options);
@@ -418,12 +384,8 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
 );
 
 it("reads Board snapshots and documents without a write-capable publication", async () => {
-  const { store, target } = fixture();
-  const put = await store.putWidget({
-    ...target,
-    name: "status",
-    content: { kind: "html", html: "read-only" },
-  });
+  const { store, target, putHtml } = fixture();
+  const put = await putHtml("status", "read-only");
   const publication = vi
     .spyOn(workerStore, "openOpenClawAgentSqliteWorkerStore")
     .mockImplementation(() => {
@@ -442,12 +404,8 @@ it("reads Board snapshots and documents without a write-capable publication", as
 });
 
 it("refuses Board disclosure when its target changes during a read", async () => {
-  const { options, store, target } = fixture();
-  await store.putWidget({
-    ...target,
-    name: "status",
-    content: { kind: "html", html: "private" },
-  });
+  const { options, target, putHtml } = fixture();
+  await putHtml("status", "private");
   let sessionKey = target.sessionKey;
   const reader = new SqliteBoardStore({
     resolveSession: () => ({
@@ -489,12 +447,8 @@ it("refuses Board disclosure when its target changes during a read", async () =>
 it.each(["snapshot", "document"] as const)(
   "retains Board validation errors without waiting on writer-dependent retirement (%s)",
   async (operation) => {
-    const { database, options, store, target } = fixture();
-    await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "private" },
-    });
+    const { database, options, store, target, putHtml } = fixture();
+    await putHtml("status", "private");
     database.db
       .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
       .run(JSON.stringify({ contentOwner: "invalid" }), target.sessionKey);
@@ -580,12 +534,8 @@ it.each([
 it.each(["mutation", "snapshot", "document"] as const)(
   "retains a queued Board %s in its mixed-case Windows state root",
   async (operation) => {
-    const { env, options, store, target } = fixture();
-    await store.putWidget({
-      ...target,
-      name: "initial",
-      content: { kind: "html", html: "original" },
-    });
+    const { env, options, target, putHtml } = fixture();
+    await putHtml("initial", "original");
     const home = tempDirs.make("board-windows-env-home-");
     const laterRoot = path.join(home, "later-state");
     const mixedEnv = { HOME: home, USERPROFILE: home, OpenClaw_State_Dir: env.OPENCLAW_STATE_DIR };
@@ -602,7 +552,7 @@ it.each(["mutation", "snapshot", "document"] as const)(
     const pending =
       operation === "mutation"
         ? captured
-            .putWidget({ ...target, name: "queued", content: { kind: "html", html: "queued" } })
+            .putWidget(htmlWidget(target.sessionKey, "queued", "queued"))
             .then((result) => result.resolvedWidgetName)
         : operation === "snapshot"
           ? captured.useSnapshot(target, (snapshot) => snapshot.widgets[0]?.name)
@@ -638,12 +588,8 @@ it.each(["mutation", "snapshot", "document"] as const)(
 );
 
 it("rejects a Board read through an alias when its physical database closes", async () => {
-  const { database, options, store, target } = fixture();
-  await store.putWidget({
-    ...target,
-    name: "status",
-    content: { kind: "html", html: "private" },
-  });
+  const { database, options, target, putHtml } = fixture();
+  await putHtml("status", "private");
   const physicalPath = realpathSync(options.path);
   const aliasDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "board-alias");
   symlinkSync(path.dirname(physicalPath), aliasDirectory, "junction");

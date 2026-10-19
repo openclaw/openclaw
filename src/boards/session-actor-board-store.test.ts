@@ -8,11 +8,14 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { BoardValidationError } from "./board-layout.js";
+import { htmlWidget, mcpContent } from "./board-store.fixtures.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
 const sessionKey = "agent:main:dashboard:incognito-board";
 const target = { sessionKey };
+const empty = { sessionKey, revision: 0, tabs: [], widgets: [] };
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+const lifetime = { assertCurrent() {}, assertReadable() {} };
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -41,36 +44,25 @@ function storeForSession() {
 async function withStore(run: (store: SqliteBoardStore) => Promise<void>) {
   const binding = (await acquireSessionActorStorage(
     { agentId: "main", storePath, sessionKey, env },
-    { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+    { authority, lifetime, create: true },
   ))!;
-  expect(
-    (
-      await binding.actor.storage.mutate(
-        {
-          type: "session.entry.create",
-          input: { entry: { sessionId: "window-1", updatedAt: 1, incognito: true } },
-        },
-        authority,
-      )
-    ).kind,
-  ).toBe("committed");
+  const outcome = await binding.actor.storage.mutate(
+    {
+      type: "session.entry.create",
+      input: { entry: { sessionId: "window-1", updatedAt: 1, incognito: true } },
+    },
+    authority,
+  );
+  expect(outcome.kind).toBe("committed");
   await binding.actor.release();
   return run(storeForSession());
 }
 
-const html = (name: string, body = "<p>hello</p>") => ({
-  ...target,
-  name,
-  content: { kind: "html" as const, html: body },
-});
+const html = (name: string, body = "<p>hello</p>") => htmlWidget(sessionKey, name, body);
 const app = (serverName = "server") => ({
   ...target,
   name: "app",
-  content: {
-    kind: "mcp-app" as const,
-    interactive: true,
-    descriptor: { serverName, toolName: "tool", uiResourceUri: "ui://app", toolCallId: "call" },
-  },
+  content: mcpContent({ serverName }),
   declared: { tools: ["tool"] },
 });
 
@@ -79,7 +71,7 @@ describe("session actor BoardStore", () => {
     withStore(async () => {
       const binding = (await acquireSessionActorStorage(
         { agentId: "main", storePath, sessionKey, env },
-        { authority, lifetime: { assertCurrent() {}, assertReadable() {} } },
+        { authority, lifetime },
       ))!;
       try {
         await runWithSessionActorStorage(binding, async () => {
@@ -115,19 +107,9 @@ describe("session actor BoardStore", () => {
 
   it("reads absent sessions without creating them and rejects writes", async () => {
     const store = storeForSession();
-    expect(await store.getSnapshot(target)).toEqual({
-      sessionKey,
-      revision: 0,
-      tabs: [],
-      widgets: [],
-    });
+    expect(await store.getSnapshot(target)).toEqual(empty);
     expect(await store.useWidgetDocument(target, "missing", (value) => value)).toBeUndefined();
-    expect(await store.applyOps(target, [])).toEqual({
-      sessionKey,
-      revision: 0,
-      tabs: [],
-      widgets: [],
-    });
+    expect(await store.applyOps(target, [])).toEqual(empty);
     await expect(store.putWidget(html("missing"))).rejects.toMatchObject({ code: "not_found" });
     expect(memorySessionActorOwners.list()).toEqual([]);
   });
@@ -281,11 +263,6 @@ describe("session actor BoardStore", () => {
         { kind: "widget_remove", name: "plugin" },
         { kind: "tab_delete", tabId: "main" },
       ]);
-      expect(await store.getSnapshot(target)).toEqual({
-        sessionKey,
-        revision: 0,
-        tabs: [],
-        widgets: [],
-      });
+      expect(await store.getSnapshot(target)).toEqual(empty);
     }));
 });
