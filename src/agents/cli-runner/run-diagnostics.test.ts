@@ -183,14 +183,8 @@ describe("Claude CLI run diagnostics", () => {
     });
     expect(callbackTrace).toEqual(runStarted.trace);
     expect(result.diagnosticTrace).toEqual(harnessStarted.trace);
-    expect(diagnostics.eventOf("run.completed")).toMatchObject({
-      type: "run.completed",
-      outcome: "completed",
-    });
-    expect(diagnostics.eventOf("harness.run.completed")).toMatchObject({
-      type: "harness.run.completed",
-      outcome: "completed",
-    });
+    expect(diagnostics.eventOf("run.completed").outcome).toBe("completed");
+    expect(diagnostics.eventOf("harness.run.completed").outcome).toBe("completed");
   });
 
   it("attributes post-preparation run and harness events to the resolved execution owner", async () => {
@@ -282,14 +276,8 @@ describe("Claude CLI run diagnostics", () => {
         "harness.run.error",
       ]),
     );
-    expect(diagnostics.eventOf("run.completed")).toMatchObject({
-      type: "run.completed",
-      outcome: "error",
-    });
-    expect(diagnostics.eventOf("harness.run.error")).toMatchObject({
-      type: "harness.run.error",
-      phase: "cleanup",
-    });
+    expect(diagnostics.eventOf("run.completed").outcome).toBe("error");
+    expect(diagnostics.eventOf("harness.run.error").phase).toBe("cleanup");
     expect(
       diagnostics.events
         .filter(({ event }) => event.type === "run.completed" || event.type === "harness.run.error")
@@ -320,19 +308,13 @@ describe("Claude CLI run diagnostics", () => {
       ),
     ).rejects.toThrow(error.message);
     expect(diagnostics.events).toHaveLength(4);
-    expect(diagnostics.eventOf("run.completed")).toMatchObject({
-      type: "run.completed",
-      outcome: "aborted",
-    });
+    expect(diagnostics.eventOf("run.completed").outcome).toBe("aborted");
     expect(
       diagnostics.events.filter(
         ({ event }) => event.type === "harness.run.completed" || event.type === "harness.run.error",
       ),
     ).toHaveLength(1);
-    expect(diagnostics.eventOf("harness.run.completed")).toMatchObject({
-      type: "harness.run.completed",
-      outcome: harnessOutcome,
-    });
+    expect(diagnostics.eventOf("harness.run.completed").outcome).toBe(harnessOutcome);
     expect(diagnostics.events.some(({ event }) => event.type === "harness.run.error")).toBe(false);
   });
 
@@ -391,38 +373,22 @@ describe("Claude CLI run diagnostics", () => {
     expect(diagnostics.record("run.completed")?.privateData.messageContent).toBeUndefined();
   });
 
-  it("merges separately published prompt and response into the completed events", async () => {
-    captureContent();
-    const diagnostics = captureLifecycle("run-claude-content-merge");
-    await diagnostics.run(
-      async (lifecycle) => {
-        lifecycle.publishCapturedContent({ userPrompt: "prepare the release" });
-        lifecycle.publishCapturedContent({ finalResponse: "release prepared" });
-        return { payloads: [{ text: "release prepared" }], meta: { durationMs: 0 } };
-      },
-      { sessionId: "session-content-merge", trigger: "user", messageChannel: "webchat" },
-    );
+  it.each([true, false])("merges turn content only with captureContent=%s", async (enabled) => {
+    captureContent(enabled);
+    const diagnostics = captureLifecycle(`run-claude-content-${enabled}`);
     const content = { userPrompt: "prepare the release", finalResponse: "release prepared" };
-    expect(diagnostics.record("run.completed")?.privateData.messageContent).toMatchObject(content);
-    expect(diagnostics.record("harness.run.completed")?.privateData.harnessContent).toMatchObject(
-      content,
-    );
-  });
-
-  it("keeps published turn content off events without captureContent", async () => {
-    captureContent(false);
-    const diagnostics = captureLifecycle("run-claude-content-disabled");
     await diagnostics.run(
       async (lifecycle) => {
-        lifecycle.publishCapturedContent({
-          userPrompt: "prepare the release",
-          finalResponse: "release prepared",
-        });
-        return { payloads: [{ text: "release prepared" }], meta: { durationMs: 0 } };
+        lifecycle.publishCapturedContent({ userPrompt: content.userPrompt });
+        lifecycle.publishCapturedContent({ finalResponse: content.finalResponse });
+        return { payloads: [{ text: content.finalResponse }], meta: { durationMs: 0 } };
       },
-      { sessionId: "session-content-off", trigger: "user", messageChannel: "webchat" },
+      { trigger: "user", messageChannel: "webchat" },
     );
-    expect(diagnostics.record("run.completed")?.privateData.messageContent).toBeUndefined();
-    expect(diagnostics.record("harness.run.completed")?.privateData.harnessContent).toBeUndefined();
+    const expected = enabled ? expect.objectContaining(content) : undefined;
+    expect(diagnostics.record("run.completed")?.privateData.messageContent).toEqual(expected);
+    expect(diagnostics.record("harness.run.completed")?.privateData.harnessContent).toEqual(
+      expected,
+    );
   });
 });

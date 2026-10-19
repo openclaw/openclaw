@@ -3,22 +3,16 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveMcpLoopbackPolicyTools,
-  resolveMcpLoopbackScopedTools,
+  resolveMcpLoopbackScopedTools as resolveScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { execSchema } from "../bash-tools.schemas.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
-import {
-  createCliRunnerPrepareFixture,
-  createTestMcpLoopbackClientGrant,
-  createTestMcpLoopbackServerConfig,
-} from "../cli-runner.test-helpers.js";
+import { createCliRunnerPrepareFixture } from "../cli-runner.test-helpers.js";
+import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
-import {
-  resetCliRunnerPrepareTestDeps,
-  setCliRunnerPrepareTestDeps,
-} from "./prepare.test-support.js";
+import { resetCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 
 const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
   buildAnthropicCliBackend: () => CliBackendPlugin;
@@ -33,7 +27,8 @@ const searchTool = {
 };
 const messageTool = { ...searchTool, name: "message", label: "Message" };
 const nodeExecution = vi.fn();
-function executionTool(defaults: { host?: string; node?: string } = {}) {
+type ExecTarget = { host?: string; node?: string };
+function execTool(defaults: ExecTarget = {}) {
   return {
     ...searchTool,
     name: "exec",
@@ -54,13 +49,11 @@ vi.mock("../openclaw-tools.js", () => ({
 }));
 // mock-isolation: Observe node-only execution without assembling unrelated coding tools.
 vi.mock("../agent-tools.js", () => ({
-  createOpenClawCodingToolsInternalAsync: async ({
-    exec,
-  }: {
-    exec?: { host?: string; node?: string };
-  }) => [executionTool(exec)],
+  createOpenClawCodingToolsInternalAsync: async ({ exec }: { exec?: ExecTarget }) => [
+    execTool(exec),
+  ],
 }));
-vi.mock("../bash-tools.js", () => ({ createExecTool: executionTool }));
+vi.mock("../bash-tools.js", () => ({ createExecTool: execTool }));
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: async (method: string) => {
     if (method === "node.list") {
@@ -73,8 +66,8 @@ vi.mock("../tools/gateway.js", () => ({
   },
 }));
 let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
-const captureNativeToolAuthority = vi.fn((_tools: readonly string[] | null) => true);
-const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+const nativeAuthority = vi.fn((_tools: readonly string[] | null) => true);
+let mintGrant: ReturnType<typeof mockCliMcpPreparation>["mint"];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -82,27 +75,11 @@ beforeEach(() => {
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [{ ...buildAnthropicCliBackend(), pluginId: "anthropic" }],
   });
-  setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
-    makeBootstrapWarn: () => () => undefined,
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-    getActiveMcpLoopbackRuntime: () => ({
-      port: 31783,
-      ownerToken: "fixture-owner",
-      nonOwnerToken: "fixture-reader",
-    }),
-    createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
-    mintMcpLoopbackClientGrant,
-    bindMcpLoopbackClientGrantAdmission: () => true,
-    revokeMcpLoopbackClientGrant: () => true,
-    activateMcpLoopbackClientGrantCapture: () => ({ captureNativeToolAuthority }),
+  ({ mint: mintGrant } = mockCliMcpPreparation({
+    activateMcpLoopbackClientGrantCapture: () => ({ captureNativeToolAuthority: nativeAuthority }),
     resolveMcpLoopbackPolicyTools,
-    resolveMcpLoopbackScopedTools,
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-    getCliLiveSessionGeneration: () => undefined,
-    loadManifestModelCatalog: () => [],
-  });
+    resolveMcpLoopbackScopedTools: resolveScopedTools,
+  }));
   fixture = createCliRunnerPrepareFixture((params) =>
     prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
   );
@@ -113,51 +90,25 @@ afterEach(async () => {
   await fixture.cleanup();
 });
 
-it.each<{
-  name: string;
-  config: OpenClawConfig;
-  native: boolean;
-  sessionSearch: boolean;
-  managed: boolean;
-  openClaw?: string[];
-}>([
-  { name: "automatic", config: {}, native: true, sessionSearch: true, managed: true },
-  {
-    name: "pinned provider",
-    config: { tools: { web: { search: { provider: "brave" } } } },
-    native: false,
-    sessionSearch: true,
-    managed: true,
-  },
-  {
-    name: "global off with stale session enable",
-    config: { tools: { web: { search: { enabled: false } } } },
-    native: false,
-    sessionSearch: true,
-    managed: false,
-  },
-  {
-    name: "session off overrides an explicit tool allowlist",
-    config: {},
-    native: false,
-    sessionSearch: false,
-    managed: false,
-    openClaw: ["exec", "web_search", "message"],
-  },
+// Columns: mode, config, native search, session search, managed search, explicit tools.
+it.each<[string, OpenClawConfig, boolean, boolean, boolean, string[]?]>([
+  ["automatic", {}, true, true, true],
+  ["pinned provider", { tools: { web: { search: { provider: "brave" } } } }, false, true, true],
+  ["global off", { tools: { web: { search: { enabled: false } } } }, false, true, false],
+  ["session off", {}, false, false, false, ["exec", "web_search", "message"]],
 ])(
-  "keeps registered Claude CLI native authority consistent with $name",
-  async ({ config, native, sessionSearch, managed, openClaw }) => {
+  "keeps registered Claude CLI native authority consistent with %s",
+  async (_name, config, native, sessionSearch, managed, openClaw) => {
     const cfg: OpenClawConfig = {
       ...config,
       plugins: { enabled: false },
       tools: {
         ...config.tools,
         allow: ["exec", "web_search", "message"],
-        // Keep this node-only proof explicit now that ordinary local shell is managed.
         exec: { host: openClaw ? "auto" : "node", mode: "full" },
       },
     };
-    const context = await fixture.prepare({
+    const { preparedBackend, systemPromptReport } = await fixture.prepare({
       provider: "claude-cli",
       config: cfg,
       senderIsOwner: true,
@@ -166,30 +117,26 @@ it.each<{
       ...(openClaw ? { cliToolAvailability: { native: ["Read", "WebSearch"], openClaw } } : {}),
     });
     try {
-      const capture = expectDefined(context.preparedBackend.mcpClientGrantCapture, "capture");
+      const capture = expectDefined(preparedBackend.mcpClientGrantCapture, "capture");
       capture.activate("fixture-capture", () => {});
       capture.captureNativeTools?.(["Read", "WebSearch"]);
-      expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(
-        native ? ["read", "web_search"] : ["read"],
-      );
-      const argv = context.preparedBackend.backend.args ?? [];
+      expect(nativeAuthority).toHaveBeenLastCalledWith(native ? ["read", "web_search"] : ["read"]);
+      const argv = preparedBackend.backend.args ?? [];
       const denied = argv[argv.indexOf("--disallowedTools") + 1] ?? "";
       expect(denied.split(",").includes("WebSearch")).toBe(!native);
-      const promptTools = context.systemPromptReport.tools.entries.map((tool) => tool.name);
+      const promptTools = systemPromptReport.tools.entries.map((tool) => tool.name);
       expect.soft(promptTools.includes("web_search")).toBe(managed);
       expect(promptTools).toContain("message");
-      const grant = expectDefined(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context, "grant");
+      const grant = expectDefined(mintGrant.mock.calls[0]?.[0]?.context, "grant");
       expect.soft(grant.toolsAllow).toEqual(openClaw);
-      const tools = await resolveMcpLoopbackScopedTools({
+      const { tools } = await resolveScopedTools({
         cfg,
         context: grant,
         isGrantCurrent: () => true,
       });
-      expect(tools.tools.some((tool) => tool.name === "web_search")).toBe(managed);
-      const exec = expectDefined(
-        tools.tools.find((tool) => tool.name === "exec"),
-        "exec",
-      );
+      expect(tools.some((tool) => tool.name === "web_search")).toBe(managed);
+      const execution = tools.find((tool) => tool.name === "exec");
+      const exec = expectDefined(execution, "exec");
       if (openClaw) {
         expect(exec.parameters).toMatchObject({
           properties: { host: { enum: expect.arrayContaining(["gateway"]) } },
@@ -202,7 +149,7 @@ it.each<{
         });
       }
     } finally {
-      await context.preparedBackend.cleanup?.();
+      await preparedBackend.cleanup?.();
     }
   },
 );

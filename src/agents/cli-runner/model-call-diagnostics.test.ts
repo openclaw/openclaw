@@ -27,6 +27,14 @@ function createContext(): PreparedCliRunContext {
   } as PreparedCliRunContext;
 }
 
+const createDiagnostics = (prompt = "hello", systemPrompt?: string) =>
+  createClaudeCliModelCallDiagnostics({
+    context: createContext(),
+    prompt,
+    systemPrompt,
+    transport: "stdio",
+  });
+
 async function captureModelContent(
   observe: (
     diagnostics: NonNullable<ReturnType<typeof createClaudeCliModelCallDiagnostics>>,
@@ -43,12 +51,7 @@ async function captureModelContent(
   });
   try {
     const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt,
-        systemPrompt,
-        transport: "stdio",
-      }),
+      createDiagnostics(prompt, systemPrompt),
       "Claude CLI diagnostics",
     );
     diagnostics.emitStarted();
@@ -72,13 +75,7 @@ describe("Claude CLI model-call diagnostics", () => {
   afterEach(resetDiagnosticEventsForTest);
 
   it("does not create diagnostics without an active event listener", () => {
-    expect(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-    ).toBeUndefined();
+    expect(createDiagnostics()).toBeUndefined();
   });
 
   it("bounds large prompt and assistant content during a burst", async () => {
