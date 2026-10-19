@@ -44,7 +44,7 @@ type OpenClawStdioServerParameters = {
   stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
-export class OpenClawStdioClientTransport implements Transport {
+export class OpenClawStdioClientTransport extends EventTarget implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
   onmessage?: (message: JSONRPCMessage) => void;
@@ -65,6 +65,7 @@ export class OpenClawStdioClientTransport implements Transport {
   >;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
+    super();
     // Keep malformed-frame errors visible; the v2 SDK buffer silently drops invalid JSON.
     this.readBuffer =
       serverParams.decoder ?? new McpStdioFrameDecoder(STDIO_DEFAULT_MAX_BUFFER_SIZE, "transport");
@@ -133,7 +134,7 @@ export class OpenClawStdioClientTransport implements Transport {
           this.stderrStream ?? (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
       });
       this.process = child;
-      child.onError((error) => this.onerror?.(error));
+      child.onError((error) => this.notifyError(error));
       const receive = (chunk: Buffer) => {
         if (this.closing) {
           return;
@@ -142,7 +143,7 @@ export class OpenClawStdioClientTransport implements Transport {
           this.readBuffer.append(chunk);
           this.processReadBuffer();
         } catch (error) {
-          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          this.notifyError(error instanceof Error ? error : new Error(String(error)));
           void this.close().catch(() => {});
         }
       };
@@ -159,16 +160,17 @@ export class OpenClawStdioClientTransport implements Transport {
       void child.wait().then(
         (exit) => {
           try {
+            this.dispatchEvent(new Event("exit"));
             this.onexit?.(exit);
           } catch (error) {
-            this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+            this.notifyError(error instanceof Error ? error : new Error(String(error)));
           } finally {
             void this.close().catch(() => {});
             this.notifyClosed();
           }
         },
         (error: unknown) => {
-          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          this.notifyError(error instanceof Error ? error : new Error(String(error)));
           void this.close().catch(() => {});
           this.notifyClosed();
         },
@@ -185,7 +187,7 @@ export class OpenClawStdioClientTransport implements Transport {
           .close(this.startupCleanupError ? undefined : Promise.resolve())
           .catch((cleanupError: unknown) => {
             recordAgentCleanupFailure();
-            this.onerror?.(
+            this.notifyError(
               cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
             );
           });
@@ -193,7 +195,7 @@ export class OpenClawStdioClientTransport implements Transport {
           await cleanup;
         }
       }
-      this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+      this.notifyError(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -208,6 +210,12 @@ export class OpenClawStdioClientTransport implements Transport {
 
   get cleanupResult() {
     return this.cleanup;
+  }
+
+  private notifyError(error: Error): void {
+    // Observe failures before SDK callbacks can request cleanup or replace handlers.
+    this.dispatchEvent(new Event("error"));
+    this.onerror?.(error);
   }
 
   private notifyClosed(): void {
@@ -227,7 +235,7 @@ export class OpenClawStdioClientTransport implements Transport {
         }
         this.onmessage?.(message);
       } catch (error) {
-        this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+        this.notifyError(error instanceof Error ? error : new Error(String(error)));
       }
     }
   }

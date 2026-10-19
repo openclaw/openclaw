@@ -157,9 +157,6 @@ describe("production lint suppressions", () => {
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
-        // The MCP probe restores method identities and wraps transport callbacks, not EventTargets.
-        "src/agents/native-mcp-connect.ts|typescript/unbound-method|2",
-        "src/agents/native-mcp-connect.ts|unicorn/prefer-add-event-listener|4",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/config-schema.ts|typescript/no-generated-empty-object-type|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
