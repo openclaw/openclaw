@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { globSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { expect } from "vitest";
 import {
   createUiRealGatewayTestShards,
@@ -65,6 +65,7 @@ export function assertControlUiE2eOwnership(
           inSuiteServer &&
           (callName === "createOpenClawTestInstance" ||
             callName === "createBackgroundWorkInstance" ||
+            callName === "createDesktopResizeProxy" ||
             callName === "createWaitClockInstance" ||
             callName === "startBuiltControlUiE2eServer" ||
             callName === "startProductionControlUiE2eServer" ||
@@ -157,6 +158,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
     "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
     "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+    "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
     "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",

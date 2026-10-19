@@ -1,11 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { once } from "node:events";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Socket } from "node:net";
 import process from "node:process";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { sendJsonNoStore as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
@@ -157,14 +159,6 @@ function resolveWakeDedupeKey(payload: Record<string, unknown>): string | undefi
   return eventId ? createHash("sha256").update(`id:${eventId}`).digest("hex") : undefined;
 }
 
-function sendJson(response: ServerResponse, statusCode: number, body: Record<string, unknown>) {
-  response.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  response.end(JSON.stringify(body));
-}
-
 function closeServer(server: Server, sockets: Set<Socket>) {
   for (const socket of sockets) {
     socket.destroy();
@@ -185,13 +179,7 @@ function stopBridge(child: ChildProcess) {
 }
 
 async function listenLoopback(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, BRIDGE_HOST, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, BRIDGE_HOST), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Raft wake server did not bind a TCP port.");

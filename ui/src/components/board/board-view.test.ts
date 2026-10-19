@@ -509,6 +509,7 @@ describe("openclaw-board-view", () => {
         "mcp-app-retried",
       ),
     );
+    expect(view.querySelector("mcp-app-view .mount")).not.toBeNull();
     expect(refreshWidgetAppView).toHaveBeenCalledWith("alpha", 1);
   });
 

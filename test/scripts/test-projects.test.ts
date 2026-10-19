@@ -538,6 +538,14 @@ describe("scripts/test-projects changed-target routing", () => {
       owner: "infra",
       inventory: databaseWorkerCoreTestFiles,
     },
+    {
+      file: "src/auto-reply/reply/agent-runner-execution-auth-failures.test.ts",
+      owner: "infra",
+    },
+    {
+      file: "src/auto-reply/reply/agent-runner-execution-cli-admission.test.ts",
+      owner: "infra",
+    },
   ])("routes $file to $owner", ({ file, owner, source, inventory }) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([source ?? file]), {
       config: `test/vitest/vitest.${owner}.config.ts`,
@@ -1649,6 +1657,10 @@ export const single = {
     [
       "test/vitest/vitest.unit-fast-isolated.config.ts",
       "src/state/openclaw-agent-execution-cleanup.test.ts",
+    ],
+    [
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
+      "src/auto-reply/reply/agent-runner-execution-auth-failures.test.ts",
     ],
   ])("preserves whole-owner watch coverage for %s with %s", (config, file) => {
     const [plan] = buildVitestRunPlans(["--watch", config, file]);

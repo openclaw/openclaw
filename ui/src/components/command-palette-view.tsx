@@ -1,15 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, For, onCleanup, Show, untrack } from "solid-js";
-import type { GatewayAgentRow } from "../api/types.ts";
+import { createMemo, For, onCleanup, Show, untrack } from "solid-js";
 import {
   pathForAgentPanel,
   pathForPluginCatalogEntry,
   pathForPluginSettings,
   type RouteId,
 } from "../app-route-paths.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
-import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -19,11 +16,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
-import {
-  HumanMentionMenuView,
-  type HumanMentionMenu,
-  type HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.tsx";
+import { HumanMentionMenuView } from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { SelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.tsx";
 import {
   PaletteSessionAttachments,
@@ -32,7 +25,6 @@ import {
   PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import "../styles/command-palette.css";
-import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
@@ -42,6 +34,7 @@ import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
 import { COMMAND_PALETTE_INPUT_ID, CommandPaletteInput } from "./command-palette-input.tsx";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
+import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -53,54 +46,7 @@ import { Kbd, KeyboardShortcut, ShortcutText } from "./solid/kbd.tsx";
 
 registerCommandPaletteEnglish();
 
-export type PaletteFilter = "all" | "sessions" | "messages";
-
-export type CommandPaletteProps = {
-  basePath: string;
-  open: boolean;
-  query: string;
-  searchQuery: string;
-  searchDebouncing: boolean;
-  onFlushSearch: () => void;
-  promptMode: boolean;
-  activeId: string | null;
-  filter: PaletteFilter;
-  onFilterChange: (filter: PaletteFilter) => void;
-  agents: readonly GatewayAgentRow[];
-  agentIdentity?: AgentIdentityCapability;
-  defaultAgentId: string;
-  sessionItems: readonly CommandPaletteItem[];
-  catalogItems: readonly CommandPaletteItem[];
-  primaryModelSearch: boolean;
-  modelSearchError: string | null;
-  sessionSearchPending: boolean;
-  catalogSearchPending: boolean;
-  sessionSearchFailed: boolean;
-  sessionSearchPartial: boolean;
-  sessionSearchIndexing: boolean;
-  archivedTranscriptsExcluded: number;
-  onToggle: () => void;
-  onQueryChange: (query: string, event: InputEvent) => void;
-  onBeforeInput: (event: InputEvent) => void;
-  onSelectionChange: (event: Event) => void;
-  onCompositionStart: () => void;
-  onCompositionEnd: () => void;
-  composing: boolean;
-  mentionMenu: HumanMentionMenu;
-  mentionHost: HumanMentionMenuHost;
-  onMentionChange: () => void;
-  onActiveIdChange: (id: string) => void;
-  onNavigate?: ApplicationContext["navigate"];
-  onSelectSession?: (sessionKey: string) => void;
-  onSlashCommand?: (command: string) => void;
-  pluginIconUrls: Readonly<Record<string, string>>;
-  onPluginIconError: (pluginId: string) => void;
-  onPluginIconVisible: (pluginId: string) => void;
-  desktopAvailable: boolean;
-  custodianAvailable: boolean;
-  onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
-  draft: PaletteSessionDraft;
-};
+type CommandPaletteProps = ReturnType<CommandPaletteState["readProps"]>;
 
 function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
   const map = new Map<string, CommandPaletteItem[]>();
@@ -278,6 +224,7 @@ function PaletteSearch(props: {
   const results = createMemo(() => resolvePaletteResults(current()));
   const notices = () =>
     [
+      current().remoteSearchOffline ? t("palette.searchOffline") : null,
       current().sessionSearchFailed
         ? t("palette.searchFailed")
         : current().sessionSearchIndexing
@@ -295,6 +242,7 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !current().sessionSearchPending &&
     !current().catalogSearchPending &&
+    !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
     !current().sessionSearchPartial &&
@@ -354,8 +302,8 @@ function PaletteSearch(props: {
               <For each={group()[1]} keyed={(item) => item.id}>
                 {(item) => {
                   // Search can move a session between groups; both keys own this row.
-                  const key = untrack(() => `${item().category}:${item().id}`);
-                  onCleanup(() => props.optionElements.delete(key));
+                  const initialKey = untrack(() => `${item().category}:${item().id}`);
+                  onCleanup(() => props.optionElements.delete(initialKey));
                   const index = () => results().items.indexOf(item());
                   const active = () => index() === results().activeIndex;
                   const agentId = () =>
@@ -368,7 +316,7 @@ function PaletteSearch(props: {
                       : undefined;
                   return (
                     <div
-                      ref={(element) => props.optionElements.set(key, element)}
+                      ref={(element) => props.optionElements.set(initialKey, element)}
                       id={getOptionId(index())}
                       class={[
                         "cmd-palette__item",
@@ -397,7 +345,7 @@ function PaletteSearch(props: {
                         identity={current().agentIdentity?.get(agentId())}
                         pluginIconUrls={current().pluginIconUrls}
                         onPluginIconError={current().onPluginIconError}
-                        onPluginIconVisible={current().onPluginIconVisible}
+                        registerPluginIcon={current().registerPluginIcon}
                       />
                     </div>
                   );
@@ -445,18 +393,8 @@ function PaletteSearch(props: {
 }
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
+  let initialInput!: HTMLTextAreaElement;
   const current = () => props.readProps();
-  // The palette retains one draft owner and picker for this view's lifetime.
-  const { mentionMenu, onMentionChange } = untrack(current);
-  createEffect(
-    () => current().draft.mentionDirectory,
-    (directory) => mentionMenu.syncDirectory(directory),
-  );
-  createEffect(
-    createMemo(() => mentionMenu.open),
-    onMentionChange,
-    { defer: true },
-  );
   const results = createMemo(() => resolvePaletteResults(current()));
   const hideSearch = () => results().hideSearch;
   // The collapsing search remains mounted with its last presented projection.
@@ -476,6 +414,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   return (
     <>
       <openclaw-modal-dialog
+        prop:initialFocus={() => initialInput}
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
@@ -484,7 +423,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             event.preventDefault();
             if (!current().composing) {
               current().mentionMenu.close();
-              current().onMentionChange();
             }
             return;
           }
@@ -501,6 +439,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           onKeyDown={(event) => handleKeydown(event, current, activeElement)}
         >
           <CommandPaletteInput
+            onAutofocusRef={(element) => {
+              initialInput = element;
+            }}
             value={current().query}
             placeholder={t("palette.placeholder")}
             onInputRef={current().onInputRef}

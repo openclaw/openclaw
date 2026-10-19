@@ -1,13 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY as embeddedRuns } from "../agents/embedded-agent-runner/run-state.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
-import { replyRunState } from "../auto-reply/reply/reply-run-registry.state.js";
+import path from "node:path";
+import { afterEach, expect, it } from "vitest";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import {
   prepareHeartbeatRunStage,
@@ -18,9 +13,7 @@ import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.t
 
 const sessionKey = "agent:main:main";
 const isolatedSessionKey = `${sessionKey}:heartbeat`;
-const runKinds = ["embedded", "reply"] as const;
 const initialEntry = { sessionId: "heartbeat-conversation", updatedAt: 1_700_000_000_000 };
-const replyRuns = replyRunState.activeRunsByKey;
 
 async function withHeartbeatFixture(
   isolatedSession: boolean,
@@ -39,140 +32,123 @@ async function withHeartbeatFixture(
         sessionKey,
         source: "cron",
         intent: "immediate",
-        deps: { getQueueSize: () => 0 },
       },
       storePath,
     );
   });
 }
 
-function registerRun(kind: (typeof runKinds)[number], key: string, sessionId: string) {
-  if (kind === "reply") {
-    const operation = createReplyOperation({ sessionKey: key, sessionId, resetTriggered: false });
-    operation.setPhase("running");
-    return () => operation.complete();
-  }
-  const handle = createEmbeddedRunHandle();
-  setActiveEmbeddedRun(sessionId, handle, key);
-  return () => clearActiveEmbeddedRun(sessionId, handle, key);
-}
-
-function captureReplyRuns() {
-  return new Map(
-    Array.from(replyRuns, ([key, { sessionId, phase }]) => [key, { sessionId, phase }]),
-  );
+function registerTurn(key: string, sessionId: string, storePath: string) {
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId,
+    agentId: "main",
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: key,
+      agentId: "main",
+      incarnation: sessionId,
+    }),
+  });
+  operation.setPhase("running");
+  return operation;
 }
 
 afterEach(resetHeartbeatEventsForTest);
 
-it("does not enumerate 1000 active runs for an isolated session", async () => {
-  await withHeartbeatFixture(true, async (opts, storePath) => {
-    const embeddedBefore = new Map(embeddedRuns);
-    const replyBefore = captureReplyRuns();
-    const expectedEmbedded = new Map(embeddedBefore);
-    const expectedReply = new Map(replyBefore);
-    const scope = { agentId: "main", storePath, sessionKey };
-    const entryBefore = loadExactSessionEntry(scope)?.entry;
-    expect(entryBefore).toMatchObject(initialEntry);
-    const cleanup: Array<() => void> = [];
-    try {
-      for (const kind of runKinds) {
-        for (let index = 0; index < 500; index += 1) {
-          cleanup.push(
-            registerRun(kind, `agent:other:${kind}-${index}`, `${kind}-session-${index}`),
-          );
-          if (kind === "embedded") {
-            expectedEmbedded.set(`agent:other:${kind}-${index}`, `${kind}-session-${index}`);
-          } else {
-            expectedReply.set(`agent:other:${kind}-${index}`, {
-              sessionId: `${kind}-session-${index}`,
-              phase: "running",
-            });
-          }
-        }
-      }
-      const keySpies = [embeddedRuns, replyRuns].map((map) => vi.spyOn(map, "keys"));
-      let wake: Awaited<ReturnType<typeof resolveHeartbeatWakeStage>>;
-      let prepared: Awaited<ReturnType<typeof prepareHeartbeatRunStage>> | undefined;
-      try {
-        wake = await resolveHeartbeatWakeStage(opts);
-        if (wake.kind === "ready") {
-          prepared = await prepareHeartbeatRunStage(wake);
-        }
-        for (const spy of keySpies) {
-          expect(spy).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const spy of keySpies) {
-          spy.mockRestore();
-        }
-      }
-      if (wake.kind !== "ready" || prepared?.kind !== "ready") {
-        throw new Error("expected both heartbeat stages to be ready");
-      }
-      expect(wake.cfg).toBe(opts.cfg);
-      expect(wake.preflight.session.entry).toEqual(entryBefore);
-      expect(prepared).toEqual(
-        expect.objectContaining({
-          run: { kind: "isolated", sessionKey: isolatedSessionKey, baseSessionKey: sessionKey },
-          runSessionKey: isolatedSessionKey,
-          delivery: expect.objectContaining({ channel: "none", reason: "target-none" }),
-          visibility: { showOk: false, showAlerts: true, useIndicator: true },
-        }),
-      );
-      expect(loadExactSessionEntry(scope)?.entry).toEqual(entryBefore);
-      const isolatedEntry = loadExactSessionEntry({ ...scope, sessionKey: isolatedSessionKey });
-      expect(isolatedEntry?.entry.heartbeatIsolatedBaseSessionKey).toBe(sessionKey);
-      expect(isolatedEntry?.entry.sessionId).not.toBe(entryBefore?.sessionId);
-      expect(embeddedRuns).toEqual(expectedEmbedded);
-      expect(captureReplyRuns()).toEqual(expectedReply);
-    } finally {
-      for (const close of cleanup.toReversed()) {
-        close();
-      }
-    }
-    expect(embeddedRuns).toEqual(embeddedBefore);
-    expect(captureReplyRuns()).toEqual(replyBefore);
-  });
-});
-
-it.each(
-  runKinds.flatMap((kind) => [false, true].map((isolatedSession) => ({ kind, isolatedSession }))),
-)(
-  "sees a late $kind run at the isolated=$isolatedSession fence",
-  async ({ kind, isolatedSession }) => {
+it.each([false, true])(
+  "leaves unrelated controller turns untouched for isolatedSession=%s",
+  async (isolatedSession) => {
     await withHeartbeatFixture(isolatedSession, async (opts, storePath) => {
-      const key = isolatedSession ? isolatedSessionKey : sessionKey;
-      const scope = { agentId: "main", storePath, sessionKey: key };
+      const runKey = isolatedSession ? isolatedSessionKey : sessionKey;
+      const scope = { agentId: "main", storePath, sessionKey };
       const entryBefore = loadExactSessionEntry(scope)?.entry;
-      let pending:
-        | ReturnType<typeof resolveHeartbeatWakeStage>
-        | ReturnType<typeof prepareHeartbeatRunStage>;
-      if (isolatedSession) {
+      const operations = [
+        registerTurn("agent:main:other", "other-conversation", storePath),
+        registerTurn(runKey, "other-store-conversation", path.join(storePath, "other-store")),
+      ];
+      try {
         const wake = await resolveHeartbeatWakeStage(opts);
+        expect(wake.kind).toBe("ready");
         if (wake.kind !== "ready") {
           throw new Error("expected heartbeat preflight to be ready");
         }
-        expect(loadExactSessionEntry(scope)).toBeUndefined();
-        pending = prepareHeartbeatRunStage(wake);
-      } else {
-        pending = resolveHeartbeatWakeStage(opts);
-      }
-      // Register after the real asynchronous owner yields, before its busy fence.
-      const close = registerRun(kind, key, `late-${kind}`);
-      try {
-        expect(await pending).toEqual({ kind: "skipped", reason: "requests-in-flight" });
-        expect(loadExactSessionEntry(scope)?.entry).toEqual(entryBefore);
-        if (isolatedSession) {
-          expect(loadExactSessionEntry(scope)).toBeUndefined();
+        const prepared = await prepareHeartbeatRunStage(wake);
+        expect(prepared.kind).toBe("ready");
+        if (prepared.kind !== "ready") {
+          throw new Error("expected unrelated turns to leave preparation ready");
         }
-        expect(getLastHeartbeatEvent()).toMatchObject({
-          status: "skipped",
-          reason: "requests-in-flight",
+        expect(prepared.runSessionKey).toBe(runKey);
+        expect(prepared.delivery).toMatchObject({ channel: "none", reason: "target-none" });
+        expect(loadExactSessionEntry(scope)?.entry).toEqual(entryBefore);
+        const isolatedEntry = loadExactSessionEntry({
+          ...scope,
+          sessionKey: isolatedSessionKey,
         });
+        if (isolatedSession) {
+          expect(isolatedEntry?.entry.heartbeatIsolatedBaseSessionKey).toBe(sessionKey);
+          expect(isolatedEntry?.entry.sessionId).not.toBe(entryBefore?.sessionId);
+        } else {
+          expect(isolatedEntry).toBeUndefined();
+        }
+        for (const operation of operations) {
+          expect(operation.result).toBeNull();
+          expect(operation.abortSignal.aborted).toBe(false);
+        }
       } finally {
-        close();
+        for (const operation of operations) {
+          operation.complete();
+        }
       }
     });
   },
 );
+
+it("defers a late isolated turn before creating its session row", async () => {
+  await withHeartbeatFixture(true, async (opts, storePath) => {
+    const scope = { agentId: "main", storePath, sessionKey: isolatedSessionKey };
+    const wake = await resolveHeartbeatWakeStage(opts);
+    expect(wake.kind).toBe("ready");
+    if (wake.kind !== "ready") {
+      throw new Error("expected heartbeat preflight to be ready");
+    }
+    expect(loadExactSessionEntry(scope)).toBeUndefined();
+    const pending = prepareHeartbeatRunStage(wake);
+    // Register after the real asynchronous owner yields, before its admission fence.
+    const operation = registerTurn(isolatedSessionKey, "late-isolated-turn", storePath);
+    try {
+      expect(await pending).toEqual({ kind: "skipped", reason: "requests-in-flight" });
+      expect(loadExactSessionEntry(scope)).toBeUndefined();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "skipped",
+        reason: "requests-in-flight",
+      });
+      expect(operation.result).toBeNull();
+      expect(operation.abortSignal.aborted).toBe(false);
+    } finally {
+      operation.complete();
+    }
+  });
+});
+
+it("leaves a busy shared session to dispatch admission", async () => {
+  await withHeartbeatFixture(false, async (opts, storePath) => {
+    const scope = { agentId: "main", storePath, sessionKey };
+    const entryBefore = loadExactSessionEntry(scope)?.entry;
+    const operation = registerTurn(sessionKey, "heartbeat-conversation", storePath);
+    try {
+      const wake = await resolveHeartbeatWakeStage(opts);
+      expect(wake.kind).toBe("ready");
+      if (wake.kind !== "ready") {
+        throw new Error("expected shared-session preflight to defer busy handling");
+      }
+      expect((await prepareHeartbeatRunStage(wake)).kind).toBe("ready");
+      expect(loadExactSessionEntry(scope)?.entry).toEqual(entryBefore);
+      expect(operation.result).toBeNull();
+      expect(operation.abortSignal.aborted).toBe(false);
+    } finally {
+      operation.complete();
+    }
+  });
+});

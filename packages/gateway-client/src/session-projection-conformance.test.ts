@@ -3,11 +3,12 @@ import {
   createSessionProjection,
   readSessionMessageIdentity,
   readSessionProjectionFinalMessageIdentity,
-  reduceSessionProjection,
+  reduceSessionProjection as reduce,
   type SessionProjectionEvent,
   type SessionProjectionScope,
   type SessionProjectionState,
 } from "./session-projection.js";
+import { user, assistant } from "./session-projection.test-support.js";
 
 const sharedScope: SessionProjectionScope = {
   activeLeafEntryId: "shared-leaf",
@@ -17,34 +18,24 @@ const sharedScope: SessionProjectionScope = {
   sessionKey: "agent:main:shared",
 };
 
-function persistedUser(params: {
-  id: string;
-  sequence: number;
-  runId?: string;
-  text?: string;
-  metadata?: Record<string, unknown>;
-}): Record<string, unknown> {
-  return {
-    __openclaw: {
-      id: params.id,
-      idempotencyKey: `${params.runId ?? params.id}:user`,
-      seq: params.sequence,
-      ...params.metadata,
-    },
-    content: [{ text: params.text ?? params.id, type: "text" }],
-    role: "user",
-  };
+function persistedUser(
+  id: string,
+  sequence: number,
+  options: { runId?: string; text?: string; metadata?: Record<string, unknown> } = {},
+) {
+  return user(options.text ?? id, {
+    id,
+    seq: sequence,
+    idempotencyKey: `${options.runId ?? id}:user`,
+    ...options.metadata,
+  });
 }
 
 function replay(
   events: readonly SessionProjectionEvent[],
   scope: SessionProjectionScope = sharedScope,
 ): SessionProjectionState {
-  let state = createSessionProjection(scope);
-  for (const event of events) {
-    state = reduceSessionProjection(state, event);
-  }
-  return state;
+  return events.reduce<SessionProjectionState>(reduce, createSessionProjection(scope));
 }
 
 describe("session projection identity conformance", () => {
@@ -68,8 +59,8 @@ describe("session projection identity conformance", () => {
       },
     };
     let state = createSessionProjection(sharedScope, [enriched]);
-    state = reduceSessionProjection(state, { type: "messagePersisted", message: native });
-    state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: [enriched] });
+    state = reduce(state, { type: "messagePersisted", message: native });
+    state = reduce(state, { type: "snapshotLoaded", messages: [enriched] });
 
     expect(state.messages).toEqual([enriched]);
     expect(readSessionProjectionFinalMessageIdentity(enriched)).toBe(
@@ -80,7 +71,7 @@ describe("session projection identity conformance", () => {
   it.each([
     {
       name: "persisted identity wins over conflicting Gateway envelope",
-      message: persistedUser({ id: "persisted-id", runId: "persisted-run", sequence: 3 }),
+      message: persistedUser("persisted-id", 3, { runId: "persisted-run" }),
       envelope: {
         clientRunId: "envelope-run",
         messageId: "envelope-id",
@@ -97,15 +88,11 @@ describe("session projection identity conformance", () => {
     },
     {
       name: "producer-owned assistant run wins over its assistant idempotency suffix",
-      message: {
-        __openclaw: {
-          id: "aborted-assistant",
-          idempotencyKey: "producer-run:assistant",
-          seq: 3,
-        },
-        content: [{ text: "held partial", type: "text" }],
-        role: "assistant",
-      },
+      message: assistant("held partial", {
+        id: "aborted-assistant",
+        idempotencyKey: "producer-run:assistant",
+        seq: 3,
+      }),
       envelope: {
         clientRunId: "conflicting-client-run",
         messageId: "aborted-assistant",
@@ -122,10 +109,7 @@ describe("session projection identity conformance", () => {
     },
     {
       name: "unsafe persisted sequence falls back to a valid envelope sequence",
-      message: persistedUser({
-        id: "unsafe-sequence",
-        sequence: Number.MAX_SAFE_INTEGER + 1,
-      }),
+      message: persistedUser("unsafe-sequence", Number.MAX_SAFE_INTEGER + 1),
       envelope: { messageSeq: 5 },
       expected: { id: "unsafe-sequence", role: "user", sequence: 5 },
     },
@@ -135,21 +119,15 @@ describe("session projection identity conformance", () => {
 
   it("keeps imported IDs isolated from colliding native and other-provider messages", () => {
     const externalId = "colliding-id";
-    const native = persistedUser({ id: externalId, sequence: 1 });
-    const firstImport = persistedUser({
-      id: externalId,
+    const native = persistedUser(externalId, 1);
+    const firstImport = persistedUser(externalId, 2, {
       metadata: { cliSessionId: "cli-a", externalId, importedFrom: "provider-a" },
-      sequence: 2,
     });
-    const secondImport = persistedUser({
-      id: externalId,
+    const secondImport = persistedUser(externalId, 3, {
       metadata: { cliSessionId: "cli-b", externalId, importedFrom: "provider-a" },
-      sequence: 3,
     });
-    const incompleteImport = persistedUser({
-      id: externalId,
+    const incompleteImport = persistedUser(externalId, 4, {
       metadata: { importedFrom: "provider-a" },
-      sequence: 4,
     });
 
     const state = replay([
@@ -174,8 +152,8 @@ describe("session projection identity conformance", () => {
       idempotencyKey: "local-run:user",
       role: "user",
     };
-    const peer = persistedUser({ id: "peer-message", runId: "peer-run", sequence: 1, text });
-    const local = persistedUser({ id: "local-message", runId: "local-run", sequence: 2, text });
+    const peer = persistedUser("peer-message", 1, { runId: "peer-run", text });
+    const local = persistedUser("local-message", 2, { runId: "local-run", text });
     const events: SessionProjectionEvent[] = [
       { message: pending, runId: "local-run", type: "sendPending" },
       {
@@ -219,8 +197,8 @@ describe("session projection identity conformance", () => {
   });
 
   it("drops obsolete leaf and lifecycle events after a session reset", () => {
-    const obsolete = persistedUser({ id: "before-reset", sequence: 1 });
-    const current = persistedUser({ id: "after-reset", sequence: 1 });
+    const obsolete = persistedUser("before-reset", 1);
+    const current = persistedUser("after-reset", 1);
     const currentScope = {
       ...sharedScope,
       activeLeafEntryId: "reset-leaf",

@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onSettled, untrack } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled, untrack } from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
@@ -30,6 +30,7 @@ export function ChatSummaryAutomations(props: Props) {
   const gateway = createMemo(() => props.gateway);
   const sessionKey = createMemo(() => props.sessionKey);
   const presented = createMemo(() => props.presented);
+  const binding = createMemo(() => ({ source: gateway(), key: sessionKey() }));
   const [revision, setRevision] = createSignal(0);
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
@@ -39,9 +40,9 @@ export function ChatSummaryAutomations(props: Props) {
   let dirty = true;
   let active = true;
   let presentationScope = 0;
-  // Imperative request admission samples live presentation without owning its dependency.
-  const readPresented = () => untrack(presented);
-  const visible = (isPresented = readPresented()) =>
+  const jobLinks = new Map<string, HTMLAnchorElement>();
+  let statusMessage: HTMLDivElement | undefined;
+  const visible = (isPresented = presented()) =>
     active && host.isConnected && isPresented && host.ownerDocument.visibilityState !== "hidden";
   const state = () => {
     revision();
@@ -93,25 +94,36 @@ export function ChatSummaryAutomations(props: Props) {
     publish();
   }
 
-  async function load(append = false, retry?: HTMLButtonElement, isPresented = readPresented()) {
+  async function load({
+    append = false,
+    retry,
+    isPresented = presented(),
+    event,
+  }: {
+    append?: boolean;
+    retry?: HTMLButtonElement;
+    isPresented?: boolean;
+    event?: unknown;
+  } = {}) {
     const current = cron;
     if (
       !readAccess ||
       !visible(isPresented) ||
       !current.connected ||
       !current.cronSessionFilter ||
-      current.cronLoading ||
-      current.cronJobsLoadingMore
+      ((current.cronLoading || current.cronJobsLoadingMore) && !dirty)
     ) {
       return;
     }
     dirty = false;
-    const pending = loadCompactCronJobsPage(current, { append });
+    const pending = loadCompactCronJobsPage(current, { append, event });
     publish();
     await pending;
     if (cron !== current || !active || !host.isConnected) {
       return;
     }
+    // The loader pauses trailing reads while hidden; retain one visible catch-up.
+    dirty ||= !visible();
     showError = current.cronJobsError !== null;
     const restoreFocus = retry && visible() && host.ownerDocument.activeElement === retry;
     publish();
@@ -122,21 +134,19 @@ export function ChatSummaryAutomations(props: Props) {
           visible() &&
           host.ownerDocument.activeElement === host.ownerDocument.body
         ) {
-          // Retry targets the first current child row after keyed list reconciliation.
-          host
-            .querySelector<HTMLElement>(
-              ".chat-summary__automation, .chat-summary__automation-message",
-            )
-            ?.focus();
+          const target = jobLinks.get(cron.cronJobs[0]?.id ?? "") ?? statusMessage;
+          if (target?.isConnected) {
+            target.focus();
+          }
         }
       });
     }
   }
 
-  // Rebind Gateway subscriptions and the request scope when the displayed session changes.
-  createEffect(
-    () => [gateway(), sessionKey()] as const,
-    ([source, key]) => {
+  function SourceLifetime(scope: { source: ApplicationGateway | undefined; key: string }) {
+    onSettled(() => {
+      const source = scope.source;
+      const key = scope.key;
       reset(source, key);
       if (!source) {
         return undefined;
@@ -144,7 +154,7 @@ export function ChatSummaryAutomations(props: Props) {
       const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
       let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
       // Reject obsolete event delivery before queued binding cleanup runs.
-      const current = () => untrack(() => props.gateway === source && props.sessionKey === key);
+      const current = () => props.gateway === source && props.sessionKey === key;
       // Connection publications retire request scopes before the next cron event is delivered.
       const unsubscribe = source.subscribe((snapshot) => {
         if (!current()) {
@@ -172,7 +182,7 @@ export function ChatSummaryAutomations(props: Props) {
       const unsubscribeEvents = source.subscribeEvents((event) => {
         if (current() && event.event === "cron") {
           dirty = true;
-          void load();
+          void load({ event: event.payload });
         }
       });
       void load();
@@ -181,15 +191,18 @@ export function ChatSummaryAutomations(props: Props) {
         unsubscribeEvents();
         lifecycle.dispose();
       };
-    },
-  );
-  // Presentation changes suspend or resume the Gateway inventory request.
-  createEffect(presented, (value) => {
-    dirty ||= !value;
-    if (value) {
-      void load(false, undefined, value);
-    }
-  });
+    });
+    return null;
+  }
+  function PresentedLifetime() {
+    onSettled(() => {
+      void load({ isPresented: true });
+      return () => {
+        dirty = true;
+      };
+    });
+    return null;
+  }
   onSettled(() => {
     const activate = () => {
       if (dirty) {
@@ -231,8 +244,20 @@ export function ChatSummaryAutomations(props: Props) {
       <For each={state().cronJobs} keyed={(job) => job.id}>
         {(job) => {
           const search = () => `?${new URLSearchParams({ job: job().id })}`;
+          // Retry focus runs before row onSettled; register its stable keyed identity in the ref.
+          const initialJobId = untrack(() => job().id);
+          let link: HTMLAnchorElement;
+          onSettled(() => () => {
+            if (jobLinks.get(initialJobId) === link) {
+              jobLinks.delete(initialJobId);
+            }
+          });
           return (
             <a
+              ref={(element) => {
+                link = element;
+                jobLinks.set(initialJobId, element);
+              }}
               class="chat-summary__automation"
               href={`${pathForRoute("cron", context?.basePath ?? "")}${search()}`}
               onClick={(event) => {
@@ -264,14 +289,19 @@ export function ChatSummaryAutomations(props: Props) {
             type="button"
             class="chip chat-summary__automation-retry"
             aria-disabled={loading() || !state().connected ? "true" : "false"}
-            onClick={(event) => void load(false, event.currentTarget)}
+            onClick={(event) => void load({ retry: event.currentTarget })}
           >
             {t("common.retry")}
           </button>
         </div>
       ) : (
         !loaded() && (
-          <div class="chat-summary__automation-message" role="status" tabindex={-1}>
+          <div
+            ref={(element) => (statusMessage = element)}
+            class="chat-summary__automation-message"
+            role="status"
+            tabindex={-1}
+          >
             {!state().cronSessionFilter
               ? t("chat.sessionDetails.automationUnavailable")
               : !state().connected
@@ -285,7 +315,7 @@ export function ChatSummaryAutomations(props: Props) {
           type="button"
           class="chip chat-summary__automation-more"
           disabled={loading() || !state().connected}
-          onClick={() => void load(true)}
+          onClick={() => void load({ append: true })}
         >
           {t("chat.sessionDetails.automationMore")}
         </button>
@@ -294,6 +324,12 @@ export function ChatSummaryAutomations(props: Props) {
   );
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
+      <Show when={binding()} keyed>
+        {(scope) => <SourceLifetime source={scope.source} key={scope.key} />}
+      </Show>
+      <Show when={presented()}>
+        <PresentedLifetime />
+      </Show>
       <Show when={readable()}>
         <Show
           when={state().cronJobs.length > 0}
@@ -311,12 +347,4 @@ export function ChatSummaryAutomations(props: Props) {
       </Show>
     </openclaw-chat-summary-automations>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-summary-automations": HTMLAttributes<HTMLElement>;
-    }
-  }
 }

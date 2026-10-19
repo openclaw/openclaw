@@ -49,20 +49,29 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       new RegExp("(^pendingInputs$|^sessionInfo$|^commands$)", "u"),
       new RegExp("(^items$|^total$|^queuedCount$|^nextBefore$)", "u"),
       new RegExp("(^id$|^runId$|^message$|^acceptedAt$|^state$|^queued$)", "u"),
+      new RegExp(
+        "(^key$|^rowMode$|^sharedFacts$|^sessionId$|^lifecycleRevision$|^sessionModelRevision$|^incognito$|^kind$|^label$|^autoLabel$|^icon$|^color$|^channelAvatarUrl$|^boardFace$|^hasBoard$|^boardPresentation$|^displayName$|^titlePending$|^derivedTitle$|^lastMessagePreview$|^lastAssistantMessage$|^channel$|^classification$|^agentId$|^accountId$|^peerKind$|^isMain$|^isBackground$|^isDock$|^chatType$|^activitySummary$|^updatedAt$|^snapshotAt$|^ancestorRevision$|^hiddenFromInvolvingMe$|^archived$|^archivedAt$|^archivedBy$|^archiveReason$|^pinned$|^sidebarRoot$|^pinnedAt$|^snoozedUntil$|^snoozedAt$|^unread$|^lastReadAt$|^markedUnreadAt$|^lastActivityAt$|^lastInteractionAt$|^status$|^lastRunError$|^suppressErrorNotice$|^providerReview$|^lastRunId$|^restartRecoveryStatus$|^restartRecoveryCycleId$|^activeLeafEntryId$|^spawnedBy$|^parentSessionKey$|^parentSessionId$|^controlOwnerSessionKey$|^childOwnerSessionKeys$|^childSessions$|^forkedFromParent$|^spawnDepth$|^subagentRole$|^subagentControlScope$|^swarmGroupId$|^swarm$|^deviceFolder$|^worktree$|^repositoryWorkspaceId$|^repository$|^execNode$|^execCwd$|^spawnedWorkspaceDir$|^spawnedCwd$|^projectId$|^workspaceDir$|^permissionMode$|^communication$|^effectiveCommunication$|^sandboxMode$|^nativeRuntimeConsent$|^permissionModePending$|^sessionRoot$|^createdVia$|^createdSurface$|^createdActor$|^owner$|^participants$|^expandedParticipants$|^participantCount$|^visibility$|^sharingRole$|^sendDisabledReason$|^createdAt$|^forkSource$|^previousSessionId$|^inputTokens$|^outputTokens$|^usageReport$|^totalTokens$|^totalTokensFresh$|^contextTokens$|^estimatedCostUsd$|^model$|^modelProvider$|^activeModel$|^activeModelProvider$|^modelOverrideSource$|^toolOverrides$)",
+        "u",
+      ),
+      new RegExp("(^text$|^timestamp$)", "u"),
       new RegExp("(^canEnsure$|^text$|^updatedAt$|^state$)", "u"),
       new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
+      new RegExp("(^type$|^id$)", "u"),
+      new RegExp("(^type$|^id$)", "u"),
+      new RegExp("(^type$|^pluginId$|^domain$|^idKind$|^id$)", "u"),
+      new RegExp("(^type$|^pluginId$|^accountId$|^senderKind$|^id$)", "u"),
+      new RegExp("(^type$|^actorType$|^source$|^id$)", "u"),
       new RegExp("(^id$|^runId$|^explanation$|^continuationMessage$|^canContinue$)", "u"),
+      new RegExp("(^groups$|^otherActiveGroups$)", "u"),
       new RegExp("(^groupId$|^createdAt$|^children$|^queued$|^running$|^done$|^failed$)", "u"),
+      new RegExp("(^sessionKey$|^status$)", "u"),
+      new RegExp("(^deviceId$|^path$)", "u"),
       new RegExp("(^url$|^ref$|^branch$)", "u"),
       new RegExp("(^send$|^receive$)", "u"),
-      new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
+      new RegExp("(^send$|^receive$)", "u"),
       new RegExp("(^actor$|^assignedBy$|^assignedAt$)", "u"),
-      new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
-      new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
-      new RegExp("(^identity$|^label$|^avatarUrl$)", "u"),
       new RegExp("(^identity$|^label$|^avatarUrl$)", "u"),
       new RegExp("(^mcpServers$|^mcpToolsDeny$|^skills$|^webSearch$)", "u"),
-      new RegExp("^.*$", "u"),
       new RegExp("^.*$", "u"),
       new RegExp("^.*$", "u"),
       new RegExp(
@@ -70,1818 +79,909 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
         "u",
       ),
       new RegExp("(^name$|^description$|^type$|^required$|^choices$|^dynamic$)", "u"),
+      new RegExp("(^value$|^label$)", "u"),
+      new RegExp("(^when$|^action$)", "u"),
+      new RegExp("(^kind$)", "u"),
     ],
-    check_0 = (value) =>
+    check_0 = (value) => check_1(value),
+    check_1 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
       "stateRevision" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_182, var_183) => External[0].test(var_182) || !1,
+        (var_108, var_109) => External[0].test(var_108) || check_2(value[var_108]),
       ) &&
-      typeof value.stateRevision == "object" &&
-      value.stateRevision !== null &&
-      !Array.isArray(value.stateRevision) &&
-      Object.getOwnPropertyNames(value.stateRevision).every(
-        (var_184, var_185) => External[1].test(var_184) || !1,
-      ) &&
-      (value.stateRevision.pendingInputs === void 0 ||
-        !("pendingInputs" in value.stateRevision) ||
-        (typeof value.stateRevision.pendingInputs == "string" &&
-          (value.stateRevision.pendingInputs.length >= 2 ||
-            (value.stateRevision.pendingInputs.length >= 1 &&
-              CodePointCount2(value.stateRevision.pendingInputs) >= 1)) &&
-          (value.stateRevision.pendingInputs.length <= 64 ||
-            (value.stateRevision.pendingInputs.length <= 128 &&
-              CodePointCount2(value.stateRevision.pendingInputs) <= 64)))) &&
-      (value.stateRevision.sessionInfo === void 0 ||
-        !("sessionInfo" in value.stateRevision) ||
-        (typeof value.stateRevision.sessionInfo == "string" &&
-          (value.stateRevision.sessionInfo.length >= 2 ||
-            (value.stateRevision.sessionInfo.length >= 1 &&
-              CodePointCount2(value.stateRevision.sessionInfo) >= 1)) &&
-          (value.stateRevision.sessionInfo.length <= 64 ||
-            (value.stateRevision.sessionInfo.length <= 128 &&
-              CodePointCount2(value.stateRevision.sessionInfo) <= 64)))) &&
-      (value.stateRevision.commands === void 0 ||
-        !("commands" in value.stateRevision) ||
-        (typeof value.stateRevision.commands == "string" &&
-          (value.stateRevision.commands.length >= 2 ||
-            (value.stateRevision.commands.length >= 1 &&
-              CodePointCount2(value.stateRevision.commands) >= 1)) &&
-          (value.stateRevision.commands.length <= 64 ||
-            (value.stateRevision.commands.length <= 128 &&
-              CodePointCount2(value.stateRevision.commands) <= 64)))) &&
+      check_3(value.stateRevision) &&
       (value.pendingInputs === void 0 ||
         !("pendingInputs" in value) ||
-        (typeof value.pendingInputs == "object" &&
-          value.pendingInputs !== null &&
-          !Array.isArray(value.pendingInputs) &&
-          "items" in value.pendingInputs &&
-          "total" in value.pendingInputs &&
-          Object.getOwnPropertyNames(value.pendingInputs).every(
-            (var_186, var_187) => External[2].test(var_186) || !1,
-          ) &&
-          Array.isArray(value.pendingInputs.items) &&
-          value.pendingInputs.items.every(
-            (element, index) =>
-              typeof element == "object" &&
-              element !== null &&
-              !Array.isArray(element) &&
-              "id" in element &&
-              "message" in element &&
-              "acceptedAt" in element &&
-              "state" in element &&
-              Object.getOwnPropertyNames(element).every(
-                (var_188, var_189) => External[3].test(var_188) || !1,
-              ) &&
-              typeof element.id == "string" &&
-              (element.id.length >= 2 ||
-                (element.id.length >= 1 && CodePointCount2(element.id) >= 1)) &&
-              (element.runId === void 0 ||
-                !("runId" in element) ||
-                (typeof element.runId == "string" &&
-                  (element.runId.length >= 2 ||
-                    (element.runId.length >= 1 && CodePointCount2(element.runId) >= 1)) &&
-                  (element.runId.length <= 256 ||
-                    (element.runId.length <= 512 && CodePointCount2(element.runId) <= 256)))) &&
-              !0 &&
-              Number.isFinite(element.acceptedAt) &&
-              typeof element.state == "string" &&
-              (element.state === "queued" ||
-                element.state === "cancelled" ||
-                element.state === "interrupted") &&
-              (element.queued === void 0 ||
-                !("queued" in element) ||
-                (typeof element.queued == "boolean" && element.queued === !0)),
-          ) &&
-          value.pendingInputs.items.length <= 20 &&
-          Number.isInteger(value.pendingInputs.total) &&
-          (!(
-            Number.isFinite(value.pendingInputs.total) ||
-            typeof value.pendingInputs.total == "bigint"
-          ) ||
-            value.pendingInputs.total >= 0) &&
-          (value.pendingInputs.queuedCount === void 0 ||
-            !("queuedCount" in value.pendingInputs) ||
-            (Number.isInteger(value.pendingInputs.queuedCount) &&
-              (!(
-                Number.isFinite(value.pendingInputs.queuedCount) ||
-                typeof value.pendingInputs.queuedCount == "bigint"
-              ) ||
-                value.pendingInputs.queuedCount >= 0))) &&
-          (value.pendingInputs.nextBefore === void 0 ||
-            !("nextBefore" in value.pendingInputs) ||
-            (Number.isInteger(value.pendingInputs.nextBefore) &&
-              (!(
-                Number.isFinite(value.pendingInputs.nextBefore) ||
-                typeof value.pendingInputs.nextBefore == "bigint"
-              ) ||
-                value.pendingInputs.nextBefore >= 1))))) &&
-      (value.sessionInfo === void 0 ||
-        !("sessionInfo" in value) ||
-        (typeof value.sessionInfo == "object" &&
-          value.sessionInfo !== null &&
-          !Array.isArray(value.sessionInfo) &&
-          "key" in value.sessionInfo &&
-          "kind" in value.sessionInfo &&
-          !0 &&
-          typeof value.sessionInfo.key == "string" &&
-          (value.sessionInfo.rowMode === void 0 ||
-            !("rowMode" in value.sessionInfo) ||
-            (typeof value.sessionInfo.rowMode == "string" &&
-              value.sessionInfo.rowMode === "compact") ||
-            (typeof value.sessionInfo.rowMode == "string" &&
-              value.sessionInfo.rowMode === "dashboard") ||
-            (typeof value.sessionInfo.rowMode == "string" &&
-              value.sessionInfo.rowMode === "sidebar")) &&
-          (value.sessionInfo.sharedFacts === void 0 ||
-            !("sharedFacts" in value.sessionInfo) ||
-            (Array.isArray(value.sessionInfo.sharedFacts) &&
-              value.sessionInfo.sharedFacts.every(
-                (element, index) =>
-                  Number.isInteger(element) &&
-                  (!(Number.isFinite(element) || typeof element == "bigint") || element >= 0),
-              ))) &&
-          (value.sessionInfo.sessionId === void 0 ||
-            !("sessionId" in value.sessionInfo) ||
-            typeof value.sessionInfo.sessionId == "string") &&
-          (value.sessionInfo.lifecycleRevision === void 0 ||
-            !("lifecycleRevision" in value.sessionInfo) ||
-            (typeof value.sessionInfo.lifecycleRevision == "string" &&
-              (value.sessionInfo.lifecycleRevision.length >= 2 ||
-                (value.sessionInfo.lifecycleRevision.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.lifecycleRevision) >= 1)))) &&
-          (value.sessionInfo.sessionModelRevision === void 0 ||
-            !("sessionModelRevision" in value.sessionInfo) ||
-            (typeof value.sessionInfo.sessionModelRevision == "string" &&
-              (value.sessionInfo.sessionModelRevision.length >= 2 ||
-                (value.sessionInfo.sessionModelRevision.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.sessionModelRevision) >= 1)))) &&
-          (value.sessionInfo.incognito === void 0 ||
-            !("incognito" in value.sessionInfo) ||
-            (typeof value.sessionInfo.incognito == "boolean" &&
-              value.sessionInfo.incognito === !0)) &&
-          ((typeof value.sessionInfo.kind == "string" && value.sessionInfo.kind === "direct") ||
-            (typeof value.sessionInfo.kind == "string" && value.sessionInfo.kind === "group") ||
-            (typeof value.sessionInfo.kind == "string" && value.sessionInfo.kind === "global") ||
-            (typeof value.sessionInfo.kind == "string" && value.sessionInfo.kind === "unknown")) &&
-          (value.sessionInfo.label === void 0 ||
-            !("label" in value.sessionInfo) ||
-            typeof value.sessionInfo.label == "string") &&
-          (value.sessionInfo.autoLabel === void 0 ||
-            !("autoLabel" in value.sessionInfo) ||
-            typeof value.sessionInfo.autoLabel == "string") &&
-          (value.sessionInfo.icon === void 0 ||
-            !("icon" in value.sessionInfo) ||
-            typeof value.sessionInfo.icon == "string") &&
-          (value.sessionInfo.color === void 0 ||
-            !("color" in value.sessionInfo) ||
-            typeof value.sessionInfo.color == "string") &&
-          (value.sessionInfo.channelAvatarUrl === void 0 ||
-            !("channelAvatarUrl" in value.sessionInfo) ||
-            (typeof value.sessionInfo.channelAvatarUrl == "string" &&
-              (value.sessionInfo.channelAvatarUrl.length >= 2 ||
-                (value.sessionInfo.channelAvatarUrl.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.channelAvatarUrl) >= 1)))) &&
-          (value.sessionInfo.boardFace === void 0 ||
-            !("boardFace" in value.sessionInfo) ||
-            (typeof value.sessionInfo.boardFace == "string" &&
-              value.sessionInfo.boardFace === "chat") ||
-            (typeof value.sessionInfo.boardFace == "string" &&
-              value.sessionInfo.boardFace === "dashboard")) &&
-          (value.sessionInfo.hasBoard === void 0 ||
-            !("hasBoard" in value.sessionInfo) ||
-            typeof value.sessionInfo.hasBoard == "boolean") &&
-          (value.sessionInfo.boardPresentation === void 0 ||
-            !("boardPresentation" in value.sessionInfo) ||
-            (typeof value.sessionInfo.boardPresentation == "string" &&
-              value.sessionInfo.boardPresentation === "split") ||
-            (typeof value.sessionInfo.boardPresentation == "string" &&
-              value.sessionInfo.boardPresentation === "expanded")) &&
-          (value.sessionInfo.displayName === void 0 ||
-            !("displayName" in value.sessionInfo) ||
-            typeof value.sessionInfo.displayName == "string") &&
-          (value.sessionInfo.titlePending === void 0 ||
-            !("titlePending" in value.sessionInfo) ||
-            typeof value.sessionInfo.titlePending == "boolean") &&
-          (value.sessionInfo.derivedTitle === void 0 ||
-            !("derivedTitle" in value.sessionInfo) ||
-            typeof value.sessionInfo.derivedTitle == "string") &&
-          (value.sessionInfo.lastMessagePreview === void 0 ||
-            !("lastMessagePreview" in value.sessionInfo) ||
-            typeof value.sessionInfo.lastMessagePreview == "string") &&
-          (value.sessionInfo.lastAssistantMessage === void 0 ||
-            !("lastAssistantMessage" in value.sessionInfo) ||
-            (typeof value.sessionInfo.lastAssistantMessage == "object" &&
-              value.sessionInfo.lastAssistantMessage !== null &&
-              !Array.isArray(value.sessionInfo.lastAssistantMessage) &&
-              "text" in value.sessionInfo.lastAssistantMessage &&
-              "timestamp" in value.sessionInfo.lastAssistantMessage &&
-              Object.getOwnPropertyNames(value.sessionInfo.lastAssistantMessage).length === 2 &&
-              typeof value.sessionInfo.lastAssistantMessage.text == "string" &&
-              Number.isFinite(value.sessionInfo.lastAssistantMessage.timestamp))) &&
-          (value.sessionInfo.channel === void 0 ||
-            !("channel" in value.sessionInfo) ||
-            typeof value.sessionInfo.channel == "string") &&
-          (value.sessionInfo.classification === void 0 ||
-            !("classification" in value.sessionInfo) ||
-            (typeof value.sessionInfo.classification == "string" &&
-              (value.sessionInfo.classification.length >= 2 ||
-                (value.sessionInfo.classification.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.classification) >= 1)))) &&
-          (value.sessionInfo.agentId === void 0 ||
-            !("agentId" in value.sessionInfo) ||
-            (typeof value.sessionInfo.agentId == "string" &&
-              (value.sessionInfo.agentId.length >= 2 ||
-                (value.sessionInfo.agentId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.agentId) >= 1)))) &&
-          (value.sessionInfo.accountId === void 0 ||
-            !("accountId" in value.sessionInfo) ||
-            (typeof value.sessionInfo.accountId == "string" &&
-              (value.sessionInfo.accountId.length >= 2 ||
-                (value.sessionInfo.accountId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.accountId) >= 1)))) &&
-          (value.sessionInfo.peerKind === void 0 ||
-            !("peerKind" in value.sessionInfo) ||
-            (typeof value.sessionInfo.peerKind == "string" &&
-              (value.sessionInfo.peerKind.length >= 2 ||
-                (value.sessionInfo.peerKind.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.peerKind) >= 1)))) &&
-          (value.sessionInfo.isMain === void 0 ||
-            !("isMain" in value.sessionInfo) ||
-            typeof value.sessionInfo.isMain == "boolean") &&
-          (value.sessionInfo.isBackground === void 0 ||
-            !("isBackground" in value.sessionInfo) ||
-            typeof value.sessionInfo.isBackground == "boolean") &&
-          (value.sessionInfo.isDock === void 0 ||
-            !("isDock" in value.sessionInfo) ||
-            typeof value.sessionInfo.isDock == "boolean") &&
-          (value.sessionInfo.chatType === void 0 ||
-            !("chatType" in value.sessionInfo) ||
-            (typeof value.sessionInfo.chatType == "string" &&
-              value.sessionInfo.chatType === "direct") ||
-            (typeof value.sessionInfo.chatType == "string" &&
-              value.sessionInfo.chatType === "group") ||
-            (typeof value.sessionInfo.chatType == "string" &&
-              value.sessionInfo.chatType === "channel")) &&
-          (value.sessionInfo.activitySummary === void 0 ||
-            !("activitySummary" in value.sessionInfo) ||
-            (typeof value.sessionInfo.activitySummary == "object" &&
-              value.sessionInfo.activitySummary !== null &&
-              !Array.isArray(value.sessionInfo.activitySummary) &&
-              "state" in value.sessionInfo.activitySummary &&
-              Object.getOwnPropertyNames(value.sessionInfo.activitySummary).every(
-                (var_190, var_191) => External[4].test(var_190) || !1,
-              ) &&
-              (value.sessionInfo.activitySummary.canEnsure === void 0 ||
-                !("canEnsure" in value.sessionInfo.activitySummary) ||
-                typeof value.sessionInfo.activitySummary.canEnsure == "boolean") &&
-              (value.sessionInfo.activitySummary.text === void 0 ||
-                !("text" in value.sessionInfo.activitySummary) ||
-                (typeof value.sessionInfo.activitySummary.text == "string" &&
-                  (value.sessionInfo.activitySummary.text.length <= 900 ||
-                    (value.sessionInfo.activitySummary.text.length <= 1800 &&
-                      CodePointCount2(value.sessionInfo.activitySummary.text) <= 900)))) &&
-              (value.sessionInfo.activitySummary.updatedAt === void 0 ||
-                !("updatedAt" in value.sessionInfo.activitySummary) ||
-                (Number.isInteger(value.sessionInfo.activitySummary.updatedAt) &&
-                  (!(
-                    Number.isFinite(value.sessionInfo.activitySummary.updatedAt) ||
-                    typeof value.sessionInfo.activitySummary.updatedAt == "bigint"
-                  ) ||
-                    value.sessionInfo.activitySummary.updatedAt >= 0))) &&
-              ((typeof value.sessionInfo.activitySummary.state == "string" &&
-                value.sessionInfo.activitySummary.state === "current") ||
-                (typeof value.sessionInfo.activitySummary.state == "string" &&
-                  value.sessionInfo.activitySummary.state === "stale") ||
-                (typeof value.sessionInfo.activitySummary.state == "string" &&
-                  value.sessionInfo.activitySummary.state === "updating") ||
-                (typeof value.sessionInfo.activitySummary.state == "string" &&
-                  value.sessionInfo.activitySummary.state === "unavailable")))) &&
-          (value.sessionInfo.updatedAt === void 0 ||
-            !("updatedAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.updatedAt) ||
-            value.sessionInfo.updatedAt === null) &&
-          (value.sessionInfo.snapshotAt === void 0 ||
-            !("snapshotAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.snapshotAt)) &&
-          (value.sessionInfo.ancestorRevision === void 0 ||
-            !("ancestorRevision" in value.sessionInfo) ||
-            (typeof value.sessionInfo.ancestorRevision == "string" &&
-              (value.sessionInfo.ancestorRevision.length >= 2 ||
-                (value.sessionInfo.ancestorRevision.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.ancestorRevision) >= 1)))) &&
-          (value.sessionInfo.hiddenFromInvolvingMe === void 0 ||
-            !("hiddenFromInvolvingMe" in value.sessionInfo) ||
-            typeof value.sessionInfo.hiddenFromInvolvingMe == "boolean") &&
-          (value.sessionInfo.archived === void 0 ||
-            !("archived" in value.sessionInfo) ||
-            typeof value.sessionInfo.archived == "boolean") &&
-          (value.sessionInfo.archivedAt === void 0 ||
-            !("archivedAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.archivedAt)) &&
-          (value.sessionInfo.archivedBy === void 0 ||
-            !("archivedBy" in value.sessionInfo) ||
-            (typeof value.sessionInfo.archivedBy == "object" &&
-              value.sessionInfo.archivedBy !== null &&
-              !Array.isArray(value.sessionInfo.archivedBy) &&
-              "type" in value.sessionInfo.archivedBy &&
-              Object.getOwnPropertyNames(value.sessionInfo.archivedBy).every(
-                (var_192, var_193) => External[5].test(var_192) || !1,
-              ) &&
-              ((typeof value.sessionInfo.archivedBy.type == "string" &&
-                value.sessionInfo.archivedBy.type === "human") ||
-                (typeof value.sessionInfo.archivedBy.type == "string" &&
-                  value.sessionInfo.archivedBy.type === "agent") ||
-                (typeof value.sessionInfo.archivedBy.type == "string" &&
-                  value.sessionInfo.archivedBy.type === "system")) &&
-              (value.sessionInfo.archivedBy.id === void 0 ||
-                !("id" in value.sessionInfo.archivedBy) ||
-                (typeof value.sessionInfo.archivedBy.id == "string" &&
-                  (value.sessionInfo.archivedBy.id.length >= 2 ||
-                    (value.sessionInfo.archivedBy.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.id) >= 1)))) &&
-              (value.sessionInfo.archivedBy.label === void 0 ||
-                !("label" in value.sessionInfo.archivedBy) ||
-                (typeof value.sessionInfo.archivedBy.label == "string" &&
-                  (value.sessionInfo.archivedBy.label.length >= 2 ||
-                    (value.sessionInfo.archivedBy.label.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.label) >= 1)))) &&
-              (value.sessionInfo.archivedBy.avatarUrl === void 0 ||
-                !("avatarUrl" in value.sessionInfo.archivedBy) ||
-                (typeof value.sessionInfo.archivedBy.avatarUrl == "string" &&
-                  (value.sessionInfo.archivedBy.avatarUrl.length >= 2 ||
-                    (value.sessionInfo.archivedBy.avatarUrl.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.avatarUrl) >= 1)))) &&
-              (value.sessionInfo.archivedBy.identity === void 0 ||
-                !("identity" in value.sessionInfo.archivedBy) ||
-                (typeof value.sessionInfo.archivedBy.identity == "object" &&
-                  value.sessionInfo.archivedBy.identity !== null &&
-                  !Array.isArray(value.sessionInfo.archivedBy.identity) &&
-                  "type" in value.sessionInfo.archivedBy.identity &&
-                  "id" in value.sessionInfo.archivedBy.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.archivedBy.identity).length === 2 &&
-                  typeof value.sessionInfo.archivedBy.identity.type == "string" &&
-                  value.sessionInfo.archivedBy.identity.type === "profile" &&
-                  typeof value.sessionInfo.archivedBy.identity.id == "string" &&
-                  (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
-                    (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.archivedBy.identity == "object" &&
-                  value.sessionInfo.archivedBy.identity !== null &&
-                  !Array.isArray(value.sessionInfo.archivedBy.identity) &&
-                  "type" in value.sessionInfo.archivedBy.identity &&
-                  "id" in value.sessionInfo.archivedBy.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.archivedBy.identity).length === 2 &&
-                  typeof value.sessionInfo.archivedBy.identity.type == "string" &&
-                  value.sessionInfo.archivedBy.identity.type === "agent" &&
-                  typeof value.sessionInfo.archivedBy.identity.id == "string" &&
-                  (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
-                    (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.archivedBy.identity == "object" &&
-                  value.sessionInfo.archivedBy.identity !== null &&
-                  !Array.isArray(value.sessionInfo.archivedBy.identity) &&
-                  "type" in value.sessionInfo.archivedBy.identity &&
-                  "pluginId" in value.sessionInfo.archivedBy.identity &&
-                  "domain" in value.sessionInfo.archivedBy.identity &&
-                  "idKind" in value.sessionInfo.archivedBy.identity &&
-                  "id" in value.sessionInfo.archivedBy.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.archivedBy.identity).length === 5 &&
-                  typeof value.sessionInfo.archivedBy.identity.type == "string" &&
-                  value.sessionInfo.archivedBy.identity.type === "remote" &&
-                  typeof value.sessionInfo.archivedBy.identity.pluginId == "string" &&
-                  (value.sessionInfo.archivedBy.identity.pluginId.length >= 2 ||
-                    (value.sessionInfo.archivedBy.identity.pluginId.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.pluginId) >= 1)) &&
-                  typeof value.sessionInfo.archivedBy.identity.domain == "string" &&
-                  (value.sessionInfo.archivedBy.identity.domain.length >= 2 ||
-                    (value.sessionInfo.archivedBy.identity.domain.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.domain) >= 1)) &&
-                  typeof value.sessionInfo.archivedBy.identity.idKind == "string" &&
-                  (value.sessionInfo.archivedBy.identity.idKind.length >= 2 ||
-                    (value.sessionInfo.archivedBy.identity.idKind.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.idKind) >= 1)) &&
-                  typeof value.sessionInfo.archivedBy.identity.id == "string" &&
-                  (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
-                    (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.archivedBy.identity == "object" &&
-                  value.sessionInfo.archivedBy.identity !== null &&
-                  !Array.isArray(value.sessionInfo.archivedBy.identity) &&
-                  "type" in value.sessionInfo.archivedBy.identity &&
-                  "pluginId" in value.sessionInfo.archivedBy.identity &&
-                  "accountId" in value.sessionInfo.archivedBy.identity &&
-                  "senderKind" in value.sessionInfo.archivedBy.identity &&
-                  "id" in value.sessionInfo.archivedBy.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.archivedBy.identity).length === 5 &&
-                  typeof value.sessionInfo.archivedBy.identity.type == "string" &&
-                  value.sessionInfo.archivedBy.identity.type === "observation" &&
-                  ((typeof value.sessionInfo.archivedBy.identity.pluginId == "string" &&
-                    (value.sessionInfo.archivedBy.identity.pluginId.length >= 2 ||
-                      (value.sessionInfo.archivedBy.identity.pluginId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.archivedBy.identity.pluginId) >= 1))) ||
-                    value.sessionInfo.archivedBy.identity.pluginId === null) &&
-                  ((typeof value.sessionInfo.archivedBy.identity.accountId == "string" &&
-                    (value.sessionInfo.archivedBy.identity.accountId.length >= 2 ||
-                      (value.sessionInfo.archivedBy.identity.accountId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.archivedBy.identity.accountId) >= 1))) ||
-                    value.sessionInfo.archivedBy.identity.accountId === null) &&
-                  ((typeof value.sessionInfo.archivedBy.identity.senderKind == "string" &&
-                    value.sessionInfo.archivedBy.identity.senderKind === "human") ||
-                    (typeof value.sessionInfo.archivedBy.identity.senderKind == "string" &&
-                      value.sessionInfo.archivedBy.identity.senderKind === "bot") ||
-                    (typeof value.sessionInfo.archivedBy.identity.senderKind == "string" &&
-                      value.sessionInfo.archivedBy.identity.senderKind === "unknown")) &&
-                  typeof value.sessionInfo.archivedBy.identity.id == "string" &&
-                  (value.sessionInfo.archivedBy.identity.id.length >= 2 ||
-                    (value.sessionInfo.archivedBy.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.archivedBy.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.archivedBy.identity == "object" &&
-                  value.sessionInfo.archivedBy.identity !== null &&
-                  !Array.isArray(value.sessionInfo.archivedBy.identity) &&
-                  "type" in value.sessionInfo.archivedBy.identity &&
-                  "actorType" in value.sessionInfo.archivedBy.identity &&
-                  "source" in value.sessionInfo.archivedBy.identity &&
-                  "id" in value.sessionInfo.archivedBy.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.archivedBy.identity).length === 4 &&
-                  typeof value.sessionInfo.archivedBy.identity.type == "string" &&
-                  value.sessionInfo.archivedBy.identity.type === "legacy" &&
-                  typeof value.sessionInfo.archivedBy.identity.actorType == "string" &&
-                  (typeof value.sessionInfo.archivedBy.identity.source == "string" ||
-                    value.sessionInfo.archivedBy.identity.source === null) &&
-                  typeof value.sessionInfo.archivedBy.identity.id == "string")))) &&
-          (value.sessionInfo.archiveReason === void 0 ||
-            !("archiveReason" in value.sessionInfo) ||
-            (typeof value.sessionInfo.archiveReason == "string" &&
-              value.sessionInfo.archiveReason === "manual") ||
-            (typeof value.sessionInfo.archiveReason == "string" &&
-              value.sessionInfo.archiveReason === "active-session-cap") ||
-            (typeof value.sessionInfo.archiveReason == "string" &&
-              value.sessionInfo.archiveReason === "age-retention") ||
-            (typeof value.sessionInfo.archiveReason == "string" &&
-              value.sessionInfo.archiveReason === "stale-dashboard") ||
-            (typeof value.sessionInfo.archiveReason == "string" &&
-              value.sessionInfo.archiveReason === "restart-recovery")) &&
-          (value.sessionInfo.pinned === void 0 ||
-            !("pinned" in value.sessionInfo) ||
-            typeof value.sessionInfo.pinned == "boolean") &&
-          (value.sessionInfo.sidebarRoot === void 0 ||
-            !("sidebarRoot" in value.sessionInfo) ||
-            typeof value.sessionInfo.sidebarRoot == "boolean") &&
-          (value.sessionInfo.pinnedAt === void 0 ||
-            !("pinnedAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.pinnedAt)) &&
-          (value.sessionInfo.snoozedUntil === void 0 ||
-            !("snoozedUntil" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.snoozedUntil)) &&
-          (value.sessionInfo.snoozedAt === void 0 ||
-            !("snoozedAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.snoozedAt)) &&
-          (value.sessionInfo.unread === void 0 ||
-            !("unread" in value.sessionInfo) ||
-            typeof value.sessionInfo.unread == "boolean") &&
-          (value.sessionInfo.lastReadAt === void 0 ||
-            !("lastReadAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.lastReadAt)) &&
-          (value.sessionInfo.markedUnreadAt === void 0 ||
-            !("markedUnreadAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.markedUnreadAt)) &&
-          (value.sessionInfo.lastActivityAt === void 0 ||
-            !("lastActivityAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.lastActivityAt)) &&
-          (value.sessionInfo.lastInteractionAt === void 0 ||
-            !("lastInteractionAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.lastInteractionAt)) &&
-          (value.sessionInfo.status === void 0 ||
-            !("status" in value.sessionInfo) ||
-            (typeof value.sessionInfo.status == "string" &&
-              value.sessionInfo.status === "queued") ||
-            (typeof value.sessionInfo.status == "string" &&
-              value.sessionInfo.status === "running") ||
-            (typeof value.sessionInfo.status == "string" && value.sessionInfo.status === "done") ||
-            (typeof value.sessionInfo.status == "string" &&
-              value.sessionInfo.status === "failed") ||
-            (typeof value.sessionInfo.status == "string" &&
-              value.sessionInfo.status === "interrupted") ||
-            (typeof value.sessionInfo.status == "string" &&
-              value.sessionInfo.status === "killed") ||
-            (typeof value.sessionInfo.status == "string" &&
-              value.sessionInfo.status === "timeout")) &&
-          (value.sessionInfo.lastRunError === void 0 ||
-            !("lastRunError" in value.sessionInfo) ||
-            typeof value.sessionInfo.lastRunError == "string") &&
-          (value.sessionInfo.suppressErrorNotice === void 0 ||
-            !("suppressErrorNotice" in value.sessionInfo) ||
-            typeof value.sessionInfo.suppressErrorNotice == "boolean") &&
-          (value.sessionInfo.providerReview === void 0 ||
-            !("providerReview" in value.sessionInfo) ||
-            (typeof value.sessionInfo.providerReview == "object" &&
-              value.sessionInfo.providerReview !== null &&
-              !Array.isArray(value.sessionInfo.providerReview) &&
-              "id" in value.sessionInfo.providerReview &&
-              "runId" in value.sessionInfo.providerReview &&
-              "canContinue" in value.sessionInfo.providerReview &&
-              Object.getOwnPropertyNames(value.sessionInfo.providerReview).every(
-                (var_194, var_195) => External[6].test(var_194) || !1,
-              ) &&
-              typeof value.sessionInfo.providerReview.id == "string" &&
-              (value.sessionInfo.providerReview.id.length >= 2 ||
-                (value.sessionInfo.providerReview.id.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.providerReview.id) >= 1)) &&
-              typeof value.sessionInfo.providerReview.runId == "string" &&
-              (value.sessionInfo.providerReview.runId.length >= 2 ||
-                (value.sessionInfo.providerReview.runId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.providerReview.runId) >= 1)) &&
-              (value.sessionInfo.providerReview.explanation === void 0 ||
-                !("explanation" in value.sessionInfo.providerReview) ||
-                (typeof value.sessionInfo.providerReview.explanation == "string" &&
-                  (value.sessionInfo.providerReview.explanation.length <= 65536 ||
-                    (value.sessionInfo.providerReview.explanation.length <= 131072 &&
-                      CodePointCount2(value.sessionInfo.providerReview.explanation) <= 65536)))) &&
-              (value.sessionInfo.providerReview.continuationMessage === void 0 ||
-                !("continuationMessage" in value.sessionInfo.providerReview) ||
-                (typeof value.sessionInfo.providerReview.continuationMessage == "string" &&
-                  (value.sessionInfo.providerReview.continuationMessage.length <= 1024 ||
-                    (value.sessionInfo.providerReview.continuationMessage.length <= 2048 &&
-                      CodePointCount2(value.sessionInfo.providerReview.continuationMessage) <=
-                        1024)))) &&
-              typeof value.sessionInfo.providerReview.canContinue == "boolean")) &&
-          (value.sessionInfo.lastRunId === void 0 ||
-            !("lastRunId" in value.sessionInfo) ||
-            (typeof value.sessionInfo.lastRunId == "string" &&
-              (value.sessionInfo.lastRunId.length >= 2 ||
-                (value.sessionInfo.lastRunId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.lastRunId) >= 1)))) &&
-          (value.sessionInfo.restartRecoveryStatus === void 0 ||
-            !("restartRecoveryStatus" in value.sessionInfo) ||
-            (typeof value.sessionInfo.restartRecoveryStatus == "string" &&
-              value.sessionInfo.restartRecoveryStatus === "tombstoned")) &&
-          (value.sessionInfo.restartRecoveryCycleId === void 0 ||
-            !("restartRecoveryCycleId" in value.sessionInfo) ||
-            (typeof value.sessionInfo.restartRecoveryCycleId == "string" &&
-              (value.sessionInfo.restartRecoveryCycleId.length >= 2 ||
-                (value.sessionInfo.restartRecoveryCycleId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.restartRecoveryCycleId) >= 1)))) &&
-          (value.sessionInfo.activeLeafEntryId === void 0 ||
-            !("activeLeafEntryId" in value.sessionInfo) ||
-            (typeof value.sessionInfo.activeLeafEntryId == "string" &&
-              (value.sessionInfo.activeLeafEntryId.length >= 2 ||
-                (value.sessionInfo.activeLeafEntryId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.activeLeafEntryId) >= 1))) ||
-            value.sessionInfo.activeLeafEntryId === null) &&
-          (value.sessionInfo.spawnedBy === void 0 ||
-            !("spawnedBy" in value.sessionInfo) ||
-            typeof value.sessionInfo.spawnedBy == "string") &&
-          (value.sessionInfo.parentSessionKey === void 0 ||
-            !("parentSessionKey" in value.sessionInfo) ||
-            typeof value.sessionInfo.parentSessionKey == "string") &&
-          (value.sessionInfo.parentSessionId === void 0 ||
-            !("parentSessionId" in value.sessionInfo) ||
-            typeof value.sessionInfo.parentSessionId == "string") &&
-          (value.sessionInfo.controlOwnerSessionKey === void 0 ||
-            !("controlOwnerSessionKey" in value.sessionInfo) ||
-            typeof value.sessionInfo.controlOwnerSessionKey == "string") &&
-          (value.sessionInfo.childOwnerSessionKeys === void 0 ||
-            !("childOwnerSessionKeys" in value.sessionInfo) ||
-            (Array.isArray(value.sessionInfo.childOwnerSessionKeys) &&
-              value.sessionInfo.childOwnerSessionKeys.every(
-                (element, index) =>
-                  typeof element == "string" &&
-                  (element.length >= 2 || (element.length >= 1 && CodePointCount2(element) >= 1)),
-              ) &&
-              value.sessionInfo.childOwnerSessionKeys.length <= 2)) &&
-          (value.sessionInfo.childSessions === void 0 ||
-            !("childSessions" in value.sessionInfo) ||
-            (Array.isArray(value.sessionInfo.childSessions) &&
-              value.sessionInfo.childSessions.every(
-                (element, index) => typeof element == "string",
-              ))) &&
-          (value.sessionInfo.forkedFromParent === void 0 ||
-            !("forkedFromParent" in value.sessionInfo) ||
-            typeof value.sessionInfo.forkedFromParent == "boolean") &&
-          (value.sessionInfo.spawnDepth === void 0 ||
-            !("spawnDepth" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.spawnDepth)) &&
-          (value.sessionInfo.subagentRole === void 0 ||
-            !("subagentRole" in value.sessionInfo) ||
-            (typeof value.sessionInfo.subagentRole == "string" &&
-              value.sessionInfo.subagentRole === "orchestrator") ||
-            (typeof value.sessionInfo.subagentRole == "string" &&
-              value.sessionInfo.subagentRole === "leaf")) &&
-          (value.sessionInfo.subagentControlScope === void 0 ||
-            !("subagentControlScope" in value.sessionInfo) ||
-            (typeof value.sessionInfo.subagentControlScope == "string" &&
-              value.sessionInfo.subagentControlScope === "children") ||
-            (typeof value.sessionInfo.subagentControlScope == "string" &&
-              value.sessionInfo.subagentControlScope === "none")) &&
-          (value.sessionInfo.swarmGroupId === void 0 ||
-            !("swarmGroupId" in value.sessionInfo) ||
-            typeof value.sessionInfo.swarmGroupId == "string") &&
-          (value.sessionInfo.swarm === void 0 ||
-            !("swarm" in value.sessionInfo) ||
-            (typeof value.sessionInfo.swarm == "object" &&
-              value.sessionInfo.swarm !== null &&
-              !Array.isArray(value.sessionInfo.swarm) &&
-              "groups" in value.sessionInfo.swarm &&
-              "otherActiveGroups" in value.sessionInfo.swarm &&
-              Object.getOwnPropertyNames(value.sessionInfo.swarm).length === 2 &&
-              Array.isArray(value.sessionInfo.swarm.groups) &&
-              value.sessionInfo.swarm.groups.every(
-                (element, index) =>
-                  typeof element == "object" &&
-                  element !== null &&
-                  !Array.isArray(element) &&
-                  "groupId" in element &&
-                  "createdAt" in element &&
-                  "queued" in element &&
-                  "running" in element &&
-                  "done" in element &&
-                  "failed" in element &&
-                  Object.getOwnPropertyNames(element).every(
-                    (var_196, var_197) => External[7].test(var_196) || !1,
-                  ) &&
-                  typeof element.groupId == "string" &&
-                  (element.groupId.length >= 2 ||
-                    (element.groupId.length >= 1 && CodePointCount2(element.groupId) >= 1)) &&
-                  Number.isFinite(element.createdAt) &&
-                  element.createdAt >= 0 &&
-                  (element.children === void 0 ||
-                    !("children" in element) ||
-                    (Array.isArray(element.children) &&
-                      element.children.every(
-                        (element2, index2) =>
-                          typeof element2 == "object" &&
-                          element2 !== null &&
-                          !Array.isArray(element2) &&
-                          "sessionKey" in element2 &&
-                          "status" in element2 &&
-                          Object.getOwnPropertyNames(element2).length === 2 &&
-                          typeof element2.sessionKey == "string" &&
-                          (element2.sessionKey.length >= 2 ||
-                            (element2.sessionKey.length >= 1 &&
-                              CodePointCount2(element2.sessionKey) >= 1)) &&
-                          ((typeof element2.status == "string" && element2.status === "queued") ||
-                            (typeof element2.status == "string" && element2.status === "running") ||
-                            (typeof element2.status == "string" && element2.status === "done") ||
-                            (typeof element2.status == "string" && element2.status === "failed")),
-                      ) &&
-                      element.children.length <= 64)) &&
-                  Number.isInteger(element.queued) &&
-                  (!(Number.isFinite(element.queued) || typeof element.queued == "bigint") ||
-                    element.queued >= 0) &&
-                  Number.isInteger(element.running) &&
-                  (!(Number.isFinite(element.running) || typeof element.running == "bigint") ||
-                    element.running >= 0) &&
-                  Number.isInteger(element.done) &&
-                  (!(Number.isFinite(element.done) || typeof element.done == "bigint") ||
-                    element.done >= 0) &&
-                  Number.isInteger(element.failed) &&
-                  (!(Number.isFinite(element.failed) || typeof element.failed == "bigint") ||
-                    element.failed >= 0),
-              ) &&
-              value.sessionInfo.swarm.groups.length <= 5 &&
-              Number.isInteger(value.sessionInfo.swarm.otherActiveGroups) &&
-              (!(
-                Number.isFinite(value.sessionInfo.swarm.otherActiveGroups) ||
-                typeof value.sessionInfo.swarm.otherActiveGroups == "bigint"
-              ) ||
-                value.sessionInfo.swarm.otherActiveGroups >= 0))) &&
-          (value.sessionInfo.deviceFolder === void 0 ||
-            !("deviceFolder" in value.sessionInfo) ||
-            (typeof value.sessionInfo.deviceFolder == "object" &&
-              value.sessionInfo.deviceFolder !== null &&
-              !Array.isArray(value.sessionInfo.deviceFolder) &&
-              "deviceId" in value.sessionInfo.deviceFolder &&
-              "path" in value.sessionInfo.deviceFolder &&
-              Object.getOwnPropertyNames(value.sessionInfo.deviceFolder).length === 2 &&
-              typeof value.sessionInfo.deviceFolder.deviceId == "string" &&
-              (value.sessionInfo.deviceFolder.deviceId.length >= 2 ||
-                (value.sessionInfo.deviceFolder.deviceId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.deviceFolder.deviceId) >= 1)) &&
-              typeof value.sessionInfo.deviceFolder.path == "string" &&
-              (value.sessionInfo.deviceFolder.path.length >= 2 ||
-                (value.sessionInfo.deviceFolder.path.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.deviceFolder.path) >= 1)) &&
-              (value.sessionInfo.deviceFolder.path.length <= 4096 ||
-                (value.sessionInfo.deviceFolder.path.length <= 8192 &&
-                  CodePointCount2(value.sessionInfo.deviceFolder.path) <= 4096)))) &&
-          (value.sessionInfo.worktree === void 0 ||
-            !("worktree" in value.sessionInfo) ||
-            (typeof value.sessionInfo.worktree == "object" &&
-              value.sessionInfo.worktree !== null &&
-              !Array.isArray(value.sessionInfo.worktree) &&
-              "id" in value.sessionInfo.worktree &&
-              "branch" in value.sessionInfo.worktree &&
-              "repoRoot" in value.sessionInfo.worktree &&
-              typeof value.sessionInfo.worktree.id == "string" &&
-              typeof value.sessionInfo.worktree.branch == "string" &&
-              typeof value.sessionInfo.worktree.repoRoot == "string")) &&
-          (value.sessionInfo.repositoryWorkspaceId === void 0 ||
-            !("repositoryWorkspaceId" in value.sessionInfo) ||
-            (typeof value.sessionInfo.repositoryWorkspaceId == "string" &&
-              (value.sessionInfo.repositoryWorkspaceId.length >= 2 ||
-                (value.sessionInfo.repositoryWorkspaceId.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.repositoryWorkspaceId) >= 1)))) &&
-          (value.sessionInfo.repository === void 0 ||
-            !("repository" in value.sessionInfo) ||
-            (typeof value.sessionInfo.repository == "object" &&
-              value.sessionInfo.repository !== null &&
-              !Array.isArray(value.sessionInfo.repository) &&
-              "url" in value.sessionInfo.repository &&
-              "branch" in value.sessionInfo.repository &&
-              Object.getOwnPropertyNames(value.sessionInfo.repository).every(
-                (var_198, var_199) => External[8].test(var_198) || !1,
-              ) &&
-              typeof value.sessionInfo.repository.url == "string" &&
-              (value.sessionInfo.repository.url.length >= 2 ||
-                (value.sessionInfo.repository.url.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.repository.url) >= 1)) &&
-              (value.sessionInfo.repository.url.length <= 2048 ||
-                (value.sessionInfo.repository.url.length <= 4096 &&
-                  CodePointCount2(value.sessionInfo.repository.url) <= 2048)) &&
-              (value.sessionInfo.repository.ref === void 0 ||
-                !("ref" in value.sessionInfo.repository) ||
-                (typeof value.sessionInfo.repository.ref == "string" &&
-                  (value.sessionInfo.repository.ref.length >= 2 ||
-                    (value.sessionInfo.repository.ref.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.repository.ref) >= 1)) &&
-                  (value.sessionInfo.repository.ref.length <= 1024 ||
-                    (value.sessionInfo.repository.ref.length <= 2048 &&
-                      CodePointCount2(value.sessionInfo.repository.ref) <= 1024)))) &&
-              typeof value.sessionInfo.repository.branch == "string" &&
-              (value.sessionInfo.repository.branch.length >= 2 ||
-                (value.sessionInfo.repository.branch.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.repository.branch) >= 1)))) &&
-          (value.sessionInfo.execNode === void 0 ||
-            !("execNode" in value.sessionInfo) ||
-            typeof value.sessionInfo.execNode == "string") &&
-          (value.sessionInfo.execCwd === void 0 ||
-            !("execCwd" in value.sessionInfo) ||
-            typeof value.sessionInfo.execCwd == "string") &&
-          (value.sessionInfo.spawnedWorkspaceDir === void 0 ||
-            !("spawnedWorkspaceDir" in value.sessionInfo) ||
-            typeof value.sessionInfo.spawnedWorkspaceDir == "string") &&
-          (value.sessionInfo.spawnedCwd === void 0 ||
-            !("spawnedCwd" in value.sessionInfo) ||
-            typeof value.sessionInfo.spawnedCwd == "string") &&
-          (value.sessionInfo.projectId === void 0 ||
-            !("projectId" in value.sessionInfo) ||
-            typeof value.sessionInfo.projectId == "string") &&
-          (value.sessionInfo.workspaceDir === void 0 ||
-            !("workspaceDir" in value.sessionInfo) ||
-            typeof value.sessionInfo.workspaceDir == "string") &&
-          (value.sessionInfo.permissionMode === void 0 ||
-            !("permissionMode" in value.sessionInfo) ||
-            (typeof value.sessionInfo.permissionMode == "string" &&
-              value.sessionInfo.permissionMode === "read-only") ||
-            (typeof value.sessionInfo.permissionMode == "string" &&
-              value.sessionInfo.permissionMode === "guarded") ||
-            (typeof value.sessionInfo.permissionMode == "string" &&
-              value.sessionInfo.permissionMode === "workspace") ||
-            (typeof value.sessionInfo.permissionMode == "string" &&
-              value.sessionInfo.permissionMode === "full")) &&
-          (value.sessionInfo.communication === void 0 ||
-            !("communication" in value.sessionInfo) ||
-            (typeof value.sessionInfo.communication == "object" &&
-              value.sessionInfo.communication !== null &&
-              !Array.isArray(value.sessionInfo.communication) &&
-              Object.getOwnPropertyNames(value.sessionInfo.communication).every(
-                (var_200, var_201) => External[9].test(var_200) || !1,
-              ) &&
-              (value.sessionInfo.communication.send === void 0 ||
-                !("send" in value.sessionInfo.communication) ||
-                (typeof value.sessionInfo.communication.send == "string" &&
-                  value.sessionInfo.communication.send === "always") ||
-                (typeof value.sessionInfo.communication.send == "string" &&
-                  value.sessionInfo.communication.send === "ask") ||
-                (typeof value.sessionInfo.communication.send == "string" &&
-                  value.sessionInfo.communication.send === "never")) &&
-              (value.sessionInfo.communication.receive === void 0 ||
-                !("receive" in value.sessionInfo.communication) ||
-                (typeof value.sessionInfo.communication.receive == "string" &&
-                  value.sessionInfo.communication.receive === "always") ||
-                (typeof value.sessionInfo.communication.receive == "string" &&
-                  value.sessionInfo.communication.receive === "ask") ||
-                (typeof value.sessionInfo.communication.receive == "string" &&
-                  value.sessionInfo.communication.receive === "never")))) &&
-          (value.sessionInfo.effectiveCommunication === void 0 ||
-            !("effectiveCommunication" in value.sessionInfo) ||
-            (typeof value.sessionInfo.effectiveCommunication == "object" &&
-              value.sessionInfo.effectiveCommunication !== null &&
-              !Array.isArray(value.sessionInfo.effectiveCommunication) &&
-              "send" in value.sessionInfo.effectiveCommunication &&
-              "receive" in value.sessionInfo.effectiveCommunication &&
-              Object.getOwnPropertyNames(value.sessionInfo.effectiveCommunication).length === 2 &&
-              ((typeof value.sessionInfo.effectiveCommunication.send == "string" &&
-                value.sessionInfo.effectiveCommunication.send === "always") ||
-                (typeof value.sessionInfo.effectiveCommunication.send == "string" &&
-                  value.sessionInfo.effectiveCommunication.send === "ask") ||
-                (typeof value.sessionInfo.effectiveCommunication.send == "string" &&
-                  value.sessionInfo.effectiveCommunication.send === "never")) &&
-              ((typeof value.sessionInfo.effectiveCommunication.receive == "string" &&
-                value.sessionInfo.effectiveCommunication.receive === "always") ||
-                (typeof value.sessionInfo.effectiveCommunication.receive == "string" &&
-                  value.sessionInfo.effectiveCommunication.receive === "ask") ||
-                (typeof value.sessionInfo.effectiveCommunication.receive == "string" &&
-                  value.sessionInfo.effectiveCommunication.receive === "never")))) &&
-          (value.sessionInfo.sandboxMode === void 0 ||
-            !("sandboxMode" in value.sessionInfo) ||
-            (typeof value.sessionInfo.sandboxMode == "string" &&
-              value.sessionInfo.sandboxMode === "off")) &&
-          (value.sessionInfo.nativeRuntimeConsent === void 0 ||
-            !("nativeRuntimeConsent" in value.sessionInfo) ||
-            (typeof value.sessionInfo.nativeRuntimeConsent == "string" &&
-              (value.sessionInfo.nativeRuntimeConsent.length >= 2 ||
-                (value.sessionInfo.nativeRuntimeConsent.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.nativeRuntimeConsent) >= 1)))) &&
-          (value.sessionInfo.permissionModePending === void 0 ||
-            !("permissionModePending" in value.sessionInfo) ||
-            typeof value.sessionInfo.permissionModePending == "boolean") &&
-          (value.sessionInfo.sessionRoot === void 0 ||
-            !("sessionRoot" in value.sessionInfo) ||
-            typeof value.sessionInfo.sessionRoot == "string") &&
-          (value.sessionInfo.createdVia === void 0 ||
-            !("createdVia" in value.sessionInfo) ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "operator") ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "spawn") ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "channel") ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "cron") ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "talk") ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "run") ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "plugin") ||
-            (typeof value.sessionInfo.createdVia == "string" &&
-              value.sessionInfo.createdVia === "internal")) &&
-          (value.sessionInfo.createdSurface === void 0 ||
-            !("createdSurface" in value.sessionInfo) ||
-            (typeof value.sessionInfo.createdSurface == "string" &&
-              value.sessionInfo.createdSurface === "plugin-dock")) &&
-          (value.sessionInfo.createdActor === void 0 ||
-            !("createdActor" in value.sessionInfo) ||
-            (typeof value.sessionInfo.createdActor == "object" &&
-              value.sessionInfo.createdActor !== null &&
-              !Array.isArray(value.sessionInfo.createdActor) &&
-              "type" in value.sessionInfo.createdActor &&
-              Object.getOwnPropertyNames(value.sessionInfo.createdActor).every(
-                (var_202, var_203) => External[10].test(var_202) || !1,
-              ) &&
-              ((typeof value.sessionInfo.createdActor.type == "string" &&
-                value.sessionInfo.createdActor.type === "human") ||
-                (typeof value.sessionInfo.createdActor.type == "string" &&
-                  value.sessionInfo.createdActor.type === "agent") ||
-                (typeof value.sessionInfo.createdActor.type == "string" &&
-                  value.sessionInfo.createdActor.type === "system")) &&
-              (value.sessionInfo.createdActor.id === void 0 ||
-                !("id" in value.sessionInfo.createdActor) ||
-                (typeof value.sessionInfo.createdActor.id == "string" &&
-                  (value.sessionInfo.createdActor.id.length >= 2 ||
-                    (value.sessionInfo.createdActor.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.id) >= 1)))) &&
-              (value.sessionInfo.createdActor.label === void 0 ||
-                !("label" in value.sessionInfo.createdActor) ||
-                (typeof value.sessionInfo.createdActor.label == "string" &&
-                  (value.sessionInfo.createdActor.label.length >= 2 ||
-                    (value.sessionInfo.createdActor.label.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.label) >= 1)))) &&
-              (value.sessionInfo.createdActor.avatarUrl === void 0 ||
-                !("avatarUrl" in value.sessionInfo.createdActor) ||
-                (typeof value.sessionInfo.createdActor.avatarUrl == "string" &&
-                  (value.sessionInfo.createdActor.avatarUrl.length >= 2 ||
-                    (value.sessionInfo.createdActor.avatarUrl.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.avatarUrl) >= 1)))) &&
-              (value.sessionInfo.createdActor.identity === void 0 ||
-                !("identity" in value.sessionInfo.createdActor) ||
-                (typeof value.sessionInfo.createdActor.identity == "object" &&
-                  value.sessionInfo.createdActor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.createdActor.identity) &&
-                  "type" in value.sessionInfo.createdActor.identity &&
-                  "id" in value.sessionInfo.createdActor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.createdActor.identity).length ===
-                    2 &&
-                  typeof value.sessionInfo.createdActor.identity.type == "string" &&
-                  value.sessionInfo.createdActor.identity.type === "profile" &&
-                  typeof value.sessionInfo.createdActor.identity.id == "string" &&
-                  (value.sessionInfo.createdActor.identity.id.length >= 2 ||
-                    (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.createdActor.identity == "object" &&
-                  value.sessionInfo.createdActor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.createdActor.identity) &&
-                  "type" in value.sessionInfo.createdActor.identity &&
-                  "id" in value.sessionInfo.createdActor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.createdActor.identity).length ===
-                    2 &&
-                  typeof value.sessionInfo.createdActor.identity.type == "string" &&
-                  value.sessionInfo.createdActor.identity.type === "agent" &&
-                  typeof value.sessionInfo.createdActor.identity.id == "string" &&
-                  (value.sessionInfo.createdActor.identity.id.length >= 2 ||
-                    (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.createdActor.identity == "object" &&
-                  value.sessionInfo.createdActor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.createdActor.identity) &&
-                  "type" in value.sessionInfo.createdActor.identity &&
-                  "pluginId" in value.sessionInfo.createdActor.identity &&
-                  "domain" in value.sessionInfo.createdActor.identity &&
-                  "idKind" in value.sessionInfo.createdActor.identity &&
-                  "id" in value.sessionInfo.createdActor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.createdActor.identity).length ===
-                    5 &&
-                  typeof value.sessionInfo.createdActor.identity.type == "string" &&
-                  value.sessionInfo.createdActor.identity.type === "remote" &&
-                  typeof value.sessionInfo.createdActor.identity.pluginId == "string" &&
-                  (value.sessionInfo.createdActor.identity.pluginId.length >= 2 ||
-                    (value.sessionInfo.createdActor.identity.pluginId.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.pluginId) >= 1)) &&
-                  typeof value.sessionInfo.createdActor.identity.domain == "string" &&
-                  (value.sessionInfo.createdActor.identity.domain.length >= 2 ||
-                    (value.sessionInfo.createdActor.identity.domain.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.domain) >= 1)) &&
-                  typeof value.sessionInfo.createdActor.identity.idKind == "string" &&
-                  (value.sessionInfo.createdActor.identity.idKind.length >= 2 ||
-                    (value.sessionInfo.createdActor.identity.idKind.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.idKind) >= 1)) &&
-                  typeof value.sessionInfo.createdActor.identity.id == "string" &&
-                  (value.sessionInfo.createdActor.identity.id.length >= 2 ||
-                    (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.createdActor.identity == "object" &&
-                  value.sessionInfo.createdActor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.createdActor.identity) &&
-                  "type" in value.sessionInfo.createdActor.identity &&
-                  "pluginId" in value.sessionInfo.createdActor.identity &&
-                  "accountId" in value.sessionInfo.createdActor.identity &&
-                  "senderKind" in value.sessionInfo.createdActor.identity &&
-                  "id" in value.sessionInfo.createdActor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.createdActor.identity).length ===
-                    5 &&
-                  typeof value.sessionInfo.createdActor.identity.type == "string" &&
-                  value.sessionInfo.createdActor.identity.type === "observation" &&
-                  ((typeof value.sessionInfo.createdActor.identity.pluginId == "string" &&
-                    (value.sessionInfo.createdActor.identity.pluginId.length >= 2 ||
-                      (value.sessionInfo.createdActor.identity.pluginId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.createdActor.identity.pluginId) >= 1))) ||
-                    value.sessionInfo.createdActor.identity.pluginId === null) &&
-                  ((typeof value.sessionInfo.createdActor.identity.accountId == "string" &&
-                    (value.sessionInfo.createdActor.identity.accountId.length >= 2 ||
-                      (value.sessionInfo.createdActor.identity.accountId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.createdActor.identity.accountId) >=
-                          1))) ||
-                    value.sessionInfo.createdActor.identity.accountId === null) &&
-                  ((typeof value.sessionInfo.createdActor.identity.senderKind == "string" &&
-                    value.sessionInfo.createdActor.identity.senderKind === "human") ||
-                    (typeof value.sessionInfo.createdActor.identity.senderKind == "string" &&
-                      value.sessionInfo.createdActor.identity.senderKind === "bot") ||
-                    (typeof value.sessionInfo.createdActor.identity.senderKind == "string" &&
-                      value.sessionInfo.createdActor.identity.senderKind === "unknown")) &&
-                  typeof value.sessionInfo.createdActor.identity.id == "string" &&
-                  (value.sessionInfo.createdActor.identity.id.length >= 2 ||
-                    (value.sessionInfo.createdActor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.createdActor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.createdActor.identity == "object" &&
-                  value.sessionInfo.createdActor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.createdActor.identity) &&
-                  "type" in value.sessionInfo.createdActor.identity &&
-                  "actorType" in value.sessionInfo.createdActor.identity &&
-                  "source" in value.sessionInfo.createdActor.identity &&
-                  "id" in value.sessionInfo.createdActor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.createdActor.identity).length ===
-                    4 &&
-                  typeof value.sessionInfo.createdActor.identity.type == "string" &&
-                  value.sessionInfo.createdActor.identity.type === "legacy" &&
-                  typeof value.sessionInfo.createdActor.identity.actorType == "string" &&
-                  (typeof value.sessionInfo.createdActor.identity.source == "string" ||
-                    value.sessionInfo.createdActor.identity.source === null) &&
-                  typeof value.sessionInfo.createdActor.identity.id == "string")))) &&
-          (value.sessionInfo.owner === void 0 ||
-            !("owner" in value.sessionInfo) ||
-            (typeof value.sessionInfo.owner == "object" &&
-              value.sessionInfo.owner !== null &&
-              !Array.isArray(value.sessionInfo.owner) &&
-              "actor" in value.sessionInfo.owner &&
-              Object.getOwnPropertyNames(value.sessionInfo.owner).every(
-                (var_204, var_205) => External[11].test(var_204) || !1,
-              ) &&
-              typeof value.sessionInfo.owner.actor == "object" &&
-              value.sessionInfo.owner.actor !== null &&
-              !Array.isArray(value.sessionInfo.owner.actor) &&
-              "type" in value.sessionInfo.owner.actor &&
-              Object.getOwnPropertyNames(value.sessionInfo.owner.actor).every(
-                (var_206, var_207) => External[12].test(var_206) || !1,
-              ) &&
-              ((typeof value.sessionInfo.owner.actor.type == "string" &&
-                value.sessionInfo.owner.actor.type === "human") ||
-                (typeof value.sessionInfo.owner.actor.type == "string" &&
-                  value.sessionInfo.owner.actor.type === "agent") ||
-                (typeof value.sessionInfo.owner.actor.type == "string" &&
-                  value.sessionInfo.owner.actor.type === "system")) &&
-              (value.sessionInfo.owner.actor.id === void 0 ||
-                !("id" in value.sessionInfo.owner.actor) ||
-                (typeof value.sessionInfo.owner.actor.id == "string" &&
-                  (value.sessionInfo.owner.actor.id.length >= 2 ||
-                    (value.sessionInfo.owner.actor.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.id) >= 1)))) &&
-              (value.sessionInfo.owner.actor.label === void 0 ||
-                !("label" in value.sessionInfo.owner.actor) ||
-                (typeof value.sessionInfo.owner.actor.label == "string" &&
-                  (value.sessionInfo.owner.actor.label.length >= 2 ||
-                    (value.sessionInfo.owner.actor.label.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.label) >= 1)))) &&
-              (value.sessionInfo.owner.actor.avatarUrl === void 0 ||
-                !("avatarUrl" in value.sessionInfo.owner.actor) ||
-                (typeof value.sessionInfo.owner.actor.avatarUrl == "string" &&
-                  (value.sessionInfo.owner.actor.avatarUrl.length >= 2 ||
-                    (value.sessionInfo.owner.actor.avatarUrl.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.avatarUrl) >= 1)))) &&
-              (value.sessionInfo.owner.actor.identity === void 0 ||
-                !("identity" in value.sessionInfo.owner.actor) ||
-                (typeof value.sessionInfo.owner.actor.identity == "object" &&
-                  value.sessionInfo.owner.actor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.owner.actor.identity) &&
-                  "type" in value.sessionInfo.owner.actor.identity &&
-                  "id" in value.sessionInfo.owner.actor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.owner.actor.identity).length === 2 &&
-                  typeof value.sessionInfo.owner.actor.identity.type == "string" &&
-                  value.sessionInfo.owner.actor.identity.type === "profile" &&
-                  typeof value.sessionInfo.owner.actor.identity.id == "string" &&
-                  (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
-                    (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.owner.actor.identity == "object" &&
-                  value.sessionInfo.owner.actor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.owner.actor.identity) &&
-                  "type" in value.sessionInfo.owner.actor.identity &&
-                  "id" in value.sessionInfo.owner.actor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.owner.actor.identity).length === 2 &&
-                  typeof value.sessionInfo.owner.actor.identity.type == "string" &&
-                  value.sessionInfo.owner.actor.identity.type === "agent" &&
-                  typeof value.sessionInfo.owner.actor.identity.id == "string" &&
-                  (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
-                    (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.owner.actor.identity == "object" &&
-                  value.sessionInfo.owner.actor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.owner.actor.identity) &&
-                  "type" in value.sessionInfo.owner.actor.identity &&
-                  "pluginId" in value.sessionInfo.owner.actor.identity &&
-                  "domain" in value.sessionInfo.owner.actor.identity &&
-                  "idKind" in value.sessionInfo.owner.actor.identity &&
-                  "id" in value.sessionInfo.owner.actor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.owner.actor.identity).length === 5 &&
-                  typeof value.sessionInfo.owner.actor.identity.type == "string" &&
-                  value.sessionInfo.owner.actor.identity.type === "remote" &&
-                  typeof value.sessionInfo.owner.actor.identity.pluginId == "string" &&
-                  (value.sessionInfo.owner.actor.identity.pluginId.length >= 2 ||
-                    (value.sessionInfo.owner.actor.identity.pluginId.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.pluginId) >= 1)) &&
-                  typeof value.sessionInfo.owner.actor.identity.domain == "string" &&
-                  (value.sessionInfo.owner.actor.identity.domain.length >= 2 ||
-                    (value.sessionInfo.owner.actor.identity.domain.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.domain) >= 1)) &&
-                  typeof value.sessionInfo.owner.actor.identity.idKind == "string" &&
-                  (value.sessionInfo.owner.actor.identity.idKind.length >= 2 ||
-                    (value.sessionInfo.owner.actor.identity.idKind.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.idKind) >= 1)) &&
-                  typeof value.sessionInfo.owner.actor.identity.id == "string" &&
-                  (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
-                    (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.owner.actor.identity == "object" &&
-                  value.sessionInfo.owner.actor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.owner.actor.identity) &&
-                  "type" in value.sessionInfo.owner.actor.identity &&
-                  "pluginId" in value.sessionInfo.owner.actor.identity &&
-                  "accountId" in value.sessionInfo.owner.actor.identity &&
-                  "senderKind" in value.sessionInfo.owner.actor.identity &&
-                  "id" in value.sessionInfo.owner.actor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.owner.actor.identity).length === 5 &&
-                  typeof value.sessionInfo.owner.actor.identity.type == "string" &&
-                  value.sessionInfo.owner.actor.identity.type === "observation" &&
-                  ((typeof value.sessionInfo.owner.actor.identity.pluginId == "string" &&
-                    (value.sessionInfo.owner.actor.identity.pluginId.length >= 2 ||
-                      (value.sessionInfo.owner.actor.identity.pluginId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.owner.actor.identity.pluginId) >= 1))) ||
-                    value.sessionInfo.owner.actor.identity.pluginId === null) &&
-                  ((typeof value.sessionInfo.owner.actor.identity.accountId == "string" &&
-                    (value.sessionInfo.owner.actor.identity.accountId.length >= 2 ||
-                      (value.sessionInfo.owner.actor.identity.accountId.length >= 1 &&
-                        CodePointCount2(value.sessionInfo.owner.actor.identity.accountId) >= 1))) ||
-                    value.sessionInfo.owner.actor.identity.accountId === null) &&
-                  ((typeof value.sessionInfo.owner.actor.identity.senderKind == "string" &&
-                    value.sessionInfo.owner.actor.identity.senderKind === "human") ||
-                    (typeof value.sessionInfo.owner.actor.identity.senderKind == "string" &&
-                      value.sessionInfo.owner.actor.identity.senderKind === "bot") ||
-                    (typeof value.sessionInfo.owner.actor.identity.senderKind == "string" &&
-                      value.sessionInfo.owner.actor.identity.senderKind === "unknown")) &&
-                  typeof value.sessionInfo.owner.actor.identity.id == "string" &&
-                  (value.sessionInfo.owner.actor.identity.id.length >= 2 ||
-                    (value.sessionInfo.owner.actor.identity.id.length >= 1 &&
-                      CodePointCount2(value.sessionInfo.owner.actor.identity.id) >= 1))) ||
-                (typeof value.sessionInfo.owner.actor.identity == "object" &&
-                  value.sessionInfo.owner.actor.identity !== null &&
-                  !Array.isArray(value.sessionInfo.owner.actor.identity) &&
-                  "type" in value.sessionInfo.owner.actor.identity &&
-                  "actorType" in value.sessionInfo.owner.actor.identity &&
-                  "source" in value.sessionInfo.owner.actor.identity &&
-                  "id" in value.sessionInfo.owner.actor.identity &&
-                  Object.getOwnPropertyNames(value.sessionInfo.owner.actor.identity).length === 4 &&
-                  typeof value.sessionInfo.owner.actor.identity.type == "string" &&
-                  value.sessionInfo.owner.actor.identity.type === "legacy" &&
-                  typeof value.sessionInfo.owner.actor.identity.actorType == "string" &&
-                  (typeof value.sessionInfo.owner.actor.identity.source == "string" ||
-                    value.sessionInfo.owner.actor.identity.source === null) &&
-                  typeof value.sessionInfo.owner.actor.identity.id == "string")) &&
-              (value.sessionInfo.owner.assignedBy === void 0 ||
-                !("assignedBy" in value.sessionInfo.owner) ||
-                (typeof value.sessionInfo.owner.assignedBy == "object" &&
-                  value.sessionInfo.owner.assignedBy !== null &&
-                  !Array.isArray(value.sessionInfo.owner.assignedBy) &&
-                  "type" in value.sessionInfo.owner.assignedBy &&
-                  Object.getOwnPropertyNames(value.sessionInfo.owner.assignedBy).every(
-                    (var_208, var_209) => External[13].test(var_208) || !1,
-                  ) &&
-                  ((typeof value.sessionInfo.owner.assignedBy.type == "string" &&
-                    value.sessionInfo.owner.assignedBy.type === "human") ||
-                    (typeof value.sessionInfo.owner.assignedBy.type == "string" &&
-                      value.sessionInfo.owner.assignedBy.type === "agent") ||
-                    (typeof value.sessionInfo.owner.assignedBy.type == "string" &&
-                      value.sessionInfo.owner.assignedBy.type === "system")) &&
-                  (value.sessionInfo.owner.assignedBy.id === void 0 ||
-                    !("id" in value.sessionInfo.owner.assignedBy) ||
-                    (typeof value.sessionInfo.owner.assignedBy.id == "string" &&
-                      (value.sessionInfo.owner.assignedBy.id.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.id) >= 1)))) &&
-                  (value.sessionInfo.owner.assignedBy.label === void 0 ||
-                    !("label" in value.sessionInfo.owner.assignedBy) ||
-                    (typeof value.sessionInfo.owner.assignedBy.label == "string" &&
-                      (value.sessionInfo.owner.assignedBy.label.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.label.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.label) >= 1)))) &&
-                  (value.sessionInfo.owner.assignedBy.avatarUrl === void 0 ||
-                    !("avatarUrl" in value.sessionInfo.owner.assignedBy) ||
-                    (typeof value.sessionInfo.owner.assignedBy.avatarUrl == "string" &&
-                      (value.sessionInfo.owner.assignedBy.avatarUrl.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.avatarUrl.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.avatarUrl) >= 1)))) &&
-                  (value.sessionInfo.owner.assignedBy.identity === void 0 ||
-                    !("identity" in value.sessionInfo.owner.assignedBy) ||
-                    (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
-                      value.sessionInfo.owner.assignedBy.identity !== null &&
-                      !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
-                      "type" in value.sessionInfo.owner.assignedBy.identity &&
-                      "id" in value.sessionInfo.owner.assignedBy.identity &&
-                      Object.getOwnPropertyNames(value.sessionInfo.owner.assignedBy.identity)
-                        .length === 2 &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.type == "string" &&
-                      value.sessionInfo.owner.assignedBy.identity.type === "profile" &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
-                      (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
-                    (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
-                      value.sessionInfo.owner.assignedBy.identity !== null &&
-                      !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
-                      "type" in value.sessionInfo.owner.assignedBy.identity &&
-                      "id" in value.sessionInfo.owner.assignedBy.identity &&
-                      Object.getOwnPropertyNames(value.sessionInfo.owner.assignedBy.identity)
-                        .length === 2 &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.type == "string" &&
-                      value.sessionInfo.owner.assignedBy.identity.type === "agent" &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
-                      (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
-                    (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
-                      value.sessionInfo.owner.assignedBy.identity !== null &&
-                      !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
-                      "type" in value.sessionInfo.owner.assignedBy.identity &&
-                      "pluginId" in value.sessionInfo.owner.assignedBy.identity &&
-                      "domain" in value.sessionInfo.owner.assignedBy.identity &&
-                      "idKind" in value.sessionInfo.owner.assignedBy.identity &&
-                      "id" in value.sessionInfo.owner.assignedBy.identity &&
-                      Object.getOwnPropertyNames(value.sessionInfo.owner.assignedBy.identity)
-                        .length === 5 &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.type == "string" &&
-                      value.sessionInfo.owner.assignedBy.identity.type === "remote" &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.pluginId == "string" &&
-                      (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.pluginId) >=
-                            1)) &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.domain == "string" &&
-                      (value.sessionInfo.owner.assignedBy.identity.domain.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.identity.domain.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.domain) >=
-                            1)) &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.idKind == "string" &&
-                      (value.sessionInfo.owner.assignedBy.identity.idKind.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.identity.idKind.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.idKind) >=
-                            1)) &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
-                      (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
-                    (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
-                      value.sessionInfo.owner.assignedBy.identity !== null &&
-                      !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
-                      "type" in value.sessionInfo.owner.assignedBy.identity &&
-                      "pluginId" in value.sessionInfo.owner.assignedBy.identity &&
-                      "accountId" in value.sessionInfo.owner.assignedBy.identity &&
-                      "senderKind" in value.sessionInfo.owner.assignedBy.identity &&
-                      "id" in value.sessionInfo.owner.assignedBy.identity &&
-                      Object.getOwnPropertyNames(value.sessionInfo.owner.assignedBy.identity)
-                        .length === 5 &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.type == "string" &&
-                      value.sessionInfo.owner.assignedBy.identity.type === "observation" &&
-                      ((typeof value.sessionInfo.owner.assignedBy.identity.pluginId == "string" &&
-                        (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 2 ||
-                          (value.sessionInfo.owner.assignedBy.identity.pluginId.length >= 1 &&
-                            CodePointCount2(value.sessionInfo.owner.assignedBy.identity.pluginId) >=
-                              1))) ||
-                        value.sessionInfo.owner.assignedBy.identity.pluginId === null) &&
-                      ((typeof value.sessionInfo.owner.assignedBy.identity.accountId == "string" &&
-                        (value.sessionInfo.owner.assignedBy.identity.accountId.length >= 2 ||
-                          (value.sessionInfo.owner.assignedBy.identity.accountId.length >= 1 &&
-                            CodePointCount2(
-                              value.sessionInfo.owner.assignedBy.identity.accountId,
-                            ) >= 1))) ||
-                        value.sessionInfo.owner.assignedBy.identity.accountId === null) &&
-                      ((typeof value.sessionInfo.owner.assignedBy.identity.senderKind == "string" &&
-                        value.sessionInfo.owner.assignedBy.identity.senderKind === "human") ||
-                        (typeof value.sessionInfo.owner.assignedBy.identity.senderKind ==
-                          "string" &&
-                          value.sessionInfo.owner.assignedBy.identity.senderKind === "bot") ||
-                        (typeof value.sessionInfo.owner.assignedBy.identity.senderKind ==
-                          "string" &&
-                          value.sessionInfo.owner.assignedBy.identity.senderKind === "unknown")) &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.id == "string" &&
-                      (value.sessionInfo.owner.assignedBy.identity.id.length >= 2 ||
-                        (value.sessionInfo.owner.assignedBy.identity.id.length >= 1 &&
-                          CodePointCount2(value.sessionInfo.owner.assignedBy.identity.id) >= 1))) ||
-                    (typeof value.sessionInfo.owner.assignedBy.identity == "object" &&
-                      value.sessionInfo.owner.assignedBy.identity !== null &&
-                      !Array.isArray(value.sessionInfo.owner.assignedBy.identity) &&
-                      "type" in value.sessionInfo.owner.assignedBy.identity &&
-                      "actorType" in value.sessionInfo.owner.assignedBy.identity &&
-                      "source" in value.sessionInfo.owner.assignedBy.identity &&
-                      "id" in value.sessionInfo.owner.assignedBy.identity &&
-                      Object.getOwnPropertyNames(value.sessionInfo.owner.assignedBy.identity)
-                        .length === 4 &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.type == "string" &&
-                      value.sessionInfo.owner.assignedBy.identity.type === "legacy" &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.actorType == "string" &&
-                      (typeof value.sessionInfo.owner.assignedBy.identity.source == "string" ||
-                        value.sessionInfo.owner.assignedBy.identity.source === null) &&
-                      typeof value.sessionInfo.owner.assignedBy.identity.id == "string")))) &&
-              (value.sessionInfo.owner.assignedAt === void 0 ||
-                !("assignedAt" in value.sessionInfo.owner) ||
-                (Number.isFinite(value.sessionInfo.owner.assignedAt) &&
-                  value.sessionInfo.owner.assignedAt >= 0)))) &&
-          (value.sessionInfo.participants === void 0 ||
-            !("participants" in value.sessionInfo) ||
-            (Array.isArray(value.sessionInfo.participants) &&
-              value.sessionInfo.participants.every(
-                (element, index) =>
-                  typeof element == "object" &&
-                  element !== null &&
-                  !Array.isArray(element) &&
-                  "identity" in element &&
-                  Object.getOwnPropertyNames(element).every(
-                    (var_210, var_211) => External[14].test(var_210) || !1,
-                  ) &&
-                  ((typeof element.identity == "object" &&
-                    element.identity !== null &&
-                    !Array.isArray(element.identity) &&
-                    "type" in element.identity &&
-                    "id" in element.identity &&
-                    Object.getOwnPropertyNames(element.identity).length === 2 &&
-                    typeof element.identity.type == "string" &&
-                    element.identity.type === "profile" &&
-                    typeof element.identity.id == "string" &&
-                    (element.identity.id.length >= 2 ||
-                      (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 2 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "agent" &&
-                      typeof element.identity.id == "string" &&
-                      (element.identity.id.length >= 2 ||
-                        (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "pluginId" in element.identity &&
-                      "domain" in element.identity &&
-                      "idKind" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 5 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "remote" &&
-                      typeof element.identity.pluginId == "string" &&
-                      (element.identity.pluginId.length >= 2 ||
-                        (element.identity.pluginId.length >= 1 &&
-                          CodePointCount2(element.identity.pluginId) >= 1)) &&
-                      typeof element.identity.domain == "string" &&
-                      (element.identity.domain.length >= 2 ||
-                        (element.identity.domain.length >= 1 &&
-                          CodePointCount2(element.identity.domain) >= 1)) &&
-                      typeof element.identity.idKind == "string" &&
-                      (element.identity.idKind.length >= 2 ||
-                        (element.identity.idKind.length >= 1 &&
-                          CodePointCount2(element.identity.idKind) >= 1)) &&
-                      typeof element.identity.id == "string" &&
-                      (element.identity.id.length >= 2 ||
-                        (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "pluginId" in element.identity &&
-                      "accountId" in element.identity &&
-                      "senderKind" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 5 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "observation" &&
-                      ((typeof element.identity.pluginId == "string" &&
-                        (element.identity.pluginId.length >= 2 ||
-                          (element.identity.pluginId.length >= 1 &&
-                            CodePointCount2(element.identity.pluginId) >= 1))) ||
-                        element.identity.pluginId === null) &&
-                      ((typeof element.identity.accountId == "string" &&
-                        (element.identity.accountId.length >= 2 ||
-                          (element.identity.accountId.length >= 1 &&
-                            CodePointCount2(element.identity.accountId) >= 1))) ||
-                        element.identity.accountId === null) &&
-                      ((typeof element.identity.senderKind == "string" &&
-                        element.identity.senderKind === "human") ||
-                        (typeof element.identity.senderKind == "string" &&
-                          element.identity.senderKind === "bot") ||
-                        (typeof element.identity.senderKind == "string" &&
-                          element.identity.senderKind === "unknown")) &&
-                      typeof element.identity.id == "string" &&
-                      (element.identity.id.length >= 2 ||
-                        (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "actorType" in element.identity &&
-                      "source" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 4 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "legacy" &&
-                      typeof element.identity.actorType == "string" &&
-                      (typeof element.identity.source == "string" ||
-                        element.identity.source === null) &&
-                      typeof element.identity.id == "string")) &&
-                  (element.label === void 0 ||
-                    !("label" in element) ||
-                    (typeof element.label == "string" &&
-                      (element.label.length >= 2 ||
-                        (element.label.length >= 1 && CodePointCount2(element.label) >= 1)))) &&
-                  (element.avatarUrl === void 0 ||
-                    !("avatarUrl" in element) ||
-                    (typeof element.avatarUrl == "string" &&
-                      (element.avatarUrl.length >= 2 ||
-                        (element.avatarUrl.length >= 1 &&
-                          CodePointCount2(element.avatarUrl) >= 1)))),
-              ) &&
-              value.sessionInfo.participants.length <= 4)) &&
-          (value.sessionInfo.expandedParticipants === void 0 ||
-            !("expandedParticipants" in value.sessionInfo) ||
-            (Array.isArray(value.sessionInfo.expandedParticipants) &&
-              value.sessionInfo.expandedParticipants.every(
-                (element, index) =>
-                  typeof element == "object" &&
-                  element !== null &&
-                  !Array.isArray(element) &&
-                  "identity" in element &&
-                  Object.getOwnPropertyNames(element).every(
-                    (var_212, var_213) => External[15].test(var_212) || !1,
-                  ) &&
-                  ((typeof element.identity == "object" &&
-                    element.identity !== null &&
-                    !Array.isArray(element.identity) &&
-                    "type" in element.identity &&
-                    "id" in element.identity &&
-                    Object.getOwnPropertyNames(element.identity).length === 2 &&
-                    typeof element.identity.type == "string" &&
-                    element.identity.type === "profile" &&
-                    typeof element.identity.id == "string" &&
-                    (element.identity.id.length >= 2 ||
-                      (element.identity.id.length >= 1 &&
-                        CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 2 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "agent" &&
-                      typeof element.identity.id == "string" &&
-                      (element.identity.id.length >= 2 ||
-                        (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "pluginId" in element.identity &&
-                      "domain" in element.identity &&
-                      "idKind" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 5 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "remote" &&
-                      typeof element.identity.pluginId == "string" &&
-                      (element.identity.pluginId.length >= 2 ||
-                        (element.identity.pluginId.length >= 1 &&
-                          CodePointCount2(element.identity.pluginId) >= 1)) &&
-                      typeof element.identity.domain == "string" &&
-                      (element.identity.domain.length >= 2 ||
-                        (element.identity.domain.length >= 1 &&
-                          CodePointCount2(element.identity.domain) >= 1)) &&
-                      typeof element.identity.idKind == "string" &&
-                      (element.identity.idKind.length >= 2 ||
-                        (element.identity.idKind.length >= 1 &&
-                          CodePointCount2(element.identity.idKind) >= 1)) &&
-                      typeof element.identity.id == "string" &&
-                      (element.identity.id.length >= 2 ||
-                        (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "pluginId" in element.identity &&
-                      "accountId" in element.identity &&
-                      "senderKind" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 5 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "observation" &&
-                      ((typeof element.identity.pluginId == "string" &&
-                        (element.identity.pluginId.length >= 2 ||
-                          (element.identity.pluginId.length >= 1 &&
-                            CodePointCount2(element.identity.pluginId) >= 1))) ||
-                        element.identity.pluginId === null) &&
-                      ((typeof element.identity.accountId == "string" &&
-                        (element.identity.accountId.length >= 2 ||
-                          (element.identity.accountId.length >= 1 &&
-                            CodePointCount2(element.identity.accountId) >= 1))) ||
-                        element.identity.accountId === null) &&
-                      ((typeof element.identity.senderKind == "string" &&
-                        element.identity.senderKind === "human") ||
-                        (typeof element.identity.senderKind == "string" &&
-                          element.identity.senderKind === "bot") ||
-                        (typeof element.identity.senderKind == "string" &&
-                          element.identity.senderKind === "unknown")) &&
-                      typeof element.identity.id == "string" &&
-                      (element.identity.id.length >= 2 ||
-                        (element.identity.id.length >= 1 &&
-                          CodePointCount2(element.identity.id) >= 1))) ||
-                    (typeof element.identity == "object" &&
-                      element.identity !== null &&
-                      !Array.isArray(element.identity) &&
-                      "type" in element.identity &&
-                      "actorType" in element.identity &&
-                      "source" in element.identity &&
-                      "id" in element.identity &&
-                      Object.getOwnPropertyNames(element.identity).length === 4 &&
-                      typeof element.identity.type == "string" &&
-                      element.identity.type === "legacy" &&
-                      typeof element.identity.actorType == "string" &&
-                      (typeof element.identity.source == "string" ||
-                        element.identity.source === null) &&
-                      typeof element.identity.id == "string")) &&
-                  (element.label === void 0 ||
-                    !("label" in element) ||
-                    (typeof element.label == "string" &&
-                      (element.label.length >= 2 ||
-                        (element.label.length >= 1 && CodePointCount2(element.label) >= 1)))) &&
-                  (element.avatarUrl === void 0 ||
-                    !("avatarUrl" in element) ||
-                    (typeof element.avatarUrl == "string" &&
-                      (element.avatarUrl.length >= 2 ||
-                        (element.avatarUrl.length >= 1 &&
-                          CodePointCount2(element.avatarUrl) >= 1)))),
-              ) &&
-              value.sessionInfo.expandedParticipants.length <= 32)) &&
-          (value.sessionInfo.participantCount === void 0 ||
-            !("participantCount" in value.sessionInfo) ||
-            (Number.isInteger(value.sessionInfo.participantCount) &&
-              (!(
-                Number.isFinite(value.sessionInfo.participantCount) ||
-                typeof value.sessionInfo.participantCount == "bigint"
-              ) ||
-                value.sessionInfo.participantCount >= 0))) &&
-          (value.sessionInfo.visibility === void 0 ||
-            !("visibility" in value.sessionInfo) ||
-            (typeof value.sessionInfo.visibility == "string" &&
-              value.sessionInfo.visibility === "shared") ||
-            (typeof value.sessionInfo.visibility == "string" &&
-              value.sessionInfo.visibility === "read-only") ||
-            (typeof value.sessionInfo.visibility == "string" &&
-              value.sessionInfo.visibility === "suggest") ||
-            (typeof value.sessionInfo.visibility == "string" &&
-              value.sessionInfo.visibility === "draft")) &&
-          (value.sessionInfo.sharingRole === void 0 ||
-            !("sharingRole" in value.sessionInfo) ||
-            (typeof value.sessionInfo.sharingRole == "string" &&
-              value.sessionInfo.sharingRole === "admin") ||
-            (typeof value.sessionInfo.sharingRole == "string" &&
-              value.sessionInfo.sharingRole === "owner") ||
-            (typeof value.sessionInfo.sharingRole == "string" &&
-              value.sessionInfo.sharingRole === "member") ||
-            (typeof value.sessionInfo.sharingRole == "string" &&
-              value.sessionInfo.sharingRole === "viewer")) &&
-          (value.sessionInfo.sendDisabledReason === void 0 ||
-            !("sendDisabledReason" in value.sessionInfo) ||
-            (typeof value.sessionInfo.sendDisabledReason == "string" &&
-              (value.sessionInfo.sendDisabledReason.length >= 2 ||
-                (value.sessionInfo.sendDisabledReason.length >= 1 &&
-                  CodePointCount2(value.sessionInfo.sendDisabledReason) >= 1))) ||
-            value.sessionInfo.sendDisabledReason === null) &&
-          (value.sessionInfo.createdAt === void 0 ||
-            !("createdAt" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.createdAt)) &&
-          (value.sessionInfo.forkSource === void 0 ||
-            !("forkSource" in value.sessionInfo) ||
-            (typeof value.sessionInfo.forkSource == "object" &&
-              value.sessionInfo.forkSource !== null &&
-              !Array.isArray(value.sessionInfo.forkSource) &&
-              "sessionKey" in value.sessionInfo.forkSource &&
-              "sessionId" in value.sessionInfo.forkSource &&
-              typeof value.sessionInfo.forkSource.sessionKey == "string" &&
-              typeof value.sessionInfo.forkSource.sessionId == "string" &&
-              (value.sessionInfo.forkSource.entryId === void 0 ||
-                !("entryId" in value.sessionInfo.forkSource) ||
-                typeof value.sessionInfo.forkSource.entryId == "string"))) &&
-          (value.sessionInfo.previousSessionId === void 0 ||
-            !("previousSessionId" in value.sessionInfo) ||
-            typeof value.sessionInfo.previousSessionId == "string") &&
-          (value.sessionInfo.inputTokens === void 0 ||
-            !("inputTokens" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.inputTokens)) &&
-          (value.sessionInfo.outputTokens === void 0 ||
-            !("outputTokens" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.outputTokens)) &&
-          (value.sessionInfo.usageReport === void 0 ||
-            !("usageReport" in value.sessionInfo) ||
-            (typeof value.sessionInfo.usageReport == "object" &&
-              value.sessionInfo.usageReport !== null &&
-              !Array.isArray(value.sessionInfo.usageReport) &&
-              "state" in value.sessionInfo.usageReport &&
-              ((typeof value.sessionInfo.usageReport.state == "string" &&
-                value.sessionInfo.usageReport.state === "available") ||
-                (typeof value.sessionInfo.usageReport.state == "string" &&
-                  value.sessionInfo.usageReport.state === "unavailable")))) &&
-          (value.sessionInfo.totalTokens === void 0 ||
-            !("totalTokens" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.totalTokens)) &&
-          (value.sessionInfo.totalTokensFresh === void 0 ||
-            !("totalTokensFresh" in value.sessionInfo) ||
-            typeof value.sessionInfo.totalTokensFresh == "boolean") &&
-          (value.sessionInfo.contextTokens === void 0 ||
-            !("contextTokens" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.contextTokens)) &&
-          (value.sessionInfo.estimatedCostUsd === void 0 ||
-            !("estimatedCostUsd" in value.sessionInfo) ||
-            Number.isFinite(value.sessionInfo.estimatedCostUsd)) &&
-          (value.sessionInfo.model === void 0 ||
-            !("model" in value.sessionInfo) ||
-            typeof value.sessionInfo.model == "string") &&
-          (value.sessionInfo.modelProvider === void 0 ||
-            !("modelProvider" in value.sessionInfo) ||
-            typeof value.sessionInfo.modelProvider == "string") &&
-          (value.sessionInfo.activeModel === void 0 ||
-            !("activeModel" in value.sessionInfo) ||
-            typeof value.sessionInfo.activeModel == "string") &&
-          (value.sessionInfo.activeModelProvider === void 0 ||
-            !("activeModelProvider" in value.sessionInfo) ||
-            typeof value.sessionInfo.activeModelProvider == "string") &&
-          (value.sessionInfo.modelOverrideSource === void 0 ||
-            !("modelOverrideSource" in value.sessionInfo) ||
-            (typeof value.sessionInfo.modelOverrideSource == "string" &&
-              value.sessionInfo.modelOverrideSource === "user") ||
-            (typeof value.sessionInfo.modelOverrideSource == "string" &&
-              value.sessionInfo.modelOverrideSource === "auto") ||
-            (typeof value.sessionInfo.modelOverrideSource == "string" &&
-              value.sessionInfo.modelOverrideSource === "inherited") ||
-            value.sessionInfo.modelOverrideSource === null) &&
-          (value.sessionInfo.toolOverrides === void 0 ||
-            !("toolOverrides" in value.sessionInfo) ||
-            (typeof value.sessionInfo.toolOverrides == "object" &&
-              value.sessionInfo.toolOverrides !== null &&
-              !Array.isArray(value.sessionInfo.toolOverrides) &&
-              Object.getOwnPropertyNames(value.sessionInfo.toolOverrides).every(
-                (var_214, var_215) => External[16].test(var_214) || !1,
-              ) &&
-              (value.sessionInfo.toolOverrides.mcpServers === void 0 ||
-                !("mcpServers" in value.sessionInfo.toolOverrides) ||
-                (typeof value.sessionInfo.toolOverrides.mcpServers == "object" &&
-                  value.sessionInfo.toolOverrides.mcpServers !== null &&
-                  !Array.isArray(value.sessionInfo.toolOverrides.mcpServers) &&
-                  Object.entries(value.sessionInfo.toolOverrides.mcpServers).every(
-                    ([var_216, var_217], _) =>
-                      !External[17].test(var_216) || typeof var_217 == "boolean",
-                  ))) &&
-              (value.sessionInfo.toolOverrides.mcpToolsDeny === void 0 ||
-                !("mcpToolsDeny" in value.sessionInfo.toolOverrides) ||
-                (typeof value.sessionInfo.toolOverrides.mcpToolsDeny == "object" &&
-                  value.sessionInfo.toolOverrides.mcpToolsDeny !== null &&
-                  !Array.isArray(value.sessionInfo.toolOverrides.mcpToolsDeny) &&
-                  Object.entries(value.sessionInfo.toolOverrides.mcpToolsDeny).every(
-                    ([var_218, var_219], _) =>
-                      !External[18].test(var_218) ||
-                      (Array.isArray(var_219) &&
-                        var_219.every(
-                          (element, index) =>
-                            typeof element == "string" &&
-                            (element.length >= 2 ||
-                              (element.length >= 1 && CodePointCount2(element) >= 1)),
-                        )),
-                  ))) &&
-              (value.sessionInfo.toolOverrides.skills === void 0 ||
-                !("skills" in value.sessionInfo.toolOverrides) ||
-                (typeof value.sessionInfo.toolOverrides.skills == "object" &&
-                  value.sessionInfo.toolOverrides.skills !== null &&
-                  !Array.isArray(value.sessionInfo.toolOverrides.skills) &&
-                  Object.entries(value.sessionInfo.toolOverrides.skills).every(
-                    ([var_220, var_221], _) =>
-                      !External[19].test(var_220) || typeof var_221 == "boolean",
-                  ))) &&
-              (value.sessionInfo.toolOverrides.webSearch === void 0 ||
-                !("webSearch" in value.sessionInfo.toolOverrides) ||
-                typeof value.sessionInfo.toolOverrides.webSearch == "boolean"))))) &&
-      (value.commands === void 0 ||
-        !("commands" in value) ||
-        (Array.isArray(value.commands) &&
-          value.commands.every(
-            (element, index) =>
-              typeof element == "object" &&
-              element !== null &&
-              !Array.isArray(element) &&
-              "name" in element &&
-              "description" in element &&
-              "source" in element &&
-              "scope" in element &&
-              "acceptsArgs" in element &&
-              Object.getOwnPropertyNames(element).every(
-                (var_222, var_223) => External[20].test(var_222) || !1,
-              ) &&
-              typeof element.name == "string" &&
-              (element.name.length >= 2 ||
-                (element.name.length >= 1 && CodePointCount2(element.name) >= 1)) &&
-              (element.name.length <= 200 ||
-                (element.name.length <= 400 && CodePointCount2(element.name) <= 200)) &&
-              (element.nativeName === void 0 ||
-                !("nativeName" in element) ||
-                (typeof element.nativeName == "string" &&
-                  (element.nativeName.length >= 2 ||
-                    (element.nativeName.length >= 1 && CodePointCount2(element.nativeName) >= 1)) &&
-                  (element.nativeName.length <= 200 ||
-                    (element.nativeName.length <= 400 &&
-                      CodePointCount2(element.nativeName) <= 200)))) &&
-              (element.textAliases === void 0 ||
-                !("textAliases" in element) ||
-                (Array.isArray(element.textAliases) &&
-                  element.textAliases.every(
-                    (element2, index2) =>
-                      typeof element2 == "string" &&
-                      (element2.length >= 2 ||
-                        (element2.length >= 1 && CodePointCount2(element2) >= 1)) &&
-                      (element2.length <= 200 ||
-                        (element2.length <= 400 && CodePointCount2(element2) <= 200)),
-                  ) &&
-                  element.textAliases.length <= 20)) &&
-              typeof element.description == "string" &&
-              (element.description.length <= 2e3 ||
-                (element.description.length <= 4e3 &&
-                  CodePointCount2(element.description) <= 2e3)) &&
-              (element.category === void 0 ||
-                !("category" in element) ||
-                (typeof element.category == "string" && element.category === "session") ||
-                (typeof element.category == "string" && element.category === "options") ||
-                (typeof element.category == "string" && element.category === "status") ||
-                (typeof element.category == "string" && element.category === "management") ||
-                (typeof element.category == "string" && element.category === "media") ||
-                (typeof element.category == "string" && element.category === "tools")) &&
-              ((typeof element.source == "string" && element.source === "native") ||
-                (typeof element.source == "string" && element.source === "skill") ||
-                (typeof element.source == "string" && element.source === "plugin")) &&
-              (element.skillDisplayName === void 0 ||
-                !("skillDisplayName" in element) ||
-                (typeof element.skillDisplayName == "string" &&
-                  (element.skillDisplayName.length >= 2 ||
-                    (element.skillDisplayName.length >= 1 &&
-                      CodePointCount2(element.skillDisplayName) >= 1)) &&
-                  (element.skillDisplayName.length <= 200 ||
-                    (element.skillDisplayName.length <= 400 &&
-                      CodePointCount2(element.skillDisplayName) <= 200)))) &&
-              (element.skillModelVisible === void 0 ||
-                !("skillModelVisible" in element) ||
-                typeof element.skillModelVisible == "boolean") &&
-              ((typeof element.scope == "string" && element.scope === "text") ||
-                (typeof element.scope == "string" && element.scope === "native") ||
-                (typeof element.scope == "string" && element.scope === "both")) &&
-              typeof element.acceptsArgs == "boolean" &&
-              (element.args === void 0 ||
-                !("args" in element) ||
-                (Array.isArray(element.args) &&
-                  element.args.every(
-                    (element2, index2) =>
-                      typeof element2 == "object" &&
-                      element2 !== null &&
-                      !Array.isArray(element2) &&
-                      "name" in element2 &&
-                      "description" in element2 &&
-                      "type" in element2 &&
-                      Object.getOwnPropertyNames(element2).every(
-                        (var_224, var_225) => External[21].test(var_224) || !1,
-                      ) &&
-                      typeof element2.name == "string" &&
-                      (element2.name.length >= 2 ||
-                        (element2.name.length >= 1 && CodePointCount2(element2.name) >= 1)) &&
-                      (element2.name.length <= 200 ||
-                        (element2.name.length <= 400 && CodePointCount2(element2.name) <= 200)) &&
-                      typeof element2.description == "string" &&
-                      (element2.description.length <= 500 ||
-                        (element2.description.length <= 1e3 &&
-                          CodePointCount2(element2.description) <= 500)) &&
-                      ((typeof element2.type == "string" && element2.type === "string") ||
-                        (typeof element2.type == "string" && element2.type === "number") ||
-                        (typeof element2.type == "string" && element2.type === "boolean")) &&
-                      (element2.required === void 0 ||
-                        !("required" in element2) ||
-                        typeof element2.required == "boolean") &&
-                      (element2.choices === void 0 ||
-                        !("choices" in element2) ||
-                        (Array.isArray(element2.choices) &&
-                          element2.choices.every(
-                            (element3, index3) =>
-                              typeof element3 == "object" &&
-                              element3 !== null &&
-                              !Array.isArray(element3) &&
-                              "value" in element3 &&
-                              "label" in element3 &&
-                              Object.getOwnPropertyNames(element3).length === 2 &&
-                              typeof element3.value == "string" &&
-                              (element3.value.length <= 200 ||
-                                (element3.value.length <= 400 &&
-                                  CodePointCount2(element3.value) <= 200)) &&
-                              typeof element3.label == "string" &&
-                              (element3.label.length <= 200 ||
-                                (element3.label.length <= 400 &&
-                                  CodePointCount2(element3.label) <= 200)),
-                          ) &&
-                          element2.choices.length <= 50)) &&
-                      (element2.dynamic === void 0 ||
-                        !("dynamic" in element2) ||
-                        typeof element2.dynamic == "boolean"),
-                  ) &&
-                  element.args.length <= 20)) &&
-              (element.clientPresentation === void 0 ||
-                !("clientPresentation" in element) ||
-                (typeof element.clientPresentation == "object" &&
-                  element.clientPresentation !== null &&
-                  !Array.isArray(element.clientPresentation) &&
-                  "when" in element.clientPresentation &&
-                  "action" in element.clientPresentation &&
-                  Object.getOwnPropertyNames(element.clientPresentation).length === 2 &&
-                  typeof element.clientPresentation.when == "string" &&
-                  element.clientPresentation.when === "no-arguments" &&
-                  typeof element.clientPresentation.action == "object" &&
-                  element.clientPresentation.action !== null &&
-                  !Array.isArray(element.clientPresentation.action) &&
-                  "kind" in element.clientPresentation.action &&
-                  Object.getOwnPropertyNames(element.clientPresentation.action).length === 1 &&
-                  typeof element.clientPresentation.action.kind == "string" &&
-                  element.clientPresentation.action.kind === "device-pairing")),
-          ) &&
-          value.commands.length <= 500));
+        check_5(value.pendingInputs)) &&
+      (value.sessionInfo === void 0 || !("sessionInfo" in value) || check_16(value.sessionInfo)) &&
+      (value.commands === void 0 || !("commands" in value) || check_151(value.commands)),
+    check_2 = (value) => !1,
+    check_3 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.getOwnPropertyNames(value).every(
+        (var_110, var_111) => External[1].test(var_110) || check_2(value[var_110]),
+      ) &&
+      (value.pendingInputs === void 0 ||
+        !("pendingInputs" in value) ||
+        check_4(value.pendingInputs)) &&
+      (value.sessionInfo === void 0 || !("sessionInfo" in value) || check_4(value.sessionInfo)) &&
+      (value.commands === void 0 || !("commands" in value) || check_4(value.commands)),
+    check_4 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount2(value) >= 1)) &&
+      (value.length <= 64 || (value.length <= 128 && CodePointCount2(value) <= 64)),
+    check_5 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "items" in value &&
+      "total" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_112, var_113) => External[2].test(var_112) || check_2(value[var_112]),
+      ) &&
+      check_6(value.items) &&
+      check_14(value.total) &&
+      (value.queuedCount === void 0 || !("queuedCount" in value) || check_14(value.queuedCount)) &&
+      (value.nextBefore === void 0 || !("nextBefore" in value) || check_15(value.nextBefore)),
+    check_6 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_7(element)) &&
+      value.length <= 20,
+    check_7 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "id" in value &&
+      "message" in value &&
+      "acceptedAt" in value &&
+      "state" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_114, var_115) => External[3].test(var_114) || check_2(value[var_114]),
+      ) &&
+      check_8(value.id) &&
+      (value.runId === void 0 || !("runId" in value) || check_9(value.runId)) &&
+      check_10(value.message) &&
+      check_11(value.acceptedAt) &&
+      check_12(value.state) &&
+      (value.queued === void 0 || !("queued" in value) || check_13(value.queued)),
+    check_8 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount2(value) >= 1)),
+    check_9 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount2(value) >= 1)) &&
+      (value.length <= 256 || (value.length <= 512 && CodePointCount2(value) <= 256)),
+    check_10 = (value) => !0,
+    check_11 = (value) => Number.isFinite(value),
+    check_12 = (value) =>
+      typeof value == "string" &&
+      (value === "queued" || value === "cancelled" || value === "interrupted"),
+    check_13 = (value) => typeof value == "boolean" && value === !0,
+    check_14 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || value >= 0),
+    check_15 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || value >= 1),
+    check_16 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "key" in value &&
+      "kind" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_116, var_117) => External[4].test(var_116) || check_17(value[var_116]),
+      ) &&
+      check_18(value.key) &&
+      (value.rowMode === void 0 || !("rowMode" in value) || check_19(value.rowMode)) &&
+      (value.sharedFacts === void 0 || !("sharedFacts" in value) || check_23(value.sharedFacts)) &&
+      (value.sessionId === void 0 || !("sessionId" in value) || check_18(value.sessionId)) &&
+      (value.lifecycleRevision === void 0 ||
+        !("lifecycleRevision" in value) ||
+        check_8(value.lifecycleRevision)) &&
+      (value.sessionModelRevision === void 0 ||
+        !("sessionModelRevision" in value) ||
+        check_8(value.sessionModelRevision)) &&
+      (value.incognito === void 0 || !("incognito" in value) || check_13(value.incognito)) &&
+      check_24(value.kind) &&
+      (value.label === void 0 || !("label" in value) || check_18(value.label)) &&
+      (value.autoLabel === void 0 || !("autoLabel" in value) || check_18(value.autoLabel)) &&
+      (value.icon === void 0 || !("icon" in value) || check_18(value.icon)) &&
+      (value.color === void 0 || !("color" in value) || check_18(value.color)) &&
+      (value.channelAvatarUrl === void 0 ||
+        !("channelAvatarUrl" in value) ||
+        check_8(value.channelAvatarUrl)) &&
+      (value.boardFace === void 0 || !("boardFace" in value) || check_29(value.boardFace)) &&
+      (value.hasBoard === void 0 || !("hasBoard" in value) || check_31(value.hasBoard)) &&
+      (value.boardPresentation === void 0 ||
+        !("boardPresentation" in value) ||
+        check_32(value.boardPresentation)) &&
+      (value.displayName === void 0 || !("displayName" in value) || check_18(value.displayName)) &&
+      (value.titlePending === void 0 ||
+        !("titlePending" in value) ||
+        check_31(value.titlePending)) &&
+      (value.derivedTitle === void 0 ||
+        !("derivedTitle" in value) ||
+        check_18(value.derivedTitle)) &&
+      (value.lastMessagePreview === void 0 ||
+        !("lastMessagePreview" in value) ||
+        check_18(value.lastMessagePreview)) &&
+      (value.lastAssistantMessage === void 0 ||
+        !("lastAssistantMessage" in value) ||
+        check_35(value.lastAssistantMessage)) &&
+      (value.channel === void 0 || !("channel" in value) || check_18(value.channel)) &&
+      (value.classification === void 0 ||
+        !("classification" in value) ||
+        check_8(value.classification)) &&
+      (value.agentId === void 0 || !("agentId" in value) || check_8(value.agentId)) &&
+      (value.accountId === void 0 || !("accountId" in value) || check_8(value.accountId)) &&
+      (value.peerKind === void 0 || !("peerKind" in value) || check_8(value.peerKind)) &&
+      (value.isMain === void 0 || !("isMain" in value) || check_31(value.isMain)) &&
+      (value.isBackground === void 0 ||
+        !("isBackground" in value) ||
+        check_31(value.isBackground)) &&
+      (value.isDock === void 0 || !("isDock" in value) || check_31(value.isDock)) &&
+      (value.chatType === void 0 || !("chatType" in value) || check_36(value.chatType)) &&
+      (value.activitySummary === void 0 ||
+        !("activitySummary" in value) ||
+        check_38(value.activitySummary)) &&
+      (value.updatedAt === void 0 || !("updatedAt" in value) || check_45(value.updatedAt)) &&
+      (value.snapshotAt === void 0 || !("snapshotAt" in value) || check_11(value.snapshotAt)) &&
+      (value.ancestorRevision === void 0 ||
+        !("ancestorRevision" in value) ||
+        check_8(value.ancestorRevision)) &&
+      (value.hiddenFromInvolvingMe === void 0 ||
+        !("hiddenFromInvolvingMe" in value) ||
+        check_31(value.hiddenFromInvolvingMe)) &&
+      (value.archived === void 0 || !("archived" in value) || check_31(value.archived)) &&
+      (value.archivedAt === void 0 || !("archivedAt" in value) || check_11(value.archivedAt)) &&
+      (value.archivedBy === void 0 || !("archivedBy" in value) || check_47(value.archivedBy)) &&
+      (value.archiveReason === void 0 ||
+        !("archiveReason" in value) ||
+        check_66(value.archiveReason)) &&
+      (value.pinned === void 0 || !("pinned" in value) || check_31(value.pinned)) &&
+      (value.sidebarRoot === void 0 || !("sidebarRoot" in value) || check_31(value.sidebarRoot)) &&
+      (value.pinnedAt === void 0 || !("pinnedAt" in value) || check_11(value.pinnedAt)) &&
+      (value.snoozedUntil === void 0 ||
+        !("snoozedUntil" in value) ||
+        check_11(value.snoozedUntil)) &&
+      (value.snoozedAt === void 0 || !("snoozedAt" in value) || check_11(value.snoozedAt)) &&
+      (value.unread === void 0 || !("unread" in value) || check_31(value.unread)) &&
+      (value.lastReadAt === void 0 || !("lastReadAt" in value) || check_11(value.lastReadAt)) &&
+      (value.markedUnreadAt === void 0 ||
+        !("markedUnreadAt" in value) ||
+        check_11(value.markedUnreadAt)) &&
+      (value.lastActivityAt === void 0 ||
+        !("lastActivityAt" in value) ||
+        check_11(value.lastActivityAt)) &&
+      (value.lastInteractionAt === void 0 ||
+        !("lastInteractionAt" in value) ||
+        check_11(value.lastInteractionAt)) &&
+      (value.status === void 0 || !("status" in value) || check_72(value.status)) &&
+      (value.lastRunError === void 0 ||
+        !("lastRunError" in value) ||
+        check_18(value.lastRunError)) &&
+      (value.suppressErrorNotice === void 0 ||
+        !("suppressErrorNotice" in value) ||
+        check_31(value.suppressErrorNotice)) &&
+      (value.providerReview === void 0 ||
+        !("providerReview" in value) ||
+        check_80(value.providerReview)) &&
+      (value.lastRunId === void 0 || !("lastRunId" in value) || check_8(value.lastRunId)) &&
+      (value.restartRecoveryStatus === void 0 ||
+        !("restartRecoveryStatus" in value) ||
+        check_83(value.restartRecoveryStatus)) &&
+      (value.restartRecoveryCycleId === void 0 ||
+        !("restartRecoveryCycleId" in value) ||
+        check_8(value.restartRecoveryCycleId)) &&
+      (value.activeLeafEntryId === void 0 ||
+        !("activeLeafEntryId" in value) ||
+        check_60(value.activeLeafEntryId)) &&
+      (value.spawnedBy === void 0 || !("spawnedBy" in value) || check_18(value.spawnedBy)) &&
+      (value.parentSessionKey === void 0 ||
+        !("parentSessionKey" in value) ||
+        check_18(value.parentSessionKey)) &&
+      (value.parentSessionId === void 0 ||
+        !("parentSessionId" in value) ||
+        check_18(value.parentSessionId)) &&
+      (value.controlOwnerSessionKey === void 0 ||
+        !("controlOwnerSessionKey" in value) ||
+        check_18(value.controlOwnerSessionKey)) &&
+      (value.childOwnerSessionKeys === void 0 ||
+        !("childOwnerSessionKeys" in value) ||
+        check_84(value.childOwnerSessionKeys)) &&
+      (value.childSessions === void 0 ||
+        !("childSessions" in value) ||
+        check_85(value.childSessions)) &&
+      (value.forkedFromParent === void 0 ||
+        !("forkedFromParent" in value) ||
+        check_31(value.forkedFromParent)) &&
+      (value.spawnDepth === void 0 || !("spawnDepth" in value) || check_11(value.spawnDepth)) &&
+      (value.subagentRole === void 0 ||
+        !("subagentRole" in value) ||
+        check_86(value.subagentRole)) &&
+      (value.subagentControlScope === void 0 ||
+        !("subagentControlScope" in value) ||
+        check_89(value.subagentControlScope)) &&
+      (value.swarmGroupId === void 0 ||
+        !("swarmGroupId" in value) ||
+        check_18(value.swarmGroupId)) &&
+      (value.swarm === void 0 || !("swarm" in value) || check_92(value.swarm)) &&
+      (value.deviceFolder === void 0 ||
+        !("deviceFolder" in value) ||
+        check_99(value.deviceFolder)) &&
+      (value.worktree === void 0 || !("worktree" in value) || check_101(value.worktree)) &&
+      (value.repositoryWorkspaceId === void 0 ||
+        !("repositoryWorkspaceId" in value) ||
+        check_8(value.repositoryWorkspaceId)) &&
+      (value.repository === void 0 || !("repository" in value) || check_102(value.repository)) &&
+      (value.execNode === void 0 || !("execNode" in value) || check_18(value.execNode)) &&
+      (value.execCwd === void 0 || !("execCwd" in value) || check_18(value.execCwd)) &&
+      (value.spawnedWorkspaceDir === void 0 ||
+        !("spawnedWorkspaceDir" in value) ||
+        check_18(value.spawnedWorkspaceDir)) &&
+      (value.spawnedCwd === void 0 || !("spawnedCwd" in value) || check_18(value.spawnedCwd)) &&
+      (value.projectId === void 0 || !("projectId" in value) || check_18(value.projectId)) &&
+      (value.workspaceDir === void 0 ||
+        !("workspaceDir" in value) ||
+        check_18(value.workspaceDir)) &&
+      (value.permissionMode === void 0 ||
+        !("permissionMode" in value) ||
+        check_105(value.permissionMode)) &&
+      (value.communication === void 0 ||
+        !("communication" in value) ||
+        check_110(value.communication)) &&
+      (value.effectiveCommunication === void 0 ||
+        !("effectiveCommunication" in value) ||
+        check_115(value.effectiveCommunication)) &&
+      (value.sandboxMode === void 0 || !("sandboxMode" in value) || check_116(value.sandboxMode)) &&
+      (value.nativeRuntimeConsent === void 0 ||
+        !("nativeRuntimeConsent" in value) ||
+        check_8(value.nativeRuntimeConsent)) &&
+      (value.permissionModePending === void 0 ||
+        !("permissionModePending" in value) ||
+        check_31(value.permissionModePending)) &&
+      (value.sessionRoot === void 0 || !("sessionRoot" in value) || check_18(value.sessionRoot)) &&
+      (value.createdVia === void 0 || !("createdVia" in value) || check_117(value.createdVia)) &&
+      (value.createdSurface === void 0 ||
+        !("createdSurface" in value) ||
+        check_125(value.createdSurface)) &&
+      (value.createdActor === void 0 ||
+        !("createdActor" in value) ||
+        check_47(value.createdActor)) &&
+      (value.owner === void 0 || !("owner" in value) || check_126(value.owner)) &&
+      (value.participants === void 0 ||
+        !("participants" in value) ||
+        check_127(value.participants)) &&
+      (value.expandedParticipants === void 0 ||
+        !("expandedParticipants" in value) ||
+        check_129(value.expandedParticipants)) &&
+      (value.participantCount === void 0 ||
+        !("participantCount" in value) ||
+        check_14(value.participantCount)) &&
+      (value.visibility === void 0 || !("visibility" in value) || check_130(value.visibility)) &&
+      (value.sharingRole === void 0 || !("sharingRole" in value) || check_134(value.sharingRole)) &&
+      (value.sendDisabledReason === void 0 ||
+        !("sendDisabledReason" in value) ||
+        check_60(value.sendDisabledReason)) &&
+      (value.createdAt === void 0 || !("createdAt" in value) || check_11(value.createdAt)) &&
+      (value.forkSource === void 0 || !("forkSource" in value) || check_139(value.forkSource)) &&
+      (value.previousSessionId === void 0 ||
+        !("previousSessionId" in value) ||
+        check_18(value.previousSessionId)) &&
+      (value.inputTokens === void 0 || !("inputTokens" in value) || check_11(value.inputTokens)) &&
+      (value.outputTokens === void 0 ||
+        !("outputTokens" in value) ||
+        check_11(value.outputTokens)) &&
+      (value.usageReport === void 0 || !("usageReport" in value) || check_140(value.usageReport)) &&
+      (value.totalTokens === void 0 || !("totalTokens" in value) || check_11(value.totalTokens)) &&
+      (value.totalTokensFresh === void 0 ||
+        !("totalTokensFresh" in value) ||
+        check_31(value.totalTokensFresh)) &&
+      (value.contextTokens === void 0 ||
+        !("contextTokens" in value) ||
+        check_11(value.contextTokens)) &&
+      (value.estimatedCostUsd === void 0 ||
+        !("estimatedCostUsd" in value) ||
+        check_11(value.estimatedCostUsd)) &&
+      (value.model === void 0 || !("model" in value) || check_18(value.model)) &&
+      (value.modelProvider === void 0 ||
+        !("modelProvider" in value) ||
+        check_18(value.modelProvider)) &&
+      (value.activeModel === void 0 || !("activeModel" in value) || check_18(value.activeModel)) &&
+      (value.activeModelProvider === void 0 ||
+        !("activeModelProvider" in value) ||
+        check_18(value.activeModelProvider)) &&
+      (value.modelOverrideSource === void 0 ||
+        !("modelOverrideSource" in value) ||
+        check_143(value.modelOverrideSource)) &&
+      (value.toolOverrides === void 0 ||
+        !("toolOverrides" in value) ||
+        check_147(value.toolOverrides)),
+    check_17 = (value) => !0,
+    check_18 = (value) => typeof value == "string",
+    check_19 = (value) => check_20(value) || check_21(value) || check_22(value),
+    check_20 = (value) => typeof value == "string" && value === "compact",
+    check_21 = (value) => typeof value == "string" && value === "dashboard",
+    check_22 = (value) => typeof value == "string" && value === "sidebar",
+    check_23 = (value) =>
+      Array.isArray(value) && value.every((element, index) => check_14(element)),
+    check_24 = (value) => check_25(value) || check_26(value) || check_27(value) || check_28(value),
+    check_25 = (value) => typeof value == "string" && value === "direct",
+    check_26 = (value) => typeof value == "string" && value === "group",
+    check_27 = (value) => typeof value == "string" && value === "global",
+    check_28 = (value) => typeof value == "string" && value === "unknown",
+    check_29 = (value) => check_30(value) || check_21(value),
+    check_30 = (value) => typeof value == "string" && value === "chat",
+    check_31 = (value) => typeof value == "boolean",
+    check_32 = (value) => check_33(value) || check_34(value),
+    check_33 = (value) => typeof value == "string" && value === "split",
+    check_34 = (value) => typeof value == "string" && value === "expanded",
+    check_35 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "text" in value &&
+      "timestamp" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_118, var_119) => External[5].test(var_118) || check_2(value[var_118]),
+      ) &&
+      check_18(value.text) &&
+      check_11(value.timestamp),
+    check_36 = (value) => check_25(value) || check_26(value) || check_37(value),
+    check_37 = (value) => typeof value == "string" && value === "channel",
+    check_38 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "state" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_120, var_121) => External[6].test(var_120) || check_2(value[var_120]),
+      ) &&
+      (value.canEnsure === void 0 || !("canEnsure" in value) || check_31(value.canEnsure)) &&
+      (value.text === void 0 || !("text" in value) || check_39(value.text)) &&
+      (value.updatedAt === void 0 || !("updatedAt" in value) || check_14(value.updatedAt)) &&
+      check_40(value.state),
+    check_39 = (value) =>
+      typeof value == "string" &&
+      (value.length <= 900 || (value.length <= 1800 && CodePointCount2(value) <= 900)),
+    check_40 = (value) => check_41(value) || check_42(value) || check_43(value) || check_44(value),
+    check_41 = (value) => typeof value == "string" && value === "current",
+    check_42 = (value) => typeof value == "string" && value === "stale",
+    check_43 = (value) => typeof value == "string" && value === "updating",
+    check_44 = (value) => typeof value == "string" && value === "unavailable",
+    check_45 = (value) => check_11(value) || check_46(value),
+    check_46 = (value) => value === null,
+    check_47 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "type" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_122, var_123) => External[7].test(var_122) || check_2(value[var_122]),
+      ) &&
+      check_48(value.type) &&
+      (value.id === void 0 || !("id" in value) || check_8(value.id)) &&
+      (value.label === void 0 || !("label" in value) || check_8(value.label)) &&
+      (value.avatarUrl === void 0 || !("avatarUrl" in value) || check_8(value.avatarUrl)) &&
+      (value.identity === void 0 || !("identity" in value) || check_52(value.identity)),
+    check_48 = (value) => check_49(value) || check_50(value) || check_51(value),
+    check_49 = (value) => typeof value == "string" && value === "human",
+    check_50 = (value) => typeof value == "string" && value === "agent",
+    check_51 = (value) => typeof value == "string" && value === "system",
+    check_52 = (value) =>
+      check_53(value) || check_55(value) || check_56(value) || check_58(value) || check_63(value),
+    check_53 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "type" in value &&
+      "id" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_124, var_125) => External[8].test(var_124) || check_2(value[var_124]),
+      ) &&
+      check_54(value.type) &&
+      check_8(value.id),
+    check_54 = (value) => typeof value == "string" && value === "profile",
+    check_55 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "type" in value &&
+      "id" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_126, var_127) => External[9].test(var_126) || check_2(value[var_126]),
+      ) &&
+      check_50(value.type) &&
+      check_8(value.id),
+    check_56 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "type" in value &&
+      "pluginId" in value &&
+      "domain" in value &&
+      "idKind" in value &&
+      "id" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_128, var_129) => External[10].test(var_128) || check_2(value[var_128]),
+      ) &&
+      check_57(value.type) &&
+      check_8(value.pluginId) &&
+      check_8(value.domain) &&
+      check_8(value.idKind) &&
+      check_8(value.id),
+    check_57 = (value) => typeof value == "string" && value === "remote",
+    check_58 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "type" in value &&
+      "pluginId" in value &&
+      "accountId" in value &&
+      "senderKind" in value &&
+      "id" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_130, var_131) => External[11].test(var_130) || check_2(value[var_130]),
+      ) &&
+      check_59(value.type) &&
+      check_60(value.pluginId) &&
+      check_60(value.accountId) &&
+      check_61(value.senderKind) &&
+      check_8(value.id),
+    check_59 = (value) => typeof value == "string" && value === "observation",
+    check_60 = (value) => check_8(value) || check_46(value),
+    check_61 = (value) => check_49(value) || check_62(value) || check_28(value),
+    check_62 = (value) => typeof value == "string" && value === "bot",
+    check_63 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "type" in value &&
+      "actorType" in value &&
+      "source" in value &&
+      "id" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_132, var_133) => External[12].test(var_132) || check_2(value[var_132]),
+      ) &&
+      check_64(value.type) &&
+      check_18(value.actorType) &&
+      check_65(value.source) &&
+      check_18(value.id),
+    check_64 = (value) => typeof value == "string" && value === "legacy",
+    check_65 = (value) => check_18(value) || check_46(value),
+    check_66 = (value) =>
+      check_67(value) || check_68(value) || check_69(value) || check_70(value) || check_71(value),
+    check_67 = (value) => typeof value == "string" && value === "manual",
+    check_68 = (value) => typeof value == "string" && value === "active-session-cap",
+    check_69 = (value) => typeof value == "string" && value === "age-retention",
+    check_70 = (value) => typeof value == "string" && value === "stale-dashboard",
+    check_71 = (value) => typeof value == "string" && value === "restart-recovery",
+    check_72 = (value) =>
+      check_73(value) ||
+      check_74(value) ||
+      check_75(value) ||
+      check_76(value) ||
+      check_77(value) ||
+      check_78(value) ||
+      check_79(value),
+    check_73 = (value) => typeof value == "string" && value === "queued",
+    check_74 = (value) => typeof value == "string" && value === "running",
+    check_75 = (value) => typeof value == "string" && value === "done",
+    check_76 = (value) => typeof value == "string" && value === "failed",
+    check_77 = (value) => typeof value == "string" && value === "interrupted",
+    check_78 = (value) => typeof value == "string" && value === "killed",
+    check_79 = (value) => typeof value == "string" && value === "timeout",
+    check_80 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "id" in value &&
+      "runId" in value &&
+      "canContinue" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_134, var_135) => External[13].test(var_134) || check_2(value[var_134]),
+      ) &&
+      check_8(value.id) &&
+      check_8(value.runId) &&
+      (value.explanation === void 0 || !("explanation" in value) || check_81(value.explanation)) &&
+      (value.continuationMessage === void 0 ||
+        !("continuationMessage" in value) ||
+        check_82(value.continuationMessage)) &&
+      check_31(value.canContinue),
+    check_81 = (value) =>
+      typeof value == "string" &&
+      (value.length <= 65536 || (value.length <= 131072 && CodePointCount2(value) <= 65536)),
+    check_82 = (value) =>
+      typeof value == "string" &&
+      (value.length <= 1024 || (value.length <= 2048 && CodePointCount2(value) <= 1024)),
+    check_83 = (value) => typeof value == "string" && value === "tombstoned",
+    check_84 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_8(element)) &&
+      value.length <= 2,
+    check_85 = (value) =>
+      Array.isArray(value) && value.every((element, index) => check_18(element)),
+    check_86 = (value) => check_87(value) || check_88(value),
+    check_87 = (value) => typeof value == "string" && value === "orchestrator",
+    check_88 = (value) => typeof value == "string" && value === "leaf",
+    check_89 = (value) => check_90(value) || check_91(value),
+    check_90 = (value) => typeof value == "string" && value === "children",
+    check_91 = (value) => typeof value == "string" && value === "none",
+    check_92 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "groups" in value &&
+      "otherActiveGroups" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_136, var_137) => External[14].test(var_136) || check_2(value[var_136]),
+      ) &&
+      check_93(value.groups) &&
+      check_14(value.otherActiveGroups),
+    check_93 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_94(element)) &&
+      value.length <= 5,
+    check_94 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "groupId" in value &&
+      "createdAt" in value &&
+      "queued" in value &&
+      "running" in value &&
+      "done" in value &&
+      "failed" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_138, var_139) => External[15].test(var_138) || check_2(value[var_138]),
+      ) &&
+      check_8(value.groupId) &&
+      check_95(value.createdAt) &&
+      (value.children === void 0 || !("children" in value) || check_96(value.children)) &&
+      check_14(value.queued) &&
+      check_14(value.running) &&
+      check_14(value.done) &&
+      check_14(value.failed),
+    check_95 = (value) => Number.isFinite(value) && value >= 0,
+    check_96 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_97(element)) &&
+      value.length <= 64,
+    check_97 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "sessionKey" in value &&
+      "status" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_140, var_141) => External[16].test(var_140) || check_2(value[var_140]),
+      ) &&
+      check_8(value.sessionKey) &&
+      check_98(value.status),
+    check_98 = (value) => check_73(value) || check_74(value) || check_75(value) || check_76(value),
+    check_99 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "deviceId" in value &&
+      "path" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_142, var_143) => External[17].test(var_142) || check_2(value[var_142]),
+      ) &&
+      check_8(value.deviceId) &&
+      check_100(value.path),
+    check_100 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount2(value) >= 1)) &&
+      (value.length <= 4096 || (value.length <= 8192 && CodePointCount2(value) <= 4096)),
+    check_101 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "id" in value &&
+      "branch" in value &&
+      "repoRoot" in value &&
+      check_18(value.id) &&
+      check_18(value.branch) &&
+      check_18(value.repoRoot),
+    check_102 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "url" in value &&
+      "branch" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_144, var_145) => External[18].test(var_144) || check_2(value[var_144]),
+      ) &&
+      check_103(value.url) &&
+      (value.ref === void 0 || !("ref" in value) || check_104(value.ref)) &&
+      check_8(value.branch),
+    check_103 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount2(value) >= 1)) &&
+      (value.length <= 2048 || (value.length <= 4096 && CodePointCount2(value) <= 2048)),
+    check_104 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount2(value) >= 1)) &&
+      (value.length <= 1024 || (value.length <= 2048 && CodePointCount2(value) <= 1024)),
+    check_105 = (value) =>
+      check_106(value) || check_107(value) || check_108(value) || check_109(value),
+    check_106 = (value) => typeof value == "string" && value === "read-only",
+    check_107 = (value) => typeof value == "string" && value === "guarded",
+    check_108 = (value) => typeof value == "string" && value === "workspace",
+    check_109 = (value) => typeof value == "string" && value === "full",
+    check_110 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.getOwnPropertyNames(value).every(
+        (var_146, var_147) => External[19].test(var_146) || check_2(value[var_146]),
+      ) &&
+      (value.send === void 0 || !("send" in value) || check_111(value.send)) &&
+      (value.receive === void 0 || !("receive" in value) || check_111(value.receive)),
+    check_111 = (value) => check_112(value) || check_113(value) || check_114(value),
+    check_112 = (value) => typeof value == "string" && value === "always",
+    check_113 = (value) => typeof value == "string" && value === "ask",
+    check_114 = (value) => typeof value == "string" && value === "never",
+    check_115 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "send" in value &&
+      "receive" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_148, var_149) => External[20].test(var_148) || check_2(value[var_148]),
+      ) &&
+      check_111(value.send) &&
+      check_111(value.receive),
+    check_116 = (value) => typeof value == "string" && value === "off",
+    check_117 = (value) =>
+      check_118(value) ||
+      check_119(value) ||
+      check_37(value) ||
+      check_120(value) ||
+      check_121(value) ||
+      check_122(value) ||
+      check_123(value) ||
+      check_124(value),
+    check_118 = (value) => typeof value == "string" && value === "operator",
+    check_119 = (value) => typeof value == "string" && value === "spawn",
+    check_120 = (value) => typeof value == "string" && value === "cron",
+    check_121 = (value) => typeof value == "string" && value === "talk",
+    check_122 = (value) => typeof value == "string" && value === "run",
+    check_123 = (value) => typeof value == "string" && value === "plugin",
+    check_124 = (value) => typeof value == "string" && value === "internal",
+    check_125 = (value) => typeof value == "string" && value === "plugin-dock",
+    check_126 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "actor" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_150, var_151) => External[21].test(var_150) || check_2(value[var_150]),
+      ) &&
+      check_47(value.actor) &&
+      (value.assignedBy === void 0 || !("assignedBy" in value) || check_47(value.assignedBy)) &&
+      (value.assignedAt === void 0 || !("assignedAt" in value) || check_95(value.assignedAt)),
+    check_127 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_128(element)) &&
+      value.length <= 4,
+    check_128 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "identity" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_152, var_153) => External[22].test(var_152) || check_2(value[var_152]),
+      ) &&
+      check_52(value.identity) &&
+      (value.label === void 0 || !("label" in value) || check_8(value.label)) &&
+      (value.avatarUrl === void 0 || !("avatarUrl" in value) || check_8(value.avatarUrl)),
+    check_129 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_128(element)) &&
+      value.length <= 32,
+    check_130 = (value) =>
+      check_131(value) || check_106(value) || check_132(value) || check_133(value),
+    check_131 = (value) => typeof value == "string" && value === "shared",
+    check_132 = (value) => typeof value == "string" && value === "suggest",
+    check_133 = (value) => typeof value == "string" && value === "draft",
+    check_134 = (value) =>
+      check_135(value) || check_136(value) || check_137(value) || check_138(value),
+    check_135 = (value) => typeof value == "string" && value === "admin",
+    check_136 = (value) => typeof value == "string" && value === "owner",
+    check_137 = (value) => typeof value == "string" && value === "member",
+    check_138 = (value) => typeof value == "string" && value === "viewer",
+    check_139 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "sessionKey" in value &&
+      "sessionId" in value &&
+      check_18(value.sessionKey) &&
+      check_18(value.sessionId) &&
+      (value.entryId === void 0 || !("entryId" in value) || check_18(value.entryId)),
+    check_140 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "state" in value &&
+      check_141(value.state),
+    check_141 = (value) => check_142(value) || check_44(value),
+    check_142 = (value) => typeof value == "string" && value === "available",
+    check_143 = (value) =>
+      check_144(value) || check_145(value) || check_146(value) || check_46(value),
+    check_144 = (value) => typeof value == "string" && value === "user",
+    check_145 = (value) => typeof value == "string" && value === "auto",
+    check_146 = (value) => typeof value == "string" && value === "inherited",
+    check_147 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.getOwnPropertyNames(value).every(
+        (var_154, var_155) => External[23].test(var_154) || check_2(value[var_154]),
+      ) &&
+      (value.mcpServers === void 0 || !("mcpServers" in value) || check_148(value.mcpServers)) &&
+      (value.mcpToolsDeny === void 0 ||
+        !("mcpToolsDeny" in value) ||
+        check_149(value.mcpToolsDeny)) &&
+      (value.skills === void 0 || !("skills" in value) || check_148(value.skills)) &&
+      (value.webSearch === void 0 || !("webSearch" in value) || check_31(value.webSearch)),
+    check_148 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.entries(value).every(
+        ([var_156, var_157], _) => !External[24].test(var_156) || check_31(var_157),
+      ),
+    check_149 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.entries(value).every(
+        ([var_158, var_159], _) => !External[25].test(var_158) || check_150(var_159),
+      ),
+    check_150 = (value) =>
+      Array.isArray(value) && value.every((element, index) => check_8(element)),
+    check_151 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_152(element)) &&
+      value.length <= 500,
+    check_152 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "name" in value &&
+      "description" in value &&
+      "source" in value &&
+      "scope" in value &&
+      "acceptsArgs" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_160, var_161) => External[26].test(var_160) || check_2(value[var_160]),
+      ) &&
+      check_153(value.name) &&
+      (value.nativeName === void 0 || !("nativeName" in value) || check_153(value.nativeName)) &&
+      (value.textAliases === void 0 || !("textAliases" in value) || check_154(value.textAliases)) &&
+      check_155(value.description) &&
+      (value.category === void 0 || !("category" in value) || check_156(value.category)) &&
+      check_163(value.source) &&
+      (value.skillDisplayName === void 0 ||
+        !("skillDisplayName" in value) ||
+        check_153(value.skillDisplayName)) &&
+      (value.skillModelVisible === void 0 ||
+        !("skillModelVisible" in value) ||
+        check_31(value.skillModelVisible)) &&
+      check_166(value.scope) &&
+      check_31(value.acceptsArgs) &&
+      (value.args === void 0 || !("args" in value) || check_169(value.args)) &&
+      (value.clientPresentation === void 0 ||
+        !("clientPresentation" in value) ||
+        check_179(value.clientPresentation)),
+    check_153 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount2(value) >= 1)) &&
+      (value.length <= 200 || (value.length <= 400 && CodePointCount2(value) <= 200)),
+    check_154 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_153(element)) &&
+      value.length <= 20,
+    check_155 = (value) =>
+      typeof value == "string" &&
+      (value.length <= 2e3 || (value.length <= 4e3 && CodePointCount2(value) <= 2e3)),
+    check_156 = (value) =>
+      check_157(value) ||
+      check_158(value) ||
+      check_159(value) ||
+      check_160(value) ||
+      check_161(value) ||
+      check_162(value),
+    check_157 = (value) => typeof value == "string" && value === "session",
+    check_158 = (value) => typeof value == "string" && value === "options",
+    check_159 = (value) => typeof value == "string" && value === "status",
+    check_160 = (value) => typeof value == "string" && value === "management",
+    check_161 = (value) => typeof value == "string" && value === "media",
+    check_162 = (value) => typeof value == "string" && value === "tools",
+    check_163 = (value) => check_164(value) || check_165(value) || check_123(value),
+    check_164 = (value) => typeof value == "string" && value === "native",
+    check_165 = (value) => typeof value == "string" && value === "skill",
+    check_166 = (value) => check_167(value) || check_164(value) || check_168(value),
+    check_167 = (value) => typeof value == "string" && value === "text",
+    check_168 = (value) => typeof value == "string" && value === "both",
+    check_169 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_170(element)) &&
+      value.length <= 20,
+    check_170 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "name" in value &&
+      "description" in value &&
+      "type" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_162, var_163) => External[27].test(var_162) || check_2(value[var_162]),
+      ) &&
+      check_153(value.name) &&
+      check_171(value.description) &&
+      check_172(value.type) &&
+      (value.required === void 0 || !("required" in value) || check_31(value.required)) &&
+      (value.choices === void 0 || !("choices" in value) || check_176(value.choices)) &&
+      (value.dynamic === void 0 || !("dynamic" in value) || check_31(value.dynamic)),
+    check_171 = (value) =>
+      typeof value == "string" &&
+      (value.length <= 500 || (value.length <= 1e3 && CodePointCount2(value) <= 500)),
+    check_172 = (value) => check_173(value) || check_174(value) || check_175(value),
+    check_173 = (value) => typeof value == "string" && value === "string",
+    check_174 = (value) => typeof value == "string" && value === "number",
+    check_175 = (value) => typeof value == "string" && value === "boolean",
+    check_176 = (value) =>
+      Array.isArray(value) &&
+      value.every((element, index) => check_177(element)) &&
+      value.length <= 50,
+    check_177 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "value" in value &&
+      "label" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_164, var_165) => External[28].test(var_164) || check_2(value[var_164]),
+      ) &&
+      check_178(value.value) &&
+      check_178(value.label),
+    check_178 = (value) =>
+      typeof value == "string" &&
+      (value.length <= 200 || (value.length <= 400 && CodePointCount2(value) <= 200)),
+    check_179 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "when" in value &&
+      "action" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_166, var_167) => External[29].test(var_166) || check_2(value[var_166]),
+      ) &&
+      check_180(value.when) &&
+      check_181(value.action),
+    check_180 = (value) => typeof value == "string" && value === "no-arguments",
+    check_181 = (value) => check_182(value),
+    check_182 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "kind" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (var_168, var_169) => External[30].test(var_168) || check_2(value[var_168]),
+      ) &&
+      check_183(value.kind),
+    check_183 = (value) => typeof value == "string" && value === "device-pairing";
   return (value) => check_0(value);
 })();
 export { isChatHistoryState };

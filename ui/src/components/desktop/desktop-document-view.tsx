@@ -2,9 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import {
-  DesktopLoading,
   DesktopPanelContent,
   DesktopSizing,
   DesktopSurface,
@@ -34,7 +34,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
             {/* noVNC owns this island; controls remain Solid-owned siblings. */}
             <DesktopSurface bind={props.surfaceRef} />
             {props.state === "connecting" && (
-              <DesktopLoading label={t("desktop.connecting")} overlay />
+              <PanelLoadingSkeleton variant="desktop" label={t("desktop.connecting")} overlay />
             )}
             <textarea
               ref={props.keyboard.inputRef}

@@ -68,6 +68,7 @@ import {
   resolveTalkClientLaunchError,
 } from "../session-config.js";
 import { readTalkRealtimeInitialItems } from "../session-history.js";
+import { restoreTalkSessionTarget } from "../session-start.js";
 import { requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   markTalkVoiceSessionReady,
@@ -185,6 +186,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     });
     assertTargetCurrent();
     if (resolution.provider.createBrowserSession) {
+      await restoreTalkSessionTarget(request, target, replacement?.source(target).assertCurrent);
       const initialItems = await readTalkRealtimeInitialItems(target, assertTargetCurrent);
       assertTargetCurrent();
       const controlSource =

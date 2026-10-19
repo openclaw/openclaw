@@ -19,7 +19,6 @@ import {
   CHROME_BOOTSTRAP_PREFS_POLL_MS,
   CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS,
   CHROME_LAUNCH_READY_POLL_MS,
-  CHROME_LAUNCH_READY_WINDOW_MS,
   CHROME_REACHABILITY_TIMEOUT_MS,
   CHROME_STDERR_HINT_MAX_CHARS,
   CHROME_STOP_PROBE_TIMEOUT_MS,
@@ -617,17 +616,12 @@ async function canOpenWebSocket(
   lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
 ): Promise<boolean> {
-  try {
-    return await withCdpSocket(url, async () => true, {
-      handshakeTimeoutMs: timeoutMs,
-      handshakeRetries: 0,
-      lookup,
-      signal,
-    });
-  } catch {
-    signal?.throwIfAborted();
-    return false;
-  }
+  return await withCdpSocket(url, async () => true, {
+    handshakeTimeoutMs: timeoutMs,
+    handshakeRetries: 0,
+    lookup,
+    signal,
+  });
 }
 
 export async function isChromeReachable(
@@ -998,8 +992,7 @@ async function launchOpenClawChromeLocked(
       const spawned = await spawnOnce(onStderr);
       proc = spawned.proc;
       releaseSpawnAbort = spawned.releaseAbort;
-      const readyDeadline =
-        Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
+      const readyDeadline = Date.now() + resolved.localLaunchTimeoutMs;
       let launchHttpReachable = false;
       // Full CDP WebSocket readiness is handled by the caller's
       // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.

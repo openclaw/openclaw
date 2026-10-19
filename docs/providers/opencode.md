@@ -24,11 +24,11 @@ OpenAI Responses transports. This header remains enabled when prompt caching is
 disabled. Low-level SDK stream callers should supply `sessionId` in their stream
 options.
 
-Zen and Go discovery requests and model requests on the OpenAI-compatible and
-Anthropic transports identify the client as `openclaw/<version>` on their native
-endpoints. Custom proxy URLs do not inherit this attribution. The
-`google-generative-ai` SDK path does not yet apply this User-Agent policy.
-OpenClaw does not impersonate the OpenCode client.
+Zen and Go discovery requests and model requests on the OpenAI-compatible,
+Anthropic, and Gemini transports identify the client as `openclaw/<version>` on
+their native endpoints, including the current `/inference/...` routes returned
+by upstream discovery and the retained `/zen/...` aliases. Custom proxy URLs do
+not inherit this attribution. OpenClaw does not impersonate the OpenCode client.
 
 Standalone `openclaw infer model run --local` calls and the
 [prepared completion helper](/plugins/sdk-runtime/models#prepared-completion-sdk-compatibility)
@@ -171,10 +171,10 @@ may also show [**Ultra**](/tools/thinking), a separate harness mode.
 
 ### Go
 
-| Property         | Value                                                                             |
-| ---------------- | --------------------------------------------------------------------------------- |
-| Runtime provider | `opencode-go`                                                                     |
-| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max` |
+| Property         | Value                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                       |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` |
 
 See [OpenCode Go](/providers/opencode-go) for discovery, routing, and access
 requirements. Go's model-list endpoint advertises its general lineup; listing

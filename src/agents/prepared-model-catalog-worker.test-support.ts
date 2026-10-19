@@ -15,6 +15,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import * as auth from "./auth-profiles.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -531,6 +532,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   const { snapshot } = build;
   const previousRegistry = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(createEmptyPluginRegistry());
+  const readAuthStore = vi.spyOn(auth, "getPreparedRuntimeAuthProfileStoreSnapshot");
   try {
     expect(snapshot.modelCatalog.entries).toContainEqual(catalogEntry("configured-dynamic-model"));
     const catalog = await refreshNativeCatalogDuringBoundedRead({
@@ -554,16 +556,14 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     } as unknown as GatewayRequestContext;
     expect(catalog.staticEntries).not.toContainEqual(catalogEntry("unresolved-configured-model"));
 
+    readAuthStore.mockReturnValue(fullAuth.authStore);
     const chatMetadata = createGatewayChatMetadataRuntime({
       getConfig: () => config,
       getContext: () => context,
       log: context.logGateway,
       deps: {
         getPreparedOwner: () => snapshot,
-        getPreparedAuthStore: () => fullAuth.authStore,
         getAuthStoreRevision: () => 1,
-        getSkillsVersion: () => 1,
-        getPluginRegistryVersion: () => 1,
         buildCommands: async () => ({ commands: [] }),
       },
     });
@@ -579,6 +579,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       ]),
     );
   } finally {
+    readAuthStore.mockRestore();
     restoreActivePluginRegistrySnapshot(previousRegistry);
   }
   for (const key of ["entries", "routeVariants", "staticEntries"] as const) {

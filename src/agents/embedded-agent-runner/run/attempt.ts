@@ -95,6 +95,7 @@ export async function runEmbeddedAttempt(
     modelExecution?.assertCurrent();
     return result;
   } finally {
+    input.continuation = undefined;
     modelExecution?.release();
   }
 }
@@ -252,6 +253,9 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          // The controller records the yield and closes injection before this
+          // backend ends its own turn; a racing steer stays queued as a followup.
+          params.replyOperation?.yield();
           queueYieldInterruptForSession?.();
           runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
           abortSessionForYield?.();
@@ -518,6 +522,9 @@ async function runEmbeddedAttemptOwned(
     }
     throw error;
   } finally {
+    // The logical run owns retry history; settled attempt callbacks need none of it.
+    params.continuation = undefined;
+    input.continuation = undefined;
     const resolveCleanupReason = () => {
       const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
       return terminal.timedOut ||

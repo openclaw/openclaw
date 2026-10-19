@@ -25,6 +25,8 @@ import {
 import { RUNTIME_CONTEXT_HEADER } from "../llm/types.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveActiveReplyOperationForSessionId } from "../sessions/session-controller.queries.js";
+import { steerSessionControllerOperation } from "../sessions/session-controller.steer.js";
 import { bindUserTurnPromptReactionSource } from "../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -40,7 +42,6 @@ import {
   type WireApi,
 } from "./embedded-agent-runner.wire.test-support.js";
 import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cache-request-observer.js";
-import { queueEmbeddedAgentMessageWithOutcomeAsync } from "./embedded-agent-runner/runs.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "./internal-runtime-context.js";
@@ -89,12 +90,24 @@ function responseFor(api: WireApi, model: string, request: number, tool: boolean
   });
 }
 
+function rateLimitResponse(api: WireApi) {
+  const message = "Synthetic tokens-per-minute limit";
+  const body =
+    api === "anthropic-messages"
+      ? { type: "error", error: { type: "rate_limit_error", message } }
+      : { error: { message, type: "tokens", param: null, code: "rate_limit_exceeded" } };
+  return new Response(JSON.stringify(body), {
+    status: 429,
+    headers: { "content-type": "application/json", "retry-after-ms": "10" },
+  });
+}
+
 afterEach(async () => {
   await clearActivePluginRegistry();
 });
 
 it.for(cases)(
-  "preserves $route prefixes across tool loops, hooks, images, errors, refresh and reopen",
+  "preserves $route prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
   { timeout: 120_000 },
   async ({ api, provider, model, route }, { signal }) => {
     await withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
@@ -281,14 +294,19 @@ it.for(cases)(
               requests.push({ turn, payload, prefix, userEnvelopes });
               requestsThisTurn++;
               if (turn === 6 && requestsThisTurn === 1) {
-                const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-                  sessionId,
-                  "mid-run steering correction",
-                );
-                expect(outcome.queued, "the active runner accepted steering").toBe(true);
+                const outcome = await steerSessionControllerOperation({
+                  operation: resolveActiveReplyOperationForSessionId(sessionId),
+                  text: "mid-run steering correction",
+                  options: { steeringMode: "all" },
+                });
+                expect(outcome.status, "the active runner accepted steering").toBe("accepted");
               }
               if (requestsThisTurn > 4) {
                 throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);
+              }
+              // A rate-limited tool continuation retries the same model from the transcript.
+              if (turn === 10 && requestsThisTurn === 2) {
+                return rateLimitResponse(api);
               }
               // Replay the error in turn 6, then verify those sent bytes after reopen in turn 7.
               const failure = api === "openai-responses" && turn === 5 && requestsThisTurn === 1;
@@ -296,7 +314,7 @@ it.for(cases)(
                 api,
                 model,
                 requests.length,
-                (turn === 1 && requestsThisTurn === 1) || failure,
+                ((turn === 1 || turn === 10) && requestsThisTurn === 1) || failure,
                 failure,
               );
               if (effectiveInput) {
@@ -315,7 +333,7 @@ it.for(cases)(
           },
         });
         try {
-          for (turn = 1; turn <= 10; turn++) {
+          for (turn = 1; turn <= 11; turn++) {
             requestsThisTurn = 0;
             if (turn === 3) {
               const runtime = peekSessionMcpRuntime({ sessionKey });
@@ -480,7 +498,11 @@ it.for(cases)(
               admission.close();
             }
           }
-          expect(requests.length).toBe(12);
+          expect(requests.length).toBe(15);
+          expect(
+            requests.filter((request) => request.turn === 10),
+            "the rate-limited continuation was retried",
+          ).toHaveLength(3);
           const historyAt = (value: number) =>
             requests.find((request) => request.turn === value)!.prefix.history.join("");
           if (api === "openai-responses") {

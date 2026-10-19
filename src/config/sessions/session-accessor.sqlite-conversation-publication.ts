@@ -20,6 +20,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -43,7 +44,6 @@ type ConversationFactChange =
 const listeners = resolveGlobalSingleton(Symbol.for("openclaw.conversationPublication"), () => ({
   installingFacts: 0,
   facts: new Set<(receipt: ConversationFactChange) => void>(),
-  observers: new Set<(receipt: ConversationPublication) => void>(),
 }));
 
 function installFacts(receipt: ConversationFactChange) {
@@ -70,19 +70,16 @@ function publicationState(receipt: ConversationPublication) {
       };
       installFacts(installed);
     },
-    notify: () => notifyListeners(listeners.observers, installed),
+    notify() {},
   };
 }
 
 /** Native/catalogue operation facts; session-worker link sets and raw writers remain incomplete. */
 export const conversationPublication = {
   stageRows: stageConversationRows,
-  /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
+  /** Install/invalidate prepared facts only. */
   subscribeFacts(listener: (receipt: ConversationFactChange) => void) {
     return registerListener(listeners.facts, listener);
-  },
-  subscribe(listener: (receipt: ConversationPublication) => void) {
-    return registerListener(listeners.observers, listener);
   },
 };
 
@@ -182,25 +179,20 @@ export function withConversationPublication(
       }
     });
     let finished = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (!finished) {
-          finished = true;
-          unsubscribe();
-          notifyListeners(listeners.facts, {
-            kind: "settled",
-            operation,
-            outcome:
-              published && !unknown && owner.admission.settlement?.kind === "completed"
-                ? "published"
-                : "unknown",
-          });
-        }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (!finished) {
+        finished = true;
+        unsubscribe();
+        notifyListeners(listeners.facts, {
+          kind: "settled",
+          operation,
+          outcome:
+            published && !unknown && owner.admission.settlement?.kind === "completed"
+              ? "published"
+              : "unknown",
+        });
       }
-    };
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       assertCurrent();
       const expected = expectedSource();

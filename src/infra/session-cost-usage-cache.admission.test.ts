@@ -18,7 +18,7 @@ import {
   costRefreshLane,
   retireSessionHistoryWorkerDatabases,
 } from "../config/sessions/session-transcript-worker-resources.js";
-import { closeAgentWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {

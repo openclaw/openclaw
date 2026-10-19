@@ -17,7 +17,10 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import {
@@ -76,6 +79,12 @@ it.each([
       OPENCLAW_UPDATE_POST_CORE: undefined,
     })) {
       vi.stubEnv(key, value);
+    }
+    if (outcome === "redirect") {
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: serviceState },
+      });
+      closeOpenClawStateDatabaseForTest();
     }
     mockProcessPlatform(platform);
     mockSystemAccountHome();
@@ -182,7 +191,7 @@ it.each([
         expect(inspected.serviceUpdateVerdict).toMatchObject({
           kind: "unavailable",
           inspectionReason: "service-manager-unavailable",
-          message: expect.stringContaining("Restart the Gateway you launched manually"),
+          message: expect.stringContaining("openclaw --profile caller gateway stop"),
         });
         expect(inspected.blockMessage).toBeUndefined();
         expect(inspected.serviceEnv).toBeUndefined();

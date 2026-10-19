@@ -177,6 +177,8 @@ class SubagentRunManager extends SubagentLaunchManager {
     childAgentId?: string;
     reason?: string;
     suppressTaskDelivery?: boolean;
+    /** A withdrawn queued input never owned the session's active execution metadata. */
+    suppressSessionEffects?: boolean;
     session?: SubagentKillSession;
     withdrawQueuedReservation?: () => void;
     assertCurrent?: () => void;
@@ -341,6 +343,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                     : entry.execution.lifecycleGeneration,
                 restartRecovery: undefined,
                 suppressSessionEffects:
+                  markParams.suppressSessionEffects ||
                   resolveSubagentChildAuthority(entry).status === "legacy-unverified"
                     ? true
                     : existingKillIntent && currentKillLifecycle

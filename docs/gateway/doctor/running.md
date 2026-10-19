@@ -18,6 +18,12 @@ re-indexes, and foreign-key checks. Use `openclaw doctor --fix --full-integrity-
 to check all tables and indexes during migration. Explicit verification,
 recovery, and compaction keep their existing checks.
 
+If Doctor cannot verify database readiness because a read-only snapshot did not
+stabilize, let write activity settle and retry the inspection. Doctor still
+refuses to complete repair, but snapshot contention alone does not call for a
+database restore. Integrity failures retain backup-restore guidance for the
+affected database.
+
 When the System agent runs Doctor, it uses a separate process from the same
 OpenClaw installation. Bulk diagnostic checks can then run without blocking the
 Gateway's event loop. This uses the existing `--non-interactive` behavior,

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createStore, For, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, createStore, For, onCleanup, Show } from "solid-js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -44,47 +44,44 @@ function McpAppContextStripContent(props: McpAppContextStripProps) {
     });
   });
   onCleanup(
-    context.gateway.subscribeEvents((event) =>
-      // Event delivery must not attach view reads to the publisher's reactive scope.
-      untrack(() => {
-        if (event.event !== "mcp.app.hostContextChanged") {
+    context.gateway.subscribeEvents((event) => {
+      if (event.event !== "mcp.app.hostContextChanged") {
+        return;
+      }
+      const payload = event.payload;
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        !("viewId" in payload) ||
+        typeof payload.viewId !== "string"
+      ) {
+        return;
+      }
+      const client = context.gateway.snapshot.client;
+      const entry = readMcpAppContexts(client, props.sessionKey, props.agentId).find(
+        (item) => item.viewId === payload.viewId,
+      );
+      if (!client || !entry) {
+        return;
+      }
+      if ("modelContext" in payload && payload.modelContext === null) {
+        if (!("updateId" in payload) || payload.updateId !== entry.state?.updateId) {
           return;
         }
-        const payload = event.payload;
-        if (
-          !payload ||
-          typeof payload !== "object" ||
-          !("viewId" in payload) ||
-          typeof payload.viewId !== "string"
-        ) {
-          return;
-        }
-        const client = context.gateway.snapshot.client;
-        const entry = readMcpAppContexts(client, props.sessionKey, props.agentId).find(
-          (item) => item.viewId === payload.viewId,
-        );
-        if (!client || !entry) {
-          return;
-        }
-        if ("modelContext" in payload && payload.modelContext === null) {
-          if (!("updateId" in payload) || payload.updateId !== entry.state?.updateId) {
-            return;
-          }
-          publishMcpAppContext(client, { ...entry, state: null });
-          return;
-        }
-        const publish = (state: McpAppContextState) =>
-          publishMcpAppContext(client, { ...entry, state });
-        void client
-          .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
-            sessionKey: entry.sessionKey,
-            agentId: entry.agentId,
-            viewId: entry.viewId,
-          })
-          .then((result) => publish(result.state))
-          .catch(() => publish(null));
-      }),
-    ),
+        publishMcpAppContext(client, { ...entry, state: null });
+        return;
+      }
+      const publish = (state: McpAppContextState) =>
+        publishMcpAppContext(client, { ...entry, state });
+      void client
+        .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
+          sessionKey: entry.sessionKey,
+          agentId: entry.agentId,
+          viewId: entry.viewId,
+        })
+        .then((result) => publish(result.state))
+        .catch(() => publish(null));
+    }),
   );
   async function removeItem(entry: McpAppContextEntry, index?: number) {
     const client = context.gateway.snapshot.client;

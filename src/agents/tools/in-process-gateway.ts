@@ -251,6 +251,9 @@ async function callAgentToolGatewayRequestBound<T>(
   const scopes =
     request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(method, request.params);
   if (forceTransport || !getInProcessGatewayRequestContext(boundGateway?.resolve)) {
+    if (request.agentToolCaller?.requesterOrigin) {
+      throw new Error("Requester provenance requires trusted in-process Gateway dispatch.");
+    }
     if (boundGateway && !forceTransport) {
       throw new Error(`Gateway instance unavailable for ${method}`);
     }
@@ -441,6 +444,9 @@ async function callInProcessGatewayToolBound<T>(
       ? {
           agentId: caller.agentId,
           sessionKey: caller.sessionKey,
+          executionIdentityToken: caller.executionIdentityToken,
+          requesterOrigin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
+            .requesterOrigin,
           assertCurrent: assertCallerCurrent,
         }
       : undefined;
@@ -481,6 +487,9 @@ async function callInProcessGatewayToolBound<T>(
           {
             ...(creation.requesterProfileId
               ? { requesterProfileId: creation.requesterProfileId }
+              : {}),
+            ...(creation.gitContributorProfileId
+              ? { gitContributorProfileId: creation.gitContributorProfileId }
               : {}),
             ...(creation.completionOwnerSessionKey
               ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }

@@ -75,9 +75,9 @@ describe("post-install doctor result IPC", () => {
     resultPaths.push(resultPath);
     const warnings = [
       "   ",
-      ...Array.from({ length: 40 }, (_, index) => `${index}: ${"x".repeat(600)}`),
+      ...Array.from({ length: 40 }, (_, index) => `Warning ${index}. ${"x".repeat(600)}`),
     ];
-    const expected = warnings.slice(1, 33).map((warning) => warning.slice(0, 500));
+    const expected = Array.from({ length: 32 }, (_, index) => `Warning ${index}. …`);
     const repeatedWarnings = warnings.flatMap((warning) => [warning, ` ${warning} `]);
 
     await writeUpdatePostInstallDoctorResult({
@@ -100,15 +100,26 @@ describe("post-install doctor result IPC", () => {
     });
   });
 
-  it("truncates long warnings without splitting a UTF-16 surrogate pair", () => {
-    // The 500-code-unit cut lands between the halves of the emoji pair.
-    const input = `${"w".repeat(499)}🤔`;
-    const [normalized] = normalizeUpdatePostInstallDoctorWarnings([input]);
-    expect(normalized).toBe("w".repeat(499));
-    // Keep ordinary ASCII truncation and empty-warning filtering unchanged.
-    expect(normalizeUpdatePostInstallDoctorWarnings(["y".repeat(600), "   "])).toEqual([
-      "y".repeat(500),
+  it("bounds warnings at complete sentences or fields instead of cutting recovery advice", () => {
+    const first = "Doctor and plugin maintenance remain pending.";
+    const detail = `Owner: ${"x".repeat(480)}. Stop the Gateway through its service manager before retrying.`;
+    expect(normalizeUpdatePostInstallDoctorWarnings([`${first} ${detail}`, "   "])).toEqual([
+      `${first} …`,
     ]);
+    expect(normalizeUpdatePostInstallDoctorWarnings([`pid: 4242\n${"y".repeat(600)}`])).toEqual([
+      "pid: 4242 …",
+    ]);
+    expect(normalizeUpdatePostInstallDoctorWarnings([`${"w".repeat(499)}🤔`])).toEqual([
+      "Warning detail omitted because it exceeds the display limit.",
+    ]);
+    const [bounded] = normalizeUpdatePostInstallDoctorWarnings([`${"w".repeat(498)}. More text.`]);
+    expect(bounded).toBe("Warning detail omitted because it exceeds the display limit.");
+  });
+
+  it("keeps a complete leading field when its description exceeds the warning limit", () => {
+    const field = "/state/external-agent/openclaw-agent.sqlite:";
+    const warning = `${field} ${"verify the workspace before restoring the agent ".repeat(20)}`;
+    expect(normalizeUpdatePostInstallDoctorWarnings([warning])).toEqual([`${field} …`]);
   });
 
   it.each(

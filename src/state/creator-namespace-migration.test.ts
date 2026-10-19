@@ -18,6 +18,10 @@ import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-
 import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 describe("creator namespace upgrades", () => {
   it("qualifies only proven historical seams atomically and keeps a restorable backup", async () => {
@@ -153,10 +157,14 @@ describe("creator namespace upgrades", () => {
         ],
       });
       const initial = openOpenClawStateDatabase({ env: state.env });
+      addPreCutoverClientCredentialTablesForTest(initial.db);
       initial.db
         .exec(`UPDATE cron_jobs SET job_json = json_remove(job_json, '$.createdActor.source');
         PRAGMA user_version = 13; UPDATE schema_meta SET schema_version = 13;`);
       await closeStateDatabaseForTest();
+      await withStateMigrationBackupForTest({ env: state.env }, () =>
+        openOpenClawStateDatabase({ env: state.env }),
+      );
       const reopened = openOpenClawStateDatabase({ env: state.env });
       expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,

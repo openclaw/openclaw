@@ -28,6 +28,7 @@ import {
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
+import type { SidebarSessionMutationResult } from "../../components/app-sidebar-session-types.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -58,7 +59,7 @@ import { createSessionCapabilityFixture } from "./chat-session-capability.test-s
 import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import type { ChatTypingActorState, ChatTypingActorView } from "./chat-typing-presence.ts";
+import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -198,7 +199,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
   clearTypingActors: () => void;
-  typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
@@ -219,6 +219,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
+  historySentinel: HTMLElement | null;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
@@ -229,7 +230,10 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   hasOlderMessages: () => boolean;
   olderCursorsSeen: Set<string>;
   beginHeaderRename: (row: GatewaySessionRow) => void;
-  handleHeaderSessionAction: (action: HeaderMenuAction, row: GatewaySessionRow) => Promise<void>;
+  handleHeaderSessionAction: (
+    action: HeaderMenuAction,
+    row: GatewaySessionRow,
+  ) => Promise<SidebarSessionMutationResult | void>;
   onboarding: boolean;
   cancelHeaderRename: () => void;
   commitHeaderRename: () => void;
@@ -536,7 +540,6 @@ export function createTestChatPane(params: {
       {
         sessionKey: "agent:main:current",
         dispatchEvent: (event) => pane.element.dispatchEvent(event),
-        querySelector: (selector) => pane.element.querySelector(selector),
       },
       chatMessagesBySession,
     ),
@@ -547,7 +550,6 @@ export function createTestChatPane(params: {
       connected: true,
       connectionEpoch: 4,
       hello: sessionMutationGatewayHello(),
-      sidebarFocusPanelId: "",
       sidebarLayout: { columns: [] },
       // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
       handleChatScroll: vi.fn(),
@@ -557,10 +559,7 @@ export function createTestChatPane(params: {
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
   };
-  state.updateSidebarActivePanel = (panelId) => {
-    state.sidebarFocusPanelId = panelId;
-    state.sidebarFocusVersion += 1;
-  };
+  state.updateSidebarActivePanel = () => {};
   pane.state = state;
   pane.chatState.attach(state);
   pane.connectedClient = params.client;
@@ -664,7 +663,6 @@ class RenderTestChatPane extends ChatPaneRuntime {
       {
         sessionKey: this.sessionKey,
         dispatchEvent: (event) => this.element.dispatchEvent(event),
-        querySelector: (selector) => this.element.querySelector(selector),
       },
     );
     return this.state;

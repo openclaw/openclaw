@@ -35,7 +35,7 @@ export function createMcpAppCatalog(
   let identity = "";
   let identityClient: GatewayBrowserClient | null = null;
   let preparedSessionIdentity = "";
-  let connected = true;
+  let targetRequest = new AbortController();
   const available = () => {
     const snapshot = gateway.read().snapshot;
     return (
@@ -66,6 +66,8 @@ export function createMcpAppCatalog(
   );
   createEffect(discoveryBinding, ([value, phase, , client, canDiscover]) => {
     const changed = identity !== value || identityClient !== client;
+    targetRequest.abort();
+    targetRequest = new AbortController();
     identity = value;
     identityClient = client;
     preparedSessionIdentity = "";
@@ -86,12 +88,12 @@ export function createMcpAppCatalog(
     }
   });
   onCleanup(() => {
-    connected = false;
-    generation++;
+    targetRequest.abort();
     unsubscribe();
   });
 
   async function refresh() {
+    const { signal } = targetRequest;
     const client = context.gateway.snapshot.client;
     const destination = target();
     if (
@@ -123,7 +125,7 @@ export function createMcpAppCatalog(
       draft.error = null;
     });
     const current = () =>
-      connected &&
+      !signal.aborted &&
       requestGeneration === generation &&
       client === context.gateway.snapshot.client &&
       client.connectionGeneration === connectionGeneration &&
@@ -141,6 +143,7 @@ export function createMcpAppCatalog(
         if (!described.session) {
           const session = await context.sessions.createResult(sessionTarget, {
             reconciliation: "background",
+            signal,
           });
           if (!current()) {
             return;

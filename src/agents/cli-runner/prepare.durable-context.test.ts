@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -354,6 +356,82 @@ describe("CLI durable session context", () => {
     expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
     expect(context.openClawHistoryPrompt).toContain("hook context");
     expect(context.openClawHistoryPrompt).toContain("current ask");
+  });
+
+  it("does not reattach historical images on a later text-only CLI turn", async () => {
+    const sent: string[] = [];
+    const backend = buildDefaultTestCliBackend();
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          ...backend,
+          config: {
+            ...backend.config,
+            command: process.execPath,
+            output: "jsonl",
+            imageArg: "@",
+            imagePathScope: "workspace",
+          },
+          prepareExecution: () => ({
+            async *execute(input: CliBackendExecuteContext) {
+              sent.push(input.prompt);
+              yield { type: "result", subtype: "success", result: "complete" };
+            },
+          }),
+        },
+      ],
+    });
+    const { dir } = fixture.session;
+    const inboundPath = path.join(dir, "inbound.png");
+    const outboundPath = path.join(dir, "outbound.png");
+    const inbound = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const outbound = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(inboundPath, inbound);
+    await fs.writeFile(outboundPath, outbound);
+
+    for (const [index, turn] of [
+      {
+        prompt: "describe this document",
+        media: [{ path: inboundPath, contentType: "image/png" }],
+      },
+      { prompt: "thanks, what is next?" },
+      {
+        prompt: "describe the quoted image",
+        media: [{ path: outboundPath, contentType: "image/png" }],
+      },
+    ].entries()) {
+      const context = await fixture.prepare({
+        ...turn,
+        config: { agents: { defaults: { workspace: dir } } },
+        ...(index > 0
+          ? {
+              cliSessionId: "existing-native-session",
+              currentInboundContext: {
+                text: `Earlier user image: ${inboundPath}\nEarlier assistant MEDIA: ${outboundPath}`,
+              },
+            }
+          : {}),
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+      await executePreparedCliRun(context, index > 0 ? "existing-native-session" : undefined);
+    }
+
+    const attachedPaths = sent.map((prompt) =>
+      prompt
+        .split("\n")
+        .filter((line) => line.startsWith("@"))
+        .map((line) => line.slice(1)),
+    );
+    expect(attachedPaths.map((paths) => paths.length)).toEqual([1, 0, 1]);
+    await expect(
+      fs.readFile(expectDefined(attachedPaths[0]?.[0], "current image")),
+    ).resolves.toEqual(inbound);
+    expect(sent[1]).toContain(`Earlier assistant MEDIA: ${outboundPath}`);
+    expect(sent[1]).not.toContain("Image turn:");
+    await expect(
+      fs.readFile(expectDefined(attachedPaths[2]?.[0], "quoted image")),
+    ).resolves.toEqual(outbound);
   });
 
   it("joins deferred maintenance before reading durable context", async () => {

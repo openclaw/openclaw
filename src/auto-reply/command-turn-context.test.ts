@@ -4,6 +4,7 @@ import {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,
   isExplicitCommandTurn,
+  isExplicitFollowupCommandTurn,
   isNativeCommandTurn,
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
@@ -156,6 +157,22 @@ describe("resolveCommandTurnContext", () => {
         "must-not-retarget-unauthorized",
       ),
     ).toBeUndefined();
+    const followup = createCommandTurnContext("text", {
+      authorized: true,
+      commandName: "followup",
+      body: "/followup next task",
+    });
+    expect(isExplicitFollowupCommandTurn({ CommandTurn: followup, Body: "next task" })).toBe(true);
+    expect(isExplicitFollowupCommandTurn({ CommandTurn: { ...followup, authorized: false } })).toBe(
+      false,
+    );
+    expect(isExplicitFollowupCommandTurn({ Body: "/followup untrusted text" })).toBe(false);
+    expect(
+      resolveCommandTurnTargetSessionKey({
+        CommandTurn: followup,
+        CommandTargetSessionKey: " active-direct-session ",
+      }),
+    ).toBe("active-direct-session");
     expect(isExplicitCommandTurn(undefined)).toBe(false);
   });
 });

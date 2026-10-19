@@ -88,7 +88,6 @@ export async function seedMessageCutSource(
 export function messageCutContext(): GatewayRequestContext {
   return {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;

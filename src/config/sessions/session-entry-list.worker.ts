@@ -9,7 +9,10 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
-import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
+import {
+  hasMainSessionRecoveryClaim,
+  hasOrphanedMainSessionWork,
+} from "./restart-recovery-state.js";
 import {
   listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
@@ -66,8 +69,8 @@ export function readSessionEntryList(
                 ),
               )
               .where((eb) =>
-                eb.or(
-                  [
+                eb.or([
+                  ...[
                     "mainRestartRecovery",
                     "restartRecoveryRuns",
                     "restartRecoveryDeliveryRunId",
@@ -75,13 +78,34 @@ export function readSessionEntryList(
                   ].map((field) =>
                     eb(jsonExtractText(database.db, eb.ref("entry_json"), field), "is not", null),
                   ),
-                ),
+                  ...(scope.mainSessionRecovery === "orphans"
+                    ? [
+                        eb(
+                          eb.cast<string>(
+                            jsonExtractText(database.db, eb.ref("entry_json"), "abortedLastRun"),
+                            "text",
+                          ),
+                          "in",
+                          ["1", "true"],
+                        ),
+                        eb(
+                          jsonExtractText(database.db, eb.ref("entry_json"), "status"),
+                          "=",
+                          "interrupted",
+                        ),
+                      ]
+                    : []),
+                ]),
               ),
           ).rows.map((row) => row.session_key);
           // Terminal run fences alone are not custody; completed rows with remaining claims still settle.
-          return keys.length
-            ? readSelectedSessionEntriesInDatabase(database, keys).filter(({ entry }) =>
-                hasMainSessionRecoveryClaim(entry),
+          // Startup still validates pending canonical rows even when no orphan needs recovery.
+          return keys.length || scope.mainSessionRecovery === "orphans"
+            ? readSelectedSessionEntriesInDatabase(database, keys).filter(
+                ({ entry, sessionKey }) =>
+                  scope.mainSessionRecovery === "orphans"
+                    ? hasOrphanedMainSessionWork(entry, sessionKey)
+                    : hasMainSessionRecoveryClaim(entry),
               )
             : [];
         }
@@ -126,15 +150,20 @@ export function readSessionEntryList(
               // Queued inputs without live custody become interrupted in the history owner.
               .where("input.state", "in", ["queued", "interrupted"])
               .where((eb) =>
-                eb(
-                  jsonPathValue(
-                    database.db,
-                    eb.ref("input.message_json"),
-                    eb.val("$.__openclaw.sessionSendDelivery"),
+                eb.or([
+                  eb("input.state", "=", "queued"),
+                  ...["sessionSendDelivery", "chatInputRecovery"].map((field) =>
+                    eb(
+                      jsonPathValue(
+                        database.db,
+                        eb.ref("input.message_json"),
+                        eb.val(`$.__openclaw.${field}`),
+                      ),
+                      "is not",
+                      null,
+                    ),
                   ),
-                  "is not",
-                  null,
-                ),
+                ]),
               ),
           ).rows.map((row) => row.session_key);
           return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];

@@ -10,7 +10,11 @@ import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import { renderSidebarRailPinMenuForMenus } from "./sidebar-menus-render.tsx";
+import { SessionOrganizer } from "./session-organizer.ts";
+import {
+  renderSidebarRailPinMenuForMenus,
+  renderSidebarSessionMenuForMenus,
+} from "./sidebar-menus-render.tsx";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
 
 it("keeps modified sidebar links native and handles ordinary navigation", () => {
@@ -56,6 +60,51 @@ it("delivers an action selected through the shared sidebar menu", async () => {
   );
   view.getByRole("menuitem", { name: "Customize", hidden: true }).click();
   await waitForSolid(() => expect(select).toHaveBeenCalledExactlyOnceWith("customize"));
+});
+
+it("keeps personal pinning and navigation usable in an offline session menu", async () => {
+  const session = { key: "agent:main:review", sessionId: "review-id", label: "Review" };
+  const pin = vi.fn();
+  const menus = {
+    sessionMenu: { x: 12, y: 30, session },
+    pluginActionLifetime: new AbortController(),
+    closeSessionMenu: vi.fn(),
+    triggers: new Map(),
+  } as unknown as SidebarMenus;
+  const host = {
+    connected: false,
+    sessionDataContext: {
+      gateway: { snapshot: { phase: "reconnecting", client: null, hello: null } },
+      agents: { state: { agentsList: null } },
+      sessions: { archiveVisibility: () => null },
+    },
+    sessionData: {
+      sessionsResult: { sessions: [session] },
+      sessionResultsByAgent: {},
+      childSessionRowsByParent: {},
+    },
+    findSidebarMenuSessionByKey: () => session,
+    selectedVisibleSessions: () => [],
+    readSessionMutationAccess: () => ({ allowed: false, reason: "Reconnect" }),
+    knownSessionGroups: () => [],
+    sessionOrganizer: {
+      isPersonalSessionPin: () => false,
+      setPersonalSessionPin: pin,
+      runSessionAction(...args: Parameters<SessionOrganizer["runSessionAction"]>) {
+        return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
+      },
+    },
+  } as unknown as Parameters<typeof renderSidebarSessionMenuForMenus>[1];
+  const view = render(() => renderSidebarSessionMenuForMenus(menus, host, menus.sessionMenu!));
+  flush();
+  const action = (value: string) =>
+    view.container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!;
+  expect(action("rename").disabled).toBe(true);
+  expect(action("toggle-unread").disabled).toBe(true);
+  expect(action("copy-session-link").disabled).toBe(false);
+  expect(action("toggle-pin").disabled).toBe(false);
+  action("toggle-pin").click();
+  await waitForSolid(() => expect(pin).toHaveBeenCalledExactlyOnceWith(session.key, true));
 });
 
 it("retires sidebar hover callbacks with the mounted menu", async () => {
@@ -135,16 +184,6 @@ describe("sidebar rail pin menu", () => {
       await sidebar.updateComplete;
       const host = getAppSidebarOwner(sidebar.hostElement)!;
       const pins = document.createElement("div");
-      for (const entry of entries) {
-        const pin = document.createElement("div");
-        pin.className = "sidebar-rail__pin";
-        pin.dataset.sidebarEntry = entry;
-        pins.append(pin);
-      }
-      const trigger = document.createElement("button");
-      pins.append(trigger);
-      document.body.append(pins);
-      onTestFinished(() => pins.remove());
       const { menus, disposeMenus } = createRoot((disposeRoot) => ({
         menus: createSidebarMenus({
           host,
@@ -154,6 +193,17 @@ describe("sidebar rail pin menu", () => {
         disposeMenus: disposeRoot,
       }));
       onTestFinished(disposeMenus);
+      for (const entry of entries) {
+        const pin = document.createElement("div");
+        pin.className = "sidebar-rail__pin";
+        pin.dataset.sidebarEntry = entry;
+        pins.append(pin);
+        menus.railPins.set(entry, pin);
+      }
+      const trigger = document.createElement("button");
+      pins.append(trigger);
+      document.body.append(pins);
+      onTestFinished(() => pins.remove());
       menus.triggers.set("railPin", trigger);
       const position: NonNullable<SidebarMenus["railPinMenuPosition"]> = {
         x: 12,

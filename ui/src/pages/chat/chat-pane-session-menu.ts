@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsFilesRevealResult,
   WorktreesBranchesResult,
@@ -9,10 +8,19 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
 import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
-import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
+import type {
+  SidebarSessionMutationResult,
+  SidebarSessionMutationScope,
+} from "../../components/app-sidebar-session-types.ts";
+import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
+import { sessionMenuDataFromRow } from "../../components/session-menu-data.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
+import {
+  captureSessionMutationScope,
+  isSessionMutationScopeCurrent,
+} from "../../components/session-mutation-scope.ts";
 import type * as SessionOperations from "../../components/session-organizer-operations.runtime.ts";
 import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -89,9 +97,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       !this.active ||
       !this.presented ||
       this.onboarding ||
-      document.openClawModalLayers?.size ||
-      // Shell modal DOM owns keyboard admission outside this pane.
-      document.querySelector(".shell-nav[aria-modal='true']")
+      hasModalSurface(this.element.ownerDocument)
     ) {
       return true;
     }
@@ -143,26 +149,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         row.icon,
         row.color,
       ],
-      () => ({
-        label,
-        placementAction: sessionPlacementAction(row),
-        target: { key: row.key, agentId: row.agentId },
-        sessionId: row.sessionId ?? null,
-        isChild,
-        pinned,
-        pinnable,
-        snoozedUntil: row.snoozedUntil ?? null,
-        unread: row.unread === true,
-        hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
-        communication: row.communication,
-        effectiveCommunication: row.effectiveCommunication,
-        archived: row.archived === true,
-        archiving,
-        category: normalizeOptionalString(row.category) ?? null,
-        icon: normalizeOptionalString(row.icon) ?? null,
-        color: normalizeOptionalString(row.color) ?? null,
-        categoryClearReturnsToGroups: false,
-      }),
+      () => sessionMenuDataFromRow(row, { label, isChild, pinned, pinnable, archiving }),
     );
   }
 
@@ -184,7 +171,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
   }
 
-  protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
+  protected async handleHeaderSessionAction(
+    action: HeaderMenuAction,
+    row: GatewaySessionRow,
+  ): Promise<SidebarSessionMutationResult | void> {
     if (action.kind === "delete" && isNativeCatalogAdoptionSessionKey(row.key)) {
       return;
     }
@@ -239,7 +229,37 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       togglePinnedSession(this.context.navigation, current.key);
       return;
     }
-    const scope = this.captureHeaderSessionActionScope();
+    if (action.kind === "new-group") {
+      const signal = this.headerSessionDraftAbortController.signal;
+      const gateway = this.context.gateway;
+      const { showInputDialog } = await import("../../components/input-dialog.ts");
+      await showInputDialog({
+        signal,
+        gateway,
+        title: t("sessionsView.newGroupTitle"),
+        label: t("sessionsView.newGroupPrompt"),
+        submitLabel: t("sessionsView.newGroupCreate"),
+        requireValue: true,
+        submit: async (name) => {
+          const result = await this.handleHeaderSessionAction(
+            { kind: "move-to-group", category: name },
+            row,
+          );
+          return result === "completed"
+            ? null
+            : result === "stale"
+              ? t("sessionsView.newGroupStale")
+              : (this.state?.chatError ?? t("sessionsView.newGroupFailed"));
+        },
+      });
+      return;
+    }
+    const scope = this.captureHeaderSessionActionScope(
+      action.kind === "set-icon" ||
+        action.kind === "set-color" ||
+        action.kind === "reset-appearance" ||
+        action.kind === "move-to-group",
+    );
     if (!scope) {
       this.publishHeaderError(t("sessionsView.actionRequiresConnection"));
       return;
@@ -372,21 +392,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           await operations.promoteSession(host, session, scope);
           break;
         case "move-to-group":
-          await assignCategory(action.category);
-          break;
-        case "new-group": {
-          const { showInputDialog } = await import("../../components/input-dialog.ts");
-          const name = await showInputDialog({
-            title: t("sessionsView.newGroupTitle"),
-            label: t("sessionsView.newGroupPrompt"),
-            submitLabel: t("sessionsView.newGroupCreate"),
-            requireValue: true,
-          });
-          if (name && this.isHeaderSessionActionCurrent(scope, owner)) {
-            await assignCategory(name);
-          }
-          break;
-        }
+          return await assignCategory(action.category);
         case "snooze":
           await operations.snoozeSessionWithUndo(host, session, action, scope);
           break;
@@ -485,35 +491,19 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     return result.command;
   }
 
-  private captureHeaderSessionActionScope():
-    | (SidebarSessionMutationScope & { signal: AbortSignal })
-    | null {
-    const gateway = this.context.gateway;
-    const client = gateway.snapshot.client;
-    if (gateway.snapshot.phase !== "connected" || !client) {
-      return null;
-    }
-    return {
+  private captureHeaderSessionActionScope(
+    allowDeferred = false,
+  ): (SidebarSessionMutationScope & { signal: AbortSignal }) | null {
+    return captureSessionMutationScope(this.context, {
       epoch: this.connectionGeneration,
-      context: this.context,
-      gateway,
-      sessions: this.context.sessions,
-      client,
+      allowDeferred,
       selectedAgentId: this.context.agentSelection.state.selectedId ?? "main",
       signal: this.headerSessionMutationAbortController.signal,
-    };
+    });
   }
 
   private isHeaderSessionActionCurrent(scope: SidebarSessionMutationScope, owner: string): boolean {
-    return (
-      this.ownsHeaderOutcome(owner) &&
-      this.isConnected &&
-      this.context === scope.context &&
-      this.context.gateway === scope.gateway &&
-      this.context.sessions === scope.sessions &&
-      scope.gateway.snapshot.phase === "connected" &&
-      scope.gateway.snapshot.client === scope.client
-    );
+    return this.ownsHeaderOutcome(owner) && isSessionMutationScopeCurrent(this.context, scope);
   }
 
   protected beginHeaderRename(row: GatewaySessionRow): void {
@@ -523,6 +513,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       params: { key: row.key, label: null },
       sessionScope: true,
       session: row,
+      allowDeferred: true,
     });
     if (!access.allowed) {
       this.publishHeaderError(access.reason);
@@ -533,12 +524,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     header.renameSession = { key, sessionId, label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
     header.renameValue = this.headerRenameInitialValue;
-    void this.awaitDomCommit().then(() => {
-      // The native pane transfers focus into the independently rendered header.
-      const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
-      input?.focus();
-      input?.select();
-    });
   }
 
   protected cancelHeaderRename(): void {
@@ -548,6 +533,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   protected commitHeaderRename(): void {
     const session = this.headerPresentation.renameSession;
     if (!session) {
+      return;
+    }
+    const snapshot = this.context.gateway.snapshot;
+    if (snapshot.phase !== "connected" && !snapshot.hello) {
       return;
     }
     const patch = resolveSessionRenamePatch(
@@ -564,6 +553,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       method: "sessions.patch",
       params: { key: session.key, ...patch },
       sessionScope: true,
+      allowDeferred: true,
       session: state.sessionsResult?.sessions.find(
         (row) =>
           areUiSessionKeysEquivalent(row.key, session.key) && row.sessionId === session.sessionId,

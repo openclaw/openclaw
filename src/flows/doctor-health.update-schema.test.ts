@@ -32,6 +32,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
+import { addPreCutoverClientCredentialTablesForTest } from "../state/openclaw-state-schema.test-support.js";
 import { VERSION } from "../version.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -136,11 +137,12 @@ it.each([
     if (damage === "orphan") {
       await doctor;
       expect(readDatabase(shared).version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-      const migrationBackup = backupPaths(shared, "openclaw.sqlite.pre-startup-migration-").find(
-        (name) => name.endsWith(".bak"),
+      // Scoped archives retain source versions in metadata; inspect the full image here.
+      const migrationBackups = backupPaths(shared, "openclaw.sqlite.pre-startup-migration-").filter(
+        (name) => name.endsWith(".bak") && !name.endsWith(".scoped.bak"),
       );
-      expect(migrationBackup).toBeDefined();
-      expect(readDatabase(migrationBackup!).version).toBe(19);
+      expect(migrationBackups).toHaveLength(1);
+      expect(readDatabase(migrationBackups[0]!).version).toBe(19);
       expect(mocks.runContributions).toHaveBeenCalledOnce();
       expect(runtime.log).toHaveBeenCalledWith(
         expect.stringContaining("Removed 1 orphan session window(s)"),
@@ -250,6 +252,10 @@ it.each([
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
     const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
     await closeOpenClawStateDatabaseAsync();
+    {
+      using predecessor = new DatabaseSync(shared);
+      addPreCutoverClientCredentialTablesForTest(predecessor);
+    }
     setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
     mocks.runContributions.mockImplementation(async () => {
       const result = repairOpenClawStateDatabaseSchema({ env: state.env });

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { statusJsonCommand } from "./status-json.js";
 import { statusCommand } from "./status.command.js";
 
@@ -11,13 +12,37 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./node-runtime-diagnostics.js", () => ({ collectNodeRuntimeFindings: async () => [] }));
 vi.mock("./status.scan.js", () => ({ scanStatus: mocks.scan }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scan }));
+// mock-isolation: Inject scan failures without starting live status or database probes.
 vi.mock("./status.scan-overview.ts", () => ({
   collectStatusScanOverview: mocks.overview,
-  resolveStatusSummaryFromOverview: vi.fn(),
+  prepareStatusSummaryFromOverview: vi.fn(),
 }));
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.gateway,
-  getNodeDaemonStatusSummary: mocks.node,
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: () => createMockGatewayService(),
+  readGatewayServiceState: mocks.gateway,
+}));
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.node,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => "/prefix-b/lib/node_modules/openclaw",
+}));
+vi.mock("../daemon/service-layout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-layout.js")>()),
+  summarizeGatewayServiceLayout: async () => undefined,
+  inspectGatewayServiceInstallationDrift: async () => ({
+    serviceRoot: "/prefix-a/lib/node_modules/openclaw",
+    activeRoot: "/prefix-b/lib/node_modules/openclaw",
+    serviceVersion: "2026.9.4",
+    activeVersion: "2026.9.17",
+  }),
+}));
+vi.mock("../cli/daemon-cli/shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/shared.js")>()),
+  formatGatewayServiceInstallationDrift: () => `\u001b[2J${installationDrift}`,
 }));
 
 const installationDrift =
@@ -42,7 +67,13 @@ describe.each([
     if (unavailable) {
       mocks.gateway.mockRejectedValue(new Error("native service inspection unavailable"));
     } else {
-      mocks.gateway.mockResolvedValue({ installationDrift: `\u001b[2J${installationDrift}` });
+      mocks.gateway.mockResolvedValue({
+        installed: false,
+        loadState: { status: "not-loaded" },
+        running: false,
+        command: null,
+        env: {},
+      });
     }
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const result =
@@ -50,7 +81,10 @@ describe.each([
         ? statusJsonCommand({ timeoutMs }, runtime)
         : statusCommand({ all: mode === "all", timeoutMs }, runtime);
     await expect(result).rejects.toBe(original);
-    expect(mocks.gateway).toHaveBeenCalledExactlyOnceWith(timeoutMs ?? 5000);
+    expect(mocks.gateway).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ timeoutMs: timeoutMs ?? 5000 }),
+    );
     expect(mocks.node).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
     return runtime;

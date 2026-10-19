@@ -25,13 +25,23 @@ export function coalesceSessionSqliteArchiveReferences(
     }
   >();
   const changed = new Set<ActiveSessionSqliteMigrationRun>();
+  const originalsByPath = new Map<string, string[]>();
+  for (const [original, survivor] of replacements) {
+    for (const path of [original, survivor.archivePath]) {
+      const originals = originalsByPath.get(path) ?? [];
+      originals.push(original);
+      originalsByPath.set(path, originals);
+    }
+  }
   for (const run of runs) {
     for (const target of run.manifest.targets) {
-      const paths = new Set(uniqueRestoreMoves(target).map((move) => move.archivePath));
-      const settled = [...replacements].filter(
-        ([original, survivor]) => paths.has(original) || paths.has(survivor.archivePath),
-      );
-      if (settled.length === 0) {
+      const settled = new Set<string>();
+      for (const move of uniqueRestoreMoves(target)) {
+        for (const original of originalsByPath.get(move.archivePath) ?? []) {
+          settled.add(original);
+        }
+      }
+      if (settled.size === 0) {
         continue;
       }
       const key = sessionSqliteMigrationTargetKey(target);
@@ -41,7 +51,7 @@ export function coalesceSessionSqliteArchiveReferences(
         issues: [{ code: "historical_duplicate_settled", message: "" }],
       };
       results.set(key, result);
-      settled.forEach(([original]) => result.archives.add(original));
+      settled.forEach((original) => result.archives.add(original));
       target.issues.push(...result.issues);
       for (const list of ["plannedMoves", "completedMoves"] as const) {
         const moves = new Map<string, SessionSqliteMigrationMove>();

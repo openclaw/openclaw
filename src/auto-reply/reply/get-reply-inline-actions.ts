@@ -37,7 +37,7 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
-import { resolveSlashCommandName } from "./commands-slash-parse.js";
+import { matchSlashCommandToken, resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
 import type { buildStatusReply } from "./commands.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
@@ -238,9 +238,16 @@ export async function handleInlineActions(
 
   const slashCommandName = getStandaloneSlashCommandName(command.commandBodyNormalized);
   const explicitSkillReferenceBody = command.commandBodyNormalized;
+  const isExplicitFollowup =
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    matchSlashCommandToken(command.commandBodyNormalized, "/followup") !== null;
   const hasSkillReferences =
-    command.isAuthorizedSender && hasSkillReferenceCandidate(explicitSkillReferenceBody);
+    !isExplicitFollowup &&
+    command.isAuthorizedSender &&
+    hasSkillReferenceCandidate(explicitSkillReferenceBody);
   const hasSkillSlashCandidate =
+    !isExplicitFollowup &&
     command.isAuthorizedSender &&
     slashCommandName !== null &&
     (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
@@ -297,56 +304,52 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const { createOpenClawToolsAsync } = await import("../../agents/openclaw-tools.js");
       const { hasAnyAuthProfileStoreSourceAsync } =
         await import("../../agents/auth-profiles/source-check.js");
       const authSourceAgentDir = agentDir?.trim();
       const authProfileStoreSource = authSourceAgentDir
         ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
         : false;
-      const authorizedTools = await resolveSkillDispatchTools(
-        {
-          message: {
-            surface: ctx.Surface,
-            provider: ctx.Provider,
-            accountId: ctx.AccountId,
-            senderId: ctx.SenderId,
-            senderName: ctx.SenderName,
-            senderUsername: ctx.SenderUsername,
-            senderE164: ctx.SenderE164,
-            originatingTo: ctx.OriginatingTo,
-            to: ctx.To,
-            nativeChannelId: ctx.NativeChannelId,
-            messageThreadId: ctx.MessageThreadId,
-            memberRoleIds: ctx.MemberRoleIds,
-          },
-          cfg,
-          agentId,
-          agentDir,
-          authProfileStoreSource,
-          sessionEntry: targetSessionEntry,
-          sessionKey,
-          workspaceDir,
-          provider,
-          model,
-          senderIsOwner: command.senderIsOwner,
-          senderId: command.senderId,
-          currentChannelId: command.channelId,
-          groupId: extractExplicitGroupId(ctx.From),
-          skillCommand: {
-            name: skillInvocation.command.name,
-            ...(skillInvocation.command.skillFile
-              ? { skillFile: skillInvocation.command.skillFile }
-              : {}),
-            skillName: skillInvocation.command.skillName,
-            ...(skillInvocation.command.skillSource
-              ? { skillSource: skillInvocation.command.skillSource }
-              : {}),
-            toolName: dispatch.toolName,
-          },
+      const authorizedTools = await resolveSkillDispatchTools({
+        message: {
+          surface: ctx.Surface,
+          provider: ctx.Provider,
+          accountId: ctx.AccountId,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+          originatingTo: ctx.OriginatingTo,
+          to: ctx.To,
+          nativeChannelId: ctx.NativeChannelId,
+          messageThreadId: ctx.MessageThreadId,
+          memberRoleIds: ctx.MemberRoleIds,
         },
-        { createOpenClawToolsAsync },
-      );
+        cfg,
+        agentId,
+        agentDir,
+        authProfileStoreSource,
+        sessionEntry: targetSessionEntry,
+        sessionKey,
+        workspaceDir,
+        provider,
+        model,
+        senderIsOwner: command.senderIsOwner,
+        senderId: command.senderId,
+        currentChannelId: command.channelId,
+        groupId: extractExplicitGroupId(ctx.From),
+        skillCommand: {
+          name: skillInvocation.command.name,
+          ...(skillInvocation.command.skillFile
+            ? { skillFile: skillInvocation.command.skillFile }
+            : {}),
+          skillName: skillInvocation.command.skillName,
+          ...(skillInvocation.command.skillSource
+            ? { skillSource: skillInvocation.command.skillSource }
+            : {}),
+          toolName: dispatch.toolName,
+        },
+      });
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
@@ -452,6 +455,7 @@ export async function handleInlineActions(
 
   // Standalone commands use ordinary dispatch even when the prompt contains extra context.
   const inlineCommand =
+    !isExplicitFollowup &&
     allowTextCommands &&
     command.isAuthorizedSender &&
     !skillInvocation &&

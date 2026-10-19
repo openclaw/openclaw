@@ -218,7 +218,9 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
         {},
         {
           tools: {
-            web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
+            web: {
+              search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } },
+            },
           },
         },
       ),
@@ -249,8 +251,7 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     const result = await runCronIsolatedAgentTurn(
       makeParams(["web_search"], {}, { deleteAfterRun: true }),
     );
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated agent run aborted");
+    expect(result).toMatchObject({ status: "error", error: "cron isolated agent run aborted" });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
       "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.",

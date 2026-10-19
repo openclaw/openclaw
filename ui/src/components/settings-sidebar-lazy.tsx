@@ -1,4 +1,4 @@
-import { createEffect, For, Show } from "solid-js";
+import { For, onSettled, Show } from "solid-js";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import type { LazyRenderer } from "../app/lazy-renderer.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -23,14 +23,11 @@ export function LazySettingsSidebar(
     loader: SettingsSidebarLoader;
   },
 ) {
-  createEffect(
-    () => !props.loader.renderer() && !props.loader.failed(),
-    (load) => {
-      if (load) {
-        props.loader.load();
-      }
-    },
-  );
+  onSettled(() => {
+    if (!props.loader.renderer() && !props.loader.failed()) {
+      props.loader.load();
+    }
+  });
   return (
     <Show
       when={props.loader.renderer()}

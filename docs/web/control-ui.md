@@ -22,6 +22,26 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Temporary disconnections
+
+When the connection drops, the Control UI keeps loaded catalogs, automation
+editors, Memory Import selections, Activity history, Dreaming results, approval
+queues, and open board and portal documents in memory. A transport interruption
+does not reset those page-local drafts. The connection indicator at the bottom
+left shows the connection state; retained data may be out of date until reconnect.
+
+If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
+
+Gateway actions, including saving edits and approving requests, require a live
+connection. Reconnecting refreshes retained data without automatically replaying
+those actions. Memory Import keeps explicit deselections when refreshing its
+plan. Session rename and new-group dialogs keep typed text across a temporary
+disconnect; failed submissions stay open for review and retry.
+
+Switching Gateway or account, signing out, or losing access clears the affected
+data and drafts. This retention does not add offline persistence or guarantee
+that page-local drafts survive a reload or closing the tab.
+
 ## Browser requirements
 
 Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
@@ -40,6 +60,8 @@ centered crop. The choice is saved with your tab-icon preference, and activity
 badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
+If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
@@ -81,6 +103,8 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
+Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
+
 In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse Code**, **Collapse Functions and Classes**, and **Expand Code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
 
 Session-start baselines omit SQLite databases and their WAL, SHM, and journal files, as well as hardlinked files. These files remain visible in checkout diffs even when unchanged since the session began; baseline capture never opens them in the Gateway process, preserving live database locks.
@@ -95,7 +119,7 @@ Sidebar live narration pauses while the browser tab is hidden and resumes from c
 
 **My sessions** and specific-owner selections list that owner’s sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
 
-Owner-filtered sidebars apply live updates to loaded sessions while ownership and list membership remain unchanged. Ownership changes, new sessions, and broad invalidations still refresh the authoritative list. A completed refresh absorbs any older scheduled fallback read.
+Sidebars apply live updates to loaded sessions without periodic list reads while ownership and list membership remain unchanged. Ownership changes, new sessions, incomplete event coverage, and broad invalidations still refresh the authoritative list. Matching views share the same managed query, and refreshes reuse retained row revisions when available.
 
 In **My sessions**, choosing an agent from the switcher resumes that agent's newest loaded active conversation from your list, or opens its Home when none is loaded. Agent unread indicators and Home activity use the same current list; Home controls keep their separate main-session behavior.
 
@@ -196,9 +220,10 @@ failures still show their failure notice.
 
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
-with their keyboard shortcuts. Open **Subagents** there or from the side-panel
-**+** menu to inspect child runs, including swarm workers. An empty conversation
-starts with the panel closed. The first running batch adds it automatically,
+with their keyboard shortcuts. Open **Subagents** there, from the side-panel
+**+** menu, or by clicking the header’s **Subagents · N running** status to inspect
+child runs, including swarm workers. The header status also supports Enter and
+Space. An empty conversation starts with the panel closed. The first running batch adds it automatically,
 preserving another panel you selected; closing it keeps it closed for that batch.
 Finished results stay open until you close them. While the parent waits on
 subagents, the conversation keeps each child’s claw, name, and current activity
@@ -229,7 +254,10 @@ menu to inspect the conversation's background exec commands. It is separate from
 time. **Finished** starts collapsed; click its heading to expand or collapse the
 list. Selecting a process opens its recent output. **Stop** targets that exact
 process, not the parent conversation or another command with the same name.
-Hidden panels stop refreshing. Output follows the process owner's temporary
+Details and Processes panels viewing the same session share one observation and
+refresh when its background processes change. Changes are batched over five seconds;
+a safety refresh runs after a minute without an update. Hidden panels and browser
+tabs stop refreshing. Output follows the process owner's temporary
 retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;
@@ -278,6 +306,10 @@ If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
 ## Download files
+
+If the **Files** panel shows a listing error, select **Retry** to load the current
+folder or search again. This keeps the session and query in place; access checks
+still apply, and a failed retry displays its error.
 
 In the **Files** panel, hover over a file or focus its row to reveal **Download file**
 next to Preview and Copy path. The same action is available in the file preview

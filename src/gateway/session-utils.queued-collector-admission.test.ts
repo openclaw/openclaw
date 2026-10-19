@@ -19,6 +19,11 @@ import {
   getAgentRunContext,
   getAgentRunLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
+import {
+  isRpcSourceExecuting,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { unwrapGatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
 import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
@@ -167,15 +172,20 @@ it.each([
         }),
       ]);
       const entry = expectDefined(registryMemory.subagentRuns.get(spawned.runId!), "collector");
-      const admission = expectDefined(context.chatAbortControllers.get(entry.runId), "controller");
-      expect(admission).toMatchObject({ kind: "agent", executionStarted: false });
+      const admission = expectDefined(rpcSourceTesting.get(entry.runId), "controller");
+      expect(admission.adapter.kind).toBe("agent");
+      expect(isRpcSourceExecuting(admission)).toBe(false);
       expect(getAgentRunContext(entry.runId)).toBeDefined();
       expect(isSubagentRunQueued(entry)).toBe(true);
+      const target = expectDefined(admission.input.target, "native physical session target");
       const visibleStatus = () =>
         resolveVisibleActiveSessionRunState({
-          context,
+          storePath: target.storeScope,
+          agentId: target.agentId,
+          sessionId: target.incarnation,
           requestedKey: entry.childSessionKey,
           canonicalKey: entry.childSessionKey,
+          resolveGatewayContext: context.resolveGatewayContext,
         }).status;
       expect(visibleStatus()).toBeUndefined();
       const releaseCapacityWait = registerAgentRunCapacityWait(
@@ -243,17 +253,20 @@ it.each([
           .toEqual([true, { ok: true, status: "aborted", abortedRunId: entry.runId }]);
       }
       expect.soft(context.chatRunState.hasAbortMarker(entry.runId)).toBe(true);
-      expect.soft(admission.abortStopReason).toBe("rpc");
-      expect.soft(stopped.execution.startedAt).toBeUndefined();
-      expect.soft(stopped.sessionStartedAt).toBeUndefined();
-      expect(context.chatAbortControllers.has(entry.runId)).toBe(false);
+      expect.soft(admission.adapter.abortStopReason).toBe("rpc");
+      expect.soft(entry.execution.startedAt).toBeUndefined();
+      expect.soft(entry.sessionStartedAt).toBeUndefined();
+      expect(rpcSourceTesting.has(entry.runId)).toBe(false);
       expect(order[0]).toBe(publicationFailure ? "deleting" : "published");
       expect(order).toContain("deleted");
       expect(await sessionEntry()).toBeUndefined();
     } finally {
       releasePublication.resolve();
       if (nativeRunId) {
-        context.chatAbortControllers.get(nativeRunId)?.controller.abort();
+        const source = rpcSourceTesting.get(nativeRunId);
+        if (source) {
+          requestRpcSourceCancellation(source);
+        }
         await dispatched.promise;
         clearAgentRunContext(nativeRunId);
       }

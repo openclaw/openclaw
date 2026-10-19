@@ -1,3 +1,5 @@
+import { channel } from "node:diagnostics_channel";
+import fs from "node:fs/promises";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,6 +9,7 @@ import { appendTranscriptMessage } from "../config/sessions/session-accessor.sql
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
   areDiagnosticsEnabledForProcess,
+  onDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -73,6 +76,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   resetDiagnosticStateForTest();
   await scheduler.stop();
   vi.useRealTimers();
@@ -104,6 +108,42 @@ it("checks memory pressure every tick without recording idle samples", async () 
     await tick();
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample });
     expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
+  }
+});
+
+it("keeps recovery and pressure checks running while a Linux footprint read is pending", async () => {
+  vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+  const footprint = createDeferred<string>();
+  const sampled = createDeferred();
+  const readFile = vi.spyOn(fs, "readFile").mockReturnValue(footprint.promise);
+  const memory = process.memoryUsage();
+  vi.spyOn(process, "memoryUsage").mockReturnValue({ ...memory, rss: Number.MAX_SAFE_INTEGER });
+  const critical = vi.fn();
+  const pressure = channel("openclaw.memory.critical");
+  pressure.subscribe(critical);
+  const stop = onDiagnosticEvent((event) => {
+    if (event.type === "diagnostic.memory.sample") {
+      sampled.resolve();
+    }
+  });
+  const recover = vi.fn();
+  startGatewayDiagnosticHeartbeat(
+    scheduler,
+    {},
+    { ...heartbeatOptions, recoverStuckSession: recover },
+  );
+  logSessionStateChange({ ...session("pending-footprint"), state: "processing" });
+  const first = tick();
+  const second = tick();
+  try {
+    expect(recover).toHaveBeenCalled();
+    expect(critical).toHaveBeenCalledTimes(2);
+    expect(readFile).toHaveBeenCalledTimes(1);
+  } finally {
+    footprint.resolve("RssAnon:\t1234 kB\nVmSwap:\t0 kB\n");
+    await Promise.all([first, second, sampled.promise]);
+    stop();
+    pressure.unsubscribe(critical);
   }
 });
 

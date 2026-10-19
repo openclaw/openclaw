@@ -25,13 +25,15 @@ exception; the confirmed-operator flag records that scope without asserting that
 the bot is an administrator. No grant changes or alternate credentials occur.
 The existing authoritative classic-protection absence gate remains mandatory:
 generic REST 404s and permission-projected GraphQL nulls do not prove absence.
-Missing policy-read capability is an external authority blocker, not an
-implicit fallback or permission to elevate the writer.
+Missing policy-read capability is an execution-capability blocker, not missing
+human consent, an implicit fallback, or permission to elevate the writer.
 This blocks the selected exception, not ordinary green-CI landing. A MAINTAIN
 writer can use ordinary `scripts/pr merge-run` when normal CI, review, and merge
-admission succeed, without organization-admin or CI-bypass authority. Repair the
-failed CI and use that route when classic policy cannot be read; do not change
-credentials or supply a policy snapshot to make the exception pass.
+admission succeed, without organization-admin or CI-bypass authority. That is an
+alternative, not a requirement to repair or rerun unrelated CI when classic policy
+cannot be read. Preserve scoped land authorization and report the exact capability
+blocker; do not change credentials or supply a policy snapshot to make the
+exception pass.
 Repository write access, organization membership, branch-policy read access,
 CI bypass, release environment approval, and production deployment authority are
 separate capabilities. A missing capability on one route proves nothing about

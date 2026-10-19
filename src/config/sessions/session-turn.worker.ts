@@ -227,7 +227,13 @@ export function prepareSessionTurn(
                   ),
                 ),
                 existing:
-                  key && append.idempotencyLookup !== "caller-checked"
+                  key &&
+                  append.idempotencyLookup !== "caller-checked" &&
+                  (!resident?.transcript.complete ||
+                    append.idempotencyLookup === "scan-assistant" ||
+                    [...resident.transcript.identities.values()].some(
+                      (identity) => identity.message_idempotency_key === key,
+                    ))
                     ? readTranscriptMessageByScopedIdempotencyKey(
                         database,
                         scope,

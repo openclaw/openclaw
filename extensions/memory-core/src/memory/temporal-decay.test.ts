@@ -32,6 +32,7 @@ describe("temporal decay", () => {
       keyword: [],
       vectorWeight: 1,
       textWeight: 0,
+      mmr: { enabled: false, lambda: 0.7 },
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       nowMs: NOW_MS,
       memorySourceMtimes: new Map(paths.map((filePath) => [filePath, NOW_MS - 30 * DAY_MS])),

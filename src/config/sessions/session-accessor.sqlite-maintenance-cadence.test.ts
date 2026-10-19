@@ -148,7 +148,7 @@ it.each(["participant", "owner"] as const)(
     const { database, storePath } = createStore(24);
     writeMetadata(storePath, kind, 0);
     const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
-    // One fact uses separate indexed probes; metadata writes must not repeat any of them.
+    // One fact combines dashboard and pending rows; metadata writes must not repeat either probe.
     const queries = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(database.db),
       ["after", "dashboards", "pending", "unexpected"],
@@ -165,7 +165,7 @@ it.each(["participant", "owner"] as const)(
         return sql.includes('"updated_at" > ?') ? "after" : "unexpected";
       },
     );
-    const expectedProbes = { after: 1, dashboards: 1, pending: 1, unexpected: 0 };
+    const expectedProbes = { after: 1, dashboards: 1, pending: 0, unexpected: 0 };
     const expectedRows = { after: 1, dashboards: 0, pending: 0, unexpected: 0 };
     try {
       await renameEntry(storePath, 0, "warm age facts");

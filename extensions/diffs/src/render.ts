@@ -2,7 +2,6 @@ import type { FileContents, FileDiffMetadata } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadDiffHTML, type PreloadDiffOptions } from "@pierre/diffs/ssr";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
-import { normalizeDiffFontSize, normalizeDiffLineSpacing } from "./config.js";
 import {
   collectDiffPayloadLanguageHints,
   isBaseDiffViewerLanguage,
@@ -50,8 +49,7 @@ function buildDiffTitle(input: DiffInput): string {
 }
 
 function resolveDiffTypography(presentation: DiffRenderOptions["presentation"]) {
-  const fontSize = normalizeDiffFontSize(presentation.fontSize);
-  const lineSpacing = normalizeDiffLineSpacing(presentation.lineSpacing);
+  const { fontSize, lineSpacing } = presentation;
   const lineHeight = Math.max(20, Math.round(fontSize * lineSpacing));
   return { fontSize, lineHeight };
 }
@@ -149,7 +147,7 @@ function buildImageRenderOptions(options: DiffRenderOptions): DiffRenderOptions 
     ...options,
     presentation: {
       ...options.presentation,
-      fontSize: Math.max(16, normalizeDiffFontSize(options.presentation.fontSize)),
+      fontSize: Math.max(16, options.presentation.fontSize),
     },
   };
 }

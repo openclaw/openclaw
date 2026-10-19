@@ -97,8 +97,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       selfE164,
     });
     const suppressPairingReply =
-      typeof connectedAtMs === "number" &&
-      typeof messageTimestampMs === "number" &&
+      messageTimestampMs !== undefined &&
       messageTimestampMs < connectedAtMs - PAIRING_REPLY_HISTORY_GRACE_MS;
 
     warnMissingProviderGroupPolicyFallbackOnce({

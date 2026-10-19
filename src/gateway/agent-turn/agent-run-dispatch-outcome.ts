@@ -57,7 +57,11 @@ export function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal
   if (resolveAgentRunErrorLifecycleFields(undefined, signal).stopReason === "restart") {
     return true;
   }
-  if (readErrorName(signal.reason) === "TimeoutError") {
+  if (signal.reason === "timeout" || readErrorName(signal.reason) === "TimeoutError") {
+    return true;
+  }
+  // Public Stop routes retain these controller reasons even if the provider fails later.
+  if (signal.reason === "rpc" || signal.reason === "stop") {
     return true;
   }
   if (!isGatewayAbortSignalReason(signal.reason)) {

@@ -53,7 +53,7 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
   // Replace only the selected source token. Re-rendering parsed siblings rounds
   // large integers and removes comments, escapes, and record separators.
   const raw = ast.raw.slice(0, start) + replacement + ast.raw.slice(start + node.length);
-  return parseJsonl(raw).ast;
+  return parseJsonl(raw);
 }
 
 /** Append a value as the next line. Line numbers are substrate-assigned. */
@@ -62,5 +62,5 @@ export function appendJsonlOcPath(ast: JsonlAst, value: JsoncValue): JsonlAst {
   const separator = ast.raw.length > 0 && !finalNewline ? (ast.lineEnding ?? "\n") : "";
   const nextLineNo = ast.raw.split("\n").length + (separator ? 1 : 0);
   const rendered = renderJsoncValue(value, `oc:///L${nextLineNo}`);
-  return parseJsonl(ast.raw + separator + rendered + finalNewline).ast;
+  return parseJsonl(ast.raw + separator + rendered + finalNewline);
 }

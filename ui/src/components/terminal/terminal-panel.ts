@@ -9,6 +9,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { createDockLayout } from "../dock-layout.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
+import { createPanelPresentationLifecycle } from "../panel-presentation-lifecycle.ts";
 import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -23,7 +24,6 @@ import {
 import type { TerminalInputs } from "./terminal-panel-session-types.ts";
 import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
-import type { TerminalPanelViewState } from "./terminal-panel-view.tsx";
 import { createTerminalSessionPicker } from "./terminal-session-picker.ts";
 
 // Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
@@ -56,30 +56,26 @@ export type OpenClawTerminalPanel = HTMLElement &
   >;
 
 /** Owns synchronous PTY/dock authority; Solid reads its publication projection. */
-export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
+export function createTerminalPanel(
+  element: HTMLElement & TerminalInputs,
+  scheduleAfterRender: (callback: () => void) => void,
+) {
   let context: ApplicationContext | undefined;
-  let connected = false;
-  let completion: Promise<boolean> = Promise.resolve(true);
-  let complete: ((value: boolean) => void) | undefined;
   let changes = new Set<keyof TerminalInputs>();
-  const listeners = new Set<() => void>();
   let fileInput: HTMLInputElement | undefined;
   let viewport: HTMLDivElement | undefined;
   let sessionPicker: ReturnType<typeof createTerminalSessionPicker> | undefined;
   let terminalPanelUploadController: TerminalPanelUpload;
-  function publish() {
-    if (!connected) {
-      return;
+  const lifecycle = createPanelPresentationLifecycle(scheduleAfterRender, () => {
+    const changed = changes;
+    changes = new Set();
+    // Ghostty measures its canvas; only the active session may occupy the viewport.
+    for (const tab of terminalSessions.state.tabs) {
+      tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
     }
-    if (!complete) {
-      completion = new Promise((resolve) => {
-        complete = resolve;
-      });
-    }
-    for (const listener of listeners) {
-      listener();
-    }
-  }
+    updated(changed);
+  });
+  const publish = lifecycle.publish;
   let hostedActionsContent: HTMLElement | undefined;
   const handleToggleRequest = (event: Event): void => {
     const detail =
@@ -184,7 +180,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
       return;
     }
     dockLayout.setDock(dock);
-    void completion.then(() => {
+    void lifecycle.updateComplete.then(() => {
       for (const tab of terminalSessions.state.tabs) {
         tab.controller.fit();
       }
@@ -242,26 +238,21 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
   const owner = {
     inputs: element,
     get isConnected() {
-      return connected && element.isConnected;
+      return lifecycle.active() && element.isConnected;
     },
     get updateComplete() {
-      return completion;
+      return lifecycle.updateComplete;
     },
     publish,
     bindPresentation,
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    subscribe: lifecycle.subscribe,
     inputsChanged(name: keyof TerminalInputs) {
       changes.add(name);
       publish();
     },
     attach(application: ApplicationContext | undefined) {
       context = application;
-      connected = true;
+      lifecycle.connect();
       terminalPanelUploadController.syncPolicy();
       dockLayout.connect();
       terminalSessions.connectHost();
@@ -284,41 +275,27 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
             handleToggleRequest(event);
           }
         }),
+        // Hosted tab labels are published to the external header after the panel commits.
         i18n.subscribe(publish),
+        // Configuration receipts retire disallowed uploads before their next operation.
         context?.config.subscribe(() => {
           terminalPanelUploadController.syncPolicy();
           publish();
         }),
+        // The commit applies font changes to imperative Ghostty controllers.
         context?.theme.subscribe(publish),
       ];
       if (element.embedded || dockLayout.open) {
         void terminalSessions.restoreSessions();
       }
       publish();
-      return () => {
-        connected = false;
-        observer.disconnect();
-        stops.forEach((stop) => stop?.());
-        terminalSessions.disconnectHost();
-        dockLayout.dispose();
-        complete?.(false);
-        complete = undefined;
-      };
-    },
-    rendered() {
-      if (!connected) {
-        return;
-      }
-      const resolve = complete;
-      complete = undefined;
-      const changed = changes;
-      changes = new Set();
-      // Ghostty measures its canvas; only the active session may occupy the viewport.
-      for (const tab of terminalSessions.state.tabs) {
-        tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
-      }
-      updated(changed);
-      resolve?.(true);
+      return () =>
+        lifecycle.dispose(() => {
+          observer.disconnect();
+          stops.forEach((stop) => stop?.());
+          terminalSessions.disconnectHost();
+          dockLayout.dispose();
+        });
     },
     get terminalPanelUploadController() {
       return terminalPanelUploadController;
@@ -339,7 +316,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     },
     async closeHostedTab(id: string): Promise<void> {
       terminalSessions.closeTab(id);
-      await completion;
+      await lifecycle.updateComplete;
     },
     set hostedActionsContent(value: HTMLElement | undefined) {
       hostedActionsContent = value;
@@ -374,7 +351,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         dockLayout.setOpen(false);
       }
     },
-    get terminalPanelOpen() {
+    get terminalPanelOpen(): boolean {
       return element.embedded ? element.available : dockLayout.open && isDockLayoutAvailable();
     },
     hideTerminalPanelForUnavailableSurface(): void {
@@ -393,7 +370,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     findTerminalPanelViewport(): Element | null {
       return viewport && element.contains(viewport) ? viewport : null;
     },
-    get viewState(): TerminalPanelViewState {
+    get viewState() {
       const activeTab = terminalSessions.state.tabs.find(
         (tab) => tab.id === terminalSessions.state.activeId,
       );
@@ -430,18 +407,18 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
           (element.embedded || readSessionBottomOnly()) && !terminalSessions.canHandoffSessions,
         upload: terminalPanelUploadController,
         picker: sessionPicker!,
-        fileInputRef: (input) => {
+        fileInputRef: (input: HTMLInputElement) => {
           fileInput = input;
         },
-        viewportRef: (nextViewport) => {
+        viewportRef: (nextViewport: HTMLDivElement) => {
           viewport = nextViewport;
         },
-        onSelect: (id) => terminalSessions.switchTo(id),
-        onClose: (id) => owner.closeHostedTab(id),
+        onSelect: (id: string) => terminalSessions.switchTo(id),
+        onClose: (id: string): Promise<void> => owner.closeHostedTab(id),
         onNew: () => void terminalSessions.openSession(),
-        onDock: (dock) => setDock(dock),
+        onDock: (dock: TerminalDock) => setDock(dock),
         onOpenFullscreen: () => openFullscreen(),
-        onHide: () => owner.closeTerminalPanel(),
+        onHide: (): void => owner.closeTerminalPanel(),
       };
     },
   };

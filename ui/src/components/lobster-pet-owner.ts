@@ -1,12 +1,12 @@
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import * as dex from "./lobster-dex.ts";
 import * as contract from "./lobster-pet-contract.ts";
 import type { LobsterPetDismissMenuPosition } from "./lobster-pet-dismiss-menu.tsx";
 import * as lobsterLook from "./lobster-pet-identity.ts";
 import { LobsterPetInteractions } from "./lobster-pet-interactions.ts";
 import * as plans from "./lobster-pet-plans.ts";
-import type { LobsterPetSceneProps } from "./lobster-pet-scene-view.tsx";
 import {
   LobsterComposerGeometry,
   lobsterTravelDuration,
@@ -36,6 +36,7 @@ export class LobsterPetOwner {
   private anchor: plans.LobsterPetAnchor = "top";
   private readonly geometry = new LobsterComposerGeometry(
     this.host,
+    () => this.host.composerElements?.() ?? null,
     () => this.inputs.residentEnabled && this.twinPlanned,
     () => this.refresh(),
   );
@@ -75,7 +76,7 @@ export class LobsterPetOwner {
     onPasserMidCross: () => this.reactToPasser(),
     onPasserDone: () => this.scheduleNextAct(),
   });
-  private readonly interactions = new LobsterPetInteractions(this.host, {
+  private readonly interactions = new LobsterPetInteractions({
     soundsEnabled: () => this.inputs.soundsEnabled,
     canHuff: () => this.inputs.mode !== "offline",
     canGaze: () => this.presence === "in" && this.act === null && !this.vigil,
@@ -121,10 +122,11 @@ export class LobsterPetOwner {
   private restartPending = false;
 
   private active = false;
-  private readonly listeners = new Set<() => void>();
+  private stopVisibility?: () => void;
+  private render?: () => void;
 
   constructor(
-    private readonly host: HTMLElement,
+    private readonly host: HTMLElement & Pick<contract.LobsterPetProps, "composerElements">,
     private readonly disableVisits: () => void,
     private inputs: Readonly<contract.LobsterPetProps>,
   ) {}
@@ -135,12 +137,13 @@ export class LobsterPetOwner {
     this.geometry.connect();
     this.traffic.connect();
     this.interactions.connect();
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility = listen(document, "visibilitychange", this.handleVisibilityChange);
   }
 
   dispose() {
     this.active = false;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility?.();
+    this.stopVisibility = undefined;
     this.clearActTimers();
     this.restartPending = false;
     this.scheduledVisiting = false;
@@ -153,14 +156,14 @@ export class LobsterPetOwner {
   }
 
   subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
   }
 
   private publish() {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.render?.();
   }
 
   update(props: contract.LobsterPetProps) {
@@ -295,6 +298,7 @@ export class LobsterPetOwner {
     this.host.toggleAttribute("data-floor-enabled", this.inputs.floorEnabled);
     this.reconcilePresence();
     this.traffic.update();
+    this.startPendingActs();
   }
 
   // Reconcile in the update pass to avoid chaining post-update state changes.
@@ -341,7 +345,7 @@ export class LobsterPetOwner {
     }
   }
 
-  afterCommit() {
+  private startPendingActs() {
     if (!this.active || !this.restartPending) {
       return;
     }
@@ -633,12 +637,13 @@ export class LobsterPetOwner {
     this.applyMove(this.geometry.planHop(this.anchor, this.spotPct));
   }
 
-  private scene(): LobsterPetSceneProps | null {
+  private scene() {
     const look = this.look;
     if (!look) {
       return null;
     }
     const identity = this.identity;
+    // Extra "· <flavor>" tooltip suffix (elder lore, old-friend returns).
     const flavor = identity?.elder
       ? "old as the tides"
       : identity?.oldFriend
@@ -687,6 +692,7 @@ export class LobsterPetOwner {
       flavor,
       bottle: this.traffic.bottle,
       onPointerDown: this.interactions.handleHoldStart,
+      onSprite: this.interactions.bindSprite,
       onPointerUp: this.interactions.handleHoldEnd,
       onPointerCancel: this.interactions.handleHoldCancel,
       onContextMenu: this.openDismissMenu,

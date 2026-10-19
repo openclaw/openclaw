@@ -49,7 +49,6 @@ export function createSubagentRegistryPublicApi(config: {
   async function leasePendingAgentSteeringItems(params: {
     requesterSessionKey: string;
     leaseId: string;
-    now?: number;
   }) {
     const context = captureOpenClawStateWorkerContext();
     await restoreOnce(context);
@@ -90,7 +89,6 @@ export function createSubagentRegistryPublicApi(config: {
   function ackPendingAgentSteeringItems(params: {
     runIds: readonly string[];
     leaseId: string;
-    now?: number;
   }): Promise<number> {
     return mutateSubagentRuns(
       params.runIds,

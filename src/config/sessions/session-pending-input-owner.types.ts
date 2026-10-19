@@ -1,3 +1,4 @@
+import type { RequesterOrigin } from "../../agents/requester-origin.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputAuthority } from "./session-pending-input-authority.js";
@@ -9,6 +10,8 @@ export type SessionPendingInputOwner = Omit<
   "preparedAuthority" | "sources"
 > & {
   sessionActor?: SessionActorStorageBinding;
+  /** Immutable facts decoded from this owner's accepted bytes before projections escape. */
+  requesterOrigin?: RequesterOrigin;
   /** Captured physical locator, or native incognito locator, for comparisons and workers. */
   workerDatabasePath: string;
   config?: OpenClawConfig;

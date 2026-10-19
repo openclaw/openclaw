@@ -56,7 +56,6 @@ import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
-import { controlUiNowMs } from "./performance.ts";
 import {
   adoptStartedChatRun,
   hasDirectSessionRun,
@@ -231,7 +230,7 @@ async function sendPreparedChatMessage(
   const requestConnectionIsCurrent = captureChatConnectionOwner(host);
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
-  const requestStartedAtMs = controlUiNowMs();
+  const requestStartedAtMs = performance.now();
   const sendingItem = updateQueuedSendItem(host, storageMode, id, (item) => ({
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,

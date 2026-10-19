@@ -9,6 +9,7 @@ import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.
 import "./oauth-external-auth-passthrough.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import { mockOAuthProviderOperations } from "./oauth-native-provider.test-support.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
@@ -20,7 +21,6 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
-import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
   ensureAuthProfileStore,
@@ -44,6 +44,7 @@ describe("OAuth refresh failure ownership", () => {
   let tempRoot = "";
   let agentDir = "";
   let caseIndex = 0;
+  let settleCaseWork: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     tempRoot = await createOAuthTestTempRoot("openclaw-oauth-queue-");
@@ -58,14 +59,15 @@ describe("OAuth refresh failure ownership", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
     agentDir = await createOAuthMainAgentDir(caseRoot);
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
+    await settleCaseWork?.();
+    settleCaseWork = undefined;
+    vi.restoreAllMocks();
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterAll(async () => {
@@ -135,15 +137,14 @@ describe("OAuth refresh failure ownership", () => {
       started.resolve();
       return await release.promise;
     });
-    const manager = createOAuthManager({
+    mockOAuthProviderOperations({
       buildApiKey: async (_provider, value) => {
         settled.resolve();
         return value.access;
       },
-      canRefreshCredential: async () => true,
       refreshCredential,
-      readBootstrapCredential: () => null,
     });
+    const manager = createOAuthManager();
     const params = {
       store: ensureAuthProfileStore(agentDir),
       profileId,
@@ -159,13 +160,21 @@ describe("OAuth refresh failure ownership", () => {
       manager.resolveOAuthAccess({ ...params, signal: activeController.signal }),
     );
     const activeRejected = expect(active).rejects.toBe(activeReason);
-    await started.promise;
-    const queued = scope.run(() =>
-      manager.resolveOAuthAccess({ ...params, signal: queuedController.signal }),
-    );
-    const queuedRejected = expect(queued).rejects.toBe(queuedReason);
-    const requests: Promise<unknown>[] = [active, queued];
+    const requests: Promise<unknown>[] = [active, activeRejected];
+    const cleanup = async () => {
+      activeController.abort(activeReason);
+      queuedController.abort(queuedReason);
+      release.resolve(refreshed);
+      await Promise.allSettled([...requests, scope.drain()]);
+    };
+    settleCaseWork = cleanup;
     try {
+      await started.promise;
+      const queued = scope.run(() =>
+        manager.resolveOAuthAccess({ ...params, signal: queuedController.signal }),
+      );
+      const queuedRejected = expect(queued).rejects.toBe(queuedReason);
+      requests.push(queued, queuedRejected);
       queuedController.abort(queuedReason);
       await queuedRejected;
       activeController.abort(activeReason);
@@ -189,11 +198,7 @@ describe("OAuth refresh failure ownership", () => {
       ).toMatchObject(refreshed);
       expect(refreshCredential).toHaveBeenCalledOnce();
     } finally {
-      activeController.abort(activeReason);
-      queuedController.abort(queuedReason);
-      release.resolve(refreshed);
-      await settled.promise;
-      await Promise.allSettled([...requests, scope.drain()]);
+      await cleanup();
     }
   });
 });

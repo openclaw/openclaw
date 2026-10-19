@@ -3,6 +3,7 @@
  * Covers identity safety, main-store adoption, refresh persistence, fallback
  * recovery, and external profile overlays.
  */
+import "./external-auth.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,8 +31,12 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { oidcIdentity } from "./credential-fixtures.test-support.js";
-import { testing as externalAuthTesting } from "./external-auth.test-support.js";
+import * as externalCliSync from "./external-cli-sync.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import {
+  mockOAuthProviderOperations,
+  type NativeOAuthProviderFixture,
+} from "./oauth-native-provider.test-support.js";
 import { isSettledOAuthRefreshFailure, OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
@@ -46,6 +51,8 @@ import {
 } from "./store-runtime.js";
 import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+const { testing: externalAuthTesting } = await import("./external-auth.test-support.js");
 
 function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
   const shared = openOpenClawStateDatabase();
@@ -71,14 +78,9 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
   };
 }
 
-function createTestManager(overrides: Partial<Parameters<typeof createOAuthManager>[0]>) {
-  return createOAuthManager({
-    buildApiKey: async (_provider, credential) => credential.access,
-    canRefreshCredential: async () => true,
-    refreshCredential: async () => null,
-    readBootstrapCredential: () => null,
-    ...overrides,
-  });
+function createTestManager(overrides: NativeOAuthProviderFixture) {
+  mockOAuthProviderOperations(overrides);
+  return createOAuthManager();
 }
 
 function saveCredential(profileId: string, credential: OAuthCredential, agentDir: string) {
@@ -114,11 +116,13 @@ async function withOAuthAgentDirs(
 }
 
 beforeEach(() => {
+  vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockReturnValue(null);
   externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   for (const stateDir of tempDirs) {
@@ -163,14 +167,15 @@ describe("createOAuthManager", () => {
           ...metadata,
         };
       });
-      const readBootstrapCredential = vi.fn(() => createCredential());
+      const readBootstrapCredential = vi
+        .spyOn(externalCliSync, "readExternalCliBootstrapCredential")
+        .mockImplementation(() => createCredential());
       const manager = createTestManager({
         buildApiKey: async (_provider, value, context) => {
           expect(context.cfg).toBe(cfg);
           return value.access;
         },
         refreshCredential,
-        readBootstrapCredential,
       });
       const results = await Promise.all(
         [mainAgentDir, agentDir].map((targetAgentDir) =>
@@ -379,6 +384,14 @@ describe("createOAuthManager", () => {
       });
       saveCredential(profileId, localCredential, agentDir);
 
+      vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockImplementation(() =>
+        createCredential({
+          provider: "minimax-portal",
+          access: "expired-external-access",
+          refresh: "external-refresh",
+          expires: Date.now() - 30_000,
+        }),
+      );
       const manager = createTestManager({
         refreshCredential: vi.fn(async (credential) => {
           expect(credential.refresh).toBe("external-refresh");
@@ -388,13 +401,6 @@ describe("createOAuthManager", () => {
             expires: Date.now() + 600_000,
           };
         }),
-        readBootstrapCredential: () =>
-          createCredential({
-            provider: "minimax-portal",
-            access: "expired-external-access",
-            refresh: "external-refresh",
-            expires: Date.now() - 30_000,
-          }),
       });
 
       const result = await manager.resolveOAuthAccess({
@@ -723,13 +729,15 @@ describe("createOAuthManager", () => {
       });
       saveCredential(profileId, localCredential, agentDir);
 
+      vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockReturnValue(
+        externalCredential,
+      );
       const manager = createTestManager({
         refreshCredential: vi.fn(async () => {
           throw new Error(
             "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
           );
         }),
-        readBootstrapCredential: () => externalCredential,
       });
 
       try {
@@ -874,7 +882,7 @@ describe("Copilot tenant boundaries", () => {
     return loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
   }
   function manager(
-    refreshCredential: Parameters<typeof createOAuthManager>[0]["refreshCredential"],
+    refreshCredential: NonNullable<NativeOAuthProviderFixture["refreshCredential"]>,
   ) {
     return createTestManager({ refreshCredential });
   }

@@ -1,4 +1,5 @@
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { readExecApprovalsSocket } from "../infra/exec-approvals-socket.js";
 import {
   normalizeExecApprovals,
   readExecApprovalsSnapshotAsync,
@@ -18,15 +19,22 @@ export function loadSnapshotLocal(): Promise<LocalExecApprovalsSnapshot> {
     target: "default exec approvals",
     requiredCapabilities: [GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER],
     recoveryCommand: "openclaw approvals get --json",
-    runLocal: async ({ assertCurrent }) => {
+    runLocal: async ({ env, assertCurrent }) => {
       assertCurrent();
       const snapshot = await readExecApprovalsSnapshotAsync();
+      assertCurrent();
+      const socket = await readExecApprovalsSocket(env, { assertCurrent });
       assertCurrent();
       return {
         path: snapshot.path,
         exists: snapshot.exists,
         hash: snapshot.hash,
-        file: snapshot.file,
+        file: socket?.socket_path
+          ? {
+              ...snapshot.file,
+              socket: { ...snapshot.file.socket, path: socket.socket_path },
+            }
+          : snapshot.file,
       };
     },
   });

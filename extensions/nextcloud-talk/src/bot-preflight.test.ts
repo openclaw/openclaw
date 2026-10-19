@@ -8,11 +8,13 @@ const hoisted = vi.hoisted(() => ({
   ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
 }));
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("../runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-api.js")>()),
   fetchWithSsrFGuard: hoisted.fetchWithSsrFGuard,
 }));
 
-vi.mock("./send.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
 }));
 

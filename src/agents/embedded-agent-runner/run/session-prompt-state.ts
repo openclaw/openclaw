@@ -73,6 +73,14 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let basePromptOverride: string | undefined;
   let continuation: EmbeddedRunAttemptParams["continuation"];
+  const releaseContinuation = () => {
+    if (continuation) {
+      // Harness parameter copies may retain the envelope after its run-owned payload expires.
+      continuation.messages = [];
+      continuation.prompt = "";
+      continuation = undefined;
+    }
+  };
   let compactionContinuationInstruction: string | undefined;
   const activePrompt: ActivePrompt = {
     get override() {
@@ -184,7 +192,13 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
 
   return {
-    [Symbol.asyncDispose]: async () => await initialOwner?.close(),
+    [Symbol.asyncDispose]: async () => {
+      try {
+        await initialOwner?.close();
+      } finally {
+        releaseContinuation();
+      }
+    },
     get sessionId() {
       return activeSessionId;
     },
@@ -227,7 +241,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
               run,
             )
           : runWithoutOwnedSessionTranscriptWrites(run);
-      return initialOwner ? initialOwner.run(withContext) : withContext();
+      return initialOwner && !initialWriter?.committedFence
+        ? initialOwner.run(withContext)
+        : withContext();
     },
     recordOutputLimitNotice: async (toolCallId: string | undefined) => {
       const note: CustomMessage = {
@@ -308,9 +324,11 @@ export async function createEmbeddedRunSessionPromptState(input: {
         return;
       }
       if (options?.messages) {
+        const messages = [...(continuation?.messages ?? []), ...options.messages];
+        releaseContinuation();
         continuation = {
           prompt: params.prompt,
-          messages: [...(continuation?.messages ?? []), ...options.messages],
+          messages,
         };
       }
       const prompt = options?.includeToolFailureInstruction

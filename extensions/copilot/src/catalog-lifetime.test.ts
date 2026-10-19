@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAdmittedHostCapabilityTestFixture,
+  runInHarnessToolAuthorityForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
@@ -146,7 +149,10 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       userTurnTranscriptRecorder: recorder,
       onAgentToolResult: (event) => void observed.push(event),
     } satisfies AgentHarnessAttemptParamsV2 & { auth: { useLoggedInUser: true } };
-    attempt = harness.runAttempt(params).finally(() => {
+    // Gateway runs reach the harness inside an admitted session turn.
+    attempt = runInHarnessToolAuthorityForTest(params, "copilot", (admitted) =>
+      harness.runAttempt(admitted),
+    ).finally(() => {
       host.closeHost();
       host.closeAdmission();
     });

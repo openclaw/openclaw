@@ -1,28 +1,31 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Loading, Show, createMemo, createSignal, lazy } from "solid-js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
-import { ChatContextBreakdown } from "./chat-context-breakdown.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import "../../../styles/chat/context-breakdown.css";
+
+// The report is needed only after Context is expanded, not during chat boot.
+const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
+  export: "ChatContextBreakdown",
+});
 
 type Props = { details: ChatDetailsProps; presented: boolean };
 
 export function ChatDetailsEnvironment(props: Props) {
   const workspace = () => props.details.detailsWorkspace;
-  const workspaceLabel = createMemo(
-    () =>
-      workspace()?.label ||
-      workspace()
-        ?.root?.replace(/[\\/]+$/, "")
-        .split(/[\\/]/)
-        .pop() ||
-      t("chat.sessionDetails.workspaceUnavailable"),
-  );
+  const workspaceLabel = () =>
+    workspace()?.label ||
+    workspace()
+      ?.root?.replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ||
+    t("chat.sessionDetails.workspaceUnavailable");
   const session = () => props.details.selectedSession;
-  const host = createMemo(() => session()?.execNode ?? session()?.deviceFolder?.deviceId);
-  const model = createMemo(() => session()?.activeModel || session()?.model);
+  const host = () => session()?.execNode ?? session()?.deviceFolder?.deviceId;
+  const model = () => session()?.activeModel || session()?.model;
   return (
     <details class="chat-details__group chat-details__environment" open>
       <summary class="chat-details__caption">
@@ -147,14 +150,22 @@ export function ChatDetailsContext(props: Props) {
               props.details.selectedSession
             }
           >
-            <ChatContextBreakdown
-              gateway={props.details.pullRequestsGateway!}
-              session={props.details.selectedSession!}
-              agentId={props.details.currentAgentId ?? undefined}
-              used={usage().used}
-              limit={usage().limit}
-              approximate={usage().approximate}
-            />
+            <Loading
+              fallback={
+                <p class="chat-context__note" role="status">
+                  {t("chat.sessionDetails.contextLoading")}
+                </p>
+              }
+            >
+              <ChatContextBreakdown
+                gateway={props.details.pullRequestsGateway!}
+                session={props.details.selectedSession!}
+                agentId={props.details.currentAgentId ?? undefined}
+                used={usage().used}
+                limit={usage().limit}
+                approximate={usage().approximate}
+              />
+            </Loading>
           </Show>
           <Show when={budget() && !usage().approximate}>
             <p class="chat-context__note">

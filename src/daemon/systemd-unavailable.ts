@@ -1,4 +1,3 @@
-/** Classifies systemd/systemctl unavailable errors into user-facing categories. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { redactSensitiveText } from "../logging/redact.js";
 import type { ExecResult } from "./exec-file.js";

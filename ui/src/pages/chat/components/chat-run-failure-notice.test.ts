@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-render.tsx";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
 import { renderChatComposerNotices } from "../chat-view-notices.tsx";
 import { ChatNotice } from "./chat-divider.tsx";
@@ -34,7 +34,6 @@ beforeEach(() => {
 afterEach(async () => {
   cleanupSolid();
   container.remove();
-  // The bridge defers disposal one microtask to preserve synchronous reparenting.
   await Promise.resolve();
   vi.clearAllTimers();
   vi.useRealTimers();
@@ -60,7 +59,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
     failureActionsRunId: "run-a",
     onRetryRun: onRetry,
   });
-  await container.querySelector("openclaw-chat-run-failure-notice")?.updateComplete;
+  flush();
   expect(container.querySelectorAll(".chat-run-failure")).toHaveLength(1);
   expect(container.textContent).toContain("Unable to finish this reply");
   expect(container.textContent).not.toContain("⚠");
@@ -90,7 +89,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   );
 });
 
-it("updates bridge text and callbacks without closing expanded details", async () => {
+it("updates text and callbacks without closing expanded details", async () => {
   const onRetry = vi.fn();
   const item = {
     kind: "notice" as const,
@@ -105,7 +104,7 @@ it("updates bridge text and callbacks without closing expanded details", async (
     onRetryRun: onRetry,
   });
   const host = container.querySelector("openclaw-chat-run-failure-notice");
-  await host?.updateComplete;
+  flush();
   expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe("First failure");
   container.querySelector("summary")?.click();
 
@@ -116,7 +115,7 @@ it("updates bridge text and callbacks without closing expanded details", async (
     failureActionsRunId: "run-a",
     onRetryRun: nextRetry,
   });
-  await host?.updateComplete;
+  flush();
   expect(container.querySelector("openclaw-chat-run-failure-notice")).toBe(host);
   expect(container.querySelector("details")?.open).toBe(true);
   expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe(
@@ -147,11 +146,10 @@ it.each([
   };
   const actions = { onRetryRun: vi.fn() };
   drawNotice(item, undefined, { failureActionsRunId: "run-a", ...actions });
-  const host = container.querySelector("openclaw-chat-run-failure-notice");
-  await host?.updateComplete;
+  flush();
   expect(container.querySelectorAll(".chat-run-failure__header button")).toHaveLength(2);
   drawNotice(item, undefined, { ...recovery, ...actions });
-  await host?.updateComplete;
+  flush();
   expect(container.querySelectorAll(".chat-run-failure__header button")).toHaveLength(1);
   expect(container.querySelector('button[aria-label="Copy error"]')).not.toBeNull();
 });

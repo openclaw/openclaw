@@ -3,7 +3,6 @@ import type {
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { i18n } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { clearLinkPreviews, loadLinkPreview } from "../lib/link-preview.ts";
 import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-click.ts";
@@ -52,6 +51,7 @@ export class HovercardOwner {
   private connected = false;
   private stopGateway?: () => void;
   private stopConfig?: () => void;
+  private stopListeners?: () => void;
 
   constructor(
     private readonly host: LinkReaderHovercardProvider,
@@ -100,6 +100,7 @@ export class HovercardOwner {
     }
     this.stopGateway?.();
     this.stopConfig?.();
+    // Retire connection-bound reads before a replacement client can publish.
     this.stopGateway = this.host.pagePreviewContext?.gateway.subscribe(() => {
       this.retirePage();
       const page = this.page;
@@ -126,6 +127,7 @@ export class HovercardOwner {
       this.retirePage();
       this.update();
     };
+    // Fetch-policy changes retire cached previews and in-flight reads synchronously.
     this.stopConfig = this.host.pagePreviewContext?.config.subscribe(syncConfig);
     syncConfig();
   }
@@ -258,7 +260,6 @@ export class HovercardOwner {
   // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
   private activeTrigger: "focus" | "pointer" | null = null;
   private readonly hovercard = createPortaledHovercardOwner(() => this.close());
-  private stopI18n: (() => void) | null = null;
   private previewRequest: {
     controller: AbortController;
     generation: number | undefined;
@@ -317,7 +318,20 @@ export class HovercardOwner {
 
   connect(): void {
     this.connected = true;
-    window.addEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
+    const stopListeners = [
+      listen(window, LINK_READER_METADATA_UPDATED_EVENT, (event) => {
+        if (event instanceof CustomEvent) {
+          this.handleMetadataUpdate(event);
+        }
+      }),
+      listen(this.host, "pointerover", this.handlePointerOver),
+      listen(this.host, "pointerout", this.handlePointerOut),
+      listen(this.host, "focusin", this.handleFocusIn),
+      listen(this.host, "focusout", this.handleFocusOut),
+      listen(this.host, "keydown", this.hovercard.handleTriggerKeyDown),
+      listen(this.host, "click", this.handleClick),
+    ];
+    this.stopListeners = () => stopListeners.forEach((stop) => stop());
     this.host.style.display = "contents";
     this.inlineObserver.observe(this.host, {
       childList: true,
@@ -325,18 +339,13 @@ export class HovercardOwner {
       attributes: true,
       attributeFilter: ["href"],
     });
-    this.host.addEventListener("pointerover", this.handlePointerOver);
-    this.host.addEventListener("pointerout", this.handlePointerOut);
-    this.host.addEventListener("focusin", this.handleFocusIn);
-    this.host.addEventListener("focusout", this.handleFocusOut);
-    this.host.addEventListener("keydown", this.hovercard.handleTriggerKeyDown);
-    this.host.addEventListener("click", this.handleClick);
-    this.stopI18n ??= i18n.subscribe(() => this.update());
     this.watchPageContext();
     // Restore focus intent after the bridge finishes adopting its caller's nodes.
     queueMicrotask(() => {
-      const focused = this.connected ? this.host.querySelector<HTMLAnchorElement>("a:focus") : null;
-      if (focused && this.ownsAnchor(focused)) {
+      const root = this.host.getRootNode();
+      const focused =
+        root instanceof ShadowRoot ? root.activeElement : this.host.ownerDocument.activeElement;
+      if (this.connected && focused instanceof HTMLAnchorElement && this.ownsAnchor(focused)) {
         this.activateFocusedAnchor(focused);
       }
     });
@@ -344,16 +353,9 @@ export class HovercardOwner {
 
   disconnect(): void {
     this.connected = false;
-    window.removeEventListener(LINK_READER_METADATA_UPDATED_EVENT, this.handleMetadataUpdate);
-    this.host.removeEventListener("pointerover", this.handlePointerOver);
-    this.host.removeEventListener("pointerout", this.handlePointerOut);
-    this.host.removeEventListener("focusin", this.handleFocusIn);
-    this.host.removeEventListener("focusout", this.handleFocusOut);
-    this.host.removeEventListener("keydown", this.hovercard.handleTriggerKeyDown);
-    this.host.removeEventListener("click", this.handleClick);
+    this.stopListeners?.();
+    this.stopListeners = undefined;
     this.inlineObserver.disconnect();
-    this.stopI18n?.();
-    this.stopI18n = null;
     this.close();
     this.clearPreviews();
     this.stopGateway?.();
@@ -403,10 +405,7 @@ export class HovercardOwner {
         this.show(anchor, request.preview);
       }
     } else if (request?.state === "error" && (this.hovercard.card || this.hovercard.held)) {
-      this.show(
-        anchor,
-        request.preview ?? this.seedPreview(target),
-        true,
+      this.show(anchor, request.preview ?? this.seedPreview(target), true, () =>
         linkReaderErrorMessage(request.error),
       );
     }
@@ -562,7 +561,7 @@ export class HovercardOwner {
     anchor: HTMLAnchorElement,
     preview?: LinkPreview,
     seeded = false,
-    error?: string,
+    error?: () => string,
   ): void {
     const existing = this.hovercard.card;
     const card =

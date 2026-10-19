@@ -231,3 +231,58 @@ it("keeps prepared entry authority current through native and worker writes with
     }
   }
 });
+
+it("retains ID-selected policy and absence without revoking unrelated publications", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-id-") };
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:selected",
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+  const initial: InternalSessionEntry = { sessionId: "selected", updatedAt: 1, execHost: "node" };
+  replaceSessionEntrySync(scope, initial);
+  const selected = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...scope,
+    sessionKey: "agent:main:ignored-key",
+    sessionId: "selected",
+    fields: ["execHost"],
+  });
+  const absent = await captureSessionEntryCurrentCheckAsyncInternal({
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+    env,
+    sessionId: "missing",
+  });
+  try {
+    expect(selected.entry?.execHost).toBe("node");
+    expect(absent.entry).toBeUndefined();
+    const selectedSource = await selected.source.prepareSessionSource();
+    const absentSource = await absent.source.prepareSessionSource();
+    replaceSessionEntrySync(scope, { ...initial, displayName: "Metadata edit" });
+    await replaceSessionEntry(
+      { ...scope, sessionKey: "agent:main:unrelated" },
+      { sessionId: "unrelated", updatedAt: 2 },
+    );
+    const sql = observeHostDataSql();
+    try {
+      expect(() => selectedSource.assertCurrent()).not.toThrow();
+      expect(() => absentSource.assertCurrent()).not.toThrow();
+      await expect(selected.isCurrent()).resolves.toBe(true);
+      await expect(absent.isCurrent()).resolves.toBe(true);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    await patchSessionEntryCore(scope, () => ({ execHost: "gateway" }), {
+      skipMaintenance: true,
+    });
+    expect(() => selectedSource.assertCurrent()).toThrow("selected session changed");
+    await expect(selected.assertCurrent()).rejects.toThrow("selected session changed");
+    absent.release();
+    expect(() => absentSource.assertCurrent()).toThrow("selected session changed");
+  } finally {
+    selected.release();
+    absent.release();
+  }
+});

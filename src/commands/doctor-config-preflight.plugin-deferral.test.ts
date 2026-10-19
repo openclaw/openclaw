@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -8,9 +10,11 @@ import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -258,8 +262,16 @@ async function installStatelessFixture(
 }
 
 describe("configured plugin migration deferral", () => {
-  it("keeps a present config-path Doctor contract available during an update rehearsal", () =>
-    withFixture(async ({ home, pluginId }) => {
+  it("keeps a present config-path Doctor contract available during an update rehearsal", () => {
+    // The real rehearsal runs in a child; this process's shared broker outlives its fixture.
+    const processTempDir = os.tmpdir();
+    const tempDir = vi.spyOn(os, "tmpdir").mockReturnValue(processTempDir);
+    syncBuiltinESMExports();
+    onTestFinished(() => {
+      tempDir.mockRestore();
+      syncBuiltinESMExports();
+    });
+    return withFixture(async ({ home, pluginId }) => {
       const rehearsalRoot = path.join(home, ".openclaw");
       const pluginRoot = path.join(rehearsalRoot, "copied-custom-plugin");
       await installStatelessFixture(pluginRoot, pluginId, "config-only");
@@ -276,12 +288,18 @@ describe("configured plugin migration deferral", () => {
           OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
         },
         async () => {
-          const result = await doctor();
-          expect(result.deferredPluginMigrations).toBeUndefined();
-          expect(readDeferredPluginMigrations()).toEqual([]);
+          try {
+            const result = await doctor();
+            expect(result.deferredPluginMigrations).toBeUndefined();
+            expect(readDeferredPluginMigrations()).toEqual([]);
+          } finally {
+            // The retained broker's socket lives inside the rehearsal temp root.
+            await closeDefaultRetainedNativeWorkerSource();
+          }
         },
       );
-    }));
+    });
+  });
 
   it.each(["linked", "unrecorded"] as const)(
     "keeps a %s config-path plugin available only when package convergence skips it",
@@ -521,7 +539,13 @@ describe("configured plugin migration deferral", () => {
         const original = await fs.readFile(configPath, "utf8");
         const options = entry === "published-candidate" ? { observe: false, ...prepared } : {};
         await withEnvAsync(entry.endsWith("candidate") ? updating : notUpdating, async () => {
-          const pending = await doctor(options);
+          const pending =
+            entry === "published-candidate"
+              ? await withStateMigrationBackupForTest(
+                  { path: databasePath, env: process.env },
+                  () => doctor(options),
+                )
+              : await doctor(options);
           expect(pending.stateMigrationStepReceipts).toContainEqual(
             expect.objectContaining({
               id: `plugin:${pluginId}`,

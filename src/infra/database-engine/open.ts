@@ -102,7 +102,10 @@ export function openEngineStore(ref: {
   reusePostgresConnection?: boolean;
   /** Inspection admits the declared source schema without running its migration. */
   existingVersion?: boolean;
+  /** Bind owner-local state inside the new anchor transaction before connecting. */
+  onFreshAnchor?: (anchor: DatabaseSync) => void;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
+  beforeMigrate?: (db: EngineConnection, fromVersion: number) => void;
   /** Family custody for schema writes; shared state defaults to its physical owner. */
   assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
@@ -173,6 +176,7 @@ export function openEngineStore(ref: {
         "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
       )
       .run(storeId, namespace);
+    ref.onFreshAnchor?.(anchor);
     return { storeId, namespace };
   };
   const identity =
@@ -194,6 +198,7 @@ export function openEngineStore(ref: {
       version: schema.version,
       schema,
       recordSchema: fresh,
+      preserveSchemaSeal: ref.existingVersion,
     });
     ref.admitPostgres?.(db, fresh);
   };
@@ -260,7 +265,12 @@ export function openEngineStore(ref: {
                   commit: () => publishSqliteDatabaseSchemaChange(db),
                   invalidate: () => publishSqliteDatabaseSchemaChange(db),
                 });
-                adapter.schema.migrate(store, Number(meta.version), db);
+                const migrate = () => adapter.schema.migrate(store, Number(meta.version), db);
+                if (migration) {
+                  migration.run(migrate);
+                } else {
+                  migrate();
+                }
               }
             }
           }

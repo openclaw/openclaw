@@ -7,10 +7,7 @@ import {
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import {
-  createOpenClawAgentDatabasePathMatcher,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -29,7 +26,6 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const conversationAuthority = { assertCurrent() {}, authorize() {} };
@@ -87,10 +83,6 @@ function withConversationRead<T>(
     input.storePath ?? resolveSessionStorePathCore(undefined, { agentId: input.agentId, env }),
   );
   const context = captureOpenClawStateReadWorkerContext({ env });
-  const source = createOpenClawAgentDatabasePathMatcher();
-  for (const candidate of captureSessionStoreReadCandidates(storePath)) {
-    source(candidate.path, candidate.path);
-  }
   return withSessionStoreReaderInWorker(
     { agentId: input.agentId, storePath, env },
     async (owner) => {
@@ -107,11 +99,6 @@ function withConversationRead<T>(
         assertCurrent() {
           context.maintenanceScope?.assertAdmission();
           context.admission.assertCurrent();
-          if (!source.isCurrent()) {
-            throw new Error(
-              "Session store changed while reading conversations. Retry the request.",
-            );
-          }
         },
       },
     },
@@ -122,7 +109,6 @@ function readConversationsAsync(
   scope: ConversationRegistryScope,
   query: ConversationReadQuery,
 ): Promise<ConversationRecord[]> {
-  const capturedQuery = structuredClone(query);
   const selected = captureSessionActorStorageOwner(
     {
       agentId: scope.databaseAgentId ?? scope.agentId,
@@ -132,6 +118,7 @@ function readConversationsAsync(
     conversationAuthority,
   );
   if (selected) {
+    const capturedQuery = structuredClone(query);
     if (
       selected.binding &&
       selected.agentId === selected.binding.agentId &&
@@ -150,7 +137,7 @@ function readConversationsAsync(
     );
   }
   return withConversationRead(scope, ({ reader, database }) =>
-    reader.readConversations({ query: capturedQuery, env: database.env }),
+    reader.readConversations({ query, env: database.env }),
   );
 }
 
@@ -252,11 +239,7 @@ export async function registerConversationAddresses(
       await binding.actor.storage!.mutate(
         {
           type: "session.conversation.register",
-          input: {
-            identities: structuredClone(identities),
-            discoveredAt,
-            query: query && structuredClone(query),
-          },
+          input: { identities, discoveredAt, query },
         },
         {
           ...memory.authority,
@@ -274,9 +257,9 @@ export async function registerConversationAddresses(
   }
   const { options } = pinConversationDatabaseScope(scope);
   const input = {
-    identities: structuredClone(identities),
+    identities,
     discoveredAt,
-    query: query && structuredClone(query),
+    query,
   };
   const selectCurrent = () => {
     const selected = selectEligible(input.identities);
@@ -382,7 +365,6 @@ export async function withConversationAuthority<T>(
     return await select(facts)();
   }
   const { options } = pinConversationDatabaseScope(scope);
-  const input = structuredClone(query);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   let consumed: Promise<{ ok: true; value: T } | { ok: false; error: unknown }> | undefined;
   try {
@@ -427,7 +409,7 @@ export async function withConversationAuthority<T>(
               });
             },
           },
-          (worker) => worker.execute({ type: "conversation.authority", input }),
+          (worker) => worker.execute({ type: "conversation.authority", input: query }),
         );
         if (!consumed && settled !== undefined) {
           throw new Error("Conversation authority omitted its transaction grant");

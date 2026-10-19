@@ -180,14 +180,13 @@ suite.define(() => {
     });
 
     const chips = page.locator(".chat-pr");
-    await pollCount(chips).toBe(3);
     expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe("false");
-    expect(await chips.first().isVisible()).toBe(false);
+    expect(await chips.count()).toBe(0);
+    await openChatDetails(page);
+    await pollCount(chips).toBe(3);
     expect(
       await page.locator('[data-details-group="pull-requests"]').getAttribute("open"),
     ).not.toBeNull();
-    await openChatDetails(page);
-
     const openChip = chips.first();
     await pollAttr(openChip, "data-state").toBe("open");
     await pollText(openChip.locator(".chat-pr__number")).toBe("#103469");

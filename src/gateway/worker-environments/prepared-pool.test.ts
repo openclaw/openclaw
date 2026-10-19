@@ -156,7 +156,6 @@ describe("prepared worker reserve lifecycle", () => {
           return {
             providerId: fixture.provider.id,
             profileSnapshot: fixture.profile(),
-            preparationKey: PREPARATION_KEY,
           };
         },
         reconcile,
@@ -204,7 +203,6 @@ describe("prepared worker reserve lifecycle", () => {
         const intent = {
           providerId: fixture.provider.id,
           profileSnapshot: fixture.profile(path.basename(projectPath!)),
-          preparationKey: PREPARATION_KEY,
         };
         admittedAt.set(intent, generation);
         return intent;

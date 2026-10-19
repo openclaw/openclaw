@@ -2,14 +2,18 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "@solidjs/web";
 import { createComponent, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import "../../test/host.setup.ts";
 import { CardUpdatedTime } from "./view-card-content.tsx";
 
 let container: HTMLDivElement;
 let visibility: DocumentVisibilityState;
 let dispose = () => {};
+let documentLanguage: string;
 const now = 1_800_000_000_000;
 
 beforeEach(() => {
+  documentLanguage = document.documentElement.lang;
+  document.documentElement.lang = "de";
   vi.useFakeTimers();
   vi.setSystemTime(now);
   visibility = "visible";
@@ -21,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   dispose();
   container.remove();
+  document.documentElement.lang = documentLanguage;
   vi.restoreAllMocks();
   vi.useRealTimers();
 });

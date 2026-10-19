@@ -1,4 +1,3 @@
-// Builds Node startup environment variables for subprocess launches.
 import fs from "node:fs";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";

@@ -187,7 +187,6 @@ export function registerMatrixMonitorEvents(params: {
   logger: RuntimeLogger;
   getHealthySyncSinceMs?: () => number | undefined;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
-  onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
   runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
   sasNoticeRetryDelayMs?: number;
 }): () => void {
@@ -207,7 +206,6 @@ export function registerMatrixMonitorEvents(params: {
     logger,
     getHealthySyncSinceMs,
     formatNativeDependencyHint,
-    onRoomMessage,
     runDetachedTask,
     sasNoticeRetryDelayMs,
   } = params;
@@ -225,17 +223,8 @@ export function registerMatrixMonitorEvents(params: {
     sasNoticeRetryDelayMs,
   });
 
-  const dispatchRoomMessage = (label: string, roomId: string, event: MatrixRawEvent) => {
-    void runDetachedTask(`${label} room=${roomId} id=${event.event_id ?? "unknown"}`, async () => {
-      await onRoomMessage(roomId, event);
-    });
-  };
-
   const onRoomMessageEvent = (roomId: string, event: MatrixRawEvent) => {
-    if (routeVerificationEvent(roomId, event)) {
-      return;
-    }
-    dispatchRoomMessage("room message handler", roomId, event);
+    routeVerificationEvent(roomId, event);
   };
 
   const onEncryptedEvent = (roomId: string, event: MatrixRawEvent) => {
@@ -248,13 +237,7 @@ export function registerMatrixMonitorEvents(params: {
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
     logVerboseMessage(`matrix: decrypted event room=${roomId} type=${eventType} id=${eventId}`);
-    if (routeVerificationEvent(roomId, event)) {
-      return;
-    }
-    if (eventType !== EventType.RoomMessage) {
-      return;
-    }
-    dispatchRoomMessage("decrypted room message handler", roomId, event);
+    routeVerificationEvent(roomId, event);
   };
 
   const onFailedDecryption = (roomId: string, event: MatrixRawEvent, error: Error) => {
@@ -326,10 +309,9 @@ export function registerMatrixMonitorEvents(params: {
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
     const invitee = normalizeOptionalString(event?.state_key) ?? "";
-    const senderIsInvitee =
-      Boolean(invitee) && (normalizeOptionalString(event?.sender) ?? "") === invitee;
-    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
     const rememberedSender = normalizeOptionalString(event?.sender);
+    const senderIsInvitee = Boolean(invitee) && rememberedSender === invitee;
+    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
     if (rememberedSender && !senderIsInvitee) {
       directTracker?.rememberInvite?.(roomId, rememberedSender);
     }
@@ -447,10 +429,6 @@ export function registerMatrixMonitorEvents(params: {
       logVerboseMessage(
         `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
       );
-    }
-    if (eventType === EventType.Reaction) {
-      dispatchRoomMessage("reaction handler", roomId, event);
-      return;
     }
 
     routeVerificationEvent(roomId, event);

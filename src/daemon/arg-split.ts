@@ -1,4 +1,3 @@
-/** Shared argument splitter for service command lines rendered by platform adapters. */
 type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
 type ArgSplitQuoteChar = '"' | "'";
 type ArgSplitQuoteStart = "anywhere" | "item-start";

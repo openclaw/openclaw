@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { raceWithTimeout } from "@openclaw/retry";
 import { retainCurrentWorkerNativeSection } from "@openclaw/worker-runtime/worker";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
@@ -371,30 +371,18 @@ async function observeOAuthRefreshSettlementBeforeDeadline<T>(
   settlement: Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  try {
-    return await racePromiseWithAbortSignal(
-      new Promise<T>((resolve, reject) => {
-        timeoutHandle = setTimeout(
-          () => {
-            reject(createOAuthRefreshTimeoutError(label, timeoutMs));
-          },
-          // performance.now() is fractional; rounding down can expire before the deadline.
-          Math.max(0, Math.ceil(deadline - performance.now())),
-        );
-        settlement
-          .finally(() => {
-            if (performance.now() >= deadline) {
-              throw createOAuthRefreshTimeoutError(label, timeoutMs);
-            }
-          })
-          .then(resolve, reject);
+  return await raceWithTimeout(
+    () =>
+      settlement.finally(() => {
+        if (performance.now() >= deadline) {
+          throw createOAuthRefreshTimeoutError(label, timeoutMs);
+        }
       }),
-      signal,
-    );
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
+    // performance.now() is fractional; rounding down can expire before the deadline.
+    Math.max(0, Math.ceil(deadline - performance.now())),
+    () => {
+      throw createOAuthRefreshTimeoutError(label, timeoutMs);
+    },
+    { signal },
+  );
 }

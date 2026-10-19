@@ -22,6 +22,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -133,7 +134,7 @@ it.each([
       markAborted({
         resolveGatewayContext: () => undefined,
         stateDir: state.stateDir,
-        activeRuns: [{ sessionKey, sessionId, runId, lifecycleGeneration }],
+        activeRuns: [{ ...target, sessionId, runId, lifecycleGeneration }],
         isActiveRun: () => isActive,
       });
     if (order === "before settlement" || order === "after settlement" || automationDrain) {
@@ -216,18 +217,22 @@ it.each([
       getDispatchSettlement: () => dispatchSettlement.promise,
       sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
     });
-    const recover = (activeSessionIds?: string[]) =>
+    const recover = () =>
       recoverSessions({
         stateDir: state.stateDir,
         gatewayRuntime: runtime,
-        ...(activeSessionIds ? { activeSessionIds } : {}),
       });
     try {
       if (persisted) {
         const info = vi.spyOn(mainSessionRecoveryLog, "info");
+        const liveWork = await beginSessionEffect({
+          scope: target.storePath,
+          identities: [sessionKey, sessionId],
+          assertAllowed() {},
+        });
         try {
-          await markOrphans({ stateDir: state.stateDir, activeSessionIds: [sessionId] });
-          expect(await recover([sessionId])).toEqual({
+          await markOrphans({ stateDir: state.stateDir });
+          expect(await recover()).toEqual({
             started: 0,
             settled: 0,
             failed: 0,
@@ -243,6 +248,7 @@ it.each([
             ),
           );
         } finally {
+          liveWork.release();
           info.mockRestore();
         }
       }

@@ -1,3 +1,5 @@
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
+
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 
@@ -60,12 +62,7 @@ export async function closeTalkRelaySessionsForConnection<
     }
   }
   const results = await Promise.allSettled(pending);
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Talk relay cleanup did not complete");
-  }
+  throwSettledAggregate(results, "Talk relay cleanup did not complete");
 }
 
 /** Returns the active session only when it belongs to the current connection. */

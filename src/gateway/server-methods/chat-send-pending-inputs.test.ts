@@ -8,16 +8,13 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
-  appendTranscriptMessageSync,
   listSessionPendingInputs,
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
-  publishTranscriptUpdate,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -26,7 +23,15 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
+import {
+  isRpcSourceActive,
+  isRpcSourceQueued,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -40,9 +45,11 @@ import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-cata
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
+import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { registerChatHistoryDeliveryCases } from "./chat-send-history-delivery.test-support.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
@@ -321,10 +328,8 @@ describe("ordinary chat input admission", () => {
         }
       });
       try {
-        expect(replyRunRegistry.isActive(scope.sessionKey)).toBe(true);
-        expect(
-          replyRunRegistry.resolveCurrentMessageInjectionTarget(scope.sessionKey),
-        ).toBeUndefined();
+        expect(isSessionRunActiveForKey(scope.sessionKey)).toBe(true);
+        expect(captureCurrentReplyMessageInjectionTarget(scope.sessionKey)).toBeUndefined();
         await fixture.send(respond);
         expectStarted(respond, { runId: params.idempotencyKey });
         expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
@@ -490,6 +495,55 @@ describe("ordinary chat input admission", () => {
     },
   );
 
+  it("retries a failed custody write with the same request identity without acknowledging lost input", async () => {
+    const fixture = await createBrowserFollowupFixture();
+    let rejectedInput: RpcSourceRef["input"] | undefined;
+    fixture.beforeApprove.mockImplementation(() => {
+      rejectedInput = rpcSourceTesting.get(fixture.params.idempotencyKey)?.input;
+    });
+    const refusal = refusePendingInputCommit({
+      operation: "stage",
+      message: "custody unavailable",
+      sessionId: fixture.scope.sessionId,
+      runId: fixture.params.idempotencyKey,
+    });
+
+    try {
+      const rejected = await fixture.send();
+      expect(rejected).toHaveBeenCalledWith(
+        false,
+        expect.objectContaining({ status: "error" }),
+        expect.objectContaining({ message: expect.stringContaining("custody unavailable") }),
+        expect.anything(),
+      );
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      expect(rpcSourceTesting.has(fixture.params.idempotencyKey)).toBe(false);
+      if (!rejectedInput) {
+        throw new Error("Expected the rejected RPC source input");
+      }
+      await rejectedInput.settlement.promise;
+
+      refusal.mockRestore();
+      const retried = await fixture.send();
+      expect(retried).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "started" }),
+        undefined,
+        expect.anything(),
+      );
+      expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+        total: 1,
+        items: [{ state: "queued", message: { content: fixture.approvedContent } }],
+      });
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+    } finally {
+      refusal.mockRestore();
+      await fixture.cleanup();
+    }
+  });
+
   it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
     "revalidates %s after message approval before committing custody",
     async (change) => {
@@ -506,12 +560,22 @@ describe("ordinary chat input admission", () => {
           });
           return;
         }
-        const active = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
+        const active = rpcSourceTesting.get(fixture.params.idempotencyKey);
         if (!active) {
           throw new Error("Expected the browser admission to own its cancellation controller");
         }
-        active.abortStopReason = "rpc";
-        active.controller.abort();
+        // Approval runs after asynchronous source preparation. Its cancellation
+        // must hit the already reserved physical input, not an ACK-time facade.
+        expect(active.input.mailbox.owner.target).toMatchObject({
+          storeScope: fixture.scope.storePath,
+          sessionKey: fixture.scope.sessionKey,
+          incarnation: fixture.scope.sessionId,
+        });
+        expect(active.input.protocolRunId).toBe(fixture.params.idempotencyKey);
+        expect(isRpcSourceActive(active)).toBe(false);
+        expect(isRpcSourceQueued(active)).toBe(true);
+        active.adapter.abortStopReason = "rpc";
+        requestRpcSourceCancellation(active);
       });
       const respond = await fixture.send();
       expect(fixture.beforeApprove).toHaveBeenCalledOnce();
@@ -524,7 +588,7 @@ describe("ordinary chat input admission", () => {
           loadTranscriptEventsSync({ ...fixture.scope, sessionId: "successor-session" }),
         ).toEqual([]);
       }
-      expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
+      expect(rpcSourceTesting.has(fixture.params.idempotencyKey)).toBe(false);
     },
   );
 
@@ -586,6 +650,7 @@ describe("ordinary chat input admission", () => {
         const legacyMessage = structuredClone(message);
         // Legacy receipts predate the admitted request identity.
         delete legacyMessage["__openclaw"]?.chatRequestIdentity;
+        delete legacyMessage["__openclaw"]?.requesterOrigin;
         if (!recordedClient) {
           // Shipped Gateway receipts predate transport.clients. Seed only after
           // collection, whose live owner still requires its exact accepted bytes.
@@ -694,17 +759,66 @@ describe("ordinary chat input admission", () => {
     },
   );
 
-  it.each(["sender", "payload", "cancelled", "same-generation"] as const)(
+  it("retries an interrupted chat input in the same lifecycle once under its original identity", async ({
+    signal,
+  }) => {
+    await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
+    const resumedRecorder = createDeferred<UserTurnTranscriptRecorder>();
+    const resumedRelease = createDeferred();
+    const profile = ensureProfileForEmail("retry-input@example.test");
+    setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Input author");
+    try {
+      const { recorder, original } = await admitPending(fixture);
+      recorder.finishPendingInput?.("interrupted");
+      await recorder.waitForPendingInputSettlement?.();
+      await fixture.finishDispatch();
+      expect((await pending(fixture)).items).toEqual([{ ...original, state: "interrupted" }]);
+      expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+      fixture.context.dedupe.clear();
+      await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
+      dispatchInboundMessageMock.mockReset().mockImplementation(async (options: unknown) => {
+        const { replyOptions } = options as Parameters<typeof dispatchInboundMessage>[0];
+        if (replyOptions?.userTurnTranscriptRecorder) {
+          resumedRecorder.resolve(replyOptions.userTurnTranscriptRecorder);
+        }
+        await resumedRelease.promise;
+        return {};
+      });
+
+      expectStarted(await fixture.send(), { runId: fixture.params.idempotencyKey });
+      const resumed = await withinTest(resumedRecorder.promise, signal);
+      expect((await pending(fixture)).items).toEqual([{ ...original, state: "queued" }]);
+      const duplicate = await fixture.send();
+      expect(duplicate).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
+        undefined,
+        expect.objectContaining({ cached: true }),
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+      expect(await resumed.persistApproved()).toMatchObject({
+        appended: true,
+        messageId: original?.id,
+        message: original?.message,
+      });
+      await resumed.persistApproved();
+      expect(fixture.readTranscript()).toHaveLength(fixture.activeTranscript.length + 1);
+      expect((await pending(fixture)).items).toEqual([]);
+    } finally {
+      resumedRelease.resolve();
+    }
+  });
+
+  it.each(["sender", "payload", "cancelled"] as const)(
     "does not recover pending input when its %s prevents fresh admission",
     async (change) => {
       await using fixture = await createMentionFixture({ preserveContent: true });
       const { recorder, original } = await admitPending(fixture);
-      if (change === "cancelled" || change === "same-generation") {
-        recorder?.finishPendingInput?.(change === "cancelled" ? "cancelled" : "interrupted");
+      if (change === "cancelled") {
+        recorder?.finishPendingInput?.("cancelled");
       }
-      if (change !== "same-generation") {
-        rotateAgentEventLifecycleGeneration();
-      }
+      rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();
       fixture.context.dedupe.clear();
       dispatchInboundMessageMock.mockClear();
@@ -724,82 +838,5 @@ describe("ordinary chat input admission", () => {
     },
   );
 
-  it.each(["webchat", "queued-webchat", "external"] as const)(
-    "keeps committed history delivery with the %s source owner",
-    async (route) => {
-      await using fixture = await createBrowserFollowupFixture({ active: false });
-      const entered = createDeferred<Parameters<typeof dispatchInboundMessage>[0]>();
-      const release = createDeferred();
-      let settleQueued: (() => void) | undefined;
-      if (route === "external") {
-        fixture.params.originatingChannel = "discord";
-        fixture.params.originatingTo = "channel:synthetic";
-        fixture.params.deliver = true;
-      }
-      dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
-        const options = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
-        if (route === "queued-webchat") {
-          // The queue retains cancellation/admission after the initial dispatch unwinds.
-          options.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
-          settleQueued = options.replyOptions?.turnAdoptionLifecycle?.onSettled;
-        }
-        entered.resolve(options);
-        if (route !== "queued-webchat") {
-          await release.promise;
-        }
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      });
-      try {
-        const ack = await fixture.send();
-        expect(ack.mock.calls[0]?.[0]).toBe(true);
-        const { replyOptions } = await entered.promise;
-        if (route === "queued-webchat") {
-          await vi.waitFor(() =>
-            expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(
-              false,
-            ),
-          );
-        }
-        await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
-        await replyOptions?.onAgentRunStart?.(fixture.params.idempotencyKey);
-        const message = attachSessionTranscriptRunId(
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "The synthetic fixture is ready.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "receipt-answer",
-                  phase: "final_answer",
-                }),
-              },
-              { type: "toolCall", id: "inspect", name: "read", arguments: {} },
-            ],
-            stopReason: "toolUse",
-          },
-          fixture.params.idempotencyKey,
-        );
-        const appended = appendTranscriptMessageSync(fixture.scope, {
-          eventId: "route-answer",
-          message,
-        });
-        if (!appended?.ok) {
-          throw new Error("Expected committed route fixture answer");
-        }
-        await publishTranscriptUpdate(fixture.scope, { message, messageId: "route-answer" });
-        expect((await replyOptions?.resolveReplyDelivery?.()) ?? "missing").toBe(
-          route === "external" ? "missing" : "delivered",
-        );
-        if (route === "queued-webchat") {
-          settleQueued?.();
-          expect(await replyOptions?.resolveReplyDelivery?.()).toBe("missing");
-        }
-      } finally {
-        settleQueued?.();
-        release.resolve();
-      }
-    },
-  );
+  registerChatHistoryDeliveryCases(createBrowserFollowupFixture);
 });

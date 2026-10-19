@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import {
@@ -11,11 +13,19 @@ import {
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
+import {
+  reportUpdateCommandPendingRecovery,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,23 +33,32 @@ beforeEach(() => {
   const temporary = dirs.make("update-activation-tmp-");
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
 });
-afterEach(() => {
-  vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    await closeOpenClawStateDatabaseAsync();
+  } finally {
+    vi.useRealTimers();
+    closeOpenClawStateDatabaseForTest();
+    vi.restoreAllMocks();
+  }
 });
 
 it.each([false, true])(
-  "records an activation timeout while settlement remains pending (retained A: %s)",
+  "reports a detached activation timeout while cancellation retains custody (retained A: %s)",
   async (retained) => {
     const root = fs.realpathSync(dirs.make("update-activation-"));
     const serviceRoot = retained
       ? fs.realpathSync(dirs.make("update-retained-activation-"))
       : undefined;
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+    };
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const onResult = vi.fn();
     const entered = createDeferred();
     const release = createDeferred();
     let childWork: Promise<unknown> | undefined;
@@ -52,6 +71,7 @@ it.each([false, true])(
         registerRun(run);
         await withUpdateCommandExecutor(run.runId, async (executor) => {
           const fence = await executor.enter(root, { serviceRoot, activationTimeoutMs: budget });
+          run.executorFence = fence;
           assertCurrent = fence.assertCurrent;
           recordUpdateRunPhase(run.runId, "activating", undefined, { env });
           childWork = withUpdateCommandExecutorChild(fence, root, async () => {
@@ -63,33 +83,48 @@ it.each([false, true])(
           // Returning does not settle the admitted child's outstanding work.
         });
       },
-      { json: true },
+      { json: true, onResult },
     ).catch((error: unknown) => {
       outcome = error;
     });
     try {
       await entered.promise;
+      const before = getUpdateRun(run.runId, { env });
       await vi.advanceTimersByTimeAsync(budget - 1);
       expect(getUpdateRun(run.runId, { env })?.status).toBe("running");
       expect(assertCurrent).toBeDefined();
       await vi.advanceTimersByTimeAsync(budget + 1);
       await running;
+      expect(outcome).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
       expect(outcome).toMatchObject({ result: { reason: "update-activation-timeout" } });
       expect(assertCurrent).toThrow("activation");
-      expect(getUpdateRun(run.runId, { env })).toMatchObject({
-        phase: "finished",
-        status: "failed",
-        reason: "update-activation-timeout",
-      });
+      // The cancellation generation is durable custody, not permission to finish
+      // history while the child is still live. The public pending reporter is detached.
+      expect(getUpdateRun(run.runId, { env })).toEqual(before);
+      await expect(
+        reportUpdateCommandPendingRecovery(outcome as UpdateCommandPendingRecoveryFailure, {
+          json: true,
+        }),
+      ).rejects.toMatchObject({ code: 1 });
       expect(output).toHaveBeenCalledWith(
         expect.objectContaining({
           reason: "update-activation-timeout",
           status: "error",
         }),
       );
-      expect(createManagedHandoffLeaseStore().read(root).kind).toBe("current");
+      expect(onResult).not.toHaveBeenCalled();
+      expect(getUpdateRun(run.runId, { env })).toEqual(before);
+      expect(await readRestartSentinelReadOnly(env)).toBeNull();
+      expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "update-reports"))).toBe(false);
+      expect(createManagedHandoffLeaseStore().read(root)).toMatchObject({
+        kind: "current",
+        lease: { version: 4 },
+      });
       if (serviceRoot) {
-        expect(createManagedHandoffLeaseStore().read(serviceRoot).kind).toBe("current");
+        expect(createManagedHandoffLeaseStore().read(serviceRoot)).toMatchObject({
+          kind: "current",
+          lease: { version: 4 },
+        });
         await expect(
           withUpdateCommandExecutor("competing-retained-owner", (other) =>
             other.enter(serviceRoot),
@@ -103,7 +138,17 @@ it.each([false, true])(
       release.resolve();
       await childWork?.catch(() => {});
       await running;
+      await setImmediate();
     }
+    expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
+    if (serviceRoot) {
+      expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
+    }
+    // The sentinel observer owns a warm reader pool with an idle-retirement
+    // timer. Join that owner before judging executor timer cleanup.
+    expect(vi.getTimerCount()).toBe(1);
+    await closeOpenClawStateDatabaseAsync();
+    expect(vi.getTimerCount()).toBe(0);
   },
 );
 

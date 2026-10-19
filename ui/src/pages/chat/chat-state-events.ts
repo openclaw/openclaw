@@ -13,7 +13,7 @@ import {
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
@@ -37,6 +37,7 @@ import {
   retirePullRequestRefreshes,
 } from "./chat-pull-request-refresh.ts";
 import { clearPendingQueueItemsForRun, readDeliveredQueuedChatSendForRun } from "./chat-queue.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import {
   requiresChatInputConsumption,
@@ -45,7 +46,6 @@ import {
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
-import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   refreshSessionWorkspace,
@@ -117,7 +117,7 @@ function finishSessionMessageRunReconcile(
     : reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
   const session = row ?? selectedChatSessionRow(state);
   const needsRunObservation = Boolean(
-    state.chatRunId && session?.hasActiveRun === false && !isSessionRunActive(session),
+    state.chatRunId && session?.hasActiveRun === false && !isSessionRunStateActive(session),
   );
   if (!cleared && !needsRunObservation) {
     return false;
@@ -398,8 +398,7 @@ export function handlePageGatewayEvent(
     event.event === "session.message" ||
     event.event === "sessions.changed" ||
     (event.event === "chat" && asNullableRecord(event.payload)?.state === "delta");
-  mutateChatRunState(
-    state,
+  chatRunPresentation(state).batch(
     () => applyPageGatewayEvent(state, event, isPresented, sessionResult),
     frameBatched ? "animation-frame" : "immediate",
   );
@@ -428,7 +427,7 @@ function applyPageGatewayEvent(
     );
     if (queue) {
       state.chatSessionApprovalQueue = queue;
-      publishChatRunState(state);
+      chatRunPresentation(state).publish();
     }
     return;
   }
@@ -440,8 +439,7 @@ function applyPageGatewayEvent(
         ? payload
         : undefined;
     const apply = () =>
-      mutateChatRunState(
-        state,
+      chatRunPresentation(state).batch(
         () => {
           const sessionMatches = Boolean(
             payload && visibleSessionMatches(state, payload.sessionKey, payload.agentId),
@@ -483,7 +481,7 @@ function applyPageGatewayEvent(
           }
           const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
           if (handleChatGatewayEvent(state, payload) === "injected") {
-            publishChatRunState(state);
+            chatRunPresentation(state).publish();
             return;
           }
           if (terminalPayload && sessionMatches) {
@@ -526,8 +524,7 @@ function applyPageGatewayEvent(
             }
           }
           if (sessionMatches) {
-            publishChatRunState(
-              state,
+            chatRunPresentation(state).publish(
               payload?.state === "delta" ? "animation-frame" : "immediate",
             );
           }
@@ -584,18 +581,18 @@ function applyPageGatewayEvent(
       return;
     }
     state.observerDigest = payload;
-    publishChatRunState(state);
+    chatRunPresentation(state).publish();
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
     if (handleAgentEvent(state as never, event.payload as never)) {
-      publishChatRunState(state, "animation-frame");
+      chatRunPresentation(state).publish("animation-frame");
     }
     return;
   }
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
-    publishChatRunState(state, "animation-frame");
+    chatRunPresentation(state).publish("animation-frame");
     return;
   }
   if (event.event === "session.message" || event.event === "sessions.changed") {
@@ -604,7 +601,7 @@ function applyPageGatewayEvent(
     const scopedChange = handle(state, event.payload, isPresented, sessionResult);
     void resumeStoredChatOutboxes(state, event);
     if (scopedChange) {
-      publishChatRunState(state, "animation-frame");
+      chatRunPresentation(state).publish("animation-frame");
     }
   }
 }

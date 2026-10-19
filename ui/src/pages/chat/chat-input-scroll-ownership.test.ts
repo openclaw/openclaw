@@ -5,7 +5,6 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 
 const disposals: Array<() => void> = [];
@@ -61,7 +60,8 @@ function setup() {
     scrollport.scrollTop = height - scrollport.clientHeight;
     return true;
   };
-  controller.prepareRender();
+  controller.publishPendingRunState();
+  controller.captureRenderChanges();
   controller.commitRender();
   vi.advanceTimersToNextFrame();
   const published = vi.fn();
@@ -74,7 +74,8 @@ function setup() {
     scrollport,
     commitGrowth: () => {
       height += 889;
-      controller.prepareRender();
+      controller.publishPendingRunState();
+      controller.captureRenderChanges();
       controller.commitRender();
       vi.advanceTimersToNextFrame();
     },
@@ -85,33 +86,25 @@ describe("transcript arrival scroll ownership", () => {
   it("coalesces streamed replies without delaying the draft or new transcript rows", () => {
     const { state, controller, published } = setup();
     for (let index = 0; index < 36; index++) {
-      mutateChatRunState(
-        state,
-        () => {
-          state.chatStream = `Reply ${index}`;
-        },
-        "animation-frame",
-      );
+      chatRunPresentation(state).batch(() => {
+        state.chatStream = `Reply ${index}`;
+      }, "animation-frame");
     }
     expect(published).not.toHaveBeenCalled();
     vi.advanceTimersToNextFrame();
     expect(published).toHaveBeenCalledOnce();
     expect(state.chatStream).toBe("Reply 35");
 
-    mutateChatRunState(
-      state,
-      () => {
-        state.chatStream = "A queued reply";
-      },
-      "animation-frame",
-    );
+    chatRunPresentation(state).batch(() => {
+      state.chatStream = "A queued reply";
+    }, "animation-frame");
     state.handleChatDraftChange("Keep this draft");
     expect(controller.composerDraft.read().draft).toBe("Keep this draft");
     expect(published).toHaveBeenCalledOnce();
     vi.advanceTimersToNextFrame();
     expect(published).toHaveBeenCalledTimes(2);
 
-    publishChatRunState(state, "animation-frame");
+    chatRunPresentation(state).publish("animation-frame");
     state.chatMessages = [...state.chatMessages, userMessage("remote")];
     expect(published).toHaveBeenCalledTimes(3);
     vi.advanceTimersToNextFrame();
@@ -120,14 +113,11 @@ describe("transcript arrival scroll ownership", () => {
 
   it("absorbs a pending stream publication into a commit and cancels on teardown", async () => {
     const { controller, dispose, published, state } = setup();
-    mutateChatRunState(
-      state,
-      () => {
-        state.chatStream = "Waiting for a frame";
-      },
-      "animation-frame",
-    );
-    controller.prepareRender();
+    chatRunPresentation(state).batch(() => {
+      state.chatStream = "Waiting for a frame";
+    }, "animation-frame");
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
     vi.advanceTimersToNextFrame();
     expect(published).toHaveBeenCalledOnce();
 
@@ -135,13 +125,9 @@ describe("transcript arrival scroll ownership", () => {
     state.renderLifecycle.afterCommit(effect);
     await Promise.resolve();
     expect(effect).toHaveBeenCalledOnce();
-    mutateChatRunState(
-      state,
-      () => {
-        state.chatStream = "Retired before publication";
-      },
-      "animation-frame",
-    );
+    chatRunPresentation(state).batch(() => {
+      state.chatStream = "Retired before publication";
+    }, "animation-frame");
     dispose();
     const publicationsAtDisposal = published.mock.calls.length;
     vi.advanceTimersToNextFrame();
@@ -152,8 +138,9 @@ describe("transcript arrival scroll ownership", () => {
     const { controller, state } = setup();
     const follow = vi.spyOn(state, "chatScrollToEnd");
     state.chatStream = "A response arrived before the property commit.";
-    publishChatRunState(state, "animation-frame");
-    controller.prepareRender();
+    chatRunPresentation(state).publish("animation-frame");
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
     controller.commitRender();
     vi.advanceTimersToNextFrame();
     expect(follow).toHaveBeenCalledOnce();

@@ -336,8 +336,8 @@ describe("buildOpenAISpeechProvider", () => {
         talkProviderConfig: {},
         params: {
           text: "Hello from talk mode.",
-          voiceId: "nova",
-          modelId: "tts-1",
+          voiceId: " nova ",
+          modelId: " tts-1 ",
           speed: 218 / 175,
         },
       }),

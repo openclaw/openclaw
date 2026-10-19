@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -23,12 +24,13 @@ afterEach(async () => {
 });
 
 it.each([
-  { name: "main", agentId: "main", replaceDuringRead: false },
-  { name: "work", agentId: "work", replaceDuringRead: false },
-  { name: "replacement work", agentId: "work", replaceDuringRead: true },
+  { name: "main", agentId: "main", replaceDuringRead: false, targetAccepted: true },
+  { name: "work", agentId: "work", replaceDuringRead: false, targetAccepted: true },
+  { name: "replacement work", agentId: "work", replaceDuringRead: true, targetAccepted: true },
+  { name: "declined work", agentId: "work", replaceDuringRead: false, targetAccepted: false },
 ])(
-  "admits images using the explicit $name global session owner",
-  async ({ agentId, replaceDuringRead }) => {
+  "resolves image admission using the explicit $name global session owner",
+  async ({ agentId, replaceDuringRead, targetAccepted }) => {
     state = await createOpenClawTestState({ label: "agent-content-owner" });
     const { stateDir, workspaceDir } = state;
     const cfg: OpenClawConfig = {
@@ -97,8 +99,7 @@ it.each([
       agentRunSeq: new Map(),
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
+
       chatRunState: createChatRunState(),
       dedupe: new Map(),
       deps: {},
@@ -112,7 +113,13 @@ it.each([
       removeChatRun: vi.fn(() => undefined),
     };
     const respond = vi.fn();
-    const result = await prepareAgentContentPhase({
+    const targetEntered = createDeferred();
+    const targetResolution = createDeferred<boolean>();
+    const onTargetResolved = vi.fn(async () => {
+      targetEntered.resolve();
+      return await targetResolution.promise;
+    });
+    const preparation = prepareAgentContentPhase({
       request: {
         message: "Inspect this synthetic pixel",
         agentId,
@@ -127,6 +134,7 @@ it.each([
       requestedSessionKey: "global",
       agentId,
       knownAgents: ["main", "work"],
+      onTargetResolved,
       normalizedAttachments: [
         {
           type: "file",
@@ -136,7 +144,20 @@ it.each([
         },
       ],
     });
+    await targetEntered.promise;
+    try {
+      expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+    } finally {
+      targetResolution.resolve(targetAccepted);
+    }
+    const result = await preparation;
+    expect(onTargetResolved).toHaveBeenCalledExactlyOnceWith({ sessionKey: "global", agentId });
     expect(respond).not.toHaveBeenCalled();
+    if (!targetAccepted) {
+      expect(result).toBeUndefined();
+      expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+      return;
+    }
     expect(result).toMatchObject({
       agentId,
       requestedSessionKey: "global",
@@ -214,8 +235,6 @@ it.each(modelSelectionCases)(
       agentRunSeq: new Map(),
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       chatRunState: createChatRunState(),
       dedupe: new Map(),
       deps: {},

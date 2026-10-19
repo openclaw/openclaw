@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId, mapArray } from "solid-js";
+import { Show, createMemo, createUniqueId, mapArray, onCleanup } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -17,6 +17,7 @@ import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { TabFocus } from "../../../lib/tabs.ts";
 import { readLinkFavicon } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
@@ -34,6 +35,8 @@ type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;
   hostedRevision: () => number;
   refreshHostedTabs: () => void;
+  headerRef: (element: HTMLElement | null) => void;
+  tabFocus: TabFocus;
 };
 
 type RegionTab = SolidPanelTabStripTab & {
@@ -43,16 +46,8 @@ type RegionTab = SolidPanelTabStripTab & {
   iconName?: IconName;
 };
 
-export function readRegionPanelHost(host: HTMLElement, slot: SidebarSlotId): Element | null {
-  const container = host.parentElement?.querySelector(`[data-panel-slot="${slot}"]`);
-  // Native panel views have an interop wrapper; raw plugin content still owns its first element.
-  return (
-    container?.querySelector("[data-sidebar-panel-host]") ?? container?.firstElementChild ?? null
-  );
-}
-
-export function readRegionHostedTabs(host: HTMLElement, panel: SidebarPanel) {
-  return readPanelHostedTabs(readRegionPanelHost(host, panel.slot));
+export function readRegionHostedTabs(host: RegionElement, panel: SidebarPanel) {
+  return readPanelHostedTabs(host.readPanelHost(panel.slot));
 }
 
 export function sidebarPanelType(definitions: SidebarPanelDefinition[], slot: SidebarSlotId) {
@@ -129,7 +124,6 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       ),
     { lazy: true },
   );
-  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy="while-open"
@@ -141,7 +135,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
       trigger={<Icon name="plus" />}
-      items={items()}
+      items={entries()()}
       onSelect={(item) => {
         const slot = props.panelDefinitions.find(
           (type) => type.available && type.slot === item.id,
@@ -180,6 +174,7 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
   );
 }
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
+  onCleanup(() => props.headerRef(null));
   const state = createMemo(() => {
     props.hostedRevision();
     const column = props.layout.columns[0];
@@ -276,12 +271,14 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   const hostedActions = () => state().activeHosted?.element.hostedActions;
   return (
     <header
+      ref={props.headerRef}
       class="rail-header side-panel__header"
       data-region-header="side"
       onMouseDown={beginNativeWindowDrag}
     >
       <div class="side-panel__header-tabs">
         <PanelTabStrip
+          focusOwner={props.tabFocus}
           renderIcon={(tab) => (
             <Show
               when={tab().hostedTab}

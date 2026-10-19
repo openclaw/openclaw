@@ -2,16 +2,21 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDetailParams,
-  ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { createDockLayout } from "./dock-layout.ts";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
 import { LinkReaderImages } from "./link-reader-images.ts";
 import {
-  readerIcon,
+  createLinkReaderPanelLifecycle,
+  type LinkReaderPanelProps,
+  type LinkReaderPanelElements,
+} from "./link-reader-panel-lifecycle.ts";
+import {
+  readerHostedTabs,
+  type LinkReaderPanelState,
   linkReaderPanelLayout,
   tabTarget,
   tabLabel,
@@ -29,49 +34,27 @@ import {
   linkReaderTargetKey as targetKey,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
-import { PANEL_HOSTED_TABS_CHANGE_EVENT, type PanelHostedTab } from "./panel-hosted-tabs.ts";
+import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "./panel-hosted-tabs.ts";
 
 registerLinkReaderEnglish();
 
 const HISTORY_LIMIT = 30;
 export const LINK_READER_TAB_LIMIT = 10;
-export type LinkReaderPanelProps = {
-  client: GatewayBrowserClient | null;
-  available: boolean;
-  agentId: string | undefined;
-  readers: readonly ControlUiLinkReaderDescriptor[];
-  suppressed: boolean;
-  embedded: boolean;
-  presented: boolean;
-  tabsInHeader: boolean;
-  sessionKey: string;
-  onClose: (() => void) | undefined;
-};
 
 /** Browser-style, memory-only tabs and connection-scoped document authority. */
-export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelProps) {
-  const listeners = new Set<() => void>();
-  const publish = () => listeners.forEach((listener) => listener());
+export function createLinkReaderPanel(
+  host: HTMLElement & LinkReaderPanelProps,
+  scheduleAfterRender: (callback: () => void) => void,
+  elements: (activeId: string | null) => LinkReaderPanelElements,
+  notify: () => void,
+) {
+  const props = host;
+  const lifecycle = createLinkReaderPanelLifecycle(props, scheduleAfterRender, afterRender, notify);
+  const publish = lifecycle.publish;
   let hostedSignature = "";
 
-  function hostedTabs() {
-    return state.tabs.map((tab) => ({
-      id: tab.id,
-      label: tabLabel(tab),
-      url: tabTarget(tab)?.href,
-      title: tabTarget(tab)?.href,
-      icon: readerIcon(tabTarget(tab)?.reader.icon, host.ownerDocument),
-      className: tab.view.status === "loading" ? "is-connecting" : "",
-    })) satisfies PanelHostedTab[];
-  }
   // Request admission and tab identity are synchronous; the projection only observes them.
-  const state: {
-    urlDraft: string;
-    invalidUrl: boolean;
-    tabLimitUrl: string | null;
-    tabs: ReaderTab[];
-    activeId: string | null;
-  } = {
+  const state: LinkReaderPanelState = {
     urlDraft: "",
     invalidUrl: false,
     tabLimitUrl: null,
@@ -107,6 +90,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
   }
 
   function dispose(): void {
+    lifecycle.dispose();
     resetTabViews();
     state.tabs = [];
     state.activeId = null;
@@ -119,7 +103,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       get: <K extends keyof LinkReaderPanelProps>(key: K): LinkReaderPanelProps[K] | undefined =>
         previous?.[key],
     };
-    // SAFETY: PanelView supplies the complete, explicitly keyed props snapshot.
+    // SAFETY: lifecycle publication supplies the complete, explicitly keyed input snapshot.
     if (!previous || (Object.keys(previous) as (keyof LinkReaderPanelProps)[]).some(changed.has)) {
       publish();
     }
@@ -220,6 +204,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
   function resume(): void {
     const active = activeTab();
     if (
+      lifecycle.active() &&
       host.isConnected &&
       panelPresented() &&
       props.available &&
@@ -229,6 +214,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       void loadDetail();
     }
     if (
+      lifecycle.active() &&
       host.isConnected &&
       panelPresented() &&
       active?.view.status === "ready" &&
@@ -241,10 +227,9 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       }
     }
   }
-  function afterRender(
-    address: HTMLInputElement | undefined,
-    content: HTMLElement | undefined,
-  ): void {
+  function afterRender(previous: LinkReaderPanelProps | undefined): void {
+    sync(previous);
+    const { address, content } = elements(state.activeId);
     const signature = JSON.stringify([
       state.activeId,
       props.available,
@@ -411,6 +396,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     const target =
       typeof detail?.url === "string" ? resolveLinkReaderTarget(detail.url, props.readers) : null;
     if (
+      !lifecycle.active() ||
       !host.isConnected ||
       !props.available ||
       !props.client ||
@@ -529,7 +515,14 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     const sessionKey = props.sessionKey;
     const generation = client?.connectionGeneration;
     const requestRecoveryScope = client?.recoveryScope;
-    if (!target || !tab || !client || !props.available || !panelPresented()) {
+    if (
+      !lifecycle.active() ||
+      !target ||
+      !tab ||
+      !client ||
+      !props.available ||
+      !panelPresented()
+    ) {
       return;
     }
     const previous = tab.view.status === "ready" ? tab.view : undefined;
@@ -552,6 +545,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     const isCurrent = () =>
       requestAbort === request &&
       !request.signal.aborted &&
+      lifecycle.active() &&
       host.isConnected &&
       props.client === client &&
       props.agentId === agentId &&
@@ -633,6 +627,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
               client,
               imageMethod,
               () =>
+                lifecycle.active() &&
                 host.isConnected &&
                 props.available &&
                 props.client === client &&
@@ -687,10 +682,16 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     dockLayout,
     activeTab,
     target: currentTarget,
-    hostedTabs,
-    sync,
-    resume,
-    afterRender,
+    hostedTabs: () => readerHostedTabs(state.tabs, host.ownerDocument),
+    connect() {
+      dockLayout.connect();
+      lifecycle.connect();
+      publish();
+    },
+    inputsChanged: publish,
+    get updateComplete() {
+      return lifecycle.updateComplete;
+    },
     dispose,
     selectHostedTab,
     createTab,
@@ -705,12 +706,6 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       state.urlDraft = value;
       state.invalidUrl = false;
       publish();
-    },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
     },
   };
 }

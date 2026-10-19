@@ -14,6 +14,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
+import { createEmptyAuthProfileStore } from "./auth-profiles/runtime-snapshot-owner.js";
 import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
@@ -21,9 +22,15 @@ import { buildBtwCliPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import { normalizeBtwContentBlocks } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
+import { createNativeModelOwnedRuntimeModel } from "./defaults.js";
 import type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
-import type { AgentHarness } from "./harness/types.js";
+import {
+  preparePluginHarnessToolPolicies,
+  resolvePluginHarnessPolicyToolsAllow,
+} from "./harness/execution-environment.js";
+import { readSessionRuntimeOwnershipAsync } from "./harness/session-runtime-ownership.js";
+import type { AgentHarness, AgentHarnessSessionRuntimeOwnership } from "./harness/types.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
   ensureAuthProfileStoreAsync,
@@ -35,6 +42,7 @@ import {
   type PreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.js";
+import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 import {
@@ -42,6 +50,7 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "./runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+import type { SandboxContext } from "./sandbox/types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 import { normalizeUsage, type NormalizedUsage } from "./usage.js";
@@ -301,6 +310,7 @@ export async function resolveBtwPreparedRuntimeAuth(
 
 export async function resolveRuntimeModel(params: {
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   provider: string;
   model: string;
   agentId: string;
@@ -320,11 +330,37 @@ export async function resolveRuntimeModel(params: {
   runtimeAuthPreparation: BtwRuntimeAuthPreparation;
   authStorage: PreparedModelRuntimeStores["authStorage"];
   modelRegistry: PreparedModelRuntimeStores["modelRegistry"];
+  nativeOwnership?: AgentHarnessSessionRuntimeOwnership;
 }> {
   const preparedModelRuntime = params.preparedModelRuntime;
   const { config: cfg, agentDir, workspaceDir } = preparedModelRuntime;
+  // Model, credentials, and tool policy must share the native owner's prepared tuple.
+  const nativeOwnership = await readSessionRuntimeOwnershipAsync({ ...params, config: cfg });
+  const modelRef = nativeOwnership?.modelRef ?? params;
   const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
-  const resolution = await resolveModelAsync(params.provider, params.model, agentDir, cfg, {
+  if (nativeOwnership?.auth === "native") {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      config: cfg,
+      workspaceDir,
+      metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+      harnessId: params.harnessId,
+      allowHarnessAuthProfileForwarding: false,
+    });
+    return {
+      model: createNativeModelOwnedRuntimeModel({
+        provider: modelRef.provider,
+        modelId: modelRef.model,
+      }),
+      authProfileStore: createEmptyAuthProfileStore(),
+      runtimeAuthPreparation: { plan, attempts: [{ kind: "implicit", plan }] },
+      authStorage,
+      modelRegistry,
+      nativeOwnership,
+    };
+  }
+  const resolution = await resolveModelAsync(modelRef.provider, modelRef.model, agentDir, cfg, {
     abortSignal: params.abortSignal,
     authStorage,
     modelRegistry,
@@ -338,7 +374,7 @@ export async function resolveRuntimeModel(params: {
   });
   let model = resolution.model;
   if (!model) {
-    throw new Error(resolution.error ?? `Unknown model: ${params.provider}/${params.model}`);
+    throw new Error(resolution.error ?? `Unknown model: ${modelRef.provider}/${modelRef.model}`);
   }
   const runtimeProvider = model.provider;
   const runtimeModelId = model.id;
@@ -385,6 +421,7 @@ export async function resolveRuntimeModel(params: {
     runtimeAuthPreparation,
     authStorage,
     modelRegistry,
+    nativeOwnership,
   };
 }
 
@@ -440,6 +477,33 @@ export type RunBtwSideQuestionParams = {
   /** Internal execution identity; never reuse a parent/correlation run id. */
   authorityRunId?: string;
 };
+
+export async function prepareBtwHarnessToolPolicies(
+  params: RunBtwSideQuestionParams & {
+    sessionId: string;
+    runtimeModel: Model;
+    nativeOwnership?: AgentHarnessSessionRuntimeOwnership;
+    sandbox: SandboxContext | null;
+  },
+) {
+  const policies = await preparePluginHarnessToolPolicies(
+    {
+      ...params,
+      config: params.cfg,
+      provider: params.runtimeModel.provider,
+      modelId: params.runtimeModel.id,
+    },
+    undefined,
+    undefined,
+    params.nativeOwnership
+      ? (params.nativeOwnership.modelRef ?? null)
+      : { provider: params.runtimeModel.provider, model: params.runtimeModel.id },
+  );
+  return {
+    toolsAllow: resolvePluginHarnessPolicyToolsAllow(policies),
+    webSearchPolicy: policies.webSearchPolicy,
+  };
+}
 
 export async function runCliBtwSideQuestion(params: {
   cfg: OpenClawConfig;

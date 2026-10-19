@@ -297,8 +297,8 @@ describe("DraftSubmissionFlow submit gates", () => {
       });
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
-        expect(place.modelControl.modelUnavailableReason(place.selectedAgent())).toBe(
-          "missing-auth",
+        expect(place.modelControl.modelSelectionBlockedReason(place.selectedAgent())).toContain(
+          "No provider credential",
         ),
       );
       const createParams = restoreCreate(flow, {
@@ -338,6 +338,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       if (phase === "creating") {
         expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(createParams, {
           reconciliation: "background",
+          signal: expect.any(AbortSignal),
         });
       } else {
         expect(context.sessions.createResult).not.toHaveBeenCalled();

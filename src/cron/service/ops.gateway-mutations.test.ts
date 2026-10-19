@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -83,8 +84,9 @@ describe("Cron mutation outcomes through the in-process router", () => {
       });
       const calls: string[] = [];
       let concurrentTimezone: string | undefined;
-      const tool = createCronTool(undefined, {
-        callGatewayTool: async <T>(method: string, _opts: unknown, params: unknown) => {
+      const gatewaySpy = vi
+        .spyOn(gatewayModule, "callGatewayTool")
+        .mockImplementation(async <T>(method: string, _opts: unknown, params: unknown) => {
           calls.push(method);
           if (method === "cron.update" && concurrentTimezone) {
             const tz = concurrentTimezone;
@@ -96,8 +98,9 @@ describe("Cron mutation outcomes through the in-process router", () => {
             });
           }
           return await fixture.call<T>({ method, params });
-        },
-      });
+        });
+      onTestFinished(() => gatewaySpy.mockRestore());
+      const tool = createCronTool();
       for (const tz of ["Asia/Shanghai", "Europe/Paris"]) {
         calls.length = 0;
         concurrentTimezone = tz === "Europe/Paris" ? tz : undefined;

@@ -834,8 +834,8 @@ async function runCliWithPreparedOutputMode(
           normalizedInvocation.commandPath[1] === "worker")))
   ) {
     // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
-    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-    await initializeSqliteRuntimeCapabilities();
+    const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+    await initializeSqliteRuntime();
   }
 
   if (
@@ -847,10 +847,10 @@ async function runCliWithPreparedOutputMode(
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-        await loadGatewayDispatchCliDotEnv({ quiet: true });
+        await loadGatewayDispatchCliDotEnv();
       } else {
         const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ loadGlobalEnv, quiet: true });
+        loadCliDotEnv({ loadGlobalEnv });
       }
     });
   }
@@ -875,10 +875,10 @@ async function runCliWithPreparedOutputMode(
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
     await startupTrace.measure("gateway-run-select-environment", async () => {
-      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await Promise.all([
-        import("./gateway-cli/pre-bootstrap.js"),
-        import("../runtime.js"),
-      ]);
+      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await startupTrace.measure(
+        "gateway-run-select-environment-imports",
+        () => Promise.all([import("./gateway-cli/pre-bootstrap.js"), import("../runtime.js")]),
+      );
       const opts = resolveGatewayRunPreBootstrapOptions(normalizedArgv) ?? {};
       await selectGatewayRunEnvironment({ opts, runtime: defaultRuntime });
     });

@@ -118,7 +118,6 @@ function makeDispatchInput(
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
     globalLane: "retry-dispatch-global",
-    sessionLane: "retry-dispatch-session",
     initialQueuedLifecycleGeneration: lifecycleGeneration,
     setLifecycleGeneration: (value) => {
       lifecycleGeneration = value;
@@ -199,8 +198,6 @@ function makeDispatchInput(
     bootstrapPromptWarningSignaturesSeen: [],
     resolveRuntimeFallbackReason: () => null,
     getPostCompactionAbortError: vi.fn(() => undefined),
-    setPostCompactionAbortController: vi.fn(),
-    clearPostCompactionAbortController: vi.fn(),
   } as unknown as Parameters<typeof dispatch>[0];
 }
 

@@ -81,8 +81,8 @@ async function waitForRun(client: Client, runId: string) {
   expect(terminal).toMatchObject({ status: "ok" });
 }
 
-const expectHeld = (entered: Promise<unknown>, completed: Promise<unknown>) =>
-  awaitGateBeforeSettlement(entered, completed, "Operation settled before its hold");
+const expectHeld = (entered: Promise<unknown>, completed: Promise<unknown>, stage: string) =>
+  awaitGateBeforeSettlement(entered, completed, `${stage}: operation settled before its hold`);
 
 function expectText(value: unknown, present: string[], absent: string[] = []) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
@@ -144,7 +144,7 @@ async function rejectAfterChange(
     });
   const denied = send(client, sessionKey, "Authority changed during this turn.");
   try {
-    await expectHeld(entered.promise, denied);
+    await expectHeld(entered.promise, denied, "chat authorization");
     await change();
     resume.resolve();
     await expect(denied).rejects.toMatchObject(error);
@@ -258,6 +258,7 @@ it(
           },
         },
         session: { scope: "global" },
+        messages: { queue: { allowCollaborativeSteering: true } },
         models: { mode: "replace", providers: { [provider.providerId]: providerConfig } },
         plugins: { enabled: false, slots: { memory: "none" } },
         tools: { profile: "minimal" },
@@ -304,7 +305,7 @@ it(
           url: gatewayUrl,
           edgeAuthHeaders: edgeHeaders(user, ip),
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: state.statePath("test-device-identities", `${name}.sqlite`),
+            path: state.statePath("test-device-identities", name, "client", "credentials.sqlite"),
           }),
         });
       const historyFor = (agentId: string) =>
@@ -496,7 +497,7 @@ it(
       const backing = await send(backer, profile.sessionKey, backingMessage);
       expect(backing.status).toBe("started");
       const backingTerminal = waitForRun(administrator, backing.runId);
-      await expectHeld(backingHold.entered.promise, backingTerminal);
+      await expectHeld(backingHold.entered.promise, backingTerminal, "backing provider");
       const steering = await send(client, profile.sessionKey, steeringMessage, {
         queueMode: "steer",
       });
@@ -519,6 +520,7 @@ it(
       await expectHeld(
         steeringHold.entered.promise,
         Promise.all([backingTerminal, steeringTerminal]),
+        "accepted steering provider",
       );
       await expect(
         administrator.request("agent.wait", { runId: backing.runId, timeoutMs: 100 }),

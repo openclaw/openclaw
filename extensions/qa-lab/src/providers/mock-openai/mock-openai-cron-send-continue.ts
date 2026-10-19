@@ -4,9 +4,9 @@ import { buildAssistantEvents } from "./mock-openai-events.js";
 
 const QA_CRON_SEND_CONTINUE_PROMPT_RE = /Cron send-then-continue QA check/i;
 const QA_CRON_SEND_CONTINUE_TARGET_RE = /Delivery target: (\S+)/;
-export const QA_CRON_SEND_CONTINUE_SENT_MARKER = "QA-CRON-SEND-CONTINUE-SENT";
-export const QA_CRON_SEND_CONTINUE_DONE_MARKER = "QA-CRON-SEND-CONTINUE-DONE";
-export const QA_CRON_SEND_CONTINUE_FILE = "cron-send-continue-marker.txt";
+const QA_CRON_SEND_CONTINUE_SENT_MARKER = "QA-CRON-SEND-CONTINUE-SENT";
+const QA_CRON_SEND_CONTINUE_DONE_MARKER = "QA-CRON-SEND-CONTINUE-DONE";
+const QA_CRON_SEND_CONTINUE_FILE = "cron-send-continue-marker.txt";
 
 /**
  * Scripts a cron job that delivers to its own target and then has more work: send with

@@ -11,6 +11,7 @@ import {
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readExecApprovalsSocket } from "../../infra/exec-approvals-socket.js";
 import {
   ensureExecApprovalsSnapshot,
   normalizeExecApprovals,
@@ -212,9 +213,32 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       guard.assertPreparationCurrent();
-      const snapshot = params.expectedOwnerId
-        ? await readExecApprovalsSnapshotAsync()
-        : await ensureExecApprovalsSnapshot(guard.assertCurrent, guard.assertPreparationCurrent);
+      let snapshot: ExecApprovalsSnapshot;
+      if (params.expectedOwnerId) {
+        const context = captureOpenClawStateWorkerContext();
+        const assertCurrent = () => {
+          context.admission.assertCurrent();
+          guard.assertCurrent();
+        };
+        snapshot = await readExecApprovalsSnapshotAsync(context);
+        assertCurrent();
+        const socket = await readExecApprovalsSocket(
+          context.initializationEnvironment ?? context.environment,
+          { assertCurrent },
+        );
+        assertCurrent();
+        if (socket?.socket_path) {
+          snapshot = {
+            ...snapshot,
+            file: { ...snapshot.file, socket: { path: socket.socket_path } },
+          };
+        }
+      } else {
+        snapshot = await ensureExecApprovalsSnapshot(
+          guard.assertCurrent,
+          guard.assertPreparationCurrent,
+        );
+      }
       guard.assertCurrent();
       respond(true, toExecApprovalsPayload(snapshot), undefined);
     });

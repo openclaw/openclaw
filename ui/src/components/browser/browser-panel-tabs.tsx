@@ -1,11 +1,13 @@
 import { createMemo } from "@solidjs/signals";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { TabFocus } from "../../lib/tabs.ts";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import type { BrowserPanelTab } from "./browser-client.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 
 export function BrowserPanelTabs(props: {
   panelId: string;
+  focusOwner: TabFocus;
   tabs: BrowserPanelTab[];
   activeTargetId: string | null;
   onSelect: (targetId: string) => void;
@@ -26,6 +28,7 @@ export function BrowserPanelTabs(props: {
   );
   return (
     <PanelTabStrip
+      focusOwner={props.focusOwner}
       tabs={tabs()}
       activeId={props.activeTargetId}
       ariaControls={props.panelId}

@@ -34,7 +34,6 @@ import {
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type GatewayPluginBootstrapLog = {
@@ -337,8 +336,6 @@ export async function loadGatewayStartupPluginRuntime(params: {
   startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
-  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
-  getCurrentPluginRegistry?: () => PluginRegistry;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
@@ -347,17 +344,6 @@ export async function loadGatewayStartupPluginRuntime(params: {
   params.startupTrace?.detail("plugins.gateway-bootstrap-import", [
     ["durationMs", performance.now() - beforeBootstrapImport],
   ]);
-  await params.pluginRuntimeClaim?.waitForUnblocked();
-  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
-    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
-    if (!currentPluginRegistry) {
-      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
-    }
-    return {
-      pluginRegistry: currentPluginRegistry,
-      gatewayMethods: params.baseMethods,
-    };
-  }
   const loaded = await prepareGatewayPluginLoad({
     loadIntent: "startup",
     cfg: params.cfg,

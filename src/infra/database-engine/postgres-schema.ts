@@ -169,6 +169,7 @@ export function verifyPostgresSchema(
   namespace: string,
   schema: StoreSchema,
   snapshot: ReturnType<typeof readPostgresSchema>,
+  preserveSeal = false,
 ): void {
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
   const ddl = postgresSchemaSql(schema, canonicalNamespace, snapshot.catalog);
@@ -184,8 +185,38 @@ export function verifyPostgresSchema(
   if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === hash(ddl)) {
     return;
   }
-  // Fragment regrouping can change DDL bytes without changing the canonical catalog.
-  verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
+  // Inspection may compare reconstructed source DDL without rewriting the installed seal.
+  if (preserveSeal) {
+    db.runTransaction(() => verifyPostgresSchemaDefinition(db, namespace, schema, snapshot));
+  } else {
+    // Fragment regrouping can change DDL bytes without changing the canonical catalog.
+    verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
+  }
+}
+
+function verifyPostgresSchemaDefinition(
+  db: PostgresSqlConnection,
+  namespace: string,
+  schema: StoreSchema,
+  snapshot: ReturnType<typeof readPostgresSchema>,
+): void {
+  const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
+  const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
+  db.exec(`CREATE SCHEMA ${quote(scratch)}`);
+  try {
+    db.exec(`SET LOCAL search_path TO ${quote(scratch)}`);
+    db.exec(postgresSchemaSql(schema, scratch, snapshot.catalog));
+    const row = db.query(
+      `SELECT catalog::text FROM (${postgresCatalogQuery(scratch, true)}) captured`,
+    ).rows[0];
+    const expected = readPostgresCatalog(JSON.parse(String(row?.catalog)));
+    if (postgresSchemaFingerprint(expected, { from: scratch, to: namespace }) !== fingerprint) {
+      throw new Error(`PostgreSQL schema drift detected against generated DDL. ${recovery}`);
+    }
+  } finally {
+    db.exec(`SET LOCAL search_path TO ${quote(namespace)}`);
+    db.exec(`DROP SCHEMA ${quote(scratch)} CASCADE`);
+  }
 }
 
 /** Migrations and major upgrades validate the destination before publishing its seal. */
@@ -195,24 +226,8 @@ export function verifyAndRecordPostgresSchema(
   schema: StoreSchema,
   snapshot = readPostgresSchema(db, namespace, schema.id),
 ): ReturnType<typeof readPostgresSchema> {
-  const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
-  const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
   db.runTransaction(() => {
-    db.exec(`CREATE SCHEMA ${quote(scratch)}`);
-    try {
-      db.exec(`SET LOCAL search_path TO ${quote(scratch)}`);
-      db.exec(postgresSchemaSql(schema, scratch, snapshot.catalog));
-      const row = db.query(
-        `SELECT catalog::text FROM (${postgresCatalogQuery(scratch, true)}) captured`,
-      ).rows[0];
-      const expected = readPostgresCatalog(JSON.parse(String(row?.catalog)));
-      if (postgresSchemaFingerprint(expected, { from: scratch, to: namespace }) !== fingerprint) {
-        throw new Error(`PostgreSQL schema drift detected against generated DDL. ${recovery}`);
-      }
-    } finally {
-      db.exec(`SET LOCAL search_path TO ${quote(namespace)}`);
-      db.exec(`DROP SCHEMA ${quote(scratch)} CASCADE`);
-    }
+    verifyPostgresSchemaDefinition(db, namespace, schema, snapshot);
     if (!snapshot.metadata.ddl_hash) {
       db.exec(
         "ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS fingerprint TEXT, ADD COLUMN IF NOT EXISTS ddl_hash TEXT, ADD COLUMN IF NOT EXISTS server_major BIGINT",

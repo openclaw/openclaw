@@ -1,24 +1,32 @@
 import type { AssistantMessageEventStreamLike, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { recoverAfterTransportDrop } from "../../../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
+import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
-const sseState = vi.hoisted(() => ({ outcomes: [] as SdkResponse[] }));
+const sseState = vi.hoisted(() => ({
+  outcomes: [] as SdkResponse[],
+  signal: undefined as AbortSignal | undefined,
+}));
 
 vi.mock("openai", () => {
   class MockOpenAI {
     responses = {
-      create: () => ({
-        withResponse: async () => {
-          const outcome = sseState.outcomes.shift();
-          if (!outcome) {
-            throw new Error("Unexpected SSE request");
-          }
-          return outcome;
-        },
-      }),
+      create: (_params: unknown, options?: { signal?: AbortSignal }) => {
+        sseState.signal = options?.signal;
+        return {
+          withResponse: async () => {
+            const outcome = sseState.outcomes.shift();
+            if (!outcome) {
+              throw new Error("Unexpected SSE request");
+            }
+            return outcome;
+          },
+        };
+      },
     };
   }
   return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
@@ -35,6 +43,7 @@ import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   argumentDelta,
+  completedResponse,
   collectEventTypes,
   outputItem,
   wireCall,
@@ -101,7 +110,92 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
+  sseState.signal = undefined;
   configureAiTransportHost(initialHost);
+});
+
+it("aborts whitespace argument churn and recovers through the same-model retry owner", async () => {
+  let emittedDeltas = 0;
+  let closed = false;
+  const call = wireCall("churn", "exec", "");
+  queueStream(async function* () {
+    try {
+      yield outputItem("added", call);
+      yield argumentDelta(call.id, '{"code":"return 1;');
+      for (let index = 0; index < 40; index++) {
+        emittedDeltas += 1;
+        yield argumentDelta(call.id, " \r\r\n".repeat(256));
+      }
+      yield completedResponse("resp_churn", [{ ...call, arguments: '{"code":"return 1;"}' }]);
+    } finally {
+      closed = true;
+    }
+  });
+
+  const { events, result } = await collect(await run());
+  expect(result).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+  expect(emittedDeltas).toBe(32);
+  expect(closed).toBe(true);
+  expect(sseState.signal).toMatchObject({
+    aborted: true,
+    reason: { code: "degenerate_output" },
+  });
+  expect(events).not.toContain("toolcall_end");
+  expect(logWarn).toHaveBeenCalledWith(
+    "openai-transport",
+    expect.stringContaining("abortReason=degenerate_output"),
+    undefined,
+  );
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
+
+  vi.useFakeTimers();
+  const recovering = recoverAfterTransportDrop({
+    assistant: result,
+    noTools: true,
+    replaySafe: true,
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  const recovered = await recovering;
+  expect(recovered.recovery).toMatchObject({
+    action: "retry",
+    lastRetryFailoverReason: "server_error",
+  });
+  expect(recovered.onAgentEvent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      stream: "run_status",
+      data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
+    }),
+  );
+  vi.useRealTimers();
+  const retryCall = wireCall("retry", "exec", '{"code":"return 1;"}');
+  queueEvents(outputItem("added", retryCall), completedResponse("resp_retry", [retryCall]));
+  expect((await collect(await run())).result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code: "return 1;" } }],
+  });
+});
+
+it("accepts 200 KiB of arguments with whitespace runs interrupted by code", async () => {
+  const call = wireCall("large", "exec", "");
+  const codeChunk = `${" ".repeat(1023)};`;
+  const code = codeChunk.repeat(200);
+  const args = JSON.stringify({ code });
+  queueStream(async function* () {
+    yield outputItem("added", call);
+    yield argumentDelta(call.id, '{"code":"');
+    for (let index = 0; index < 200; index++) {
+      yield argumentDelta(call.id, codeChunk);
+    }
+    yield argumentDelta(call.id, '"}');
+    yield completedResponse("resp_large", [{ ...call, arguments: args }]);
+  });
+  const { result } = await collect(await run());
+  expect(result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code } }],
+  });
+  expect(sseState.signal?.aborted).toBe(false);
 });
 
 it("logs the actual output budget, served tier, and usage after a long incomplete stream", async () => {
@@ -234,19 +328,60 @@ it.each(["filtered", "failed", "eof", "aborted"])(
   },
 );
 
-it("keeps a caller deadline at warning level when the stream throws a generic abort", async () => {
-  const controller = new AbortController();
+it("logs the idle-timeout reason at warning level when the stream throws a generic abort", async () => {
+  vi.useFakeTimers();
   queueStream(async function* () {
     yield { type: "response.created", response: { id: "resp_timeout", status: "in_progress" } };
-    controller.abort(new DOMException("run deadline", "TimeoutError"));
+    await new Promise<void>((resolve) => {
+      sseState.signal?.addEventListener("abort", () => resolve());
+    });
     throw new Error("Request was aborted");
   });
-  expect((await (await run({ signal: controller.signal })).result()).stopReason).toBe("aborted");
+  const stream = await streamWithIdleTimeout(createOpenAIResponsesTransportStreamFn(), 50)(
+    model,
+    { messages: [], tools: [] },
+    { apiKey: "test-key", transport: "sse", headers: { Authorization: "Bearer private-key" } },
+  );
+  const result = stream.result();
+  await vi.advanceTimersByTimeAsync(50);
+  expect((await result).stopReason).toBe("aborted");
   expect(logWarn).toHaveBeenCalledWith(
     "openai-transport",
-    expect.stringContaining("[responses] error "),
+    expect.stringContaining("abortReason=idle_timeout"),
     undefined,
   );
+  const line = logWarn.mock.calls.find(([, message]) =>
+    message.startsWith("[responses] error "),
+  )?.[1];
+  expect(line).toContain("abortReason=idle_timeout");
+  expect(line).not.toContain("message=");
+  expect(line).not.toContain("LLM idle timeout");
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("private-key");
+});
+
+it("omits provider error messages, headers, and bodies from transport logs", async () => {
+  const privateText = "synthetic private prompt and tool result";
+  queueStream(async function* () {
+    yield { type: "response.created", response: { id: "resp_error", status: "in_progress" } };
+    throw Object.assign(new SyntaxError(`${privateText}\n${"x".repeat(400)}`), {
+      status: 503,
+      code: "service_unavailable",
+      headers: { Authorization: "Bearer private-key" },
+      request: { body: "private-request" },
+      response: { body: "private-response", headers: { "set-cookie": "private-cookie" } },
+    });
+  });
+  expect((await (await run()).result()).stopReason).toBe("error");
+  const line = logWarn.mock.calls.find(([, message]) =>
+    message.startsWith("[responses] error "),
+  )?.[1];
+  expect(line).toContain("name=SyntaxError status=503 code=service_unavailable");
+  expect(line).not.toContain("abortReason=");
+  expect(line).not.toContain("message=");
+  expect(line).not.toContain("\n");
+  const logs = JSON.stringify(logWarn.mock.calls);
+  expect(logs).not.toContain(privateText);
+  expect(logs).not.toMatch(/private-(?:key|request|response|cookie)/u);
 });
 
 it.each([

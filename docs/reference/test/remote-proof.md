@@ -526,7 +526,7 @@ The shared skill's command placeholders map to the focused commands in this
 guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
 untrusted path above invokes the installed trusted CLI, never the PR's wrapper.
 For an explicitly selected local-container lane, the existing example image is
-`node:24-bookworm` and the install command is
+`node:24-trixie` and the install command is
 `corepack pnpm install --frozen-lockfile --store-dir .pnpm-store`, followed by
 the chosen test. Keep `--no-hydrate` and a repository-local dependency store
 when host caches cannot cross filesystems. The OpenClaw broker login endpoint

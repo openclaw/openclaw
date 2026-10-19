@@ -139,14 +139,21 @@ it("hydrates a connection replacement while an old child page is pending", async
       expect(sessions.listSnapshot(childQuery).result?.sessions).toHaveLength(100),
     );
     const replacement = { ...children[0]!, label: "Replacement child", updatedAt: 30 };
-    const newRequest = childRequest({ ...parent, childSessions: [replacement.key] }, () =>
-      result([replacement]),
+    const newRequest = childRequest(
+      { ...parent, label: "Replacement parent", childSessions: [replacement.key] },
+      () => result([replacement]),
     );
     harness.publish({ client: createTestGatewayClient(newRequest) });
-    // A different connection identity intentionally resets manual expansion.
-    await waitForFast(() => expect(childToggle(sidebar)).not.toBeNull());
+    // Wait for the replacement parent, not the old toggle awaiting retirement.
+    await waitForFast(() =>
+      expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)?.textContent).toContain(
+        "Replacement parent",
+      ),
+    );
     await sidebar.updateComplete;
-    expandCollapsed(sidebar);
+    const replacementToggle = childToggle(sidebar)!;
+    expect(replacementToggle.getAttribute("aria-expanded")).toBe("false");
+    replacementToggle.click();
     await waitForFast(() => expect(sidebar.textContent).toContain("Replacement child"));
     expect(data.loadingChildSessionKeys.has(parentKey)).toBe(false);
     tail.resolve(tailResult);

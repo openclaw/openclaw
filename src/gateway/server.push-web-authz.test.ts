@@ -48,7 +48,7 @@ test("protects Web Push ownership through authenticated browser RPCs and profile
           prePairDevice: true,
           scopes: ["operator.read", "operator.write"],
           client: CONTROL_UI_CLIENT,
-          deviceIdentityPath: path.join(identities, `${device}.sqlite`),
+          deviceIdentityPath: path.join(identities, device, "client", "credentials.sqlite"),
           browserOrigin: origin,
         });
         expect(response.ok, JSON.stringify(response.error)).toBe(true);

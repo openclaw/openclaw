@@ -152,13 +152,13 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       });
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("%PDF-1.7")));
     const panel = await mountAttachment({ sourceIdentity: "attachment:brief" });
-    const preview = panel.querySelector("openclaw-chat-pdf-preview")!;
-    await preview.updateComplete;
     await originalReadStarted.promise;
     const bytes = new TextEncoder().encode("%PDF-1.7 original").buffer;
     original.resolve(bytes);
     await original.promise;
-    await preview.updateComplete;
+    await waitForSolid(() =>
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:original"),
+    );
     const frame = panel.querySelector("iframe")!;
     expect(frame?.getAttribute("src")).toBe("blob:original");
 
@@ -170,15 +170,16 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       sizeBytes: change === "oversized" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
     };
     await panel.updateComplete;
-    await preview.updateComplete;
-    if (change === "identity" || change === "oversized") {
-      expect(frame.isConnected).toBe(false);
-      expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
-    } else {
-      expect(panel.querySelector("iframe")).toBe(frame);
-      expect(frame.getAttribute("src")).toBe("blob:original");
-      expect(urls.revokeObjectURL).not.toHaveBeenCalled();
-    }
+    await waitForSolid(() => {
+      if (change === "identity" || change === "oversized") {
+        expect(frame.isConnected).toBe(false);
+        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
+      } else {
+        expect(panel.querySelector("iframe")).toBe(frame);
+        expect(frame.getAttribute("src")).toBe("blob:original");
+        expect(urls.revokeObjectURL).not.toHaveBeenCalled();
+      }
+    });
     if (change === "oversized") {
       expect(readBytes).toHaveBeenCalledOnce();
       expect(panel.querySelector("[role=alert]")).not.toBeNull();
@@ -195,20 +196,21 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
           : bytes.slice(0),
     );
     await refreshed.promise;
-    await preview.updateComplete;
-    if (change === "unchanged") {
-      expect(panel.querySelector("iframe")).toBe(frame);
-      expect(frame.getAttribute("src")).toBe("blob:original");
-      expect(urls.createObjectURL).toHaveBeenCalledOnce();
-      expect(urls.revokeObjectURL).not.toHaveBeenCalled();
-    } else {
-      expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
-      if (change === "failed") {
-        expect(panel.querySelector("iframe")).toBeNull();
-        expect(panel.querySelector("a[download]")?.getAttribute("href")).toContain("renewed");
+    await waitForSolid(() => {
+      if (change === "unchanged") {
+        expect(panel.querySelector("iframe")).toBe(frame);
+        expect(frame.getAttribute("src")).toBe("blob:original");
+        expect(urls.createObjectURL).toHaveBeenCalledOnce();
+        expect(urls.revokeObjectURL).not.toHaveBeenCalled();
       } else {
-        expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
+        if (change === "failed") {
+          expect(panel.querySelector("iframe")).toBeNull();
+          expect(panel.querySelector("a[download]")?.getAttribute("href")).toContain("renewed");
+        } else {
+          expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+        }
       }
-    }
+    });
   },
 );

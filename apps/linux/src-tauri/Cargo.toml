@@ -10,7 +10,7 @@ name = "openclaw-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2.7.1", features = [] }
+tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
 base64 = "0.23.1"
@@ -22,13 +22,13 @@ mdns-sd = { version = "0.21.5", default-features = false }
 openclaw-gateway-client = { path = "../../../crates/openclaw-gateway-client" }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 sha2 = "0.11.0"
 # macos-private-api backs Quick Chat's transparent window. Tauri gates
 # `WebviewWindowBuilder::transparent` behind it on macOS, and the feature must
 # stay in sync with `app.macOSPrivateApi` in tauri.conf.json or tauri-build
 # fails. It is inert on Linux and Windows.
-tauri = { version = "2.12.2", features = [
+tauri = { version = "2.12.3", features = [
   "image-png",
   "macos-private-api",
   "tray-icon",
@@ -36,11 +36,11 @@ tauri = { version = "2.12.2", features = [
 ] }
 tauri-plugin-autostart = "2.7.0"
 tauri-plugin-deep-link = "2.6.1"
-tauri-plugin-dialog = "2.8.1"
-tauri-plugin-global-shortcut = "2.4.0"
-tauri-plugin-opener = "2.7.0"
+tauri-plugin-dialog = "2.8.2"
+tauri-plugin-global-shortcut = "2.4.1"
+tauri-plugin-opener = "2.7.1"
 tauri-plugin-process = "2.4.0"
-tauri-plugin-single-instance = { version = "2.5.2", features = ["deep-link"] }
+tauri-plugin-single-instance = { version = "2.5.3", features = ["deep-link"] }
 # Defer Windows cleanup until the installer launches successfully.
 # Return to crates.io once an eligible release includes this fix.
 # Preserve 2.10.1's network features instead of enabling OS proxy discovery.
@@ -49,7 +49,7 @@ tauri-plugin-window-state = "2.5.0"
 tauri-utils = { version = "2.10.1", features = ["config-json5"] }
 tokio = { version = "1.53.2", features = ["macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
-uuid = { version = "1.27.0", features = ["v4"] }
+uuid = { version = "1.28.0", features = ["v4"] }
 zeroize = "1.9.1"
 
 [target.'cfg(unix)'.dependencies]
@@ -75,5 +75,6 @@ tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-n
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.39.1"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The windows::core::implement macro emits direct windows_core paths; keep both versions aligned.
 windows-core = "0.62.2"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }

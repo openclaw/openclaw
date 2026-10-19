@@ -14,6 +14,7 @@ import {
   pathMayExistSync,
   readDirectoryEntriesSync,
   safeStat,
+  statIfExists,
 } from "./path-existence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,6 +42,13 @@ describe("filesystem discovery policies", () => {
       expect(await lstatIfExists(missing)).toBeUndefined();
       expect(await lstatIfExists(path.join(file, "child"))).toBeUndefined();
       await expect(lstatIfExists(path.join(file, "child"), "ENOENT")).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+      expect((await statIfExists(link))?.isFile()).toBe(true);
+      expect((await statIfExists(directory))?.isDirectory()).toBe(true);
+      expect(await statIfExists(dangling)).toBeUndefined();
+      expect(await statIfExists(missing)).toBeUndefined();
+      await expect(statIfExists(path.join(file, "child"))).rejects.toMatchObject({
         code: "ENOTDIR",
       });
       expect((await safeStat(link))?.isFile()).toBe(true);
@@ -89,6 +97,12 @@ describe("filesystem discovery policies", () => {
     const failure = Object.assign(new Error("filesystem probe failed"), { code });
     vi.spyOn(fsPromises, "lstat").mockRejectedValue(failure);
     await expect(lstatIfExists("blocked")).rejects.toBe(failure);
+  });
+
+  it.each(["EACCES", "EIO"])("preserves strict stat failure %s", async (code) => {
+    const failure = Object.assign(new Error("filesystem probe failed"), { code });
+    vi.spyOn(fsPromises, "stat").mockRejectedValue(failure);
+    await expect(statIfExists("blocked")).rejects.toBe(failure);
   });
 
   it("requires executable regular targets while preserving Windows existence-only access", async () => {

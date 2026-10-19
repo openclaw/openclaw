@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { readUpdateTargetCliOptions } from "../cli/update-cli/update-command-cli-options.js";
@@ -11,7 +11,7 @@ import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as schemaVersions from "../state/openclaw-schema-versions.js";
-import { hasErrnoCode } from "./errors.js";
+import { ignoreMissingPath } from "./errno.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
@@ -223,9 +223,7 @@ export async function validateUpdateCandidateCanary(params: {
     try {
       await fs.lstat(continuationEntry);
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       if (params.migrationPolicy === "startup-only") {
         throw new Error(
           "The candidate lacks the runtime required to prove preserved-input startup",
@@ -248,7 +246,6 @@ export async function validateUpdateCandidateCanary(params: {
     if (params.migrationPolicy !== "startup-only") {
       const policy = resolveUpdateDoctorExecutionPolicy({
         targetVersion: await readPackageVersion(params.root),
-        allowGatewayServiceRepair: false,
       });
       if (!policy.fix) {
         throw new Error("Cannot check migrations without changing the running service");
@@ -469,17 +466,13 @@ export async function validateUpdateCandidateCanary(params: {
             pluginFailures.push(createUpdateFailureFact(fact, env));
           }
         };
-        const inventory: unknown = running.outputExceeded()
+        const inventory = running.outputExceeded()
           ? undefined
-          : JSON.parse(running.stdout());
-        const plugins =
-          isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : undefined;
-        const registry =
-          isRecord(inventory) && isRecord(inventory.registry) ? inventory.registry : undefined;
+          : asOptionalRecord(JSON.parse(running.stdout()));
+        const plugins = Array.isArray(inventory?.plugins) ? inventory.plugins : undefined;
+        const registry = asOptionalRecord(inventory?.registry);
         const diagnostics = [
-          ...(isRecord(inventory) && Array.isArray(inventory.diagnostics)
-            ? inventory.diagnostics
-            : []),
+          ...(Array.isArray(inventory?.diagnostics) ? inventory.diagnostics : []),
           ...(Array.isArray(registry?.diagnostics) ? registry.diagnostics : []),
         ];
         const failedPluginIds = new Set<string>();
@@ -666,7 +659,8 @@ export async function validateUpdateCandidateCanary(params: {
     const { phase } = progress;
     const durationMs = Date.now() - stepStartedAt;
     const displayPhase = phase === "lint" ? "health" : phase;
-    const failureLine = capture(`${displayPhase}: ${coerceErrorMessage(error)} (${durationMs}ms)`);
+    const message = coerceErrorMessage(error);
+    const failureLine = capture(`${displayPhase}: ${message} (${durationMs}ms)`);
     let failed = steps.at(-1);
     if (!failed || (failed.exitCode === 0 && failed !== activeLintStep) || failed.advisory) {
       failed = activeLintStep ?? currentStep(1);
@@ -684,7 +678,7 @@ export async function validateUpdateCandidateCanary(params: {
           check: phase === "readiness" ? "readyz" : phase === "startup" ? "startupz" : phase,
           code:
             phase === "doctor" || phase === "lint" ? "doctor-failed" : `candidate-${phase}-failed`,
-          message: coerceErrorMessage(error),
+          message,
         },
         env,
       ),
@@ -695,7 +689,10 @@ export async function validateUpdateCandidateCanary(params: {
       failed.failureFacts.some(
         (fact) => failureLine === `${displayPhase}: ${fact.message} (${durationMs}ms)`,
       );
-    failed.stderrTail ??= stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
+    failed.stderrTail ??=
+      phase === "snapshot"
+        ? message
+        : stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     try {
       await reportReceipt(onStep, failed);
     } catch (recordingError) {

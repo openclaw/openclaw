@@ -92,9 +92,16 @@ import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js"
 
 async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
   const { params, cfg } = ctx;
+  if (params.kind.startsWith("saved-auth:")) {
+    const profileId = parseSavedAuthSetupProfileId(params.kind);
+    if (!profileId) {
+      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
+    }
+    return await stageSavedAuthCandidate(ctx, profileId);
+  }
+  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
   const hasProviderTarget =
-    params.kind.startsWith("saved-auth:") ||
-    parseProviderAutoSetupChoiceId(params.kind) ||
+    choiceId ||
     params.kind === "existing-model" ||
     params.kind === "provider-auth" ||
     params.kind === "api-key";
@@ -104,14 +111,6 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
   if (roleError) {
     return roleError;
   }
-  if (params.kind.startsWith("saved-auth:")) {
-    const profileId = parseSavedAuthSetupProfileId(params.kind);
-    if (!profileId) {
-      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
-    }
-    return await stageSavedAuthCandidate(ctx, profileId);
-  }
-  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
   if (choiceId) {
     return await stageProviderAutoCandidate(ctx, choiceId);
   }
@@ -265,9 +264,7 @@ export async function activateSetupInference(
 async function activateCandidate(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
-  const deps = params.deps ?? {};
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const snapshot = await readSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
@@ -276,7 +273,6 @@ async function activateCandidate(
   const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   const ctx: StageContext = {
     params,
-    deps,
     snapshot,
     cfg,
     routeAgentId,
@@ -332,10 +328,9 @@ async function verifyAndActivateCandidate(
   preparedGeneration: SetupInferencePluginGeneration | undefined,
   runtimeCredential?: SetupRuntimeCredential,
 ): Promise<ActivateSetupInferenceResult> {
-  const { params, deps, snapshot, cfg, routeAgentId } = ctx;
+  const { params, snapshot, cfg, routeAgentId } = ctx;
   const source = snapshot.sourceConfig;
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const catalogPreference = params.automaticSetup
     ? false
     : resolveSetupNativeSessionCatalogPreference({
@@ -532,7 +527,6 @@ async function verifyAndActivateCandidate(
         route: candidateRoute,
         auth: verification.auth,
         stagedOwnerPluginArtifacts: artifacts,
-        deps,
       }),
     );
   };

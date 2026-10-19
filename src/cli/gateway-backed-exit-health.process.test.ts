@@ -17,7 +17,10 @@ import {
 import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
@@ -89,6 +92,7 @@ it.each<[string, string[]]>([
       remote: { url },
     });
     const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
+    openOpenClawStateDatabase({ env });
     const identity = loadOrCreateDeviceIdentity({ env });
     seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(url),

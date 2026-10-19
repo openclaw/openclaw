@@ -24,6 +24,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/call-device-auth.worker.test.ts",
   "src/gateway/chat-auth-readiness.integration.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
+  "src/gateway/chat-input-recovery.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",
   "src/gateway/config-reload.lease-retry.test.ts",
   "src/gateway/config-reload.plugin-drain.test.ts",
@@ -41,6 +42,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/control-ui-session-prs-retention.test.ts",
   "src/gateway/control-ui-session-prs-staleness.test.ts",
   "src/gateway/control-ui-session-prs.test.ts",
+  "src/gateway/control-ui-session-task-prs.test.ts",
   "src/gateway/control-ui.http.test.ts",
   "src/gateway/control-ui.response-authority.test.ts",
   "src/gateway/conversation-send.test.ts",
@@ -102,6 +104,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/health/collector.channel-discovery.test.ts",
   "src/gateway/health/collector.deadline.test.ts",
   "src/gateway/health/collector.queue-health.test.ts",
+  "src/gateway/health/collector.session-row-projection.test.ts",
   "src/gateway/health/collector.session-store-path.test.ts",
   "src/gateway/health/delivery-queue-cache.test.ts",
   "src/gateway/http-auth-utils.paired-device.test.ts",
@@ -143,6 +146,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-mcp-grants.test.ts",
   "src/gateway/operator-approval-placement-grants.test.ts",
   "src/gateway/operator-approval-receipts.test.ts",
+  "src/gateway/operator-approval-runtime-token.test.ts",
   "src/gateway/operator-approval-session-events.test.ts",
   "src/gateway/operator-approval-standing-grants.test.ts",
   "src/gateway/operator-approval-store.execution-identity.test.ts",
@@ -225,6 +229,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/skill-library-read.test.ts",
   "src/gateway/server/ws-connection.startup.test.ts",
   "src/gateway/server/ws-connection/authenticated-request-dispatch.policy-close.test.ts",
+  "src/gateway/server/ws-connection/authenticated-request-dispatch.storage.test.ts",
   "src/gateway/server/ws-connection/connect-device-pairing.test.ts",
   "src/gateway/server/ws-connection/connect-hello.setup-completion.test.ts",
   "src/gateway/server/ws-connection/message-handler.control-ui-build-admission.test.ts",
@@ -286,6 +291,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.topology.test.ts",
   "src/gateway/session-row-selection.test.ts",
   "src/gateway/session-send-recovery.test.ts",
+  "src/gateway/session-send-recovery.upgrade.test.ts",
   "src/gateway/session-sharing-committed-read.test.ts",
   "src/gateway/session-sharing-creation-receipts.test.ts",
   "src/gateway/session-sharing-groups.test.ts",
@@ -315,7 +321,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/sessions-history-http.model-policy.test.ts",
   "src/gateway/sessions-history-http.physical-source.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
-  "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/skill-library-authoring.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
   "src/gateway/talk/client-agent-consult.terminal-writes.test.ts",
@@ -583,6 +588,8 @@ export const gatewayMethodsTestExclude = [
 export const gatewayServerIsolatedTestFiles = [
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
+  // Native provider imports must not retain a previous file's retired shared-state owner.
+  "src/gateway/setup-inference.first-signin.integration.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.
   "src/gateway/server/plugin-legacy-listeners.test.ts",
   // Native source captures must not retain this fixture's forbidden process constructors.
@@ -603,6 +610,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.chat.canonical-publication.test.ts",
   "src/gateway/server.chat-worktree-readiness.product.test.ts",
   "src/gateway/server.chat-membership-authority.product.test.ts",
+  "src/gateway/chat-input-recovery.authority.test.ts",
   "src/gateway/server-chat.retired-projection.test.ts",
   "src/gateway/server-plugin-subagent-runtime.overrides.test.ts",
   // Loads the real plugin runtime that neighboring server tests replace with mocks.

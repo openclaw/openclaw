@@ -101,7 +101,7 @@ it(
       role: "operator",
       scopes: ["operator.admin", "operator.read", "operator.write"],
       deviceIdentity: loadOrCreateDeviceIdentity({
-        path: gateway.state.path("reply-obligation-client.sqlite"),
+        path: gateway.state.path("reply-obligation-client", "client", "credentials.sqlite"),
       }),
       signal,
       onEvent: (event) => {

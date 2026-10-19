@@ -2,7 +2,7 @@ import {
   readClawHubRiskAcknowledgementRequiredError,
   readClawReviewRequiredError,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -79,7 +79,6 @@ class ClawsCatalogModel {
   private searchRevision = 0;
   private previewRevision = 0;
   private detailRevision = 0;
-  private routedPackageName = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   onIdentityChange() {
     this.entries = [];
@@ -114,23 +113,6 @@ class ClawsCatalogModel {
 
   ensureInitialData() {
     void this.loadCatalog();
-  }
-
-  syncInitialSelection(initialPackageName: string, pageMode: boolean) {
-    if (pageMode && initialPackageName !== this.routedPackageName) {
-      this.routedPackageName = initialPackageName;
-      this.detailRevision += 1;
-      this.searchRevision += 1;
-      this.onIdentityChange();
-      void this.loadCatalog();
-      return;
-    }
-    if (pageMode && initialPackageName && !this.selected) {
-      const entry = this.entries.find((candidate) => candidate.packageName === initialPackageName);
-      if (entry) {
-        this.select(entry);
-      }
-    }
   }
 
   dispose() {
@@ -571,15 +553,6 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
     invalidateRequests: (change) => model.invalidateRequests(change),
     ensureInitialData: () => model.ensureInitialData(),
   });
-  // Current route snapshots admit catalog detail requests; request revisions retire late results.
-  createEffect(
-    () => ({
-      initialPackageName: props.initialPackageName ?? "",
-      pageMode: props.pageMode ?? false,
-      revision: revision(),
-    }),
-    (value) => untrack(() => model.syncInitialSelection(value.initialPackageName, value.pageMode)),
-  );
   onCleanup(() => model.dispose());
   const view = createMemo(() => {
     revision();

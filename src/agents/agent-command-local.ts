@@ -25,7 +25,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
@@ -92,39 +92,33 @@ export async function runLocalAgentCommand<TResult>(params: {
                 const run = async () => {
                   // Preparation owns registry selection and physical resources. Do not load
                   // an intermediate discovery registry just to select that same generation.
-                  await using lease = await acquireAgentRunPreparedModelRuntime(
-                    {
-                      config: admittedPrepared.cfg,
-                      agentId: admittedPrepared.sessionAgentId,
-                      agentDir: admittedPrepared.agentDir,
-                      workspaceDir: admittedPrepared.workspaceDir,
-                    },
-                    { abortSignal: admittedPrepared.opts.abortSignal },
+                  await using lease = scopePreparedModelRuntimeLease(
+                    await acquireAgentRunPreparedModelRuntime(
+                      {
+                        config: admittedPrepared.cfg,
+                        agentId: admittedPrepared.sessionAgentId,
+                        agentDir: admittedPrepared.agentDir,
+                        workspaceDir: admittedPrepared.workspaceDir,
+                      },
+                      { abortSignal: admittedPrepared.opts.abortSignal },
+                    ),
                   );
                   // Tool policy dispatches through the global runner; a headless run has no root.
                   ensureGlobalHookRunner();
-                  let active = true;
-                  try {
-                    return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
-                      withPreparedModelRuntimePluginGenerationScope(
-                        lease.pluginGeneration,
-                        () =>
-                          params.run(
-                            {
-                              ...admittedPrepared,
-                              commandRuntimeContext: {
-                                config: lease.snapshot.config,
-                                pluginGeneration: lease.pluginGeneration,
-                              },
-                            },
-                            resolvedDeps,
-                          ),
-                        () => (active ? lease.snapshot : undefined),
+                  return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
+                    lease.run(() =>
+                      params.run(
+                        {
+                          ...admittedPrepared,
+                          commandRuntimeContext: {
+                            config: lease.snapshot.config,
+                            pluginGeneration: lease.pluginGeneration,
+                          },
+                        },
+                        resolvedDeps,
                       ),
-                    );
-                  } finally {
-                    active = false;
-                  }
+                    ),
+                  );
                 };
                 return capability
                   ? await runWithCronCreatorAuthorityCapability(

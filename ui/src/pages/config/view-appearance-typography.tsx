@@ -48,7 +48,7 @@ export function Typography(
         <For each={["ui", "chat"] as const}>
           {(slot) => {
             const isUi = slot === "ui";
-            const title = createMemo(() => t(`configView.appearance.fonts.${slot}`));
+            const title = () => t(`configView.appearance.fonts.${slot}`);
             const face = createMemo(() => resolveTypefaces(props.presentedTheme.id)[slot]);
             return (
               <SettingsRow

@@ -9,9 +9,10 @@ read_when:
 ## Shared test state and process helpers
 
 TypeScript tooling uses the native `typescript` package. The `pnpm tsgo` lanes
-resolve its executable directly; syntax and semantic tools use its unstable API
-with explicit process lifetimes. The package root exports version metadata,
-while AST, filesystem, and compiler APIs live under `typescript/unstable/*`.
+resolve its executable directly; syntax and semantic tools use its native API
+with explicit process lifetimes. The package root exports version metadata.
+AST and filesystem APIs use `typescript/ast` and `typescript/fs`; synchronous and
+asynchronous compiler APIs use `typescript/sync` and `typescript/async`.
 Packaged declaration builds run the same native compiler with semantic checking
 and validate its complete source and package-manifest receipts before bundling.
 The tsdown wrapper defaults declaration builds to one configuration at a time,

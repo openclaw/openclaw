@@ -183,7 +183,6 @@ describe("image custom provider auth regression", () => {
     const tool = createImageTool({
       config: cfg,
       agentDir,
-      deferAutoModelResolution: true,
       modelHasVision: false,
       authProfileStore: createAuthProfileStoreFixture({}),
     });
@@ -211,7 +210,6 @@ describe("image custom provider auth regression", () => {
     const tool = createImageTool({
       config: cfg,
       agentDir,
-      deferAutoModelResolution: true,
       modelHasVision: false,
       authProfileStore: createAuthProfileStoreFixture({}),
     });

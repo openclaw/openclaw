@@ -20,6 +20,7 @@ import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/s
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
+import { captureMemoryDatabaseWriteOptions } from "./manager-database-admission.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
@@ -134,7 +135,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             purpose,
             acquireLocalService: params.acquireLocalService,
           });
-          const databaseOptions = MemoryIndexDatabase.captureWriteOptions(
+          const databaseOptions = captureMemoryDatabaseWriteOptions(
             agentId,
             settings.store.databasePath,
             source?.publishedDatabase,
@@ -307,7 +308,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
-        this.ensureIntervalSync();
         void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
           (err: unknown) => {
             log.warn("memory session startup catch-up failed: " + String(err));

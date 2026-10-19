@@ -87,7 +87,7 @@ describe("runReplyAgent direct replies and compaction notices", () => {
     async (_label, agentResult) => {
       const onAgentRunTerminalOutcome = vi.fn();
       const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
-      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
       expect(result).toMatchObject({ isError: true });
     },
   );

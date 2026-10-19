@@ -191,6 +191,8 @@ period. It never starts during a running turn. One pass covers the agent's pendi
 sessions, sharing transcript preparation, embedding-cache reads, and bounded
 publication transactions. If a turn starts during a pass, indexing finishes its
 current bounded group and resumes after the next quiet period.
+Repeated notifications for an unchanged transcript do not rewrite its source
+metadata; changes to its content, timestamp, or size still update the index.
 
 Failed session passes, including handled embedding-provider fallback failures,
 retain their pending work and retry after 1, 5, and 15 minutes, subject to the same

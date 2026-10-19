@@ -13,7 +13,10 @@ import {
   resolveJobLastRunEndedAtMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
-import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
+import {
+  isCronOneShotContinuationJob,
+  resolveForcePreservedOneShotAtMs,
+} from "./one-shot-schedule.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /**
@@ -118,7 +121,8 @@ export function isRunnableJob(params: {
       typeof lastRun === "number" &&
       typeof nextRun === "number" &&
       nextRun > lastRun &&
-      parseAbsoluteTimeMs(job.schedule.at) === nextRun
+      (parseAbsoluteTimeMs(job.schedule.at) === nextRun ||
+        (isCronOneShotContinuationJob(job) && job.state.pacedNextRunAtMs === nextRun))
     ) {
       return nowMs >= nextRun;
     }

@@ -2,7 +2,6 @@
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
@@ -10,6 +9,7 @@ import {
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const sessionKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:escaped-"\\🦞';
 function snapshot(): ChatSessionSnapshot {
