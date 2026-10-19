@@ -119,7 +119,7 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
@@ -216,7 +216,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
-  const selfChatCache = createSelfChatCache();
+  const selfChatCache = new SelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeStringEntries(imessageCfg.allowFrom);

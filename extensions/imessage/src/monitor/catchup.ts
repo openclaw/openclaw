@@ -194,7 +194,6 @@ export type CatchupDispatchFn = (row: IMessageCatchupRow) => Promise<{ ok: boole
 type PerformCatchupParams = {
   accountId: string;
   config: ResolvedCatchupConfig;
-  now?: number;
   fetch: CatchupFetchFn;
   dispatch: CatchupDispatchFn;
   observeSkippedFromMe?: (row: IMessageCatchupRow) => Promise<void> | void;
@@ -243,7 +242,7 @@ export async function advanceIMessageCatchupCursor(
 }
 
 export async function performIMessageCatchup(params: PerformCatchupParams) {
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const cfg = params.config;
   const cursor = await loadIMessageCatchupCursor(params.accountId);
   const lookbackMs =

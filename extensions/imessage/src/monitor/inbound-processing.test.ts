@@ -5,7 +5,7 @@ import {
   createInboundDecisionParams,
   type InboundDecisionParams,
 } from "./inbound-decision.test-support.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 type InboundProcessingModule = typeof import("./inbound-processing.js");
@@ -109,7 +109,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("keeps self-chat cache scoped to configured group threads", async () => {
-    const selfChatCache = createSelfChatCache();
+    const selfChatCache = new SelfChatCache();
     const groupedCfg = {
       channels: { imessage: { groups: { "123": {}, "456": {} } } },
     } as OpenClawConfig;
@@ -153,7 +153,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("logs reflected duplicate drops without message content", async () => {
-    const selfChatCache = createSelfChatCache();
+    const selfChatCache = new SelfChatCache();
     const logVerbose = vi.fn();
     const bodyText = "line-1\nline-2\t\u001b[31mred";
     const resolveReflection = (message: Partial<InboundDecisionParams["message"]>) =>
