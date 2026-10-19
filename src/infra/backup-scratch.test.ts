@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -65,7 +66,29 @@ it("inspects a scratch creator awaiting lifetime admission without reclaiming it
     resume.resolve();
     await expect(finishScratch(await creating, () => {})).resolves.toBeUndefined();
   }
+  await expect(fs.readdir(root)).resolves.toEqual([]);
 });
+
+it.runIf(process.platform === "win32")(
+  "preserves an existing retirement destination without moving the owned scratch",
+  async () => {
+    const root = dirs.make("backup-scratch-collision-");
+    const scratch = await createScratch(root);
+    const id = crypto.randomUUID();
+    const destination = path.join(root, `openclaw-backup-retired-${id}`);
+    await fs.mkdir(destination);
+    const before = await fs.lstat(destination, { bigint: true });
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(id);
+
+    await expect(finishScratch(scratch, () => {})).resolves.toContain(scratch.directory);
+    await expect(fs.stat(path.join(scratch.directory, "owner.sqlite"))).resolves.toBeDefined();
+    await expect(fs.lstat(destination, { bigint: true })).resolves.toMatchObject({
+      dev: before.dev,
+      ino: before.ino,
+    });
+    await expect(fs.readdir(destination)).resolves.toEqual([]);
+  },
+);
 
 it("rejects replaced scratch after boundary observation without removing either directory", async () => {
   const root = await fs.realpath(dirs.make("backup-scratch-observation-"));

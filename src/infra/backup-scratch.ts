@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -161,24 +162,30 @@ async function cleanupBackupScratchDirectory(
         throw new Error("Backup scratch directory identity unavailable");
       }
       const parent = await createRoot(path.dirname(directory));
-      const retiredPath = await createPrivateSqliteTempDirectory(parent.rootReal, retiredPrefix);
+      // Windows cannot rename onto an empty reservation; use a native no-clobber move.
+      // Keep the portable reservation path on platforms that support replacement.
+      const retiredPath =
+        process.platform === "win32"
+          ? path.join(parent.rootReal, `${retiredPrefix}${crypto.randomUUID()}`)
+          : await createPrivateSqliteTempDirectory(parent.rootReal, retiredPrefix);
       const retiredName = path.basename(retiredPath);
-      const reservation = await fs.lstat(retiredPath, { bigint: true });
-      // The committed token fenced every writer before this move into our empty reservation.
+      const reservation =
+        process.platform === "win32" ? undefined : await fs.lstat(retiredPath, { bigint: true });
+      // The committed token fenced every writer before this move.
       // The retired name survives failures after the token itself is removed.
       await parent.move(path.basename(directory), retiredName, {
-        overwrite: true,
+        overwrite: reservation !== undefined,
         mutationSymlinks: "reject",
         assertBeforeMutation: () => {
           const current = fsSync.lstatSync(directory, { bigint: true });
-          const destination = fsSync.lstatSync(retiredPath, { bigint: true });
-          if (
-            !current.isDirectory() ||
-            !sameFileIdentity(expected, current) ||
-            !destination.isDirectory() ||
-            !sameFileIdentity(reservation, destination)
-          ) {
+          if (!current.isDirectory() || !sameFileIdentity(expected, current)) {
             throw new Error("Backup scratch directory identity changed");
+          }
+          if (reservation) {
+            const destination = fsSync.lstatSync(retiredPath, { bigint: true });
+            if (!destination.isDirectory() || !sameFileIdentity(reservation, destination)) {
+              throw new Error("Backup scratch directory identity changed");
+            }
           }
         },
       });
