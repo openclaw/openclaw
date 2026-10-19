@@ -1,4 +1,3 @@
-// Exercise durable auth identity through isolated cron orchestration, stopping at provider I/O.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
@@ -37,14 +36,13 @@ const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
 
-function makeAuthJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
-  return makeIsolatedAgentJobFixture({
+const makeAuthJob = (overrides: Partial<CronStoredJob> = {}): CronStoredJob =>
+  makeIsolatedAgentJobFixture({
     agentId: "main",
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "check status" },
     ...overrides,
   });
-}
 
 function runWithConfig(cfg: OpenClawConfig, job = makeAuthJob(), trigger?: "cron" | "event") {
   return runCronIsolatedAgentTurn(
@@ -76,49 +74,46 @@ function setupClaudeCliBackend(): void {
   });
 }
 
-function oauth(provider = "openai"): AuthProfileCredential {
-  return {
-    type: "oauth",
-    provider,
-    access: "synthetic-subscription-access",
-    refresh: "synthetic-subscription-refresh",
-    expires: Date.now() + 3_600_000,
-    accountId: "synthetic-account",
-  };
-}
+const oauth = (provider = "openai"): AuthProfileCredential => ({
+  type: "oauth",
+  provider,
+  access: "synthetic-subscription-access",
+  refresh: "synthetic-subscription-refresh",
+  expires: Date.now() + 3_600_000,
+  accountId: "synthetic-account",
+});
 
-function apiKey(): AuthProfileCredential {
-  return { type: "api_key", provider: "openai", key: "synthetic-platform-key" };
-}
+const apiKey = (): AuthProfileCredential => ({
+  type: "api_key",
+  provider: "openai",
+  key: "synthetic-platform-key",
+});
 
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", () => {
   setupRunCronIsolatedAgentTurnSuite();
   let state: OpenClawTestState;
 
   async function saveProfiles(profiles: Record<string, AuthProfileCredential>) {
-    await persistAuthProfileBatch({
-      profiles: Object.entries(profiles).map(([profileId, credential]) => ({
-        profileId,
-        credential,
-      })),
-    });
+    const batch = Object.entries(profiles).map(([profileId, credential]) => ({
+      profileId,
+      credential,
+    }));
+    await persistAuthProfileBatch({ profiles: batch });
   }
 
-  function config(primary = "openai/gpt-4.1"): OpenClawConfig {
-    return {
-      agents: {
-        entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
-        defaults: { model: primary },
+  const config = (primary = "openai/gpt-4.1"): OpenClawConfig => ({
+    agents: {
+      entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+      defaults: { model: primary },
+    },
+    auth: {
+      profiles: {
+        [platformId]: { provider: "openai", mode: "api_key" },
+        [subscriptionId]: { provider: "openai", mode: "oauth" },
       },
-      auth: {
-        profiles: {
-          [platformId]: { provider: "openai", mode: "api_key" },
-          [subscriptionId]: { provider: "openai", mode: "oauth" },
-        },
-        order: { openai: [platformId, subscriptionId] },
-      },
-    };
-  }
+      order: { openai: [platformId, subscriptionId] },
+    },
+  });
 
   beforeEach(async () => {
     state = await createOpenClawTestState({
@@ -179,10 +174,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       }
       const job = makeAuthJob({
         ...makeJob({ kind: "agentTurn", message: "check status" }),
-        id: "durable-auth",
-        name: "Durable auth",
-        createdAtMs: 1,
-        updatedAtMs: 1,
         inferenceBinding: binding,
       });
       const storePath = state.statePath("cron", "jobs.json");

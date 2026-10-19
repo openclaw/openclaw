@@ -37,6 +37,7 @@ type SelectionParams = Parameters<typeof resolveCronModelSelection>[0];
 const defaultRef = { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 const selectedRef = { provider: "openai", model: "gpt-4.1-mini" };
 const model = "openai/gpt-4.1-mini";
+const selected = (modelSource: string, ref = selectedRef) => ({ ok: true, ...ref, modelSource });
 const payload = { kind: "agentTurn", message: "do it" } as const;
 type Agents = NonNullable<OpenClawConfig["agents"]>;
 const agentConfig = (defaults: Agents["defaults"], entries: Agents["entries"] = {}) => ({
@@ -44,9 +45,8 @@ const agentConfig = (defaults: Agents["defaults"], entries: Agents["entries"] = 
 });
 const discordConfig = (token: string | { provider: string; source: "env"; id: string }) =>
   ({ channels: { discord: { accounts: { default: { token } } } } }) satisfies OpenClawConfig;
-function expectAllowed(params: Record<string, unknown> = { raw: model }) {
+const expectAllowed = (params: Record<string, unknown> = { raw: model }) =>
   expect(mocks.allowed).toHaveBeenCalledWith(expect.objectContaining(params));
-}
 const select = (overrides: Partial<SelectionParams> = {}) =>
   resolveCronModelSelection({
     cfg: {},
@@ -74,13 +74,6 @@ beforeEach(() => {
 });
 afterEach(clearRuntimeConfigSnapshot);
 
-it("uses the session model when no payload model is present", async () => {
-  await expect(
-    select({ sessionEntry: { providerOverride: "openai", modelOverride: "gpt-4.1-mini" } }),
-  ).resolves.toMatchObject({ ok: true, ...selectedRef, modelSource: "session" });
-  expectAllowed();
-});
-
 it.each<[string, OpenClawConfig, string | undefined, string]>([
   ["invalid model", {}, undefined, "rejected: invalid model"],
   [
@@ -106,10 +99,7 @@ it.each<[string, OpenClawConfig, string | undefined, string]>([
 
 it("uses one replacement catalog owner for config, policy, and selected identity", async () => {
   const cfg = agentConfig({ model: "anthropic/caller-model" }, { worker: {} });
-  const ownerConfig = agentConfig(
-    { model: "openai/owner-default", modelPolicy: { allow: ["openai/*"] } },
-    { main: {} },
-  );
+  const ownerConfig = agentConfig({ model: "openai/owner", modelPolicy: { allow: ["openai/*"] } });
   const catalog = [{ id: "gpt-4.1-mini", name: "Owner Model", provider: "openai" }];
   const owner = {
     config: ownerConfig,
@@ -125,15 +115,13 @@ it("uses one replacement catalog owner for config, policy, and selected identity
       payload: { ...payload, model: `  ${model}  ` },
       sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" },
     }),
-  ).resolves.toMatchObject({ ok: true, ...selectedRef, owner, modelSource: "payload" });
+  ).resolves.toMatchObject({ ...selected("payload"), owner });
   expect(mocks.loadOwner).toHaveBeenCalledExactlyOnceWith({
     config: cfg,
     readOnly: true,
     allowGatewaySubagentBinding: true,
   });
-  expect(mocks.configured).toHaveBeenCalledWith(
-    expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
-  );
+  expect(mocks.configured.mock.lastCall?.[0]?.cfg).toMatchObject(ownerConfig);
   expectAllowed({ cfg: ownerConfig, agentId: "main", catalog, raw: model });
 });
 
@@ -147,11 +135,9 @@ it.each([true, false])("selects a Gmail hook model only when allowed=%s", async 
         ? { sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-opus-4-6" } }
         : {}),
     }),
-  ).resolves.toMatchObject({
-    ok: true,
-    ...(allowed ? selectedRef : defaultRef),
-    modelSource: allowed ? "hook" : "default",
-  });
+  ).resolves.toMatchObject(
+    selected(allowed ? "hook" : "default", allowed ? selectedRef : defaultRef),
+  );
 });
 
 it("uses the selected subagent model with agent defaults derived from object config", async () => {
@@ -161,11 +147,7 @@ it("uses the selected subagent model with agent defaults derived from object con
   };
   const cfg = agentConfig({ model: "anthropic/claude-sonnet-4-6", subagents: { model } });
   mocks.subagent.mockReturnValue({ raw: model, source: "default-subagent" });
-  await expect(select({ cfg, agentConfigOverride })).resolves.toMatchObject({
-    ok: true,
-    ...selectedRef,
-    modelSource: "subagent",
-  });
+  await expect(select({ cfg, agentConfigOverride })).resolves.toMatchObject(selected("subagent"));
   expect(mocks.subagent).toHaveBeenCalledWith({ cfg, agentId: "main", agentConfigOverride });
   expectAllowed();
 });

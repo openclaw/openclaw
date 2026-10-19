@@ -27,17 +27,11 @@ const base = { agentId: "main", sessionKey: "agent:main:cron:queue-race" };
 const exact = { ...base, sessionKey: `${base.sessionKey}:run:run-123` };
 const payload = { kind: "systemEvent" as const, sessionKey: exact.sessionKey, text: "resume" };
 type QueueContext = ReturnType<typeof captureOpenClawStateWorkerContext>;
-const writers = [
-  {
-    name: "ordinary",
-    enqueue: async (context: QueueContext) => queue.enqueueSessionDelivery(payload, context),
-  },
-  {
-    name: "claimed",
-    enqueue: async (context: QueueContext) =>
-      (await queue.enqueueClaimedSessionDelivery(payload, 1_000, context)).id,
-  },
-];
+const writers = ["ordinary", "claimed"] as const;
+const enqueue = async (context: QueueContext, writer: (typeof writers)[number]) =>
+  writer === "ordinary"
+    ? queue.enqueueSessionDelivery(payload, context)
+    : (await queue.enqueueClaimedSessionDelivery(payload, 1_000, context)).id;
 
 async function seedContinuation() {
   setRuntimeConfigSnapshot({});
@@ -88,10 +82,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(writers)("retains the alias while a $name enqueue owns admission", async ({ enqueue }) => {
+it.each(writers)("retains the alias while a %s enqueue owns admission", async (writer) => {
   await withContinuation(async (context) => {
     const admission = pauseAdmission();
-    const enqueueing = enqueue(context);
+    const enqueueing = enqueue(context, writer);
     try {
       await admission.entered;
       await removeIdle(exact.sessionKey, undefined, context);
@@ -107,42 +101,39 @@ it.each(writers)("retains the alias while a $name enqueue owns admission", async
   });
 });
 
-it.each(writers)(
-  "refuses a $name enqueue that loses to continuation cleanup",
-  async ({ enqueue }) => {
-    await withContinuation(async (context) => {
-      const snapshotRead = createDeferredCore();
-      const resumeCleanup = createDeferredCore();
-      const reserved = createDeferredCore();
-      const readPending = queue.loadPendingSessionDeliveries;
-      vi.spyOn(queue, "loadPendingSessionDeliveries").mockImplementationOnce(async (owner) => {
-        const pending = await readPending(owner);
-        snapshotRead.resolve();
-        await resumeCleanup.promise;
-        return pending;
-      });
-      const cleaning = removeIdle(exact.sessionKey, undefined, context);
-      await snapshotRead.promise;
-      const begin = lifecycle.beginSessionEffect;
-      vi.spyOn(lifecycle, "beginSessionEffect").mockImplementationOnce((params) => {
-        const pending = begin(params);
-        reserved.resolve();
-        return pending;
-      });
-      const enqueueing = enqueue(context);
-      const refused = expect(enqueueing).rejects.toBeInstanceOf(SessionDeliveryDeadLetteredError);
-      try {
-        await reserved.promise;
-      } finally {
-        resumeCleanup.resolve();
-        await Promise.all([cleaning, refused]);
-      }
-      expect(loadSessionEntry(exact)).toBeUndefined();
-      expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
-      expect(await readPending(context)).toEqual([]);
+it.each(writers)("refuses a %s enqueue that loses to continuation cleanup", async (writer) => {
+  await withContinuation(async (context) => {
+    const snapshotRead = createDeferredCore();
+    const resumeCleanup = createDeferredCore();
+    const reserved = createDeferredCore();
+    const readPending = queue.loadPendingSessionDeliveries;
+    vi.spyOn(queue, "loadPendingSessionDeliveries").mockImplementationOnce(async (owner) => {
+      const pending = await readPending(owner);
+      snapshotRead.resolve();
+      await resumeCleanup.promise;
+      return pending;
     });
-  },
-);
+    const cleaning = removeIdle(exact.sessionKey, undefined, context);
+    await snapshotRead.promise;
+    const begin = lifecycle.beginSessionEffect;
+    vi.spyOn(lifecycle, "beginSessionEffect").mockImplementationOnce((params) => {
+      const pending = begin(params);
+      reserved.resolve();
+      return pending;
+    });
+    const enqueueing = enqueue(context, writer);
+    const refused = expect(enqueueing).rejects.toBeInstanceOf(SessionDeliveryDeadLetteredError);
+    try {
+      await reserved.promise;
+    } finally {
+      resumeCleanup.resolve();
+      await Promise.all([cleaning, refused]);
+    }
+    expect(loadSessionEntry(exact)).toBeUndefined();
+    expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
+    expect(await readPending(context)).toEqual([]);
+  });
+});
 
 it("removes an eligible alias after its own settled delivery, preserving the base", async () => {
   await withContinuation(async (context) => {
