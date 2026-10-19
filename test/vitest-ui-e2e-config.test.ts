@@ -74,6 +74,7 @@ const realGatewayFiles = [
   "session-progress-hovercard.real-gateway",
   "session-roster-request-rate.real-gateway",
   "sidebar-running-counts.real-gateway",
+  "task-pull-requests.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
 ]
@@ -559,6 +560,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/sidebar-running-counts.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/task-pull-requests.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial",
           phase: 1,
           workers: 1,
