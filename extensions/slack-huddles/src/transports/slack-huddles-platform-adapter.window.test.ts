@@ -222,9 +222,9 @@ it("unmutes talk-back once the huddle window shows the preferred virtual microph
   expect(result).toMatchObject({ audioInputRouted: true, micMuted: false, inCall: true });
 });
 
-it("captures captions Slack renders in the huddle window", async () => {
-  const caption = new PageNode("div").append(
-    new PageNode("span", { class: "p-huddle_closed_caption_event__member_name" }, "Morgan:"),
+function captionRow(speaker: string, words: string) {
+  return new PageNode("div").append(
+    new PageNode("span", { class: "p-huddle_closed_caption_event__member_name" }, speaker),
     new PageNode("div", { class: "p-huddle_closed_caption_event__event_text" }).append(
       new PageNode(
         "span",
@@ -232,11 +232,52 @@ it("captures captions Slack renders in the huddle window", async () => {
           "data-qa": "huddle_closed_caption_event",
           class: "p-huddle_closed_caption_event__transcription",
         },
-        "The next step is ready.",
+        words,
       ),
     ),
   );
-  const opened = huddleWindow(muteControl(false), caption);
+}
+
+it.each([
+  { inTab: false, expected: [{ speaker: "Morgan:", text: "The next step is ready." }] },
+  // Captions in the channel tab are still collected while a huddle window is tracked.
+  {
+    inTab: true,
+    expected: [
+      { speaker: "Morgan:", text: "The next step is ready." },
+      { speaker: "Riley:", text: "Tab captions still count." },
+    ],
+  },
+])(
+  "captures captions from the huddle window and the tab (tab captions=$inTab)",
+  async ({ inTab, expected }) => {
+    const opened = huddleWindow(
+      muteControl(false),
+      captionRow("Morgan:", "The next step is ready."),
+    );
+    const browser = fixture({
+      document: page(
+        channelHeader(true),
+        qaNode("huddle_toolbar__leave_button", "Leave"),
+        ...(inTab ? [captionRow("Riley:", "Tab captions still count.")] : []),
+      ),
+      currentUrl: CLIENT_URL,
+      window: slackWindow(opened, { ...MARKER, joinRequested: true }),
+    });
+    await browser.status({ readOnly: true });
+    (browser.window.open as (url: string) => unknown)("about:blank");
+    expect(await browser.status({ captureCaptions: true })).toMatchObject({
+      captioning: true,
+      recentTranscript: expected,
+    });
+    // The live-caption observer watches the huddle window, not only the channel tab.
+    expect(browser.observed).toContain(opened.document.body);
+  },
+);
+
+it("leaves a tracked huddle window untouched once another session owns the tab", async () => {
+  const mute = muteControl(true);
+  const opened = huddleWindow(mute, captionRow("Morgan:", "Not for the old session."));
   const browser = fixture({
     document: page(channelHeader(true), qaNode("huddle_toolbar__leave_button", "Leave")),
     currentUrl: CLIENT_URL,
@@ -244,10 +285,11 @@ it("captures captions Slack renders in the huddle window", async () => {
   });
   await browser.status({ readOnly: true });
   (browser.window.open as (url: string) => unknown)("about:blank");
-  expect(await browser.status({ captureCaptions: true })).toMatchObject({
-    captioning: true,
-    recentTranscript: [{ speaker: "Morgan:", text: "The next step is ready." }],
-  });
+  // A newer session takes over the page marker during this session's awaited work.
+  Object.assign(browser.window, { __openclawSlackHuddle: { ...MARKER, sessionId: "session-2" } });
+  const result = await browser.status({ allowSessionAdoption: false, captureCaptions: true });
+  expect(mute.clicks).toBe(0);
+  expect(result).toMatchObject({ captioning: false, transcriptLines: 0 });
 });
 
 it.each([

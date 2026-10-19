@@ -8,6 +8,8 @@ export const CLIENT_URL = "https://app.slack.com/client/T0123ABCD/C0123ABCD";
 export class PageNode {
   readonly children: PageNode[] = [];
   parentElement?: PageNode;
+  /** The fixture page this node's tree belongs to; set on each page body. */
+  ownerDocument?: unknown;
   isConnected = true;
   disabled = false;
   clicks = 0;
@@ -179,7 +181,7 @@ export function microphone(on: boolean, inPreview = false): PageNode {
 
 export function page(...nodes: PageNode[]) {
   const body = new PageNode("body").append(...nodes);
-  return {
+  const document = {
     body,
     title: "Slack",
     querySelector: (selector: string) =>
@@ -187,6 +189,8 @@ export function page(...nodes: PageNode[]) {
     querySelectorAll: (selector: string) => body.querySelectorAll(selector),
     getElementById: () => undefined,
   };
+  body.ownerDocument = document;
+  return document;
 }
 
 export function fixture(params: {
@@ -216,6 +220,7 @@ export function fixture(params: {
       : {});
   const location = new URL(params.currentUrl ?? HUDDLE_URL);
   let mutation: (() => void) | undefined;
+  const observed: unknown[] = [];
   const timers = new Map<number, () => void>();
   let nextTimer = 1;
   const sandbox = {
@@ -250,7 +255,9 @@ export function fixture(params: {
       constructor(callback: () => void) {
         mutation = callback;
       }
-      observe() {}
+      observe(target: unknown) {
+        observed.push(target);
+      }
       disconnect() {
         mutation = undefined;
       }
@@ -272,6 +279,8 @@ export function fixture(params: {
   return {
     window,
     location,
+    /** Targets the caption observer was attached to. */
+    observed,
     mutate: () => mutation?.(),
     async status(
       overrides: Partial<

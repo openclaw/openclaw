@@ -472,12 +472,14 @@ ${withLiveOwnership("  }\n")}${
       observedMeeting.inCallUrl === location.href
     );
   };
+  // Every control document can hold captions; platforms without a call window list only this page.
+  const captionContents = () =>
+    controlDocuments().map((root) => firstWithin(root, selectors.captionContent)).filter(Boolean);
   const scrapeCaptions = (mutations = []) => {
     if (!captionCaptureMatchesCurrentMeeting()) return;
-    const content = firstRaw(selectors.captionContent);
-    const rows = content
-      ? selectors.captionRows.flatMap((selector) => [...content.querySelectorAll(selector)])
-      : [];
+    const rows = captionContents().flatMap((content) =>
+      selectors.captionRows.flatMap((selector) => [...content.querySelectorAll(selector)])
+    );
     captionState.settled = Array.isArray(captionState.settled) ? captionState.settled : [];
     const removedNodes = mutations.flatMap((mutation) => [...(mutation.removedNodes || [])]);
     const rowWasRemoved = (entry) => removedNodes.some((node) =>
@@ -595,11 +597,13 @@ ${withLiveOwnership("  }\n")}${
       captionState.observerInstalled = true;
       captionState.observer = new MutationObserver(scrapeCaptions);
       // Captions may render in a call window listed by the platform's control documents.
-      captionState.observer.observe((firstRaw(selectors.captionContent)?.ownerDocument || document).body, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
+      for (const content of captionContents()) {
+        captionState.observer.observe((content.ownerDocument || document).body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+      }
       notes.push("Installed ${options.platform.displayName} live-caption observer.");
     }
     if (!captionsFinalized && canMutateSession && inCall) scrapeCaptions();
