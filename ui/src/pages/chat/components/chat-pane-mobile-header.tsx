@@ -11,7 +11,7 @@ import {
 } from "./chat-session-sharing.solid.tsx";
 import "./chat-pane-mobile-header.css";
 
-export type ChatPaneMobileHeaderNotice =
+type ChatPaneMobileHeaderNotice =
   | { kind: "gateway"; status: GatewayStatus; onRetry?: () => void }
   | {
       kind: "device-offline";
