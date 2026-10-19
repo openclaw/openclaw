@@ -65,14 +65,12 @@ export function extractGeneratedMusicFileCandidates(
     if (!url) {
       continue;
     }
+    const mimeType = normalizeOptionalString(value.content_type);
+    const fileName = normalizeOptionalString(value.file_name);
     candidates.push({
       url,
-      ...(normalizeOptionalString(value.content_type)
-        ? { mimeType: normalizeOptionalString(value.content_type) }
-        : {}),
-      ...(normalizeOptionalString(value.file_name)
-        ? { fileName: normalizeOptionalString(value.file_name) }
-        : {}),
+      ...(mimeType ? { mimeType } : {}),
+      ...(fileName ? { fileName } : {}),
     });
   }
   return candidates;
