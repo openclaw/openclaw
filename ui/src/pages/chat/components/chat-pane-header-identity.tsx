@@ -26,12 +26,7 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import type { ChatPaneHeaderProps } from "./chat-pane-header.tsx";
-
-export type ChatPaneParentSession = {
-  key: string;
-  title: string;
-};
+import type { ChatPaneHeaderProps, ChatPaneParentSession } from "./chat-pane-header.types.ts";
 
 function revealLabel(platform: string | null): string {
   if (platform === "darwin") {

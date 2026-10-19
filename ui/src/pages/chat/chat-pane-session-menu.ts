@@ -58,7 +58,7 @@ import {
 import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
-import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
+import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {

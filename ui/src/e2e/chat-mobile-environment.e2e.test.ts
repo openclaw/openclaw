@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
@@ -11,6 +11,8 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const machineName = "Studio Mac";
@@ -57,12 +59,26 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" },
       async ({ page }) => {
+        const module = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-machine.tsx"),
+        );
+        onTestFinished(module.release);
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        const offlineSession = {
+          ...remoteSession,
+          placement: {
+            ...remoteSession.placement,
+            runner: { ...remoteSession.placement.runner, status: "offline" as const },
+          },
+        };
         const gateway = await installMockGateway(page, {
           sessionKey: remoteSession.key,
-          sessionInfo: remoteSession,
+          sessionInfo: offlineSession,
           featureMethods: ["environments.list"],
           methodResponses: {
-            "sessions.list": chatSessionListResponse([remoteSession, localSession]),
+            "sessions.list": chatSessionListResponse([offlineSession, localSession]),
             "environments.list": {
               profiles: [],
               environments: [
@@ -85,12 +101,24 @@ suite.define(() => {
           .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
           .waitFor();
         await gateway.waitForRequest("environments.list");
-        await header
-          .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
-          .click();
         const host = pane.locator(".chat-mobile-host");
         const environment = host.locator(".chat-environment-mobile");
         const machine = environment.getByRole("button", { name: machineName, exact: true });
+        expect(module.requests()).toBe(0);
+        await header.getByRole("button", { name: /Studio Mac.*Offline/i }).click();
+        const moduleUrl = await module.request;
+        await host.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+        await host.getByRole("button", { name: "Back", exact: true }).click();
+        await host.getByRole("button", { name: "Close", exact: true }).click();
+        await host.waitFor({ state: "hidden" });
+        module.release();
+        // Observe the pending native import without reopening its dismissed destination.
+        await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
+        expect(await host.isVisible()).toBe(false);
+        expect(errors).toEqual([]);
+        await header
+          .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
+          .click();
         await machine.waitFor();
         if (captureUiProofEnabled) {
           await writeFile(
@@ -123,6 +151,8 @@ suite.define(() => {
         expect(await gateway.getRequests("environments.list")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
+        expect(module.requests()).toBe(1);
+        expect(errors).toEqual([]);
       },
     );
   });

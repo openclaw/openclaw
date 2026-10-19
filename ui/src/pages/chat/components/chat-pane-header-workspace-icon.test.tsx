@@ -4,11 +4,8 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createSessionContext } from "../chat-pane.test-support.ts";
 import { resolveChatPaneWorkspaceIcon } from "./chat-pane-header-identity.tsx";
-import {
-  mountChatPaneHeader,
-  mockWorkspaceIconFetch,
-  type ChatPaneHeaderProps,
-} from "./chat-pane-header.test-support.ts";
+import { mountChatPaneHeader, mockWorkspaceIconFetch } from "./chat-pane-header.test-support.ts";
+import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
 

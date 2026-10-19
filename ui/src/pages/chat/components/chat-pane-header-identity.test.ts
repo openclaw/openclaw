@@ -5,6 +5,7 @@ import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
 } from "./chat-pane-header.test-support.ts";
+import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
 

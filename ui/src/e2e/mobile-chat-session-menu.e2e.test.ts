@@ -1,9 +1,12 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
@@ -12,7 +15,7 @@ import {
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const mobile = {
   hasTouch: true,
   locale: "en-US",
@@ -29,11 +32,16 @@ async function installSessionSharing(
   title: string,
   role: "owner" | "member",
   visibility: "draft" | "read-only" = "draft",
+  includePeople = false,
 ) {
   const featureMethods = ["chat.metadata", "chat.startup", "session.visibility.set"];
   const methodResponses: Record<string, unknown> = {
     "sessions.list": sessionsListResponse([
-      sessionRow(key, title, updatedAt, { sharingRole: role, visibility }),
+      sessionRow(key, title, updatedAt, {
+        sharingRole: role,
+        visibility,
+        ...(includePeople ? { createdActor: { type: "human", id: "owner", label: "Owner" } } : {}),
+      }),
     ]),
   };
   if (role === "owner") {
@@ -173,16 +181,232 @@ suite.define(() => {
     (colorScheme) =>
       withMobilePage(async (page) => {
         const sessionKey = "agent:main:mobile-more";
-        const gateway = await installSessionSharing(page, sessionKey, "Mobile menu", "owner");
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        const peopleModule = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-mobile-people.tsx"),
+        );
+        onTestFinished(peopleModule.release);
+        const sharingRequest = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/chat-session-sharing-mobile.tsx",
+        );
+        let sharingAvailable = false;
+        let documentAvailable = false;
+        let documentRequests = 0;
+        let documentProbes = 0;
+        page.on("request", (request) => {
+          if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+            documentRequests += 1;
+          }
+        });
+        let failedRequests = 0;
+        const sharingModule =
+          colorScheme === "dark" ? await holdModuleResponse(page, sharingRequest) : undefined;
+        if (sharingModule) {
+          onTestFinished(sharingModule.release);
+        } else {
+          await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
+            if (route.request().method() === "HEAD") {
+              documentProbes += 1;
+              if (!documentAvailable) {
+                await route.fulfill({ status: 503 });
+                return;
+              }
+            }
+            await route.fallback();
+          });
+          await page.route(sharingRequest, async (route) => {
+            if (!sharingAvailable) {
+              failedRequests += 1;
+              await route.abort("internetdisconnected");
+              return;
+            }
+            await route.fallback();
+          });
+        }
+        const gateway = await installSessionSharing(
+          page,
+          sessionKey,
+          "Mobile menu",
+          "owner",
+          "draft",
+          colorScheme === "light",
+        );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        if (colorScheme === "dark") {
+          await page.setViewportSize({ width: 1440, height: 1000 });
+          await page
+            .locator(".chat-header-session-menu__trigger")
+            .filter({ visible: true })
+            .click();
+          await page.getByRole("menuitem", { name: "Open split view", exact: true }).click();
+          await expect.poll(() => page.locator(".chat-split-view__cell").count()).toBe(2);
+          await page.setViewportSize(mobile.viewport);
+        }
         const trigger = page.getByRole("button", { name: "Actions for Mobile menu" });
         await trigger.click();
         const menu = page.getByRole("menu", { name: "Actions for Mobile menu" });
         await menu.waitFor();
-        await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).waitFor();
+        if (colorScheme === "light") {
+          expect(
+            await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).count(),
+          ).toBe(0);
+          await page.getByRole("button", { name: "People", exact: true }).waitFor();
+        } else {
+          await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).waitFor();
+        }
+        await page.keyboard.press("Escape");
+        const host = page.locator(".chat-mobile-host").filter({ visible: true });
+
+        expect(peopleModule.requests()).toBe(0);
+        expect(sharingModule?.requests() ?? failedRequests).toBe(0);
+        if (colorScheme === "light") {
+          await page.getByRole("button", { name: "People", exact: true }).click();
+          await peopleModule.request;
+          await host.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+          await captureUiProof(suite, page, "mobile-people-loading-light.png");
+          peopleModule.release();
+          await host.getByRole("group", { name: "People", exact: true }).waitFor();
+          await host.getByRole("button", { name: /^Sharing options/ }).click();
+        } else {
+          peopleModule.release();
+          await trigger.click();
+          await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).click();
+        }
+        const sharing = host.locator('[data-mobile-page="sharing"]');
+        if (sharingModule) {
+          const moduleUrl = await sharingModule.request;
+          await sharing.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+          await captureUiProof(suite, page, "mobile-sharing-pending-dark.png");
+          const retiringPane = page.locator(".chat-split-view__cell--active openclaw-chat-pane");
+          const retiringElement = await retiringPane.elementHandle();
+          expect(retiringElement).not.toBeNull();
+          await host
+            .locator(".chat-mobile-host__header")
+            .getByRole("button", { name: "Close", exact: true })
+            .click();
+          await selectChatLayoutAction(retiringPane, "Close pane");
+          await expect.poll(() => page.locator(".chat-split-view__cell").count()).toBe(1);
+          expect(await retiringElement!.evaluate((element) => element.isConnected)).toBe(false);
+          sharingModule.release();
+          // Observe the already-requested native import settling after its header was retired.
+          await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
+          expect(await sharing.isVisible()).toBe(false);
+          expect(errors).toEqual([]);
+          expect(await gateway.getRequests("session.visibility.set")).toHaveLength(0);
+          await trigger.click();
+          await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).click();
+        } else {
+          const failure = sharing.getByRole("alert");
+          await failure.waitFor();
+          expect(await failure.textContent()).toContain(
+            "Failed to fetch dynamically imported module",
+          );
+          expect(failedRequests).toBeGreaterThan(0);
+          await captureUiProof(suite, page, "mobile-sharing-error-light.png");
+          expect(documentRequests).toBe(1);
+          await expect.poll(() => documentProbes).toBeGreaterThanOrEqual(1);
+          const reloaded = page.waitForEvent("domcontentloaded");
+          await failure.getByRole("button", { name: "Reload", exact: true }).click();
+          sharingAvailable = true;
+          documentAvailable = true;
+          await reloaded;
+          await trigger.waitFor();
+          expect(new URL(page.url()).pathname).toBe(
+            new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey)).pathname,
+          );
+          expect(await sharing.isVisible()).toBe(false);
+          // Full-document recovery preserves the session route; the operator reopens the sheet.
+          await page.getByRole("button", { name: "People", exact: true }).click();
+          await host.getByRole("button", { name: /^Sharing options/ }).click();
+        }
+        try {
+          await sharing
+            .getByRole("heading", { name: "Message permissions", exact: true })
+            .waitFor();
+        } finally {
+          console.info("MOBILE_SHARING_RECOVERY", {
+            documentRequests,
+            documentProbes,
+            failedRequests,
+          });
+        }
+        const lastMember = sharing.getByRole("checkbox", { name: /^Member 29,/ });
+        await lastMember.scrollIntoViewIfNeeded();
+        expect(await sharing.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        await lastMember.click({ trial: true });
+        const bounds = await host.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(mobile.viewport.width);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(mobile.viewport.height);
+        await captureUiProof(suite, page, `mobile-sharing-sheet-${colorScheme}.png`);
+
+        await sharing.getByRole("button", { name: "Search people…", exact: true }).click();
+        const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
+        await search.fill("Member 29");
+        await lastMember.waitFor();
+        await sharing.getByRole("button", { name: /^Draft / }).click();
+        const access = host.locator('[data-mobile-page="sharing-access"]');
+        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Back", exact: true })
+          .click();
+        await search.waitFor();
+        expect(await search.inputValue()).toBe("Member 29");
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await host.waitFor({ state: "hidden" });
+        await expect
+          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        if (colorScheme === "light") {
+          await page.getByRole("button", { name: "People", exact: true }).click();
+          await host.getByRole("button", { name: /^Sharing options/ }).click();
+        } else {
+          await trigger.click();
+          await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).click();
+        }
+        await search.waitFor();
+        expect(await search.inputValue()).toBe("Member 29");
+        await sharing.getByRole("button", { name: /^Draft / }).click();
+        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        expect(
+          await access.getByRole("button", { name: /^Draft / }).getAttribute("aria-pressed"),
+        ).toBe("true");
+        await gateway.deferNext("session.visibility.set");
+        await access.getByRole("button", { name: /^Shared / }).click();
+        const changed = await gateway.waitForRequest("session.visibility.set");
+        expect(changed.params).toMatchObject({ sessionKey, visibility: "shared" });
+        await gateway.setSessionsListResponse(
+          sessionsListResponse([
+            sessionRow(sessionKey, "Mobile menu", updatedAt, {
+              sharingRole: "owner",
+              visibility: "shared",
+            }),
+          ]),
+        );
+        await gateway.resolveDeferred("session.visibility.set", {
+          ok: true,
+          sessionKey,
+          visibility: "shared",
+        });
+        await sharing.getByRole("button", { name: /^Shared / }).waitFor();
+        expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
+        if (colorScheme === "light") expect(peopleModule.requests()).toBe(documentRequests);
+        if (sharingModule) expect(sharingModule.requests()).toBe(1);
+        expect(errors).toEqual([]);
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await trigger.click();
         await menu.getByRole("menuitem", { name: "Advanced", exact: true }).click();
 
-        const host = page.locator(".chat-mobile-host").filter({ visible: true });
         const advanced = host.locator('[data-mobile-page="session-advanced"]');
         await advanced.waitFor();
         const deleteAction = advanced.getByRole("button", { name: "Delete", exact: true });
@@ -211,47 +435,6 @@ suite.define(() => {
           })
           .click();
         await host.waitFor({ state: "hidden" });
-
-        await trigger.click();
-        await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).click();
-        const sharing = host.locator('[data-mobile-page="sharing"]');
-        await sharing.getByRole("heading", { name: "Message permissions", exact: true }).waitFor();
-        const lastMember = sharing.getByRole("checkbox", { name: /^Member 29,/ });
-        await lastMember.scrollIntoViewIfNeeded();
-        expect(await sharing.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-        await lastMember.click({ trial: true });
-        const bounds = await host.boundingBox();
-        expect(bounds).not.toBeNull();
-        expect(bounds!.x).toBeGreaterThanOrEqual(0);
-        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(mobile.viewport.width);
-        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(mobile.viewport.height);
-        await captureUiProof(suite, page, `mobile-sharing-sheet-${colorScheme}.png`);
-
-        await sharing.getByRole("button", { name: /^Draft / }).click();
-        const access = host.locator('[data-mobile-page="sharing-access"]');
-        await access.getByRole("button", { name: /^Draft / }).waitFor();
-        expect(
-          await access.getByRole("button", { name: /^Draft / }).getAttribute("aria-pressed"),
-        ).toBe("true");
-        await gateway.deferNext("session.visibility.set");
-        await access.getByRole("button", { name: /^Shared / }).click();
-        const changed = await gateway.waitForRequest("session.visibility.set");
-        expect(changed.params).toMatchObject({ sessionKey, visibility: "shared" });
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([
-            sessionRow(sessionKey, "Mobile menu", updatedAt, {
-              sharingRole: "owner",
-              visibility: "shared",
-            }),
-          ]),
-        );
-        await gateway.resolveDeferred("session.visibility.set", {
-          ok: true,
-          sessionKey,
-          visibility: "shared",
-        });
-        await sharing.getByRole("button", { name: /^Shared / }).waitFor();
-        expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
       }, colorScheme),
   );
 

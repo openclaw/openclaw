@@ -1,5 +1,10 @@
 import {
   createEffect,
+  Errored,
+  Loading,
+  lazy,
+  getOwner,
+  runWithOwner,
   createMemo,
   createSignal,
   merge,
@@ -10,11 +15,16 @@ import {
 } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../../app/stale-chunk-reload.ts";
+import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { closeMenusWithin } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
@@ -25,9 +35,8 @@ import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
-import { ChatMachine } from "./chat-machine.tsx";
-import { ChatMobilePeopleBody, ChatMobilePeopleGrid } from "./chat-mobile-people.tsx";
-import type { ChatPaneHeaderProps } from "./chat-pane-header.tsx";
+import { ChatMobilePeopleGrid } from "./chat-mobile-people-grid.tsx";
+import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileHeader } from "./chat-pane-mobile-header.tsx";
 import {
   createChatMachinePresentation,
@@ -35,11 +44,7 @@ import {
 } from "./chat-pane-placement.tsx";
 import type { HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
-import {
-  ChatSessionAccessMobile,
-  ChatSessionSharingMobile,
-  ChatSessionSharingOptions,
-} from "./chat-session-sharing-mobile.tsx";
+import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
 import "./chat-pane-mobile-composition.css";
 
 /** Composition only: destinations and resources remain owned by the pane's native host. */
@@ -54,6 +59,63 @@ export function ChatPaneMobileComposition(props: {
     details: Element,
   ) => Element;
 }) {
+  const owner = getOwner();
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+  });
+  // Native page callbacks run under a transient host; their contents retain this header's lifetime.
+  const retainPage = (render: () => Element) => {
+    let content: Element;
+    return () => {
+      if (disposed) {
+        return undefined;
+      }
+      return (content ??= runWithOwner(owner, () => (
+        <Errored
+          fallback={(error, reset) => (
+            <LazyViewError
+              error={error()}
+              stale={isStaleChunkImportError(error())}
+              onRetry={() => {
+                if (!isStaleChunkImportError(error())) {
+                  reset();
+                  return;
+                }
+                const scopeKey = host()?.scopeKey;
+                const destination = host()?.destination;
+                void retryStaleChunkReloadWhenReachable({
+                  canReload: () => {
+                    const current = host();
+                    return (
+                      !disposed &&
+                      current?.open === true &&
+                      !current.suspended &&
+                      current.scopeKey === scopeKey &&
+                      current.destination === destination
+                    );
+                  },
+                });
+              }}
+              inline
+            />
+          )}
+        >
+          <Loading fallback={<p role="status">{t("common.loading")}</p>}>{render()}</Loading>
+        </Errored>
+      )));
+    };
+  };
+  const ChatMobilePeopleBody = lazy(() => import("./chat-mobile-people.tsx"), {
+    export: "ChatMobilePeopleBody",
+  });
+  const ChatMachine = lazy(() => import("./chat-machine.tsx"), { export: "ChatMachine" });
+  const ChatSessionSharingMobile = lazy(() => import("./chat-session-sharing-mobile.tsx"), {
+    export: "ChatSessionSharingMobile",
+  });
+  const ChatSessionAccessMobile = lazy(() => import("./chat-session-sharing-mobile.tsx"), {
+    export: "ChatSessionAccessMobile",
+  });
   const host = () => props.header.detailsControl?.mobileHost;
   const mobile = () => Boolean(props.header.mergedChrome && host());
   const panePresented = usePanePresentation(() => props.header.presented);
@@ -142,7 +204,7 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return labels.people;
       },
-      content: (
+      render: retainPage(() => (
         <div id={peopleId()}>
           <Show when={props.header.mobilePeopleMentions?.status === "loading"}>
             <p role="status">{t("common.loading")}</p>
@@ -191,7 +253,7 @@ export function ChatPaneMobileComposition(props: {
             )}
           </Show>
         </div>
-      ),
+      )),
     },
   };
   // A viewport round-trip parks this page. Only entering/leaving the native
@@ -211,7 +273,7 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return t("chat.sessionSharing.sharingOptions");
       },
-      content: <ChatSessionSharingMobile {...adapter.sharing} />,
+      render: retainPage(() => <ChatSessionSharingMobile {...adapter.sharing} />),
     },
   };
   const accessPage: MobileHostDestination = {
@@ -222,7 +284,7 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return t("chat.sessionSharing.sessionAccess");
       },
-      content: <ChatSessionAccessMobile {...adapter.access} />,
+      render: retainPage(() => <ChatSessionAccessMobile {...adapter.access} />),
     },
   };
   const machinePage: MobileHostDestination = {
@@ -233,14 +295,14 @@ export function ChatPaneMobileComposition(props: {
       get title() {
         return t("sessionsView.placementFactMachine");
       },
-      content: (
+      render: retainPage(() => (
         <ChatMachine
           {...placement}
           onPlacementMove={
             props.header.onMobilePlacementMove ? openMove : placement.onPlacementMove
           }
         />
-      ),
+      )),
     },
   };
   const [moveRequest, setMoveRequest] = createSignal<Parameters<SessionPlacementPresentation>[0]>();

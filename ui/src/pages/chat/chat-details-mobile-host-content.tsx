@@ -10,7 +10,6 @@ import { createMobileAutomationBinding } from "./chat-mobile-automation-binding.
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import type { ChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts";
 import type { ChatMobilePeople } from "./chat-mobile-people.ts";
-import type { PreparedChatSessionSharing } from "./chat-pane-sharing-actions.ts";
 import { ChatAuthorAvatar } from "./components/chat-author-avatar-view.tsx";
 import { SessionAutomationMobileHeading } from "./components/chat-automation-mobile.tsx";
 import type { ChatDetailsGoalProps } from "./components/chat-details-goal.tsx";
@@ -23,6 +22,7 @@ import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { chatPullRequestId } from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
 import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.tsx";
+import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 import type { ChatSessionVersionsMobileProps } from "./components/chat-session-versions-mobile.tsx";
 import { createSessionAutomationInventory } from "./components/chat-summary-automations.tsx";
 import { ProcessesPanelData } from "./processes-panel-data.ts";

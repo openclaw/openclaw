@@ -70,7 +70,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/memory-overview-source.e2e.test.ts",
-  "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
   "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
