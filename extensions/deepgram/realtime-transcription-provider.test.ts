@@ -53,7 +53,11 @@ function sendResult(
 }
 
 function parseClientMessage(data: RawData): Record<string, unknown> {
-  const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+  const bytes = Array.isArray(data)
+    ? Buffer.concat(data)
+    : Buffer.isBuffer(data)
+      ? data
+      : Buffer.from(data);
   return JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
 }
 

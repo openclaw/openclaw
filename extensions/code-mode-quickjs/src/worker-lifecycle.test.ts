@@ -100,9 +100,9 @@ type RunArgs = Parameters<typeof runCodeModeWorker>;
 function run(task: RunArgs[0], inlineHost?: RunArgs[4], timeoutMs = 10_000) {
   return runCodeModeWorker(task, timeoutMs, undefined, undefined, inlineHost);
 }
-function parkedResult<T extends { status: "waiting" }>(
-  result: T | { status: "completed" | "failed" },
-): T {
+function parkedResult(
+  result: CodeModeWorkerResult,
+): Extract<CodeModeWorkerResult, { status: "waiting" }> {
   expect(result).toMatchObject({ status: "waiting" });
   if (result.status !== "waiting") {
     throw new Error("expected a suspended guest");

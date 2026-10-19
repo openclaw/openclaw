@@ -33,7 +33,7 @@ const legacyConfig = {
   models: [{ id: "qwen3.7-plus" }],
 };
 const resolveCanonicalKey: ProviderCatalogContext["resolveProviderApiKey"] = (id) =>
-  id === TOKEN_PLAN ? { apiKey: "canonical-key" } : {};
+  id === TOKEN_PLAN ? { apiKey: "canonical-key" } : { apiKey: undefined };
 
 describe("qwen provider plugin", () => {
   let providers: Awaited<ReturnType<typeof registerProviderPlugin>>["providers"];
@@ -135,7 +135,10 @@ describe("qwen provider plugin", () => {
     expect(provider.envVars).toEqual(["QWEN_TOKEN_PLAN_API_KEY"]);
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "api-key-cn"]);
 
-    const runtimeChoiceIds = provider.auth.map((method) => method.wizard?.choiceId).toSorted();
+    const runtimeChoiceIds = provider.auth
+      .map((method) => method.wizard?.choiceId)
+      .filter((id): id is string => typeof id === "string")
+      .toSorted();
     const manifestChoiceIds = manifest.providerAuthChoices
       .filter((choice) => choice.provider === "qwen-token-plan")
       .map((choice) => choice.choiceId)

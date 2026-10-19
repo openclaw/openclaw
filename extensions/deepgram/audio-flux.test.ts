@@ -57,7 +57,11 @@ async function createFluxServer(onFlush = (socket: WebSocket) => socket.close())
   });
   server.on("connection", (client) => {
     client.on("message", (data, isBinary) => {
-      const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+      const bytes = Array.isArray(data)
+        ? Buffer.concat(data)
+        : Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(data);
       if (isBinary) {
         audioFrames.push(bytes);
       } else if (asOptionalRecord(JSON.parse(bytes.toString()))?.type === "CloseStream") {
@@ -129,12 +133,14 @@ describe("Deepgram Flux audio", () => {
       await vi.advanceTimersByTimeAsync(200);
       return await writeDecodedPcm(argv, Buffer.alloc(10, 1));
     });
-    prepareWebSocket.mockImplementationOnce(() => vi.advanceTimersByTimeAsync(300));
+    prepareWebSocket.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const errors: unknown[] = [];
     const transcription = server
       .transcribe({ timeoutMs: 1000 })
-      .catch((error) => errors.push(error));
+      .catch((error: unknown) => errors.push(error));
     await flushed.promise;
     await vi.advanceTimersByTimeAsync(499);
     expect(errors).toEqual([]);

@@ -37,6 +37,9 @@ function wrap(model: Model, streamFn?: StreamFn, thinkingLevel?: ThinkingLevel) 
 function overridePayload(patch: Record<string, unknown>): NonNullable<Parameters<StreamFn>[2]> {
   return {
     onPayload: (payload) => {
+      if (!payload || typeof payload !== "object") {
+        throw new Error("Expected a Qwen request payload");
+      }
       Object.assign(payload, patch);
     },
   };
