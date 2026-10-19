@@ -83,6 +83,70 @@ afterEach(async () => {
 });
 
 describe("processEvent (functional)", () => {
+  it.each([
+    { path: "machine policy", answeredBy: "machine_start", reason: "voicemail" },
+    { path: "notify fax", answeredBy: "fax", reason: "failed" },
+    { path: "playback recovery", answeredBy: "machine_end_beep", reason: "error" },
+  ] as const)(
+    "reports failed $path hangup without claiming termination",
+    async ({ path, answeredBy, reason }) => {
+      const work: Promise<unknown>[] = [];
+      const hangupCall = vi.fn(async () => {
+        throw new Error("synthetic private carrier response");
+      });
+      const ctx = createContext({
+        provider: createProvider({
+          name: "twilio",
+          hangupCall,
+          playMessageAndHangup: async () => {
+            throw new Error("synthetic playback failure");
+          },
+        }),
+        config: normalizeVoiceCallConfig({
+          voicemail: {
+            detection: "twilio",
+            onMachine: path === "machine policy" ? "hang-up" : "leave-message",
+          },
+        }),
+        trackCallWork: (item) => {
+          work.push(item);
+        },
+      });
+      const call = createCall({
+        callId: "detected-call",
+        providerCallId: "CA-detected",
+        provider: "twilio",
+        metadata: {
+          pendingNotifyAmd: path === "notify fax",
+          brief: { voicemailMessage: "Please call back." },
+        },
+      });
+      ctx.activeCalls.set(call.callId, call);
+
+      await expect(
+        processEvent(ctx, {
+          id: "detection",
+          type: "call.amd",
+          callId: call.callId,
+          timestamp: Date.now(),
+          answeredBy,
+        }),
+      ).resolves.toEqual({ kind: "processed" });
+      await Promise.all(work);
+
+      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
+        callId: call.callId,
+        providerCallId: "CA-detected",
+        reason,
+      });
+      expect(logSpy.logEntries).toEqual([
+        "Detected-call hangup failed; check carrier access and retry ending the call.",
+      ]);
+      expect(ctx.activeCalls.get(call.callId)).toBe(call);
+      expect(call.endedAt).toBeUndefined();
+    },
+  );
+
   it("drains final assistant transcript before a carrier terminal event finalizes", async () => {
     const ctx = createContext();
     const call = createCall({ callId: "carrier-drain", providerCallId: "CA-drain" });
