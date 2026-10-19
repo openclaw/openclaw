@@ -11,13 +11,15 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
+import { createRecoveryRestartMock } from "./config-reload.test-support.js";
 import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import {
   createDefaultGatewayReloadState,
   createMonitorPublicationFailure,
   createTestCronState,
-  type ReloadTestFactories,
 } from "./server-reload-handlers.config.test-support.js";
+import type { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import {
@@ -28,7 +30,10 @@ import {
 export function registerGatewayCronReloadTests({
   createGatewayReloadHandlers,
   autoCleanupTempDirs,
-}: Pick<ReloadTestFactories, "createGatewayReloadHandlers"> & {
+}: {
+  createGatewayReloadHandlers: (
+    params: Partial<GatewayReloadHandlerParams>,
+  ) => ReturnType<typeof createGatewayReloadHandlersImpl>;
   autoCleanupTempDirs: { make(prefix: string): string };
 }) {
   it.each(["rejected", "noop"] as const)(
@@ -37,16 +42,23 @@ export function registerGatewayCronReloadTests({
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);
       const fixtureDir = autoCleanupTempDirs.make("openclaw-monitor-publication-");
-      const heartbeatConfig = (every: string): OpenClawConfig => ({
+      const initialConfig: OpenClawConfig = {
         agents: {
           entries: {
-            first: { heartbeat: { every } },
-            second: { heartbeat: { every } },
+            first: { heartbeat: { every: "1h" } },
+            second: { heartbeat: { every: "1h" } },
           },
         },
-      });
-      const initialConfig = heartbeatConfig("1h");
-      const nextConfig = heartbeatConfig("2h");
+      };
+      const nextConfig = {
+        ...initialConfig,
+        agents: {
+          entries: {
+            first: { heartbeat: { every: "2h" } },
+            second: { heartbeat: { every: "2h" } },
+          },
+        },
+      } satisfies OpenClawConfig;
       activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
       const { buildGatewayCronService } =
         await vi.importActual<typeof import("./server-cron.js")>("./server-cron.js");
@@ -121,20 +133,29 @@ export function registerGatewayCronReloadTests({
           .catch((error: unknown) => error);
         expect(await readIntervals()).toEqual([7_200_000, 3_600_000]);
         expect(result).toBe("applied");
+        expect(requestRecoveryRestart).not.toHaveBeenCalled();
         expect(markRuntimeCommitted).toHaveBeenCalledOnce();
         expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(nextConfig);
         publicationFailure.remove();
         const successorConfig = { ...nextConfig, logging: { level: "debug" as const } };
-        const applied = managed.onHotReload(
-          buildGatewayReloadPlan(successor === "rejected" ? ["logging.level"] : []),
-          successorConfig,
-          successor === "rejected" ? { ...ownership, isCurrent: () => false } : ownership,
-          successorConfig,
-        );
         if (successor === "rejected") {
-          await expect(applied).rejects.toThrow("superseded");
+          await expect(
+            managed.onHotReload(
+              buildGatewayReloadPlan(["logging.level"]),
+              successorConfig,
+              { ...ownership, isCurrent: () => false },
+              successorConfig,
+            ),
+          ).rejects.toThrow("superseded");
         } else {
-          await expect(applied).resolves.toBe("applied");
+          await expect(
+            managed.onHotReload(
+              buildGatewayReloadPlan([]),
+              successorConfig,
+              ownership,
+              successorConfig,
+            ),
+          ).resolves.toBe("applied");
         }
         await clock.advanceBy(30_000);
         expect(await readIntervals()).toEqual([7_200_000, 7_200_000]);
@@ -151,14 +172,12 @@ export function registerGatewayCronReloadTests({
     },
   );
 
-  it.each(["converged", "lifecycle-deferred", "retry-scheduled"] as const)(
+  it.each(["converged", "lifecycle-deferred", "retry-scheduled", "rejected"] as const)(
     "preserves cron reconciliation recovery semantics for %s",
     async (result) => {
       const logReload = { info: vi.fn(), warn: vi.fn() };
-      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-      const reconcileSystemJobs = vi
-        .fn<GatewayCronState["reconcileSystemJobs"]>()
-        .mockResolvedValueOnce(result);
+      const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
+      const reconcileSystemJobs = vi.fn<GatewayCronState["reconcileSystemJobs"]>();
       let state = createDefaultGatewayReloadState({
         cronState: createTestCronState({ reconcileSystemJobs }),
       });
@@ -170,17 +189,30 @@ export function registerGatewayCronReloadTests({
         logReload,
         requestRecoveryRestart,
       });
-      using _ = { [Symbol.dispose]: () => handlers.stopRestartRetries() };
-      await expect(
-        handlers.applyHotReload(buildGatewayReloadPlan(["agents.defaults.heartbeat.every"]), {
-          agents: { defaults: { heartbeat: { every: "1h" } } },
-        }),
-      ).resolves.toBe("applied");
-      expect(requestRecoveryRestart).not.toHaveBeenCalled();
-      if (result === "retry-scheduled") {
-        expect(logReload.warn).toHaveBeenCalledWith(
-          "cron system jobs pending; continuing hot reload with cron retry",
-        );
+      if (result === "rejected") {
+        reconcileSystemJobs.mockRejectedValueOnce(new Error("cron reconciliation failed"));
+      } else {
+        reconcileSystemJobs.mockResolvedValueOnce(result);
+      }
+      try {
+        await expect(
+          handlers.applyHotReload(buildGatewayReloadPlan(["agents.defaults.heartbeat.every"]), {
+            agents: { defaults: { heartbeat: { every: "1h" } } },
+          }),
+        ).resolves.toBe(result === "rejected" ? "applied-restart-required" : "applied");
+        if (result === "rejected") {
+          await restartEmitted;
+          expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+        } else {
+          expect(requestRecoveryRestart).not.toHaveBeenCalled();
+        }
+        if (result === "retry-scheduled") {
+          expect(logReload.warn).toHaveBeenCalledWith(
+            "cron system jobs pending; continuing hot reload with cron retry",
+          );
+        }
+      } finally {
+        handlers.stopRestartRetries();
       }
     },
   );
