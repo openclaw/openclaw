@@ -58,7 +58,12 @@ describe("setYamlOcPath — direct", () => {
 
   it("reports parse-error before inserting into a malformed document", () => {
     expect(() =>
-      insertYamlOcPath(parseYaml(MALFORMED).ast, path(""), { kind: "keyed", key: "next" }, "x"),
+      insertYamlOcPath(
+        parseYaml(MALFORMED).ast,
+        parseOcPath("oc://workflow.yaml"),
+        { kind: "keyed", key: "next" },
+        "x",
+      ),
     ).toThrow(expect.objectContaining({ reason: "parse-error" }));
   });
 });
