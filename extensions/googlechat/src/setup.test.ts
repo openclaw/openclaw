@@ -1,4 +1,3 @@
-// Googlechat tests cover setup plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -63,11 +62,59 @@ const googlechatSetupPlugin = {
 
 const googlechatConfigure = createPluginSetupWizardConfigure(googlechatSetupPlugin);
 const googlechatStatus = createPluginSetupWizardStatus(googlechatSetupPlugin);
+type GoogleChatConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["googlechat"]>;
+const audienceConfig = {
+  audienceType: "app-url",
+  audience: "https://example.com/googlechat",
+} as const;
 
-function withGoogleChat(
-  googlechat: NonNullable<OpenClawConfig["channels"]>["googlechat"],
-): OpenClawConfig {
+function withGoogleChat(googlechat: GoogleChatConfig): OpenClawConfig {
   return { channels: { googlechat } };
+}
+
+function resolveAccount(googlechat: GoogleChatConfig = {}, accountId = DEFAULT_ACCOUNT_ID) {
+  return resolveGoogleChatAccount({ cfg: withGoogleChat(googlechat), accountId });
+}
+
+function resolveNamedAccount(defaults: NonNullable<GoogleChatConfig["accounts"]>[string]) {
+  return resolveAccount(
+    {
+      accounts: {
+        default: { ...audienceConfig, ...defaults },
+        andy: { serviceAccountFile: "/tmp/andy-sa.json" },
+      },
+    },
+    "andy",
+  );
+}
+
+function alertsConfig(
+  account: NonNullable<GoogleChatConfig["accounts"]>[string],
+  root: GoogleChatConfig = {},
+) {
+  return withGoogleChat({ ...root, defaultAccount: "alerts", accounts: { alerts: account } });
+}
+
+function applyConfig(
+  input: Parameters<NonNullable<typeof googlechatSetupAdapter.applyAccountConfig>>[0]["input"],
+) {
+  return googlechatSetupAdapter.applyAccountConfig!({
+    cfg: withGoogleChat({}),
+    accountId: DEFAULT_ACCOUNT_ID,
+    input,
+  });
+}
+
+async function prepare(accountId: string) {
+  const confirm = vi.fn(async () => true);
+  const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
+  const result = await googlechatSetupWizard.prepare!({
+    cfg: {},
+    accountId,
+    credentialValues: {},
+    prompter: createTestWizardPrompter({ confirm, select }),
+  } as never);
+  return { confirm, select, result };
 }
 
 function buildAccount(): ResolvedGoogleChatAccount {
@@ -79,8 +126,7 @@ function buildAccount(): ResolvedGoogleChatAccount {
     config: {
       webhookPath: "/googlechat",
       webhookUrl: "https://example.com/googlechat",
-      audienceType: "app-url",
-      audience: "https://example.com/googlechat",
+      ...audienceConfig,
     },
   };
 }
@@ -114,11 +160,8 @@ describe("googlechat setup", () => {
   });
 
   it("rejects env auth for non-default accounts", () => {
-    if (!googlechatSetupAdapter.validateInput) {
-      throw new Error("Expected googlechatSetupAdapter.validateInput to be defined");
-    }
     expect(
-      googlechatSetupAdapter.validateInput({
+      googlechatSetupAdapter.validateInput!({
         accountId: "secondary",
         input: { useEnv: true },
       } as never),
@@ -128,15 +171,7 @@ describe("googlechat setup", () => {
   it("offers valid service-account env credentials for the default account", async () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '  {"client_email":"bot@example.com"}  ');
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "  ");
-    const confirm = vi.fn(async () => true);
-    const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
-
-    const result = await googlechatSetupWizard.prepare?.({
-      cfg: {},
-      accountId: DEFAULT_ACCOUNT_ID,
-      credentialValues: {},
-      prompter: createTestWizardPrompter({ confirm, select }),
-    } as never);
+    const { confirm, select, result } = await prepare(DEFAULT_ACCOUNT_ID);
 
     expect(confirm).toHaveBeenCalledOnce();
     expect(select).not.toHaveBeenCalled();
@@ -146,15 +181,7 @@ describe("googlechat setup", () => {
   it("does not offer default-account env credentials to named accounts", async () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
-    const confirm = vi.fn(async () => true);
-    const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
-
-    const result = await googlechatSetupWizard.prepare?.({
-      cfg: {},
-      accountId: "alerts",
-      credentialValues: {},
-      prompter: createTestWizardPrompter({ confirm, select }),
-    } as never);
+    const { confirm, select, result } = await prepare("alerts");
 
     expect(confirm).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledOnce();
@@ -162,59 +189,41 @@ describe("googlechat setup", () => {
   });
 
   it("builds a patch from token-file and trims optional webhook fields", () => {
-    if (!googlechatSetupAdapter.applyAccountConfig) {
-      throw new Error("Expected googlechatSetupAdapter.applyAccountConfig to be defined");
-    }
     expect(
-      googlechatSetupAdapter.applyAccountConfig({
-        cfg: withGoogleChat({}),
-        accountId: DEFAULT_ACCOUNT_ID,
-        input: {
-          name: "Default",
-          tokenFile: "/tmp/googlechat.json",
-          audienceType: " app-url ",
-          audience: " https://example.com/googlechat ",
-          webhookPath: " /googlechat ",
-          webhookUrl: " https://example.com/googlechat/hook ",
-        },
+      applyConfig({
+        name: "Default",
+        tokenFile: "/tmp/googlechat.json",
+        audienceType: " app-url ",
+        audience: " https://example.com/googlechat ",
+        webhookPath: " /googlechat ",
+        webhookUrl: " https://example.com/googlechat/hook ",
       } as never),
-    ).toEqual({
-      channels: {
-        googlechat: {
-          enabled: true,
-          name: "Default",
-          serviceAccountFile: "/tmp/googlechat.json",
-          audienceType: "app-url",
-          audience: "https://example.com/googlechat",
-          webhookPath: "/googlechat",
-          webhookUrl: "https://example.com/googlechat/hook",
-        },
-      },
-    });
+    ).toEqual(
+      withGoogleChat({
+        enabled: true,
+        name: "Default",
+        serviceAccountFile: "/tmp/googlechat.json",
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+        webhookPath: "/googlechat",
+        webhookUrl: "https://example.com/googlechat/hook",
+      }),
+    );
   });
 
   it("prefers inline token patch when token-file is absent", () => {
-    if (!googlechatSetupAdapter.applyAccountConfig) {
-      throw new Error("Expected googlechatSetupAdapter.applyAccountConfig to be defined");
-    }
     expect(
-      googlechatSetupAdapter.applyAccountConfig({
-        cfg: withGoogleChat({}),
-        accountId: DEFAULT_ACCOUNT_ID,
-        input: {
-          name: "Default",
-          token: { client_email: "bot@example.com" },
-        },
+      applyConfig({
+        name: "Default",
+        token: { client_email: "bot@example.com" },
       } as never),
-    ).toEqual({
-      channels: {
-        googlechat: {
-          enabled: true,
-          name: "Default",
-          serviceAccount: { client_email: "bot@example.com" },
-        },
-      },
-    });
+    ).toEqual(
+      withGoogleChat({
+        enabled: true,
+        name: "Default",
+        serviceAccount: { client_email: "bot@example.com" },
+      }),
+    );
   });
 
   it("configures service-account auth and webhook audience", async () => {
@@ -238,25 +247,19 @@ describe("googlechat setup", () => {
     });
 
     expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.googlechat?.enabled).toBe(true);
-    expect(result.cfg.channels?.googlechat?.serviceAccountFile).toBe(
-      "/tmp/googlechat-service-account.json",
-    );
-    expect(result.cfg.channels?.googlechat?.audienceType).toBe("app-url");
-    expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
+    expect(result.cfg.channels?.googlechat).toMatchObject({
+      enabled: true,
+      serviceAccountFile: "/tmp/googlechat-service-account.json",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    });
   });
 
   it("uses defaultAccount for DM policy reads and writes when accountId is omitted", () => {
-    const cfg = withGoogleChat({
-      dmPolicy: "disabled",
-      defaultAccount: "alerts",
-      accounts: {
-        alerts: {
-          serviceAccount: { client_email: "bot@example.com" },
-          dmPolicy: "allowlist",
-        },
-      },
-    });
+    const cfg = alertsConfig(
+      { serviceAccount: { client_email: "bot@example.com" }, dmPolicy: "allowlist" },
+      { dmPolicy: "disabled" },
+    );
     const dmPolicy = googlechatSetupWizard.dmPolicy!;
     expect(dmPolicy.getCurrent(cfg)).toBe("allowlist");
     expect(dmPolicy.resolveConfigKeys?.(cfg)).toEqual({
@@ -297,16 +300,10 @@ describe("googlechat setup", () => {
     });
 
     const next = await googlechatSetupWizard.dmPolicy?.promptAllowFrom?.({
-      cfg: withGoogleChat({
-        defaultAccount: "alerts",
-        allowFrom: ["users/root"],
-        accounts: {
-          alerts: {
-            serviceAccount: { client_email: "bot@example.com" },
-            allowFrom: ["users/alerts"],
-          },
-        },
-      }),
+      cfg: alertsConfig(
+        { serviceAccount: { client_email: "bot@example.com" }, allowFrom: ["users/alerts"] },
+        { allowFrom: ["users/root"] },
+      ),
       prompter,
     });
 
@@ -395,32 +392,28 @@ describe("googlechat setup", () => {
 describe("resolveGoogleChatAccount", () => {
   const tempWorkspaces: TempWorkspaceSync[] = [];
 
+  function workspace(prefix: string) {
+    const created = tempWorkspaceSync({ rootDir: resolvePreferredOpenClawTmpDir(), prefix });
+    tempWorkspaces.push(created);
+    return created.dir;
+  }
+
   afterEach(() => {
-    for (const workspace of tempWorkspaces.splice(0)) {
-      workspace.cleanup();
+    for (const created of tempWorkspaces.splice(0)) {
+      created.cleanup();
     }
   });
 
   it("resolves user-relative service-account files before checking availability", () => {
-    const workspace = tempWorkspaceSync({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-googlechat-home-",
-    });
-    tempWorkspaces.push(workspace);
-    const homeDir = workspace.dir;
+    const homeDir = workspace("openclaw-googlechat-home-");
     fs.writeFileSync(path.join(homeDir, "service-account.json"), "{}", { mode: 0o600 });
     vi.stubEnv("OPENCLAW_HOME", homeDir);
     try {
-      const resolved = resolveGoogleChatAccount({
-        cfg: withGoogleChat({
-          serviceAccountFile: "~/service-account.json",
-        }),
-        accountId: "default",
+      expect(resolveAccount({ serviceAccountFile: "~/service-account.json" })).toMatchObject({
+        credentialSource: "file",
+        credentialsFile: "~/service-account.json",
+        tokenStatus: "available",
       });
-
-      expect(resolved.credentialSource).toBe("file");
-      expect(resolved.credentialsFile).toBe("~/service-account.json");
-      expect(resolved.tokenStatus).toBe("available");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -428,30 +421,17 @@ describe("resolveGoogleChatAccount", () => {
 
   it("parses default-account env JSON credentials only when they decode to an object", () => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
-
-    const resolved = resolveGoogleChatAccount({
-      cfg: withGoogleChat({}),
-      accountId: "default",
-    });
-
+    const resolved = resolveAccount();
     expect(resolved.credentialSource).toBe("env");
     expect(resolved.credentials).toEqual({ client_email: "bot@example.com" });
   });
 
   it("ignores env JSON credentials when they decode to a non-object value", () => {
-    const workspace = tempWorkspaceSync({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-googlechat-missing-",
-    });
-    tempWorkspaces.push(workspace);
-    const missingFile = path.join(workspace.dir, "missing.json");
+    const missingFile = path.join(workspace("openclaw-googlechat-missing-"), "missing.json");
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", missingFile);
 
-    const resolved = resolveGoogleChatAccount({
-      cfg: withGoogleChat({}),
-      accountId: "default",
-    });
+    const resolved = resolveAccount();
 
     expect(resolved.credentialSource).toBe("env");
     expect(resolved.credentials).toBeUndefined();
@@ -468,23 +448,24 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("merges account bot loop protection over top-level defaults field-by-field", () => {
-    const cfg: OpenClawConfig = withGoogleChat({
-      botLoopProtection: {
-        maxEventsPerWindow: 8,
-        windowSeconds: 120,
-        cooldownSeconds: 240,
-      },
-      accounts: {
-        april: {
-          webhookPath: "/googlechat-april",
-          botLoopProtection: {
-            maxEventsPerWindow: 3,
+    const resolved = resolveAccount(
+      {
+        botLoopProtection: {
+          maxEventsPerWindow: 8,
+          windowSeconds: 120,
+          cooldownSeconds: 240,
+        },
+        accounts: {
+          april: {
+            webhookPath: "/googlechat-april",
+            botLoopProtection: {
+              maxEventsPerWindow: 3,
+            },
           },
         },
       },
-    });
-
-    const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
+      "april",
+    );
     expect(resolved.config.botLoopProtection).toEqual({
       maxEventsPerWindow: 3,
       windowSeconds: 120,
@@ -493,44 +474,16 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("does not inherit default-account credentials into named accounts", () => {
-    const cfg: OpenClawConfig = withGoogleChat({
-      accounts: {
-        default: {
-          serviceAccount: {
-            source: "env",
-            provider: "test",
-            id: "default-sa",
-          },
-          audienceType: "app-url",
-          audience: "https://example.com/googlechat",
-        },
-        andy: {
-          serviceAccountFile: "/tmp/andy-sa.json",
-        },
-      },
+    const resolved = resolveNamedAccount({
+      serviceAccount: { source: "env", provider: "test", id: "default-sa" },
     });
-
-    const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
     expect(resolved.credentialSource).toBe("file");
     expect(resolved.credentialsFile).toBe("/tmp/andy-sa.json");
     expect(resolved.config.audienceType).toBe("app-url");
   });
 
   it("does not inherit dangerous name matching from accounts.default", () => {
-    const cfg: OpenClawConfig = withGoogleChat({
-      accounts: {
-        default: {
-          dangerouslyAllowNameMatching: true,
-          audienceType: "app-url",
-          audience: "https://example.com/googlechat",
-        },
-        andy: {
-          serviceAccountFile: "/tmp/andy-sa.json",
-        },
-      },
-    });
-
-    const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
+    const resolved = resolveNamedAccount({ dangerouslyAllowNameMatching: true });
     expect(resolved.config.dangerouslyAllowNameMatching).toBeUndefined();
     expect(resolved.config.audienceType).toBe("app-url");
   });

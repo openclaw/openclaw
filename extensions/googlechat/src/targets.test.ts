@@ -1,4 +1,3 @@
-// Googlechat tests cover targets plugin behavior.
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -113,36 +112,69 @@ beforeEach(() => {
   account = { ...account, accountId: `test-${accountCounter}` };
 });
 
-function stubSuccessfulSend(name: string, threadName?: string) {
-  const fetchMock = vi.fn().mockResolvedValue(
-    new Response(
-      JSON.stringify({ name, ...(threadName ? { thread: { name: threadName } } : {}) }),
-      {
-        status: 200,
-      },
-    ),
-  );
+afterEach(() => {
+  mocks.fetchWithSsrFGuard.mockClear();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+function jsonResponse(value: unknown) {
+  return new Response(JSON.stringify(value), { status: 200 });
+}
+
+function stubResponse(response: Response) {
+  const fetchMock = vi.fn().mockResolvedValue(response);
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
-function createStalledResponse(status = 200): Response {
-  return new Response(
-    new ReadableStream({
-      start() {},
-    }),
-    { status },
+function guardedResponse(response: Response) {
+  const release = vi.fn(async () => {});
+  mocks.fetchWithSsrFGuard.mockResolvedValueOnce({ response, release });
+  return release;
+}
+
+function stubSuccessfulSend(name: string, threadName?: string) {
+  return stubResponse(
+    jsonResponse({ name, ...(threadName ? { thread: { name: threadName } } : {}) }),
   );
 }
 
-async function expectDownloadToRejectForResponse(
-  response: Response,
-  expected: string | RegExp = /max bytes/i,
-) {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-  await expect(
-    downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-  ).rejects.toThrow(expected);
+function send(overrides: Partial<Parameters<typeof sendGoogleChatMessage>[0]> = {}) {
+  return sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello", ...overrides });
+}
+
+function download(maxBytes: number | undefined = 10) {
+  return downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes });
+}
+
+function sessionRoute(target = "spaces/AAA") {
+  return resolveGoogleChatOutboundSessionRoute({ cfg: {}, agentId: "main", target });
+}
+
+function verifyAppToken(expectedAddOnPrincipal?: string) {
+  return verifyGoogleChatRequest({
+    bearer: "token",
+    audienceType: "app-url",
+    audience: "https://example.com/googlechat",
+    expectedAddOnPrincipal,
+  });
+}
+
+function verifyProjectToken() {
+  return verifyGoogleChatRequest({
+    bearer: "token",
+    audienceType: "project-number",
+    audience: "123456789",
+  });
+}
+
+function requestBody(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const init = mockCallArg(mock, 0, 1) as RequestInit | undefined;
+  if (typeof init?.body !== "string") {
+    throw new Error("Expected Google Chat request body");
+  }
+  return JSON.parse(init.body);
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
@@ -151,14 +183,6 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
     throw new Error(`Expected mock call ${callIndex}`);
   }
   return call[argIndex];
-}
-
-function lastGuardedFetchOptions(): { timeoutMs?: number } {
-  const call = mocks.fetchWithSsrFGuard.mock.calls.at(-1);
-  if (!call) {
-    throw new Error("Expected guarded fetch call");
-  }
-  return call[0] as { timeoutMs?: number };
 }
 
 describe("target helpers", () => {
@@ -172,25 +196,11 @@ describe("target helpers", () => {
 });
 
 describe("outbound session routing", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it.each([{ spaceType: "SPACE", chatType: "group", peerKind: "group" }] as const)(
     "classifies API space type $spaceType",
     async ({ spaceType, chatType, peerKind }) => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ name: "spaces/AAA", spaceType }), { status: 200 }),
-        );
-      vi.stubGlobal("fetch", fetchMock);
-
-      const route = await resolveGoogleChatOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        target: "googlechat:spaces/AAA",
-      });
+      const fetchMock = stubResponse(jsonResponse({ name: "spaces/AAA", spaceType }));
+      const route = await sessionRoute("googlechat:spaces/AAA");
 
       expect(route).toMatchObject({
         peer: { kind: peerKind, id: "spaces/AAA" },
@@ -209,41 +219,20 @@ describe("outbound session routing", () => {
   );
 
   it("rejects an unclassified space response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(new Response(JSON.stringify({ name: "spaces/AAA" }), { status: 200 })),
-    );
-
-    await expect(
-      resolveGoogleChatOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        target: "spaces/AAA",
-      }),
-    ).resolves.toBeNull();
+    stubResponse(jsonResponse({ name: "spaces/AAA" }));
+    await expect(sessionRoute()).resolves.toBeNull();
   });
 
   it("keeps session-route classification failures non-fatal", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("read unavailable")));
 
-    await expect(
-      resolveGoogleChatOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        target: "spaces/AAA",
-      }),
-    ).resolves.toBeNull();
+    await expect(sessionRoute()).resolves.toBeNull();
   });
 });
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     unregisterGoogleChatManualApprovalFollowupSuppression("12345678-1234-1234-1234-123456789012");
-    mocks.fetchWithSsrFGuard.mockClear();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
   });
 
   it("rejects content-length overflow before reading media", async () => {
@@ -258,37 +247,35 @@ describe("downloadGoogleChatMedia", () => {
       arrayBuffer,
     } as unknown as Response;
 
-    await expectDownloadToRejectForResponse(response, "Google Chat media exceeds max bytes (10)");
+    stubResponse(response);
+    await expect(download()).rejects.toThrow("Google Chat media exceeds max bytes (10)");
     expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(lastGuardedFetchOptions().timeoutMs).toBe(30_001);
+    expect(mocks.fetchWithSsrFGuard.mock.lastCall?.[0].timeoutMs).toBe(30_001);
   });
 
   it("cancels a stalled media error body", async () => {
     vi.useFakeTimers();
     const cancel = vi.fn();
-    const release = vi.fn(async () => {});
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: new Response(new ReadableStream({ start() {}, cancel }), { status: 500 }),
-      release,
-    });
+    const release = guardedResponse(
+      new Response(new ReadableStream({ start() {}, cancel }), { status: 500 }),
+    );
 
-    const download = downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 });
-    const result = expect(download).rejects.toThrow(
+    const pending = download();
+    const result = expect(pending).rejects.toThrow(
       "Google Chat API error response stalled after 30000ms",
     );
     await vi.advanceTimersByTimeAsync(30_001);
     await result;
-    await expect(download).rejects.toBeInstanceOf(GoogleChatApiError);
-    await expect(download).rejects.toMatchObject({ status: 500 });
+    await expect(pending).rejects.toBeInstanceOf(GoogleChatApiError);
+    await expect(pending).rejects.toMatchObject({ status: 500 });
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
   });
 
   it("preserves redacted error-body read diagnostics", async () => {
     const token = "googlechat-error-read-test-token";
-    const release = vi.fn(async () => {});
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: new Response(
+    const release = guardedResponse(
+      new Response(
         new ReadableStream({
           start(controller) {
             controller.error(new Error(`body read failed; Authorization: Bearer ${token}`));
@@ -296,14 +283,9 @@ describe("downloadGoogleChatMedia", () => {
         }),
         { status: 500 },
       ),
-      release,
-    });
+    );
 
-    const outcome = await downloadGoogleChatMedia({
-      account,
-      resourceName: "media/123",
-      maxBytes: 10,
-    }).catch((error: unknown) => error);
+    const outcome = await download().catch((error: unknown) => error);
     expect(outcome).toBeInstanceOf(GoogleChatApiError);
     expect(outcome).toMatchObject({ status: 500 });
     expect((outcome as Error).message).toContain("Google Chat API 500: body read failed");
@@ -382,65 +364,40 @@ describe("downloadGoogleChatMedia", () => {
 });
 
 describe("supported Google Chat request bounds", () => {
-  afterEach(() => {
-    mocks.fetchWithSsrFGuard.mockClear();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  });
-
   it("cancels a stalled JSON response body", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse()));
+    stubResponse(new Response(new ReadableStream({ start() {} })));
 
-    const result = expect(
-      sendGoogleChatMessage({
-        account,
-        space: "spaces/AAA",
-        text: "hello",
-      }),
-    ).rejects.toThrow("Google Chat API request failed: response body stalled after 30000ms");
+    const result = expect(send()).rejects.toThrow(
+      "Google Chat API request failed: response body stalled after 30000ms",
+    );
     await vi.advanceTimersByTimeAsync(30_001);
     await result;
   });
 });
 
 describe("sendGoogleChatMessage", () => {
-  afterEach(() => {
-    mocks.fetchWithSsrFGuard.mockClear();
-    vi.unstubAllGlobals();
-  });
-
   it("adds messageReplyOption when sending to an existing thread", async () => {
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123", "spaces/AAA/threads/xyz");
     const cardsV2 = [{ cardId: "approval", card: { header: { title: "Approval" } } }];
 
-    const result = await sendGoogleChatMessage({
-      account,
-      space: "spaces/AAA",
-      text: "hello",
+    const result = await send({
       thread: "spaces/AAA/threads/xyz",
       cardsV2,
     });
 
     const url = mockCallArg(fetchMock);
-    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
     expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected Google Chat request body");
-    }
-    const body = JSON.parse(init.body) as {
-      text?: unknown;
-      thread?: { name?: unknown };
-      cardsV2?: unknown;
-    };
-    expect(body.text).toBe("hello");
-    expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
-    expect(body.cardsV2).toEqual(cardsV2);
+    expect(requestBody(fetchMock)).toEqual({
+      text: "hello",
+      thread: { name: "spaces/AAA/threads/xyz" },
+      cardsV2,
+    });
     expect(result).toEqual({
       messageName: "spaces/AAA/messages/123",
       threadName: "spaces/AAA/threads/xyz",
     });
-    expect(lastGuardedFetchOptions().timeoutMs).toBe(30_000);
+    expect(mocks.fetchWithSsrFGuard.mock.lastCall?.[0].timeoutMs).toBe(30_000);
   });
 
   it.each([
@@ -451,23 +408,13 @@ describe("sendGoogleChatMessage", () => {
     async (_label, badThread) => {
       const fetchMock = stubSuccessfulSend("spaces/AAA/messages/126");
 
-      const result = await sendGoogleChatMessage({
-        account,
-        space: "spaces/AAA",
-        text: "hello",
-        thread: badThread,
-      });
+      const result = await send({ thread: badThread });
 
       const url = mockCallArg(fetchMock);
-      const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
       // Invalid thread must not be forwarded, and the reply option must be omitted
       // so the Chat API accepts the send instead of returning 400 INVALID_ARGUMENT.
       expect(String(url)).not.toContain("messageReplyOption=");
-      if (typeof init?.body !== "string") {
-        throw new Error("Expected Google Chat request body");
-      }
-      const body = JSON.parse(init.body) as { thread?: unknown };
-      expect(body.thread).toBeUndefined();
+      expect(requestBody(fetchMock).thread).toBeUndefined();
       expect(result).toEqual({ messageName: "spaces/AAA/messages/126" });
     },
   );
@@ -480,9 +427,7 @@ describe("sendGoogleChatMessage", () => {
       expiresAtMs: Date.now() + 60_000,
     });
 
-    const result = await sendGoogleChatMessage({
-      account,
-      space: "spaces/AAA",
+    const result = await send({
       text: "Please reply with:\n/approve 12345678 allow-once",
     });
 
@@ -492,11 +437,6 @@ describe("sendGoogleChatMessage", () => {
 });
 
 describe("updateGoogleChatMessage", () => {
-  afterEach(() => {
-    mocks.fetchWithSsrFGuard.mockClear();
-    vi.unstubAllGlobals();
-  });
-
   it("updates text and cardsV2 with a matching update mask", async () => {
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
     const cardsV2 = [
@@ -519,17 +459,21 @@ describe("updateGoogleChatMessage", () => {
     expect(String(mockCallArg(fetchMock))).toContain(
       "spaces/AAA/messages/123?updateMask=text,cardsV2",
     );
-    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected Google Chat request body");
-    }
-    expect(JSON.parse(init.body)).toEqual({ text: "Resolved", cardsV2 });
+    expect(requestBody(fetchMock)).toEqual({ text: "Resolved", cardsV2 });
   });
 });
 
 function mockTicket(payload: Record<string, unknown>) {
-  mocks.verifyIdToken.mockResolvedValue({
+  mocks.verifyIdToken.mockReset().mockResolvedValue({
     getPayload: () => payload,
+  });
+}
+
+function mockAddOnTicket(sub = "principal-1") {
+  mockTicket({
+    email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
+    email_verified: true,
+    sub,
   });
 }
 
@@ -574,19 +518,12 @@ describe("verifyGoogleChatRequest", () => {
   });
 
   it("accepts Google Chat app-url tokens from the Chat issuer", async () => {
-    mocks.verifyIdToken.mockReset();
     mockTicket({
       email: "chat@system.gserviceaccount.com",
       email_verified: true,
     });
 
-    await expect(
-      verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
-      }),
-    ).resolves.toEqual({ ok: true });
+    await expect(verifyAppToken()).resolves.toEqual({ ok: true });
 
     const oauthOptions = mockCallArg(mocks.oauthCtor) as {
       transporter?: { defaults?: { fetchImplementation?: unknown } };
@@ -595,59 +532,21 @@ describe("verifyGoogleChatRequest", () => {
   });
 
   it("rejects add-on tokens when no principal binding is configured", async () => {
-    mocks.verifyIdToken.mockReset();
-    mockTicket({
-      email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
-      email_verified: true,
-      sub: "principal-1",
-    });
-
-    await expect(
-      verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
-      }),
-    ).resolves.toEqual({
+    mockAddOnTicket();
+    await expect(verifyAppToken()).resolves.toEqual({
       ok: false,
       reason: "missing add-on principal binding",
     });
   });
 
   it("accepts add-on tokens only when the bound principal matches", async () => {
-    mocks.verifyIdToken.mockReset();
-    mockTicket({
-      email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
-      email_verified: true,
-      sub: "principal-1",
-    });
-
-    await expect(
-      verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
-        expectedAddOnPrincipal: "principal-1",
-      }),
-    ).resolves.toEqual({ ok: true });
+    mockAddOnTicket();
+    await expect(verifyAppToken("principal-1")).resolves.toEqual({ ok: true });
   });
 
   it("rejects add-on tokens when the bound principal does not match", async () => {
-    mocks.verifyIdToken.mockReset();
-    mockTicket({
-      email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
-      email_verified: true,
-      sub: "principal-2",
-    });
-
-    await expect(
-      verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
-        expectedAddOnPrincipal: "principal-1",
-      }),
-    ).resolves.toEqual({
+    mockAddOnTicket("principal-2");
+    await expect(verifyAppToken("principal-1")).resolves.toEqual({
       ok: false,
       reason: "unexpected add-on principal: principal-2",
     });
@@ -655,21 +554,11 @@ describe("verifyGoogleChatRequest", () => {
 
   it("fetches Chat certs through the guarded fetch for project-number tokens", async () => {
     expireGoogleChatCertCache();
-    const release = vi.fn();
     mocks.fetchWithSsrFGuard.mockClear();
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ "kid-1": "cert-body" }), { status: 200 }),
-      release,
-    });
+    const release = guardedResponse(jsonResponse({ "kid-1": "cert-body" }));
     mocks.verifySignedJwtWithCertsAsync.mockReset().mockResolvedValue(undefined);
 
-    await expect(
-      verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "project-number",
-        audience: "123456789",
-      }),
-    ).resolves.toEqual({ ok: true });
+    await expect(verifyProjectToken()).resolves.toEqual({ ok: true });
 
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
@@ -687,22 +576,14 @@ describe("verifyGoogleChatRequest", () => {
 
   it("reports malformed Chat cert JSON with a stable auth error", async () => {
     expireGoogleChatCertCache();
-    const release = vi.fn(async () => {});
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: new Response("{ nope", {
+    const release = guardedResponse(
+      new Response("{ nope", {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
-      release,
-    });
+    );
 
-    await expect(
-      verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "project-number",
-        audience: "123456789",
-      }),
-    ).resolves.toEqual({
+    await expect(verifyProjectToken()).resolves.toEqual({
       ok: false,
       reason: "Google Chat cert fetch failed: malformed JSON response",
     });
@@ -710,64 +591,33 @@ describe("verifyGoogleChatRequest", () => {
   });
 
   describe("bounded JSON read (readProviderJsonResponse delegation)", () => {
-    const ONE_MIB = 1024 * 1024;
-    const TOTAL_CHUNKS = 32;
-
-    function createOversizedResponse(chunk: Uint8Array, init: ResponseInit) {
-      let bytesPulled = 0;
-      let canceled = false;
-      return {
-        response: new Response(
+    it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
+      const chunk = new TextEncoder().encode("x".repeat(1024 * 1024));
+      const totalBytes = 32 * chunk.length;
+      const streamed = { bytesPulled: 0, canceled: false };
+      const release = guardedResponse(
+        new Response(
           new ReadableStream<Uint8Array>({
             pull(controller) {
-              if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+              if (streamed.bytesPulled >= totalBytes) {
                 controller.close();
                 return;
               }
-              bytesPulled += chunk.length;
+              streamed.bytesPulled += chunk.length;
               controller.enqueue(chunk);
             },
             cancel() {
-              canceled = true;
+              streamed.canceled = true;
             },
           }),
-          init,
+          { status: 500, statusText: "Internal Server Error" },
         ),
-        get bytesPulled() {
-          return bytesPulled;
-        },
-        get canceled() {
-          return canceled;
-        },
-      };
-    }
+      );
 
-    afterEach(() => {
-      mocks.fetchWithSsrFGuard.mockClear();
-      vi.unstubAllGlobals();
-    });
-
-    it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
-      const streamed = createOversizedResponse(new TextEncoder().encode("x".repeat(ONE_MIB)), {
-        status: 500,
-        statusText: "Internal Server Error",
-      });
-      const release = vi.fn(async () => {});
-      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-        response: streamed.response,
-        release,
-      });
-
-      await expect(
-        sendGoogleChatMessage({
-          account,
-          space: "spaces/AAA",
-          text: "hello",
-        }),
-      ).rejects.toThrow(/^Google Chat API 500: x+/);
+      await expect(send()).rejects.toThrow(/^Google Chat API 500: x+/);
 
       expect(streamed.canceled).toBe(true);
-      expect(streamed.bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(streamed.bytesPulled).toBeLessThan(totalBytes);
       expect(release).toHaveBeenCalledOnce();
     });
   });
