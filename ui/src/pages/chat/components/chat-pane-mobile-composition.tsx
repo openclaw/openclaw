@@ -3,8 +3,6 @@ import {
   Errored,
   Loading,
   lazy,
-  getOwner,
-  runWithOwner,
   createMemo,
   createSignal,
   merge,
@@ -61,19 +59,17 @@ export function ChatPaneMobileComposition(props: {
     details: Element,
   ) => Element;
 }) {
-  const owner = getOwner();
   let disposed = false;
   onCleanup(() => {
     disposed = true;
   });
-  // Native page callbacks run under a transient host; their contents retain this header's lifetime.
+  // The destination's first visit mounts its content under this retained header owner.
   const retainPage = (render: () => Element) => {
-    let content: Element;
-    return () => {
-      if (disposed) {
-        return undefined;
-      }
-      return (content ??= runWithOwner(owner, () => (
+    const opened = createMemo<boolean>(
+      (previous) => previous === true || host()?.destination.page?.render === page,
+    );
+    const content = (
+      <Show when={opened()}>
         <Errored
           fallback={(error, reset) => (
             <LazyViewError
@@ -105,8 +101,12 @@ export function ChatPaneMobileComposition(props: {
         >
           <Loading fallback={<p role="status">{t("common.loading")}</p>}>{render()}</Loading>
         </Errored>
-      )));
-    };
+      </Show>
+    );
+    function page() {
+      return disposed ? undefined : content;
+    }
+    return page;
   };
   const ChatMobilePeopleBody = lazy(() => import("./chat-mobile-people.tsx"), {
     export: "ChatMobilePeopleBody",

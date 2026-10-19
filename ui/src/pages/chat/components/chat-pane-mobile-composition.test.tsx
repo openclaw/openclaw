@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
+import { dynamic } from "@solidjs/web";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
@@ -45,7 +47,7 @@ it("clears the device name while replacing its request and ignores retired resul
   expect(name()).toBeUndefined();
 });
 
-it("retains the People lookup across header refreshes and desktop parking", () => {
+it("retains the People page and lookup across native host replacement and desktop parking", async () => {
   const release = vi.fn();
   const mentions = {
     status: "idle" as const,
@@ -105,7 +107,20 @@ it("retains the People lookup across header refreshes and desktop parking", () =
     mounted.update({ detailsControl: { ...detailsControl, mobileHost: { ...mobileHost } } });
   }
   const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-people-grid")!;
+  expect(mentions.activate).not.toHaveBeenCalled();
   trigger.click();
+  const renderPage = mobileHost.destination.page!.render!;
+  const mountPage = () =>
+    mountSolid(() => {
+      const Page = dynamic(() => renderPage);
+      return <Page />;
+    });
+  const firstPage = mountPage();
+  await waitForSolid(() =>
+    expect(firstPage.queryByRole("group", { name: "People" })).not.toBeNull(),
+  );
+  const retainedPage = firstPage.container.querySelector("#pane-1-mobile-people");
+  expect(retainedPage).not.toBeNull();
   expect(mentions.activate).toHaveBeenCalledOnce();
   mounted.update({
     title: "Updated title",
@@ -119,9 +134,23 @@ it("retains the People lookup across header refreshes and desktop parking", () =
   expect(mounted.container.querySelector(".chat-mobile-people-grid")).toBe(trigger);
   expect(mentions.activate).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
+  firstPage.unmount();
   mobileHost.open = false;
   refreshHost();
   expect(release).toHaveBeenCalledOnce();
+  mounted.update({
+    mergedChrome: false,
+    detailsControl: { ...detailsControl, mobileHost: undefined },
+    mobilePeopleMentions: { ...mentions, status: "error", error: "Retained lookup needs retry" },
+  });
+  mobileHost.open = true;
+  mounted.update({ mergedChrome: true, detailsControl });
+  const returnedPage = mountPage();
+  expect(returnedPage.container.querySelector("#pane-1-mobile-people")).toBe(retainedPage);
+  expect(returnedPage.getByRole("alert").textContent).toContain("Retained lookup needs retry");
+  expect(mentions.activate).toHaveBeenCalledTimes(2);
   mounted.unmount();
-  expect(release).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledTimes(2);
+  expect(renderPage()).toBeUndefined();
+  returnedPage.unmount();
 });
