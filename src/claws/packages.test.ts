@@ -73,7 +73,7 @@ async function installClawPackages(
 }
 const acquirePackageLease = vi.fn(async () => ({
   identity: { scope: "claw-package-lifecycle" as const, key: "test-package", owner: "test-owner" },
-  heartbeat: vi.fn(),
+  assertCurrent: vi.fn(),
   release: vi.fn(),
 }));
 const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {

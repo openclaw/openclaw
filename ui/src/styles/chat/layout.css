@@ -3320,14 +3320,16 @@ openclaw-chat-ci-details {
 
 .chat-pane__chat-toggle,
 .chat-pane__layout-trigger,
-.chat-pane__sharing-trigger {
+.chat-pane__sharing-trigger,
+button.chat-pane__subagents-running {
   padding: 5px 8px;
   line-height: 1;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-pane__chat-toggle,
-  .chat-pane__layout-trigger {
+  .chat-pane__layout-trigger,
+  button.chat-pane__subagents-running {
     min-height: 44px;
   }
 

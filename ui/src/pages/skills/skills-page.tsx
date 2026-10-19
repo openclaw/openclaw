@@ -226,11 +226,13 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   );
   onSettled(() => {
+    // Roster receipts reconcile the request target before admitting missing skill reads.
     const stopAgents = agents.subscribe(() => {
       reconcileAgentState();
       ensureInitialData();
     });
     const selections = new Set([context.settingsAgentSelection, context.agentSelection]);
+    // Retained surfaces have separate selection owners; only the admitted owner retargets.
     const stopSelections = Array.from(selections, (selection) =>
       selection.subscribe(() => {
         if (selection === agentSelection()) {
@@ -260,14 +262,11 @@ export function SkillsPage(props: SkillsPageProps) {
         ],
       );
     };
+    // Icon reconciliation waits for result/detail publication to settle.
     const stopSkills = skills.subscribe(() => onSettled(syncIcons));
     syncSelection();
     syncIcons();
-    return () => {
-      stopAgents();
-      stopSelections.forEach((stop) => stop());
-      stopSkills();
-    };
+    return () => [stopAgents, ...stopSelections, stopSkills].forEach((stop) => stop());
   });
   onCleanup(() => {
     active = false;

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   captureWorktreeRunEndContext,
   retainWorktreeRunEndFailure,
@@ -15,10 +13,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import {
-  localWorkspacePublication,
-  readLocalWorkspaceCommit,
-} from "./local-workspace-publication.js";
+import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
@@ -130,7 +125,6 @@ export function withLocalWorkspaceStore<T>(
                 ) => {
                   assertCurrent();
                   const capturedMutation = structuredClone(mutation);
-                  const receipt = randomUUID();
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
                   const predicates = structuredClone(guard.predicates);
@@ -153,7 +147,6 @@ export function withLocalWorkspaceStore<T>(
                                 mutation: capturedMutation,
                                 predicates,
                                 leases: write.identities,
-                                receipt,
                               },
                             }),
                           {
@@ -162,23 +155,15 @@ export function withLocalWorkspaceStore<T>(
                               settled = operation.settled;
                               const result = write.createAdmission(operation);
                               admission = result.admission;
-                              const publication = localWorkspacePublication.begin({
-                                get identity() {
-                                  return context.admission.identity.key;
-                                },
-                                assertCurrent:
-                                  context.assertPublicationCurrent ??
-                                  context.admission.assertCurrent,
-                              });
                               observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
-                                if (!isRecord(facts) || facts.operationId !== receipt) {
-                                  throw new Error("Local workspace receipt changed operation");
+                                (
+                                  context.assertPublicationCurrent ??
+                                  context.admission.assertCurrent
+                                )();
+                                if (facts !== undefined) {
+                                  readLocalWorkspaceCommit(facts, params.worktreeId);
                                 }
-                                publication.committed(facts.receipt);
                               });
-                              void operation.settled.then((outcome) =>
-                                publication.finish(outcome.kind === "completed"),
-                              );
                               return result;
                             },
                           },
@@ -192,7 +177,6 @@ export function withLocalWorkspaceStore<T>(
                       try {
                         row = readLocalWorkspaceCommit(
                           admission.committed.facts,
-                          receipt,
                           params.worktreeId,
                         );
                       } catch (receiptError) {

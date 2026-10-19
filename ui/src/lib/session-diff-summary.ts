@@ -1,5 +1,4 @@
 import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/index.js";
-import { registerListener } from "../../../src/shared/listeners.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
@@ -26,14 +25,12 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
   let unsubscribe: (() => void) | undefined;
   let current = empty();
   const entries = new Map<string, Entry>();
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending = false;
   let disposed = false;
   const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
   };
   const clearTimer = () => {
     clearTimeout(timer);
@@ -167,7 +164,12 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
     get snapshot(): Snapshot {
       return current;
     },
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     update(next: Input) {
       if (disposed) {
         return;
@@ -192,7 +194,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
       lifecycle?.dispose();
       stopVisibility();
       entries.clear();
-      listeners.clear();
+      render = undefined;
     },
   };
 }

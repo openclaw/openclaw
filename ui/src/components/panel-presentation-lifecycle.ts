@@ -2,11 +2,12 @@
 export function createPanelPresentationLifecycle(
   scheduleAfterRender: (callback: () => void) => void,
   reconcile: () => void,
+  initialRender?: () => void,
 ) {
+  let render = initialRender;
   let connected = false;
   let completion: Promise<boolean> = Promise.resolve(true);
   let complete: ((value: boolean) => void) | undefined;
-  const listeners = new Set<() => void>();
 
   function publish(): void {
     if (!connected) {
@@ -19,9 +20,7 @@ export function createPanelPresentationLifecycle(
       });
     }
     const pending = complete;
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
     if (needsCommit) {
       scheduleAfterRender(() => {
         // Detach retires this receipt before a retained host starts another render.
@@ -52,9 +51,9 @@ export function createPanelPresentationLifecycle(
       complete = undefined;
     },
     subscribe(this: void, listener: () => void) {
-      listeners.add(listener);
+      render = listener;
       return () => {
-        listeners.delete(listener);
+        render = undefined;
       };
     },
   };

@@ -25,22 +25,27 @@ export function createLinkReaderPanelLifecycle(
   props: LinkReaderPanelProps,
   scheduleAfterRender: (callback: () => void) => void,
   reconcile: (previous: LinkReaderPanelProps | undefined) => void,
+  render: () => void,
 ) {
   let previousProps: LinkReaderPanelProps | undefined;
-  return createPanelPresentationLifecycle(scheduleAfterRender, () => {
-    const previous = previousProps;
-    previousProps = {
-      client: props.client,
-      available: props.available,
-      agentId: props.agentId,
-      readers: props.readers,
-      suppressed: props.suppressed,
-      embedded: props.embedded,
-      presented: props.presented,
-      tabsInHeader: props.tabsInHeader,
-      sessionKey: props.sessionKey,
-      onClose: props.onClose,
-    };
-    reconcile(previous);
-  });
+  return createPanelPresentationLifecycle(
+    scheduleAfterRender,
+    () => {
+      const previous = previousProps;
+      previousProps = {
+        client: props.client,
+        available: props.available,
+        agentId: props.agentId,
+        readers: props.readers,
+        suppressed: props.suppressed,
+        embedded: props.embedded,
+        presented: props.presented,
+        tabsInHeader: props.tabsInHeader,
+        sessionKey: props.sessionKey,
+        onClose: props.onClose,
+      };
+      reconcile(previous);
+    },
+    render,
+  );
 }

@@ -244,9 +244,7 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-sidebar-session-filter-popover": HTMLAttributes<HTMLElement>;
-      "openclaw-sidebar-collapse-toggle": HTMLAttributes<HTMLElement> & {
-        "prop:onToggle"?: () => void;
-      };
+      "openclaw-sidebar-collapse-toggle": HTMLAttributes<HTMLElement>;
       "openclaw-agent-avatar": BridgeAttributes<AgentAvatarProps>;
       "openclaw-catalog-session-menu": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-catalog-session-menu"]
@@ -273,6 +271,7 @@ declare module "@solidjs/web" {
       > &
         Properties<HTMLElementTagNameMap["openclaw-theme-mode-toggle"]> & {
           "prop:menuAttributes"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["menuAttributes"];
+          "prop:onChange"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["onChange"];
         };
     }
   }

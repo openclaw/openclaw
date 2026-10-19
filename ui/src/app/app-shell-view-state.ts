@@ -6,7 +6,6 @@ import type {
   SettingsSidebarFallbackProps,
   SettingsSidebarLoader,
 } from "../components/settings-sidebar-lazy.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -71,7 +70,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
-  handleThemeChange(event: CustomEvent<ThemeModeChangeDetail>): void;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
   readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;

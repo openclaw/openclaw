@@ -458,7 +458,15 @@ describe("CI changed lint", () => {
           },
         ).trim();
       write("ui/src/view.ts", "export {};\n");
-      for (const pattern of ["createEffect", "untrack", "addEventListener", "querySelector"]) {
+      for (const pattern of [
+        "createEffect",
+        "untrack",
+        "addEventListener",
+        "querySelector",
+        "flush",
+        "getOwner",
+        "runWithOwner",
+      ]) {
         write(`config/control-ui-${pattern}-baseline.txt`, "");
       }
       git(source, ["init"]);

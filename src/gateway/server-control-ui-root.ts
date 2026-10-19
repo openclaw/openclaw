@@ -43,7 +43,6 @@ export type ControlUiRootState =
 type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "resolved" }>;
 type RootFiles = {
   controller: AbortController;
-  generation: number;
   cacheEnabled: boolean;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
   cached: LruCache<{ asset: ControlUiRootAsset; bytes: number }>;
@@ -73,7 +72,6 @@ function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
   if (!files) {
     files = {
       controller: new AbortController(),
-      generation: 0,
       cacheEnabled: true,
       pending: new Map(),
       cached: new LruCache(MAX_PREPARED_ENTRIES, {
@@ -95,17 +93,14 @@ export function readControlUiRootAsset(
   const runtime = fileRuntime();
   const owner = rootFiles(runtime, root);
   owner.controller.signal.throwIfAborted();
-  const generation = owner.generation;
   const key = `${readBody ? "body" : "metadata"}:${fileRel}`;
-  const pendingKey = `${generation}:${key}`;
   const cachedKey = owner.cached.peek(`body:${fileRel}`) ? `body:${fileRel}` : key;
   const cached = owner.cached.get(cachedKey);
   if (cached) {
     return Promise.resolve(cached.asset);
   }
   const pending =
-    owner.pending.get(pendingKey) ??
-    (!readBody ? owner.pending.get(`${generation}:body:${fileRel}`) : undefined);
+    owner.pending.get(key) ?? (!readBody ? owner.pending.get(`body:${fileRel}`) : undefined);
   if (pending) {
     return pending;
   }
@@ -164,7 +159,6 @@ export function readControlUiRootAsset(
     if (
       root.kind === "bundled" &&
       owner.cacheEnabled &&
-      owner.generation === generation &&
       !(asset.br instanceof Error) &&
       !(asset.gzip instanceof Error)
     ) {
@@ -177,8 +171,8 @@ export function readControlUiRootAsset(
       }
     }
     return asset;
-  })().finally(() => owner.pending.delete(pendingKey));
-  owner.pending.set(pendingKey, preparation);
+  })().finally(() => owner.pending.delete(key));
+  owner.pending.set(key, preparation);
   return preparation;
 }
 
@@ -353,10 +347,9 @@ export function createGatewayControlUiRootLifecycle(
         return;
       }
       enabled = nextEnabled;
-      // Admitted HTTP reads may finish, but cannot refill a disabled cache or
-      // coalesce with reads after re-enable. Stop still joins every generation.
+      // Admitted HTTP reads may finish; only enabled roots cache their results.
+      // Stop still joins every outstanding read.
       const files = rootFiles(fileRuntime(), state);
-      files.generation++;
       files.cacheEnabled = enabled;
       files.cached.clear();
       if (enabled) {
