@@ -13,9 +13,13 @@ import { createOperatorClient } from "../../../gateway/server-plugin-in-process-
 import { SharedGatewaySessionGenerationState } from "../../../gateway/server-shared-auth-generation.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  releaseSessionControllerClaim,
+  tryClaimSessionControllerTask,
+} from "../../../sessions/session-controller.mailbox.js";
 import { ensureGatewayOwnerProfile } from "../../../state/user-profiles.js";
 import type { deliverSubagentAnnouncement } from "../announce/subagent-announce-delivery.js";
-import { registerSubagentRun } from "./subagent-registry.js";
+import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
 
@@ -74,6 +78,7 @@ export async function prepareNestedRequesterReplay(params: {
   sessionId: string;
   lifecycleRevision: string;
   runIds: readonly string[];
+  adoptAfterRestart?: boolean;
 }) {
   const { cfg, requesterSessionKey, sessionId, lifecycleRevision, runIds } = params;
   const runId = buildRequesterSettleWakeIdentity({
@@ -82,6 +87,8 @@ export async function prepareNestedRequesterReplay(params: {
     batchRunIds: runIds,
     rearmGeneration: 1,
   }).runId;
+  const originalRunId = params.adoptAfterRestart ? "original-nested-lead" : runId;
+  let requesterAdmitted = false;
   let lifecycleHandler: Parameters<typeof onAgentEvent>[0] | undefined;
   vi.mocked(onAgentEvent).mockImplementation((handler) => {
     lifecycleHandler = handler;
@@ -99,7 +106,7 @@ export async function prepareNestedRequesterReplay(params: {
       context: GatewayRequestContext,
     ) {
       await registerSubagentRun(
-        registration(runId, {
+        registration(originalRunId, {
           childSessionKey: requesterSessionKey,
           sessionEntry: { sessionId, lifecycleRevision },
           requesterSessionKey: "agent:main:main",
@@ -111,18 +118,32 @@ export async function prepareNestedRequesterReplay(params: {
           gatewayContextResolver: () => context,
         }),
       );
-      await updateRun(runId, (draft) => {
+      await updateRun(originalRunId, (draft) => {
+        if (params.adoptAfterRestart) {
+          draft.pauseReason = "sessions_yield";
+          draft.execution = { ...draft.execution, status: "terminal", endedAt: Date.now() };
+        }
         draft.requesterSettleWake = {
           status: "pending",
           attemptCount: 0,
           rearmGeneration: 1,
-          batchRunIds: [runId],
+          batchRunIds: [originalRunId],
           requesterYieldBatch: true,
         };
       });
     },
     async complete(delivery: Delivery) {
       expect(delivery.directIdempotencyKey).toBe(runId);
+      if (params.adoptAfterRestart) {
+        expect(
+          await replaceSubagentRunAfterSteerCore({
+            previousRunId: originalRunId,
+            nextRunId: runId,
+            allowEndedSource: true,
+            preserveRequesterSettleWake: true,
+          }),
+        ).toBe(true);
+      }
       const resumed = await prepareGatewaySubagentRun({
         cfg,
         client: captureAgentTurnPrincipal(getPluginRuntimeGatewayRequestScope()?.client ?? null),
@@ -161,7 +182,22 @@ export async function prepareNestedRequesterReplay(params: {
         },
       });
     },
+    admitRequester(delivery: Delivery) {
+      if (!params.adoptAfterRestart || delivery.targetRequesterSessionKey !== "agent:main:main") {
+        return true;
+      }
+      const input = expectDefined(delivery.controllerInput, "top-parent mailbox input");
+      const claim = tryClaimSessionControllerTask(input);
+      requesterAdmitted = claim !== undefined;
+      if (claim) {
+        releaseSessionControllerClaim(claim);
+      }
+      return requesterAdmitted;
+    },
     expectCompleted(settled: ReadonlyMap<string, SubagentRunRecord>, deliveries: Delivery[]) {
+      if (params.adoptAfterRestart) {
+        expect(requesterAdmitted, "restored top-parent wake must enter its mailbox").toBe(true);
+      }
       expect(
         deliveries.map((delivery) => ({
           target: delivery.targetRequesterSessionKey,

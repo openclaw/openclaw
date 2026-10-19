@@ -71,6 +71,7 @@ export function registerRequesterCompletionCustodyTests({
     "owner current",
     "owner nested password",
     "owner nested committed replay",
+    "owner nested adopted replay",
     "owner rotated",
     "current with child",
     "owner current with child",
@@ -93,7 +94,8 @@ export function registerRequesterCompletionCustodyTests({
       const owner = recovery.startsWith("owner ");
       const spawnsChild = recovery.endsWith(" with child");
       const revokesChild = recovery === "owner revoked with child";
-      const nestedReplay = recovery === "owner nested committed replay";
+      const nestedReplay =
+        recovery === "owner nested committed replay" || recovery === "owner nested adopted replay";
       const nestedOwner = recovery.startsWith("owner nested ");
       const ownerAuth = nestedOwner
         ? { mode: "password" as const, password: "owner-password-fixture" }
@@ -139,6 +141,7 @@ export function registerRequesterCompletionCustodyTests({
               sessionId,
               lifecycleRevision,
               runIds,
+              adoptAfterRestart: recovery === "owner nested adopted replay",
             })
           : undefined;
         const currentChild = (runId = runIds[0]) =>
@@ -262,6 +265,9 @@ export function registerRequesterCompletionCustodyTests({
             expectDefined(deliveredAuthority, "restored requester authority").assertCurrent();
             if (nested && params.targetRequesterSessionKey === requesterSessionKey) {
               await nested.complete(params);
+            }
+            if (nested && !nested.admitRequester(params)) {
+              return { delivered: false, path: "none", disposition: "session_queued" };
             }
             if (spawnsChild && !childAuthority) {
               const gateway = expectDefined(
