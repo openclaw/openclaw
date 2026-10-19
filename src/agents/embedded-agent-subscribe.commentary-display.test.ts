@@ -57,15 +57,19 @@ function commentaryHarness(options: Options) {
 function update(
   emit: ReturnType<typeof createSubscribedSessionHarness>["emit"],
   message: TestAssistant,
-  event: {
-    type: string;
-    contentIndex?: number;
-    delta?: string;
-    content?: string;
-    partial?: TestAssistant;
-  },
+  type: "text_delta" | "text_end" | "toolcall_start",
+  text?: string,
+  contentIndex?: number,
 ) {
-  emit({ type: "message_update", message, assistantMessageEvent: event });
+  emit({
+    type: "message_update",
+    message,
+    assistantMessageEvent: {
+      type,
+      ...(text === undefined ? {} : type === "text_delta" ? { delta: text } : { content: text }),
+      ...(contentIndex === undefined ? {} : { contentIndex, partial: message }),
+    },
+  });
 }
 function textMessage(
   text: string,
@@ -101,16 +105,11 @@ describe("commentary preambles", () => {
       for (const delta of ["Checking", " the", " café 🦞."]) {
         text += delta;
         const partial = message(text);
-        update(emit, partial, { type: "text_delta", contentIndex: 0, delta, partial });
+        update(emit, partial, "text_delta", delta, 0);
       }
       await subscription.waitForPendingEvents();
       expect(progress()).toEqual(["Checking"]);
-      update(emit, message(text), {
-        type: "text_end",
-        contentIndex: 0,
-        content: text,
-        partial: message(text),
-      });
+      update(emit, message(text), "text_end", text, 0);
       await subscription.waitForPendingEvents();
       expect(progress().at(-1)).toBe("Checking the café 🦞.");
     },
@@ -123,7 +122,7 @@ describe("commentary preambles", () => {
       const { emit, subscription, snapshot, drain } = commentaryHarness({ onAgentEvent });
       const narration = "Checking the workspace.\n\n```sh\n  pwd\n```";
       emit({ type: "message_start", message: textMessage("", api) });
-      update(emit, textMessage(narration, api), { type: "text_delta", delta: narration });
+      update(emit, textMessage(narration, api), "text_delta", narration);
       await subscription.waitForPendingEvents();
       expect(await snapshot()).toContain("Checking the workspace.");
 
@@ -132,7 +131,7 @@ describe("commentary preambles", () => {
         stopReason: "toolUse",
         content: [{ type: "text", text: narration }, toolBlock("exec_0", "exec")],
       };
-      update(emit, toolMessage, { type: "toolcall_start", contentIndex: 1, partial: toolMessage });
+      update(emit, toolMessage, "toolcall_start", undefined, 1);
       emit({ type: "message_end", message: toolMessage });
       await subscription.waitForPendingEvents();
       await drain();
@@ -140,7 +139,7 @@ describe("commentary preambles", () => {
       expect(onAgentEvent.mock.calls.some(([event]) => event.stream === "item")).toBe(false);
 
       emit({ type: "message_start", message: textMessage("", api) });
-      update(emit, textMessage("Next answer.", api), { type: "text_delta", delta: "Next answer." });
+      update(emit, textMessage("Next answer.", api), "text_delta", "Next answer.");
       emit({
         type: "message_end",
         message: { ...textMessage("Next answer.", api), stopReason: "stop" },
@@ -168,12 +167,7 @@ describe("commentary preambles", () => {
         content: [textBlock("Accepted answer.", "answer-0", "final_answer")],
       };
       emit({ type: "message_start", message: answer });
-      update(emit, answer, {
-        type: "text_delta",
-        contentIndex: 0,
-        delta: "Accepted answer.",
-        partial: answer,
-      });
+      update(emit, answer, "text_delta", "Accepted answer.", 0);
       const mixed: TestAssistant = {
         ...answer,
         content: [...answer.content, textBlock("Checking a detail.", "commentary-0", "commentary")],
@@ -185,12 +179,7 @@ describe("commentary preambles", () => {
               ...answer,
               content: [...answer.content, { type: "text", text: "Checking a detail." }],
             };
-      update(emit, partial, {
-        type: "text_delta",
-        contentIndex: 1,
-        delta: "Checking a detail.",
-        partial,
-      });
+      update(emit, partial, "text_delta", "Checking a detail.", 1);
       if (phaseKnownAt === "text_end" && !deferred) {
         expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
           stream: "assistant",
@@ -204,12 +193,7 @@ describe("commentary preambles", () => {
         });
         broadcast.mockClear();
       }
-      update(emit, mixed, {
-        type: "text_end",
-        contentIndex: 1,
-        content: "Checking a detail.",
-        partial: mixed,
-      });
+      update(emit, mixed, "text_end", "Checking a detail.", 1);
       await subscription.waitForPendingEvents();
       await drain();
       if (phaseKnownAt === "text_end" && !deferred) {
@@ -247,12 +231,7 @@ describe("commentary preambles", () => {
             }
           : mixed;
       if (continued !== mixed) {
-        update(emit, continued, {
-          type: "text_delta",
-          contentIndex: 2,
-          delta: "Continuing answer.",
-          partial: continued,
-        });
+        update(emit, continued, "text_delta", "Continuing answer.", 2);
         await subscription.waitForPendingEvents();
         await drain();
         expect(await snapshot()).toBe("Accepted answer.\nContinuing answer.");

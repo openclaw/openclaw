@@ -24,17 +24,17 @@ const plugins: ExtractionPlugin[] = [
           ? { to: args.to, threadImplicit: true }
           : null,
       extractToolSendResult: ({ result }) => {
-        const send = (result as { details?: { toolSend?: Record<string, unknown> } })?.details
+        const toolSend = (result as { details?: { toolSend?: Record<string, unknown> } })?.details
           ?.toolSend;
-        if (typeof send?.to !== "string" || !send.to) {
+        if (typeof toolSend?.to !== "string" || !toolSend.to) {
           return null;
         }
-        const threadId = typeof send.threadId === "string" ? send.threadId : undefined;
+        const threadId = typeof toolSend.threadId === "string" ? toolSend.threadId : undefined;
         return {
-          to: send.to,
+          to: toolSend.to,
           ...(threadId ? { threadId } : {}),
-          ...(send.threadImplicit === true ? { threadImplicit: true } : {}),
-          ...(send.threadSuppressed === true ? { threadSuppressed: true } : {}),
+          ...(toolSend.threadImplicit === true ? { threadImplicit: true } : {}),
+          ...(toolSend.threadSuppressed === true ? { threadSuppressed: true } : {}),
         };
       },
     },
@@ -118,6 +118,13 @@ beforeEach(() => {
 });
 afterEach(() => setActivePluginRegistry(createTestRegistry()));
 
+function send(
+  args: Record<string, unknown>,
+  options?: Parameters<typeof extractMessagingToolSend>[2],
+) {
+  return extractMessagingToolSend("message", { action: "send", ...args }, options);
+}
+
 describe("extractMessagingToolSend", () => {
   it("records opaque conversation targets", () => {
     expect(
@@ -134,7 +141,7 @@ describe("extractMessagingToolSend", () => {
 
   it("extracts provider-declared delivery aliases", () => {
     expect(
-      extractMessagingToolSend("message", {
+      send({
         action: "reply",
         provider: "slack",
         chatGuid: "Channel:C1",
@@ -144,16 +151,17 @@ describe("extractMessagingToolSend", () => {
 
   it("does not treat message-id aliases as delivery targets", () => {
     const args = { action: "reply", provider: "slack", messageId: "message-1" };
-    expect(
-      extractMessagingToolSend("message", args, { currentMessagingTarget: "user:u123" }),
-    ).toMatchObject({ tool: "message", provider: "slack", to: "user:u123" });
-    expect(extractMessagingToolSend("message", args)).toBeUndefined();
+    expect(send(args, { currentMessagingTarget: "user:u123" })).toMatchObject({
+      tool: "message",
+      provider: "slack",
+      to: "user:u123",
+    });
+    expect(send(args)).toBeUndefined();
   });
 
   it("keeps explicit thread evidence with an implicit provider", () => {
     expect(
-      extractMessagingToolSend("message", {
-        action: "send",
+      send({
         to: "channel:123",
         threadId: "456",
       }),
@@ -161,16 +169,15 @@ describe("extractMessagingToolSend", () => {
   });
 
   it("uses send transport thread precedence", () => {
-    const result = extractMessagingToolSend("message", {
-      action: "send",
+    const result = send({
       provider: "slack",
       target: "channel:C1",
       threadId: "111.000",
       replyTo: "999.000",
     });
     expect(result?.to).toBe("channel:c1");
-    expect(result?.threadImplicit).toBeUndefined();
     expect(result?.threadId).toBe("999.000");
+    expect(result?.threadImplicit).toBeUndefined();
   });
 
   it("does not infer native threads without a reply mode", () => {
@@ -182,8 +189,8 @@ describe("extractMessagingToolSend", () => {
         currentThreadId: "171.222",
       },
     );
-    expect(result?.threadImplicit).toBeUndefined();
     expect(result?.threadId).toBeUndefined();
+    expect(result?.threadImplicit).toBeUndefined();
   });
 
   it("infers a native first-mode thread without consuming reply state", () => {
@@ -198,24 +205,15 @@ describe("extractMessagingToolSend", () => {
         hasRepliedRef,
       },
     );
-    expect(result?.threadImplicit).toBe(true);
     expect(result?.threadId).toBe("171.222");
+    expect(result?.threadImplicit).toBe(true);
     expect(hasRepliedRef.value).toBe(false);
   });
 
   it("records explicit suppression of implicit message threading", () => {
-    const topLevel = extractMessagingToolSend("message", {
-      action: "send",
-      provider: "telegram",
-      to: "123",
-      topLevel: true,
-    });
-    const nullThread = extractMessagingToolSend("message", {
-      action: "send",
-      provider: "telegram",
-      to: "123",
-      threadId: null,
-    });
+    const target = { provider: "telegram", to: "123" };
+    const topLevel = send({ ...target, topLevel: true });
+    const nullThread = send({ ...target, threadId: null });
     expect(topLevel?.threadSuppressed).toBe(true);
     expect(topLevel?.threadImplicit).toBeUndefined();
     expect(nullThread?.threadSuppressed).toBe(true);
@@ -225,10 +223,8 @@ describe("extractMessagingToolSend", () => {
 
 describe("extractMessagingToolSendResult thread evidence", () => {
   it("preserves implicit thread evidence and reply dedupe when the result omits it", () => {
-    const pending = extractMessagingToolSend(
-      "message",
+    const pending = send(
       {
-        action: "send",
         provider: "partialthreadprovider",
         to: "channel:abc",
         message: "answer",
@@ -240,13 +236,13 @@ describe("extractMessagingToolSendResult thread evidence", () => {
         replyToMode: "all",
       },
     );
-    expect(pending?.threadImplicit).toBe(true);
     expect(pending?.threadId).toBe("root-1");
+    expect(pending?.threadImplicit).toBe(true);
     const confirmed = extractMessagingToolSendResult(pending!, {
       details: { toolSend: { to: "channel:abc" } },
     });
-    expect(confirmed.threadImplicit).toBe(true);
     expect(confirmed.threadId).toBe("root-1");
+    expect(confirmed.threadImplicit).toBe(true);
     expect(
       resolveMessagingToolPayloadDedupe({
         messageProvider: "partialthreadprovider",

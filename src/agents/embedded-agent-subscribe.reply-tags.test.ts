@@ -96,13 +96,8 @@ describe("fenced block streaming", () => {
     ).toBe(expected);
   });
 
-  it.each([
-    {
-      name: "a long fence",
-      text: `\`\`\`txt\n${"code\n\n".repeat(600)}\`\`\`\n\nAfter`,
-      expectedContent: `${"code".repeat(600)}After`,
-    },
-  ])("preserves fenced code and final prose in $name", ({ text, expectedContent }) => {
+  it("preserves fenced code and final prose in a long fence", () => {
+    const text = `\`\`\`txt\n${"code\n\n".repeat(600)}\`\`\`\n\nAfter`;
     const harness = fenceHarness();
     harness.delta(text);
     expect(harness.chunks().length).toBeGreaterThan(1);
@@ -118,7 +113,7 @@ describe("fenced block streaming", () => {
       .flatMap((chunk) => chunk.split("\n").filter((line) => !line.startsWith("```")))
       .join("")
       .replace(/\s/g, "");
-    expect(rendered).toBe(expectedContent);
+    expect(rendered).toBe(`${"code".repeat(600)}After`);
   });
 
   it("delivers identical fenced chunks as distinct source occurrences with coalescing", async () => {
@@ -170,30 +165,21 @@ function subscribe(options: Omit<Parameters<typeof createSubscribedSessionHarnes
   onTestFinished(() => subscription.unsubscribe());
   return emit;
 }
+function deltas(emit: ReturnType<typeof subscribe>, chunks: string[]) {
+  emit({ type: "message_start", message: { role: "assistant" } });
+  for (const delta of chunks) {
+    emitAssistantTextDelta({ emit, delta });
+  }
+}
 
 describe("streamed final tags", () => {
-  it.each([
-    {
-      name: "closes hidden reasoning fences split across deltas",
-      deltas: ["<think>\n```ts\nconst hidden = true;\n``", "`\n</think><final>Answer</final>"],
-      expected: "Answer",
-      partial: true,
-    },
-  ])("$name", ({ deltas, expected, partial }) => {
+  it("closes hidden reasoning fences split across deltas", () => {
     const reply = vi.fn();
-    const emit = subscribe({
-      enforceFinalTag: true,
-      ...(partial ? { onPartialReply: reply } : { onAgentEvent: reply }),
-    });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const delta of deltas) {
-      emitAssistantTextDelta({ emit, delta });
-    }
-    const payloads = partial
-      ? reply.mock.calls.map(([p]) => p)
-      : extractAgentEventPayloads(reply.mock.calls);
+    const emit = subscribe({ enforceFinalTag: true, onPartialReply: reply });
+    deltas(emit, ["<think>\n```ts\nconst hidden = true;\n``", "`\n</think><final>Answer</final>"]);
+    const payloads = reply.mock.calls.map(([p]) => p);
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(expected);
+    expect(payloads[0]?.text).toBe("Answer");
   });
 
   it.each([
@@ -205,13 +191,10 @@ describe("streamed final tags", () => {
       name: "leading self-closing final opener",
       deltas: ["<final data-model=openrouter/google/gemini/>Visible"],
     },
-  ])("preserves enforced content with a $name", ({ deltas }) => {
+  ])("preserves enforced content with a $name", ({ deltas: chunks }) => {
     const onPartialReply = vi.fn();
     const emit = subscribe({ enforceFinalTag: true, onPartialReply });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const delta of deltas) {
-      emitAssistantTextDelta({ emit, delta });
-    }
+    deltas(emit, chunks);
     expect(
       onPartialReply.mock.calls
         .map(([p]) => p.delta)
@@ -223,10 +206,7 @@ describe("streamed final tags", () => {
   it("strips split final tags without remnants or replacement events", () => {
     const onAgentEvent = vi.fn();
     const emit = subscribe({ onAgentEvent });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
-      emitAssistantTextDelta({ emit, delta });
-    }
+    deltas(emit, ["<", "final>Title\n", "Line one\nLine two</", "final>"]);
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     const text = payloads.map((payload) => payload.delta).join("");
     expect(text).toBe("Title\nLine one\nLine two");
@@ -267,11 +247,11 @@ afterEach(async () => {
     await subscription.waitForPendingEvents();
   }
 });
-function replies(partial = false) {
+function replies() {
   const onReply = vi.fn<(payload: Reply) => void>();
   const harness = createSubscribedSessionHarness({
     runId: "reply-tags",
-    ...(partial ? { onPartialReply: onReply } : { onBlockReply: onReply }),
+    onBlockReply: onReply,
     blockReplyBreak: "text_end",
     blockReplyChunking: { minChars: 1, maxChars: 50, breakPreference: "newline" },
   });
@@ -293,19 +273,11 @@ function replies(partial = false) {
 }
 
 describe("subscribeEmbeddedAgentSession reply tags", () => {
-  it.each([
-    {
-      name: "voice intent",
-      chunks: [
-        "[[audio_as_voice]]Hello.\n\n",
-        "An ordinary paragraph is long enough to drain the earlier voice block.\n\n",
-      ],
-      voice: true,
-    },
-  ])("delivers $name before text_end without leaking metadata", async ({ chunks, voice }) => {
+  it("delivers voice intent before text_end without leaking metadata", async () => {
     const h = replies();
     for (const delta of [
-      ...chunks,
+      "[[audio_as_voice]]Hello.\n\n",
+      "An ordinary paragraph is long enough to drain the earlier voice block.\n\n",
       "A second paragraph gives the first completed block enough text to drain.",
     ]) {
       h.emit({
@@ -316,12 +288,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     }
     await h.subscription.waitForPendingEvents();
     const payloads = h.payloads();
-    if (voice) {
-      expect(payloads[0]?.text).toBe("Hello.");
-    } else {
-      expect(payloads.map((payload) => payload.text).join("")).toContain("[[reply_to:example-id]]");
-    }
-    expect(Boolean(payloads[0]?.audioAsVoice)).toBe(voice);
+    expect(payloads[0]?.text).toBe("Hello.");
+    expect(Boolean(payloads[0]?.audioAsVoice)).toBe(true);
     for (const [index, payload] of payloads.entries()) {
       expect(payload.replyToId).toBeUndefined();
       expect(payload.replyToTag).toBeFalsy();
@@ -346,7 +314,6 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     {
       name: "valid media",
       text: "Hello\nMEDIA:https://example.com/a.png",
-      final: "Hello\nMEDIA:https://example.com/a.png",
       texts: ["Hello", ""],
       media: ["https://example.com/a.png"],
       early: false,
@@ -355,19 +322,18 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     {
       name: "unclosed fence",
       text: "```text\nMEDIA:https://example.com/a.png",
-      final: "```text\nMEDIA:https://example.com/a.png",
       texts: ["```text\nMEDIA:https://example.com/a.png\n```"],
       media: [],
       early: true,
     },
-  ])("flushes trailing directive tails: $name", ({ text, final, texts, media, early }) => {
+  ])("flushes trailing directive tails: $name", ({ text, texts, media, early }) => {
     const h = replies();
     h.delta(text);
     emitAssistantTextEnd(h);
     if (early) {
       expect(h.payloads().map((payload) => payload.text)).toEqual(texts);
     }
-    h.end(final);
+    h.end(text);
     expect(h.payloads().map((payload) => payload.text)).toEqual(texts);
     expect(h.payloads().flatMap((payload) => payload.mediaUrls ?? [])).toEqual(media);
   });

@@ -16,7 +16,19 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 function harness(params: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> = {}) {
   const result = createSubscribedSessionHarness({ runId: "compaction", ...params });
   onTestFinished(() => result.subscription.unsubscribe());
-  return result;
+  return {
+    ...result,
+    startTool: (toolName: string, args: Record<string, unknown>, toolCallId = toolName) =>
+      result.emit({ type: "tool_execution_start", toolName, toolCallId, args }),
+    endTool: (toolName: string, text: string) =>
+      result.emit({
+        type: "tool_execution_end",
+        toolName,
+        toolCallId: toolName,
+        isError: false,
+        result: { content: [{ type: "text", text }] },
+      }),
+  };
 }
 function completed(willRetry = true, tokensBefore = 100, tokensAfter = 50) {
   return {
@@ -73,9 +85,7 @@ describe("compaction accounting", () => {
     const observed: EmbeddedContextAccountingEvent[] = [];
     const { emit } = harness({
       sessionPersistence: "detached",
-      onContextAccountingEvent: (event) => {
-        observed.push(event);
-      },
+      onContextAccountingEvent: (event) => observed.push(event),
     });
     for (const event of events) {
       if ("role" in event) {
@@ -113,9 +123,7 @@ describe("compaction accounting", () => {
         deliveryStarted.resolve();
         return releaseDelivery.promise;
       },
-      onContextAccountingEvent: (event) => {
-        observed.push(event);
-      },
+      onContextAccountingEvent: (event) => observed.push(event),
     });
     const expected: EmbeddedContextAccountingEvent[] = [
       { kind: "model", contextTokens: 90_000, successful: false },
@@ -164,7 +172,7 @@ describe("compaction accounting", () => {
 
   it("preserves an accepted heartbeat response and private scratch through retry", async () => {
     const onHeartbeatToolResponse = vi.fn();
-    const { emit, subscription } = harness({
+    const { emit, subscription, startTool } = harness({
       sessionPersistence: "detached",
       onHeartbeatToolResponse,
     });
@@ -177,12 +185,7 @@ describe("compaction accounting", () => {
       notificationText: "Your report is ready.",
       scratch: "Private monitor notes: report completion confirmed.",
     };
-    emit({
-      type: "tool_execution_start",
-      toolName: tool.name,
-      toolCallId: "heartbeat",
-      args: response,
-    });
+    startTool(tool.name, response, "heartbeat");
     const result = await tool.execute("heartbeat", response);
     emit({
       type: "tool_execution_end",
@@ -290,67 +293,40 @@ describe("compaction accounting", () => {
 describe("tool summaries", () => {
   it("honors shouldEmitToolResult over disabled verbose mode", async () => {
     const onToolResult = vi.fn();
-    const { emit, subscription } = harness({
+    const { subscription, startTool } = harness({
       verboseLevel: "off",
       shouldEmitToolResult: () => true,
       onToolResult,
     });
-    emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "read",
-      args: { path: "/tmp/c.txt" },
-    });
+    startTool("read", { path: "/tmp/c.txt" });
     await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["exec"])("hides command metadata for %s outside full verbose mode", async (toolName) => {
+  it("hides command metadata for exec outside full verbose mode", async () => {
     const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
-    const { emit, subscription } = harness({ verboseLevel: "on", onToolResult });
-    emit({
-      type: "tool_execution_start",
-      toolName,
-      toolCallId: "exec",
-      args: { command: "echo private-sentinel" },
-    });
+    const { subscription, startTool } = harness({ verboseLevel: "on", onToolResult });
+    startTool("exec", { command: "echo private-sentinel" });
     await subscription.waitForPendingEvents();
     const payload = onToolResult.mock.calls[0]?.[0];
-    expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
+    expect(payload?.text).toContain("Exec");
     expect(payload?.text).not.toContain("private-sentinel");
   });
 
   it("emits exec and read output in full verbose mode with the PTY indicator", async () => {
     const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
-    const { emit, subscription } = harness({ verboseLevel: "full", onToolResult });
-    emit({
-      type: "tool_execution_start",
-      toolName: "exec",
-      toolCallId: "exec",
-      args: { command: "claude", pty: true },
-    });
+    const { subscription, startTool, endTool } = harness({ verboseLevel: "full", onToolResult });
+    startTool("exec", { command: "claude", pty: true });
     await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult.mock.calls[0]?.[0].text).toContain("pty");
     expect(onToolResult.mock.calls[0]?.[0].text).toContain("claude");
-    emit({
-      type: "tool_execution_end",
-      toolName: "exec",
-      toolCallId: "exec",
-      isError: false,
-      result: { content: [{ type: "text", text: "hello\nworld" }] },
-    });
+    endTool("exec", "hello\nworld");
     await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult.mock.calls[1]?.[0].text).toContain("hello");
     expect(onToolResult.mock.calls[1]?.[0].text).toContain("```txt");
-    emit({
-      type: "tool_execution_end",
-      toolName: "read",
-      toolCallId: "read",
-      isError: false,
-      result: { content: [{ type: "text", text: "file data" }] },
-    });
+    endTool("read", "file data");
     await subscription.waitForPendingEvents();
     expect(onToolResult).toHaveBeenCalledTimes(3);
     expect(onToolResult.mock.calls[2]?.[0].text).toContain("file data");
