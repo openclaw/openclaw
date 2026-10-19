@@ -47,6 +47,7 @@ function primeCommonDefaults() {
     providerMissingFallbackApplied: false,
   });
   warnMissingProviderGroupPolicyFallbackOnce.mockReturnValue(undefined);
+  allowInboundGroupTraffic();
 }
 
 const baseAccessConfig = {
@@ -73,6 +74,10 @@ function account(config: ResolvedGoogleChatAccount["config"]) {
   return { accountId: "default", config } as ResolvedGoogleChatAccount;
 }
 
+const mention = (name: string) => ({
+  annotations: [{ type: "USER_MENTION", userMention: { user: { name } } }],
+});
+
 async function applyInboundAccessPolicy(
   overrides: Partial<Parameters<typeof applyGoogleChatInboundAccessPolicy>[0]>,
 ) {
@@ -90,6 +95,19 @@ async function applyInboundAccessPolicy(
   } as never);
 }
 
+async function expectBlocked(
+  overrides: Partial<Parameters<typeof applyGoogleChatInboundAccessPolicy>[0]>,
+  ...reasons: string[]
+) {
+  const logVerbose = vi.fn();
+  await expect(applyInboundAccessPolicy({ ...overrides, logVerbose })).resolves.toEqual({
+    ok: false,
+  });
+  for (const reason of reasons) {
+    expect(logVerbose).toHaveBeenCalledWith(reason);
+  }
+}
+
 describe("googlechat inbound access policy", () => {
   beforeEach(primeCommonDefaults);
   beforeAll(async () => {
@@ -105,38 +123,15 @@ describe("googlechat inbound access policy", () => {
   });
 
   it.each([
-    {
-      name: "blocks raw email entries when dangerous name matching is disabled",
-      allowNameMatching: false,
-      allowFrom: ["jane@example.com"],
-      senderId: "users/123",
-      ok: false,
-    },
-    {
-      name: "matches raw email entries when dangerous name matching is enabled",
-      allowNameMatching: true,
-      allowFrom: ["jane@example.com"],
-      senderId: "users/123",
-      ok: true,
-    },
-    {
-      name: "does not treat users/<email> entries as email allowlist entries",
-      allowNameMatching: true,
-      allowFrom: ["users/jane@example.com"],
-      senderId: "users/123",
-      ok: false,
-    },
-  ])("$name", async ({ allowNameMatching, allowFrom, senderId, ok }) => {
+    ["blocks email matching by default", false, "jane@example.com", false],
+    ["opts into email matching", true, "jane@example.com", true],
+    ["rejects users/<email> aliases", true, "users/jane@example.com", false],
+  ] as const)("%s", async (_name, allowNameMatching, entry, ok) => {
     isDangerousNameMatchingEnabled.mockReturnValue(allowNameMatching);
-    createChannelPairingController.mockReturnValue({
-      readAllowFromStore: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
-
     const result = await applyInboundAccessPolicy({
       isGroup: false,
-      account: account({ dmPolicy: "allowlist", allowFrom }),
-      senderId,
+      account: account({ dmPolicy: "allowlist", allowFrom: [entry] }),
+      senderId: "users/123",
       senderEmail: "Jane@Example.com",
     });
     expect(result.ok).toBe(ok);
@@ -196,7 +191,6 @@ describe("googlechat inbound access policy", () => {
   });
 
   it("allows group traffic when sender and mention gates pass", async () => {
-    allowInboundGroupTraffic();
     const core = createCore();
     core.channel.commands.shouldComputeCommandAuthorized.mockReturnValue(true);
     core.channel.commands.resolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
@@ -213,14 +207,7 @@ describe("googlechat inbound access policy", () => {
         },
       }),
       core: core as never,
-      message: {
-        annotations: [
-          {
-            type: "USER_MENTION",
-            userMention: { user: { name: "users/app-bot" } },
-          },
-        ],
-      } as never,
+      message: mention("users/app-bot"),
     });
 
     expect(result).toMatchObject({
@@ -235,49 +222,41 @@ describe("googlechat inbound access policy", () => {
     });
   });
 
-  it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {
-    allowInboundGroupTraffic();
-    const logVerbose = vi.fn();
-
-    await expect(
-      applyInboundAccessPolicy({
-        account: account({
-          dmPolicy: "allowlist",
-          allowFrom: ["users/alice"],
-          groups: { "spaces/AAA": { enabled: true } },
-        }),
-        logVerbose,
-      }),
-    ).resolves.toEqual({ ok: false });
-
-    expect(logVerbose).toHaveBeenCalledWith(
-      "drop group message (sender policy blocked, reason=groupPolicy=allowlist (empty allowlist), space=spaces/AAA)",
-    );
-  });
-
-  it("keeps configured space users sender-scoped when group policy is open", async () => {
+  it.each([
+    {
+      name: "does not borrow DM allowlists for routed spaces",
+      config: {
+        dmPolicy: "allowlist",
+        allowFrom: ["users/alice"],
+        groups: { "spaces/AAA": { enabled: true } },
+      },
+      policy: "allowlist",
+      reason:
+        "drop group message (sender policy blocked, reason=groupPolicy=allowlist (empty allowlist), space=spaces/AAA)",
+    },
+    {
+      name: "keeps configured users sender-scoped under open group policy",
+      config: {
+        groupPolicy: "open",
+        groups: { "spaces/AAA": { users: ["users/bob"], requireMention: false } },
+      },
+      policy: "open",
+      reason: "drop group message (sender not allowed, users/alice)",
+    },
+  ] satisfies Array<{
+    name: string;
+    config: ResolvedGoogleChatAccount["config"];
+    policy: string;
+    reason: string;
+  }>)("$name", async ({ config, policy, reason }) => {
     resolveAllowlistProviderRuntimeGroupPolicy.mockReturnValue({
-      groupPolicy: "open",
+      groupPolicy: policy,
       providerMissingFallbackApplied: false,
     });
-    allowInboundGroupTraffic();
-    const logVerbose = vi.fn();
-
-    await expect(
-      applyInboundAccessPolicy({
-        account: account({
-          groupPolicy: "open",
-          groups: { "spaces/AAA": { users: ["users/bob"], requireMention: false } },
-        }),
-        logVerbose,
-      }),
-    ).resolves.toEqual({ ok: false });
-
-    expect(logVerbose).toHaveBeenCalledWith("drop group message (sender not allowed, users/alice)");
+    await expectBlocked({ account: account(config) }, reason);
   });
 
   it("drops unauthorized group control commands", async () => {
-    allowInboundGroupTraffic();
     resolveAllowlistProviderRuntimeGroupPolicy.mockReturnValue({
       groupPolicy: "open",
       providerMissingFallbackApplied: false,
@@ -285,26 +264,20 @@ describe("googlechat inbound access policy", () => {
     const core = createCore();
     core.channel.commands.shouldComputeCommandAuthorized.mockReturnValue(true);
     core.channel.commands.isControlCommandMessage.mockReturnValue(true);
-    const logVerbose = vi.fn();
 
-    await expect(
-      applyInboundAccessPolicy({
+    await expectBlocked(
+      {
         core: core as never,
         account: account({ groups: { "spaces/AAA": { requireMention: false } } }),
         rawBody: "/admin",
-        logVerbose,
-      }),
-    ).resolves.toEqual({ ok: false });
-
-    expect(logVerbose).toHaveBeenCalledWith("googlechat: drop control command from users/alice");
+      },
+      "googlechat: drop control command from users/alice",
+    );
   });
 
   it("does not match group policy by mutable space displayName when the stable id differs", async () => {
-    allowInboundGroupTraffic();
-    const logVerbose = vi.fn();
-
-    await expect(
-      applyInboundAccessPolicy({
+    await expectBlocked(
+      {
         account: account({
           groups: {
             "Finance Ops": {
@@ -315,23 +288,10 @@ describe("googlechat inbound access policy", () => {
           },
         }),
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
-        message: {
-          annotations: [
-            {
-              type: "USER_MENTION",
-              userMention: { user: { name: "users/app" } },
-            },
-          ],
-        } as never,
+        message: mention("users/app"),
         rawBody: "show quarter close status",
-        logVerbose,
-      }),
-    ).resolves.toEqual({ ok: false });
-
-    expect(logVerbose).toHaveBeenCalledWith(
+      },
       "Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: Finance Ops",
-    );
-    expect(logVerbose).toHaveBeenCalledWith(
       "drop group message (deprecated mutable group key matched, space=spaces/BBB)",
     );
   });
@@ -341,11 +301,9 @@ describe("googlechat inbound access policy", () => {
       groupPolicy: "open",
       providerMissingFallbackApplied: false,
     });
-    allowInboundGroupTraffic();
-    const logVerbose = vi.fn();
 
-    await expect(
-      applyInboundAccessPolicy({
+    await expectBlocked(
+      {
         account: account({
           groupPolicy: "open",
           groups: {
@@ -355,11 +313,7 @@ describe("googlechat inbound access policy", () => {
         }),
         space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
         rawBody: "show quarter close status",
-        logVerbose,
-      }),
-    ).resolves.toEqual({ ok: false });
-
-    expect(logVerbose).toHaveBeenCalledWith(
+      },
       "drop group message (deprecated mutable group key matched, space=spaces/BBB)",
     );
   });

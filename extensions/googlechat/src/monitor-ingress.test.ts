@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { createGoogleChatIngressMonitor } from "./monitor-ingress.js";
@@ -235,13 +237,8 @@ describe("Google Chat durable ingress", () => {
   });
 
   it("waits for active delivery before stop returns", async () => {
-    let releaseDelivery = () => {};
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    const dispatch = vi.fn(async () => {
-      await deliveryGate;
-    });
+    const deliveryGate = createDeferred<void>();
+    const dispatch = vi.fn(() => deliveryGate.promise);
     const ingress = startIngress(dispatch);
     await ingress.receive(messageEvent({ messageName: "spaces/AAA/messages/active" }));
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
@@ -250,12 +247,10 @@ describe("Google Chat durable ingress", () => {
     const stopping = ingress.stop().then(() => {
       stopped = true;
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
+    await delay(50);
     expect(stopped).toBe(false);
 
-    releaseDelivery();
+    deliveryGate.resolve();
     await stopping;
     expect(stopped).toBe(true);
     expect(await queue.listClaims()).toHaveLength(0);

@@ -50,24 +50,16 @@ vi.mock("./monitor-access.js", () => ({
 
 import { startGoogleChatMonitor } from "./monitor.js";
 
-const configuredAccount = {
-  accountId: "default",
-  enabled: true,
-  credentialSource: "config",
-  config: {
-    audienceType: "project-number",
-    audience: "1234567890",
-  },
-};
+const defaultAudience = { audienceType: "project-number", audience: "1234567890" };
 
 function start(
-  accountConfig: typeof configuredAccount.config & {
+  accountConfig: typeof defaultAudience & {
     typingIndicator?: "none";
-  } = configuredAccount.config,
+  } = defaultAudience,
   overrides: Partial<Parameters<typeof startGoogleChatMonitor>[0]> = {},
 ) {
   return startGoogleChatMonitor({
-    account: { ...configuredAccount, config: accountConfig },
+    account: { accountId: "default", config: accountConfig },
     config: {},
     runtime: {},
     abortSignal: new AbortController().signal,
@@ -82,17 +74,12 @@ describe("Google Chat monitor lifecycle", () => {
     mocks.registerTarget.mockReturnValue(vi.fn());
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it("follows runtime config reloads without replacing the webhook target", async () => {
     const startup = { messages: { visibleReplies: "message_tool" as const } };
     setRuntimeConfigSnapshot(startup);
-    const stop = await start(
-      { ...configuredAccount.config, typingIndicator: "none" },
-      { config: startup },
-    );
+    const stop = await start({ ...defaultAudience, typingIndicator: "none" }, { config: startup });
     try {
       const target = mocks.registerTarget.mock.calls[0]![0];
       const { dispatch } = mocks.ingressFactory.mock.calls[0]![0];
@@ -141,22 +128,13 @@ describe("Google Chat monitor lifecycle", () => {
   });
 
   it.each([
-    {
-      description: "the audience is blank",
-      config: { audienceType: "app-url", audience: "   " },
-    },
-    {
-      description: "the audience type is unsupported",
-      config: {
-        audienceType: "unsupported",
-        audience: "https://chat.example.test/googlechat",
-      },
-    },
-  ])("blocks startup when $description", async ({ config }) => {
+    ["the audience is blank", "app-url", "   "],
+    ["the audience type is unsupported", "unsupported", "https://chat.example.test/googlechat"],
+  ])("blocks startup when %s", async (_description, audienceType, audience) => {
     const statusSink = vi.fn();
     const runtime = { error: vi.fn() };
 
-    const stop = await start(config, { runtime, statusSink });
+    const stop = await start({ audienceType, audience }, { runtime, statusSink });
 
     expect(mocks.ingressStart).not.toHaveBeenCalled();
     expect(mocks.registerTarget).not.toHaveBeenCalled();
@@ -181,7 +159,7 @@ describe("Google Chat monitor lifecycle", () => {
       throw new Error("Google Chat route conflict");
     });
 
-    await expect(start(configuredAccount.config, { statusSink })).rejects.toThrow(
+    await expect(start(defaultAudience, { statusSink })).rejects.toThrow(
       "Google Chat route conflict",
     );
 
