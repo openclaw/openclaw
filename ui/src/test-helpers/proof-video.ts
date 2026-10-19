@@ -17,6 +17,11 @@ import { rasterizeProofAnnotations } from "./proof-annotations.ts";
 
 type Rect = NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>;
 type UntimedCue<T = ProofVideoCue> = T extends ProofVideoCue ? Omit<T, "start" | "end"> : never;
+function requireValid(condition: unknown, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
 
 export async function rasterizeProofOverlays(browser: Browser, cues: ProofVideoCues, dir: string) {
   validateProofVideoCues(cues);
@@ -53,9 +58,7 @@ export async function rasterizeProofOverlays(browser: Browser, cues: ProofVideoC
       const fits = await card.evaluate(
         (element) => element.scrollHeight <= innerHeight && element.scrollWidth <= innerWidth - 160,
       );
-      if (!fits) {
-        throw new Error(`Caption is too long for the card: ${cue.text}`);
-      }
+      requireValid(fits, `Caption is too long for the card: ${cue.text}`);
       const image = path.join(dir, cue.image);
       await mkdir(path.dirname(image), { recursive: true });
       await page.screenshot({ path: image, omitBackground: true, scale: "css" });
@@ -80,9 +83,7 @@ export async function startProofRecording(
   },
 ) {
   const ffprobe = resolveSystemBin("ffprobe", { trust: "standard" });
-  if (!ffprobe) {
-    throw new Error("Install system ffmpeg/ffprobe: brew install ffmpeg or apt install ffmpeg");
-  }
+  requireValid(ffprobe, "Install system ffmpeg/ffprobe: brew install ffmpeg or apt install ffmpeg");
   await mkdir(dir, { recursive: true });
   const sidecar: ProofVideoCues = {
     version: 1,
@@ -115,9 +116,7 @@ export async function startProofRecording(
   let finished = false;
   const open = new Map<ProofVideoCue["kind"], ProofVideoCue>();
   const now = () => {
-    if (finished) {
-      throw new Error("Proof recording is already finished");
-    }
+    requireValid(!finished, "Proof recording is already finished");
     return (performance.now() - zero) / 1000;
   };
   const end = (kind: ProofVideoCue["kind"], time: number) => {
@@ -140,9 +139,7 @@ export async function startProofRecording(
     context,
     caption(text: string) {
       const start = now();
-      if (!text.trim()) {
-        throw new Error("Caption text must not be empty");
-      }
+      requireValid(text.trim(), "Caption text must not be empty");
       add(start, { kind: "caption", text, image: cueImage("caption") });
     },
     clearCaption: () => end("caption", now()),
@@ -158,40 +155,31 @@ export async function startProofRecording(
     clearAnnotations: () => end("annotation", now()),
     async zoom(target: Locator | Rect, { factor = 2, padding = 24, ease = 0.5 } = {}) {
       now();
-      if (
-        ![factor, padding, ease].every(Number.isFinite) ||
-        factor < 1 ||
-        factor > 10 ||
-        padding < 0 ||
-        ease < 0
-      ) {
-        throw new Error("Zoom needs factor 1–10 and nonnegative padding/ease");
-      }
+      requireValid(
+        [factor, padding, ease].every(Number.isFinite) &&
+          factor >= 1 &&
+          factor <= 10 &&
+          padding >= 0 &&
+          ease >= 0,
+        "Zoom needs factor 1–10 and nonnegative padding/ease",
+      );
       const rect = "boundingBox" in target ? await target.boundingBox() : target;
-      if (
-        !rect ||
-        !Object.values(rect).every(Number.isFinite) ||
-        rect.width <= 0 ||
-        rect.height <= 0
-      ) {
-        throw new Error("Zoom target must have a visible, finite rectangle");
-      }
+      requireValid(
+        rect && Object.values(rect).every(Number.isFinite) && rect.width > 0 && rect.height > 0,
+        "Zoom target must have a visible, finite rectangle",
+      );
       const x = Math.max(0, rect.x - padding),
         y = Math.max(0, rect.y - padding);
       const width = Math.min(viewport.width, rect.x + rect.width + padding) - x;
       const height = Math.min(viewport.height, rect.y + rect.height + padding) - y;
-      if (width <= 0 || height <= 0) {
-        throw new Error("Zoom target is outside the viewport");
-      }
+      requireValid(width > 0 && height > 0, "Zoom target is outside the viewport");
       const start = now();
       add(start, { kind: "zoom", rect: { x, y, width, height }, factor, ease });
     },
     zoomOut: () => end("zoom", now()),
     speed(factor: number) {
       const start = now();
-      if (!Number.isFinite(factor) || factor <= 0) {
-        throw new Error("Speed must be positive");
-      }
+      requireValid(Number.isFinite(factor) && factor > 0, "Speed must be positive");
       end("speed", start);
       if (factor !== 1) {
         add(start, { kind: "speed", factor });
@@ -212,9 +200,7 @@ export async function startProofRecording(
         videoPath,
       ]);
       const duration = Number(stdout.trim());
-      if (!Number.isFinite(duration) || duration <= 0) {
-        throw new Error("Recording has no video duration");
-      }
+      requireValid(Number.isFinite(duration) && duration > 0, "Recording has no video duration");
       for (const kind of open.keys()) {
         end(kind, duration);
       }

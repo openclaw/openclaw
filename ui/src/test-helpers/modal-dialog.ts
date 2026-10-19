@@ -87,7 +87,7 @@ export function createModalDialogTestFixture(
   }
 
   async function cleanup() {
-    let joined = false;
+    let results: PromiseSettledResult<unknown>[];
     try {
       // An assertion can fail before the lazy dialog exists. Catalog completion
       // can repaint its host, so join those responses before cancelling the owner.
@@ -100,23 +100,20 @@ export function createModalDialogTestFixture(
           dismissModal(modal);
         }
       }
-      const results = await Promise.allSettled(operations);
+      results = await Promise.allSettled(operations);
       await vi.dynamicImportSettled();
-      joined = true;
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw errors.length === 1
-          ? errors[0]
-          : new AggregateError(errors, "Dialog operations failed during fixture cleanup");
-      }
     } finally {
       observer.disconnect();
-      if (joined) {
-        document.body.replaceChildren();
-        restoreDialogPolyfill();
-      }
+    }
+    document.body.replaceChildren();
+    restoreDialogPolyfill();
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length) {
+      throw errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, "Dialog operations failed during fixture cleanup");
     }
   }
 
