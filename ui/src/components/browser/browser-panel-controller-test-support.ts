@@ -1,5 +1,5 @@
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
-import { afterEach, onTestFinished, vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { BrowserDashboardTarget, BrowserInspectedNode } from "./browser-client.ts";
 import {
@@ -185,26 +185,7 @@ class TestBrowserFileReader extends EventTarget {
   }
 }
 
-const fontDocuments = new WeakSet<Document>();
-
 export function stubScreenshotMedia(): void {
-  if (!fontDocuments.has(document)) {
-    const ownerDocument = document;
-    const originalFonts = Object.getOwnPropertyDescriptor(ownerDocument, "fonts");
-    Object.defineProperty(ownerDocument, "fonts", {
-      configurable: true,
-      value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
-    });
-    fontDocuments.add(ownerDocument);
-    onTestFinished(() => {
-      if (originalFonts) {
-        Object.defineProperty(ownerDocument, "fonts", originalFonts);
-      } else {
-        Reflect.deleteProperty(ownerDocument, "fonts");
-      }
-      fontDocuments.delete(ownerDocument);
-    });
-  }
   vi.stubGlobal("Image", TestBrowserImage);
   vi.stubGlobal("FileReader", TestBrowserFileReader);
   vi.stubGlobal(
