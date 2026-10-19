@@ -19,7 +19,7 @@ const config = {};
 const agentDir = resolveAgentDir(config, "main");
 const store = createAuthProfileStoreFixture({
   "openai:default": {
-    type: "oauth",
+    type: "oauth" as const,
     provider: "openai",
     access: "access",
     refresh: "refresh",
@@ -51,13 +51,16 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/provider-runtime.js")>()),
   listProviderUsagePluginDescriptors: mocks.listProviderUsagePluginDescriptors,
 }));
-vi.mock("../../secrets/runtime.js", () => ({
+vi.mock("../../secrets/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../secrets/runtime.js")>()),
   refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
 }));
-vi.mock("../../agents/prepared-model-runtime.js", () => ({
+vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/prepared-model-runtime.js")>()),
   prepareModelRuntimeSnapshot: vi.fn(async () => {}),
 }));
-vi.mock("../server-model-catalog-auth.js", () => ({
+vi.mock("../server-model-catalog-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-model-catalog-auth.js")>()),
   loadDeferredCatalog: mocks.loadDeferredCatalog,
   readPreparedCatalog: mocks.readPreparedCatalog,
 }));
