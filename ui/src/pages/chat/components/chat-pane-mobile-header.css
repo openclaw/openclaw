@@ -31,7 +31,7 @@
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .agent-chat__header--mobile .mobile-header__control:hover {
@@ -97,7 +97,7 @@
   color: inherit;
   font: 600 14px/20px var(--font-body);
   text-align: start;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .agent-chat__header--mobile .mobile-header__title-text {
@@ -205,7 +205,7 @@
 }
 
 .agent-chat__header--mobile :is(.mobile-header__retry, .mobile-header__machine) {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   pointer-events: auto;
 }
 
