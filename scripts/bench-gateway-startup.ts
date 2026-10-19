@@ -506,6 +506,27 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
         });
         return;
       }
+      if (result.id === "slowAgentDatabase") {
+        const gatePassed = sample.integrityGateMs!["gate-passed"]!;
+        for (const agentId of SLOW_DATABASE_AGENT_IDS) {
+          const recovered = sample.agentRecoveryMs![agentId]!;
+          const slow = agentId === "bench-slow";
+          if (slow ? recovered <= gatePassed : recovered >= gatePassed) {
+            failures.push({
+              id: result.id,
+              reason: `${agentId} recovered at ${recovered.toFixed(1)}ms; must recover ${slow ? "after" : "before"} integrity gate passed at ${gatePassed.toFixed(1)}ms`,
+              sampleIndex: index + 1,
+            });
+          }
+        }
+        if (sample.agentDatabaseAdmissionErrors !== 0) {
+          failures.push({
+            id: result.id,
+            reason: `database admission errors: ${sample.agentDatabaseAdmissionErrors ?? "missing count"}`,
+            sampleIndex: index + 1,
+          });
+        }
+      }
       if (sample.exitedBeforeTeardown === true) {
         failures.push({
           id: result.id,

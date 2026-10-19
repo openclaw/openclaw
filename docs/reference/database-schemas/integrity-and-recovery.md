@@ -754,7 +754,9 @@ Doctor derive failed inspection and preparation warnings from current agent
 admission decisions, with the reason and repair guidance. Successful preparation
 clears the agent's pending refusal without requiring a restart. Recovery discovery
 and cron session maintenance exclude pending stores before acquiring their readers,
-so healthy agents continue. Cron retries after the admission owner publishes the
+so healthy agents continue. Custom session-store selectors retain healthy sibling
+databases when another physical database in the family is unavailable.
+Cron retries after the admission owner publishes the
 agent's availability; it does not log an admission failure while inspection is pending.
 Database admission refusals do not schedule periodic sweeps of healthy stores.
 Session requests retain the typed, retryable inspection-pending response until

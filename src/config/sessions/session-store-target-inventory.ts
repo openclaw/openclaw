@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
@@ -446,17 +447,21 @@ export function prepareSessionStoreTargetInventory(
       throw new Error("Incognito session discovery requires its process-held owner");
     }
     const storeCandidates = captureSessionStoreReadCandidates(storePath);
-    if (
-      storeCandidates.some(
-        (candidate) =>
-          excludedDatabasePaths.has(candidate.path) ||
-          excludedDatabasePaths.has(candidate.physicalPath),
-      )
-    ) {
+    const availableCandidates = storeCandidates.filter(
+      (candidate) =>
+        !excludedDatabasePaths.has(candidate.path) &&
+        !excludedDatabasePaths.has(candidate.physicalPath),
+    );
+    const hasExcludedCandidate = availableCandidates.length !== storeCandidates.length;
+    if (hasExcludedCandidate && (target.agentId || target.shared)) {
       excludedStorePaths.push(storePath);
       continue;
     }
-    for (const candidate of storeCandidates) {
+    for (const candidate of availableCandidates) {
+      // Family custody would still join the refused sibling's native admission.
+      if (hasExcludedCandidate && candidate.scope === "sibling-family") {
+        continue;
+      }
       candidates.set(JSON.stringify(candidate), candidate);
     }
   }
@@ -550,6 +555,14 @@ export function readSessionStoreTargetInventory(
           request.recoveryExclusions?.agentIds.includes(target.agentId) === true ||
           request.recoveryExclusions?.storePaths.includes(target.storePath) === true,
         onResolvedTarget(target: SessionStoreTarget, physical: SessionStoreTarget) {
+          // Partial recovery has no rows to recover from uncreated stores.
+          if (
+            request.selection === "recovery" &&
+            request.recoveryExclusions &&
+            !statSync(physical.storePath, { throwIfNoEntry: false })
+          ) {
+            return;
+          }
           const databasePath = assertSessionStoreReadCandidate(
             physical.storePath,
             request.candidates,

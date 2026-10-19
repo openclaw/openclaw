@@ -30,6 +30,10 @@ recovery events before teardown and rejects missing observations. No models or
 external channels run. Generate a fresh fixture for every sample; recovery
 mutates the synthetic records. Use separate roots and identical inputs for
 concurrent A/B pairs, with the host's measurement lock and alternating CPU halves.
+The case also requires every healthy agent to recover before the slow integrity
+gate passes, the slow agent to recover afterward, and zero admission errors.
+An unfixed baseline exits nonzero for the ordering failure while still writing
+its measurements; distinguish this expected result from setup or missing data.
 
 Use one fixture for local and sandbox performance repros:
 
