@@ -1,17 +1,10 @@
-import {
-  createEffect,
-  createMemo,
-  createUniqueId,
-  For,
-  Repeat,
-  onCleanup,
-  onSettled,
-} from "solid-js";
+import { createMemo, createUniqueId, For, Repeat, onCleanup, onSettled } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { createTabFocus } from "../lib/tabs.ts";
@@ -36,7 +29,6 @@ import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import { observeScrollState } from "./scroll-state-observer.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
 import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
@@ -243,23 +235,6 @@ function PanelView(
   const target = () => view().target();
   const railMenuId = createUniqueId();
   const editedUrl = () => !target() || view().state.urlDraft.trim() !== target()!.href;
-  createEffect(
-    () => [tab()?.id, view().state.urlDraft, props.mobile] as const,
-    () => {
-      if (!address?.isConnected) {
-        return undefined;
-      }
-      const input = address;
-      const observation = observeScrollState(
-        input,
-        (state) => {
-          input.dataset.overflow = String(state.scrollable);
-        },
-        true,
-      );
-      return () => observation.disconnect();
-    },
-  );
   const loading = () => {
     const current = tab()?.view;
     return (
@@ -286,11 +261,23 @@ function PanelView(
     return icons.size === 1 ? (props.readers[0]?.icon ?? "globe") : "globe";
   });
   function AddressInput() {
+    const scrollState = createScrollStateRef(
+      (element, state) => {
+        element.dataset.overflow = String(state.scrollable);
+      },
+      {
+        horizontal: true,
+        content: () => [tab()?.id, view().state.urlDraft, props.mobile],
+      },
+    );
     return (
       <input
-        ref={(element) => {
-          address = element;
-        }}
+        ref={[
+          (element) => {
+            address = element;
+          },
+          scrollState,
+        ]}
         class="lr-url"
         type="text"
         inputmode={props.mobile ? "url" : undefined}
