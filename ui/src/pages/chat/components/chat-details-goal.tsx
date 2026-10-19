@@ -80,6 +80,7 @@ function GoalEditDialog(props: {
   return (
     <openclaw-modal-dialog
       label={t("chat.goals.edit")}
+      prop:initialFocus={() => input}
       onModal-cancel={(event: Event) => {
         if (submitting) {
           event.preventDefault();
