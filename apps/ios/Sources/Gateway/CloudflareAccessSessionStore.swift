@@ -19,14 +19,16 @@ final class CloudflareAccessSessionStore {
     }
 
     struct Persistence {
-        var load: (CloudflareAccessOrigin) -> String?
+        var load: (CloudflareAccessOrigin) throws -> String?
         var save: (CloudflareAccessOrigin, String) -> Bool
         var delete: (CloudflareAccessOrigin) -> Bool
 
         static var keychain: Self {
             let service = "\(Bundle.main.bundleIdentifier ?? "ai.openclaw.ios").cloudflare-access"
             return Self(
-                load: { GenericPasswordKeychainStore.loadString(service: service, account: $0.url.absoluteString) },
+                load: {
+                    try GenericPasswordKeychainStore.loadStringChecked(service: service, account: $0.url.absoluteString)
+                },
                 save: { GenericPasswordKeychainStore.saveString($1, service: service, account: $0.url.absoluteString) },
                 delete: { GenericPasswordKeychainStore.delete(service: service, account: $0.url.absoluteString) })
         }
@@ -35,6 +37,22 @@ final class CloudflareAccessSessionStore {
     typealias Browser = @MainActor @Sendable (URL) async throws -> Void
     typealias Authenticate = @MainActor (CloudflareAccessApplication, @escaping Browser) async throws
         -> CloudflareAccessSession
+
+    private struct Binding: Codable, Equatable {
+        let issuer: URL
+        let subject: String
+
+        init(_ session: CloudflareAccessSession) {
+            self.issuer = session.issuer
+            self.subject = session.subject
+        }
+    }
+
+    /// One atomic Keychain row keeps the expected principal after the grant is retired.
+    private struct SavedAccount: Codable {
+        let binding: Binding
+        let session: CloudflareAccessSession?
+    }
 
     private struct Lifecycle {
         var phase: State = .signedOut
@@ -57,6 +75,8 @@ final class CloudflareAccessSessionStore {
     }
 
     private(set) var revision: UInt64 = 0
+    @ObservationIgnored private var restored: Set<CloudflareAccessOrigin> = []
+    @ObservationIgnored private var bindings: [CloudflareAccessOrigin: Binding] = [:]
     @ObservationIgnored private var sessions: [CloudflareAccessOrigin: Snapshot] = [:]
     @ObservationIgnored private var states: [CloudflareAccessOrigin: Lifecycle] = [:]
     @ObservationIgnored private var attempts: [CloudflareAccessOrigin: Attempt] = [:]
@@ -85,19 +105,31 @@ final class CloudflareAccessSessionStore {
         return self.states[origin]?.phase ?? .signedOut
     }
 
+    /// Saved account ownership includes expired/revoked grants and never authorizes traffic.
+    func hasAccount(for origin: CloudflareAccessOrigin) -> Bool {
+        _ = self.revision
+        do {
+            try self.restore(origin, now: self.now())
+        } catch {
+            return false
+        }
+        return self.bindings[origin] != nil
+    }
+
     func snapshot(for origin: CloudflareAccessOrigin, now: Date? = nil) -> Snapshot? {
         let now = now ?? self.now()
         _ = self.revision
-        if self.states[origin] == nil {
-            if let encoded = self.persistence.load(origin),
-               let session = try? JSONDecoder().decode(CloudflareAccessSession.self, from: Data(encoded.utf8)),
-               session.origin == origin, (try? session.validate(now: now)) != nil
-            {
-                self.setState(.authenticated, for: origin)
-                self.sessions[origin] = Snapshot(session: session, revision: self.revision)
-            } else {
-                self.setState(.signedOut, for: origin)
-            }
+        // A cold explicit revocation must not restore its row while deletion is pending or failed.
+        if !self.restored.contains(origin),
+           self.retirements[origin] != nil || self.states[origin]?.phase == .signedOut
+        {
+            return nil
+        }
+        do {
+            try self.restore(origin, now: now)
+        } catch {
+            // Leave restoration retryable after unlocking; signIn surfaces the storage error.
+            return nil
         }
         guard let snapshot = self.sessions[origin] else { return nil }
         guard snapshot.session.authorizationHeader(for: origin.url, now: now) != nil else {
@@ -120,12 +152,19 @@ final class CloudflareAccessSessionStore {
         let id = UUID()
         let task = Task { @MainActor in
             do {
+                if let retirement = self.retirements[origin] { try await retirement.task.value }
+                try self.checkAttempt(origin: origin, id: id)
+                try self.restore(origin, now: self.now())
                 let session = try await self.authenticate(application, openBrowser)
                 try self.checkAttempt(origin: origin, id: id)
                 guard session.origin == origin, session.issuer == application.issuer,
                       session.audience == application.audience
                 else { throw CloudflareAccessError.invalidSession }
                 try session.validate(now: self.now())
+                let binding = Binding(session)
+                if let expected = self.bindings[origin], expected != binding {
+                    throw CloudflareAccessError.accountMismatch
+                }
                 // Close transports, browser cookies and cached media before a new
                 // Access principal can be committed. Gateway device tokens survive.
                 self.sessions.removeValue(forKey: origin)
@@ -135,10 +174,11 @@ final class CloudflareAccessSessionStore {
                 // Teardown can suspend across backgrounding or expiry. Admission
                 // must still be valid when persistence and publication happen.
                 try session.validate(now: self.now())
-                let encoded = try JSONEncoder().encode(session)
+                let encoded = try JSONEncoder().encode(SavedAccount(binding: binding, session: session))
                 guard let value = String(data: encoded, encoding: .utf8), self.persistence.save(origin, value) else {
                     throw CloudflareAccessError.storageFailed
                 }
+                self.bindings[origin] = binding
                 self.setState(.authenticated, for: origin)
                 let snapshot = Snapshot(session: session, revision: self.revision)
                 self.sessions[origin] = snapshot
@@ -199,7 +239,7 @@ final class CloudflareAccessSessionStore {
         self.sessions.removeValue(forKey: origin)
         self.setState(.signedOut, for: origin)
         self.states[origin, default: Lifecycle()].admissionRevokedAt = self.revision
-        return self.queueRetirement(origin)
+        return self.queueRetirement(origin, releaseBinding: true)
     }
 
     /// Cleanup waiters follow the latest explicit revocation, including its failure.
@@ -217,6 +257,44 @@ final class CloudflareAccessSessionStore {
         self.states[retirement.origin]?.transitionRevision == retirement.transitionRevision
     }
 
+    private func restore(_ origin: CloudflareAccessOrigin, now: Date) throws {
+        guard !self.restored.contains(origin) else { return }
+        do {
+            if let encoded = try self.persistence.load(origin) {
+                let data = Data(encoded.utf8)
+                let saved: SavedAccount
+                if let account = try? JSONDecoder().decode(SavedAccount.self, from: data) {
+                    saved = account
+                } else {
+                    // Upgrade the shipped session-only row, including an expired grant.
+                    let legacy = try JSONDecoder().decode(CloudflareAccessSession.self, from: data)
+                    saved = SavedAccount(binding: Binding(legacy), session: legacy)
+                }
+                self.bindings[origin] = saved.binding
+                if let session = saved.session {
+                    guard session.origin == origin, Binding(session) == saved.binding else {
+                        throw CloudflareAccessError.storageFailed
+                    }
+                    // A failed cold forget leaves the row available for identity checks,
+                    // not admission. Only a fresh authentication may publish another grant.
+                    if (self.states[origin]?.admissionRevokedAt ?? 0) == 0,
+                       (try? session.validate(now: now)) != nil
+                    {
+                        self.setState(.authenticated, for: origin)
+                        self.sessions[origin] = Snapshot(session: session, revision: self.revision)
+                    } else {
+                        self.setState(.reauthenticationRequired, for: origin)
+                    }
+                } else {
+                    self.setState(.reauthenticationRequired, for: origin)
+                }
+            }
+            self.restored.insert(origin)
+        } catch {
+            throw CloudflareAccessError.storageFailed
+        }
+    }
+
     private func setState(_ phase: State, for origin: CloudflareAccessOrigin) {
         // Phase changes and replacement grants must not revive an old admission.
         self.revision &+= 1
@@ -225,7 +303,7 @@ final class CloudflareAccessSessionStore {
         self.states[origin, default: Lifecycle()].transitionRevision = self.revision
     }
 
-    private func queueRetirement(_ origin: CloudflareAccessOrigin) -> Retirement {
+    private func queueRetirement(_ origin: CloudflareAccessOrigin, releaseBinding: Bool = false) -> Retirement {
         let previous = self.retirements[origin]?.task
         let id = UUID()
         let task = Task { @MainActor in
@@ -236,7 +314,18 @@ final class CloudflareAccessSessionStore {
                 if self.retirements[origin]?.id == id { self.retirements.removeValue(forKey: origin) }
             }
             await self.retireTransports(origin)
-            guard self.persistence.delete(origin) else { throw CloudflareAccessError.storageFailed }
+            if releaseBinding || self.bindings[origin] == nil {
+                guard self.persistence.delete(origin) else { throw CloudflareAccessError.storageFailed }
+                if releaseBinding {
+                    self.bindings.removeValue(forKey: origin)
+                    self.restored.insert(origin)
+                }
+            } else if let binding = self.bindings[origin] {
+                let encoded = try JSONEncoder().encode(SavedAccount(binding: binding, session: nil))
+                guard let value = String(data: encoded, encoding: .utf8), self.persistence.save(origin, value) else {
+                    throw CloudflareAccessError.storageFailed
+                }
+            }
         }
         // Queue completion only releases its task. Its acknowledgement stays current
         // until a later transition for this origin, even after the queue entry is gone.

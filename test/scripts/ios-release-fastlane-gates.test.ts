@@ -728,6 +728,15 @@ def repo_root
 end
 module Open3
   def self.capture3(command, *args)
+    return ["1", "", Struct.new(:success?).new(true)] if command == "/usr/sbin/sysctl" && args == ["-n", "hw.optional.arm64"]
+    if command == "xcrun" && args == ["simctl", "list", "--json"]
+      inventory = {
+        "runtimes" => [],
+        "devicetypes" => [{ "name" => "Apple Watch Ultra 3 (49mm)", "identifier" => "watch-type", "minRuntimeVersion" => 26 << 16 }]
+      }
+      inventory["runtimes"] = $watch_runtime_available ? [{ "identifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "version" => "27.0", "isAvailable" => true, "supportedArchitectures" => ["arm64", "x86_64"] }] : []
+      return [JSON.generate(inventory), "", Struct.new(:success?).new(true)]
+    end
     raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
     [File.read(args.last), "", Struct.new(:success?).new(true)]
   end
@@ -903,6 +912,79 @@ puts JSON.generate(rows)
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
   });
 
+  it("resolves Watch templates without pre-created devices and diagnoses incompatible inventories", () => {
+    const source = String.raw`
+require "json"
+module UI
+  def self.user_error!(message); raise message; end
+  def self.important(*); end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*); yield; end
+def lane(*); end
+alias private_lane lane
+load ARGV.fetch(0)
+module Open3
+  def self.capture3(*args)
+    return ["1", "", Struct.new(:success?).new(true)] if args == ["/usr/sbin/sysctl", "-n", "hw.optional.arm64"]
+    raise "unexpected command: #{args}" unless args == ["xcrun", "simctl", "list", "--json"]
+    $inventory_reads += 1
+    [JSON.generate($inventory), "", Struct.new(:success?).new(true)]
+  end
+end
+def available_simulator_devices; $devices; end
+runtime_id = "com.apple.CoreSimulator.SimRuntime.watchOS-27-0"
+type_id = "com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Ultra-3-49mm"
+name = "Apple Watch Ultra 3 (49mm)"
+template = { "name" => name, "deviceTypeIdentifier" => type_id, "runtime" => runtime_id }
+type = { "name" => name, "identifier" => type_id, "minRuntimeVersion" => 26 << 16, "maxRuntimeVersion" => 0xFFFFFFFF }
+runtime = { "identifier" => runtime_id, "version" => "27.0", "isAvailable" => true, "supportedArchitectures" => ["arm64", "x86_64"] }
+$inventory_reads = 0
+$devices = [template.merge("udid" => "existing")]
+raise "exact device lost" unless resolve_simulator_device(name).fetch("udid") == "existing"
+raise "existing fallback lost" unless resolve_simulator_device("Apple Watch missing").fetch("udid") == "existing"
+raise "unnecessary inventory lookup" unless $inventory_reads.zero?
+$devices = []
+$inventory = { "runtimes" => [runtime], "devicetypes" => [type] }
+raise "missing creation template" unless resolve_simulator_device(name) == template
+# Newer runtimes for another architecture must not hide a usable host runtime.
+foreign_runtime = runtime.merge("identifier" => "foreign-runtime", "version" => "28.0", "supportedArchitectures" => ["unsupported-host"])
+$inventory["runtimes"] = [foreign_runtime, runtime]
+raise "foreign architecture selected" unless resolve_simulator_device(name) == template
+$inventory["runtimes"] = [runtime]
+# A preferred type that requires a newer runtime must not win over a compatible fallback.
+older_type = type.merge("name" => "Apple Watch Series 10 (46mm)", "identifier" => "series-10")
+$inventory["devicetypes"] = [type.merge("minRuntimeVersion" => 28 << 16), older_type]
+raise "incompatible type selected" unless resolve_simulator_device(name).fetch("deviceTypeIdentifier") == "series-10"
+# Runtime-supported types are authoritative when supplied by simctl.
+$inventory["runtimes"] = [runtime.merge("supportedDeviceTypes" => [{ "identifier" => "series-10" }])]
+raise "runtime support ignored" unless resolve_simulator_device(name).fetch("deviceTypeIdentifier") == "series-10"
+[
+  { "runtimes" => [], "devicetypes" => [type] },
+  { "runtimes" => [foreign_runtime], "devicetypes" => [type] },
+  { "runtimes" => [runtime.reject { |key, _| key == "supportedArchitectures" }], "devicetypes" => [type] },
+  { "runtimes" => [runtime.merge("isAvailable" => false, "availabilityError" => "runtime unavailable")], "devicetypes" => [type] },
+  { "runtimes" => [runtime], "devicetypes" => [type.merge("minRuntimeVersion" => 28 << 16)] },
+  { "runtimes" => [runtime], "devicetypes" => [type.merge("maxRuntimeVersion" => 26 << 16)] },
+  { "runtimes" => [runtime.merge("supportedDeviceTypes" => [])], "devicetypes" => [type] }
+].each do |inventory|
+  $inventory = inventory
+  begin
+    resolve_simulator_device(name)
+    raise "accepted incompatible inventory"
+  rescue => error
+    raise unless error.message.include?("No compatible available watchOS") &&
+      error.message.include?("Settings > Components") && error.message.include?(JSON.generate(inventory))
+  end
+end
+puts "Watch resolver scenarios passed"
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("Watch resolver scenarios passed");
+  });
+
   it("owns one simulator at a time and cleans up failed captures while reusing the screenshot build", () => {
     const source = `
 require "json"
@@ -940,7 +1022,7 @@ def available_simulator_devices
     { "name" => "iPad Pro 13-inch", "udid" => "older-ipad", "deviceTypeIdentifier" => "ipad-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-26-0", "state" => "Shutdown" },
     { "name" => "iPad Pro 13-inch", "udid" => "ipad-template", "deviceTypeIdentifier" => "ipad-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Shutdown" },
     { "name" => "Apple Watch Ultra 3 (49mm)", "udid" => "watch-template", "deviceTypeIdentifier" => "watch-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Shutdown" }
-  ] + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
+  ].reject { |device| %w[no-created-watch no-watch-runtime].include?(@scenario) && device.fetch("name").start_with?("Apple Watch") } + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
 end
 def write_watch_screenshot_mode_defaults(*); end
 def set_watch_status_bar_override(*)
@@ -961,6 +1043,15 @@ module Open3
     raise Errno::ENOENT
   end
   def self.capture3(command, *args)
+    return ["1", "", Struct.new(:success?).new(true)] if command == "/usr/sbin/sysctl" && args == ["-n", "hw.optional.arm64"]
+    if command == "xcrun" && args == ["simctl", "list", "--json"]
+      inventory = {
+        "runtimes" => [],
+        "devicetypes" => [{ "name" => "Apple Watch Ultra 3 (49mm)", "identifier" => "watch-type", "minRuntimeVersion" => 26 << 16 }]
+      }
+      inventory["runtimes"] = $watch_runtime_available ? [{ "identifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "version" => "27.0", "isAvailable" => true, "supportedArchitectures" => ["arm64", "x86_64"] }] : []
+      return [JSON.generate(inventory), "", Struct.new(:success?).new(true)]
+    end
     raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
     [File.read(args.last), "", Struct.new(:success?).new(true)]
   end
@@ -1019,9 +1110,10 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
+results = %w[combined no-created-watch no-watch-runtime diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
+    $watch_runtime_available = scenario != "no-watch-runtime"
     @owned, @created = {}, 0
     ENV["HOME"] = root
     ENV["OPENCLAW_SNAPSHOT_DIAGNOSTICS"] = scenario == "diagnostics" ? "1" : "0"
@@ -1111,6 +1203,20 @@ puts JSON.generate(results)
       logs: ["build.log"],
       versions: [versionArgs],
     });
+    expect(row("no-created-watch")).toMatchObject({
+      builds: ["snapshot"],
+      error: null,
+      pngs: 9,
+      owned: [],
+    });
+    expect(row("no-created-watch").lifecycle).toEqual(row("combined").lifecycle);
+    expect(row("no-watch-runtime")).toMatchObject({
+      builds: [],
+      pngs: 0,
+      owned: [],
+      lifecycle: [],
+    });
+    expect(row("no-watch-runtime").error).toContain("No compatible available watchOS");
     expect(row("iphone")).toMatchObject({
       builds: ["snapshot"],
       error: null,

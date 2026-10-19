@@ -223,10 +223,51 @@ def resolve_simulator_device(name)
 
   watch_devices = devices.select { |device| device["name"].to_s.include?("Apple Watch") }
   fallback = watch_devices.find { |device| device["name"].to_s.include?("Ultra") } || watch_devices.first
-  UI.user_error!("No available Apple Watch simulators found.") unless fallback
+  return watch_simulator_template(name) unless fallback
 
   UI.important("Apple Watch simulator '#{name}' was not found; using '#{fallback.fetch("name")}'.")
   fallback
+end
+
+def watch_simulator_template(name)
+  stdout, stderr, status = Open3.capture3("xcrun", "simctl", "list", "--json")
+  UI.user_error!("Failed to list simulator runtimes and device types: #{stderr.to_s.strip}") unless status.success?
+  inventory = JSON.parse(stdout).slice("runtimes", "devicetypes")
+  # Query hardware, not Ruby’s build architecture (Intel Ruby may run under Rosetta).
+  arm64, _, arm64_status = Open3.capture3("/usr/sbin/sysctl", "-n", "hw.optional.arm64")
+  host_architecture = arm64_status.success? && arm64.strip == "1" ? "arm64" : "x86_64"
+  runtimes = inventory.fetch("runtimes").select do |runtime|
+    runtime.fetch("identifier").start_with?("com.apple.CoreSimulator.SimRuntime.watchOS-") && runtime["isAvailable"] == true &&
+      Array(runtime["supportedArchitectures"]).include?(host_architecture)
+  end.sort_by { |runtime| Gem::Version.new(runtime.fetch("version")) }.reverse
+  types = inventory.fetch("devicetypes").select { |type| type.fetch("name").start_with?("Apple Watch") }
+  types = types.sort_by { |type| [type.fetch("name") == name ? 0 : 1, type.fetch("name").include?("Ultra") ? 0 : 1] }
+
+  runtimes.each do |runtime|
+    version = runtime.fetch("version").split(".").map(&:to_i)
+    # CoreSimulator device type bounds encode major/minor/patch in three bytes.
+    runtime_version = (version.fetch(0) << 16) | (version.fetch(1, 0) << 8) | version.fetch(2, 0)
+    type = types.find do |candidate|
+      if runtime.key?("supportedDeviceTypes")
+        runtime.fetch("supportedDeviceTypes").any? { |supported| supported.fetch("identifier") == candidate.fetch("identifier") }
+      else
+        candidate.key?("minRuntimeVersion") && runtime_version >= candidate.fetch("minRuntimeVersion") &&
+          runtime_version <= candidate.fetch("maxRuntimeVersion", 0xFFFFFFFF)
+      end
+    end
+    next unless type
+
+    UI.important("No pre-created Apple Watch simulator; using '#{type.fetch("name")}' with #{runtime.fetch("identifier")} for task-owned capture.")
+    return { "name" => type.fetch("name"), "deviceTypeIdentifier" => type.fetch("identifier"), "runtime" => runtime.fetch("identifier") }
+  end
+
+  UI.user_error!(
+    "No compatible available watchOS simulator runtime/device type for mandatory Watch screenshots. " \
+      "Provision a compatible watchOS Simulator runtime in the selected Xcode (Settings > Components), then retry. " \
+      "Simulator inventory: #{JSON.generate(inventory)}"
+  )
+rescue JSON::ParserError => e
+  UI.user_error!("Invalid JSON from simctl runtime/device type list: #{e.message}")
 end
 
 def screenshot_phase(diagnostics, phase, device: nil, udid: nil, log_path: nil, &operation)
@@ -518,8 +559,7 @@ def build_watch_screenshot_app
   app_path
 end
 
-def capture_watch_screenshot(diagnostics: nil)
-  device = resolve_simulator_device(watch_snapshot_device)
+def capture_watch_screenshot(diagnostics: nil, device: resolve_simulator_device(watch_snapshot_device))
   device_name = device.fetch("name")
   output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
   output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
@@ -2359,6 +2399,7 @@ platform :ios do
         Gem::Version.new(device.fetch("runtime").delete_prefix("com.apple.CoreSimulator.SimRuntime.iOS-").tr("-", "."))
       end || UI.user_error!("Screenshot simulator '#{name}' is unavailable.")
     end
+    watch_device = resolve_simulator_device(watch_snapshot_device) unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
     require_idle_screenshot_simulators!
     screenshot_phase(diagnostics, "build") do
       run_screenshot_xcodebuild!(
@@ -2418,7 +2459,7 @@ platform :ios do
     unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
       # The fresh OpenClawUITests build also compiles its Watch app dependency.
       # Keep this product in the same invocation; standalone capture builds separately.
-      capture_watch_screenshot(diagnostics: diagnostics) do
+      capture_watch_screenshot(diagnostics: diagnostics, device: watch_device) do
         File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
       end
     end

@@ -620,9 +620,9 @@ extension SettingsProTab {
         ingress: GatewayIngressController) -> (stableID: String, origin: CloudflareAccessOrigin)?
     {
         // Access belongs to the selected saved profile, not the editable manual
-        // credential fields. Resolve its durable grant origin through the ingress owner.
+        // credential fields. Binding-only accounts must remain sign-out targets after expiry or revocation.
         guard let selected = registry.activeEntry,
-              let origin = ingress.sessionOrigin(stableID: selected.stableID)
+              let origin = ingress.accountOrigin(stableID: selected.stableID)
         else { return nil }
         return (selected.stableID, origin)
     }

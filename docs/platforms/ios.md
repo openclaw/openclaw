@@ -140,6 +140,29 @@ the native connection. Tap **Cancel** to stop; use **Sign in** in the
 native Gateway settings to try again. Returning from the background never starts
 a browser automatically.
 
+If the browser keeps signing in with the wrong account, choose **Use another
+account** in the initial **Sign in to your website** prompt. This clears website
+sign-ins, cookies, and cached website data for all Gateways in OpenClaw’s internal
+Safari browser before opening the website. It does not clear standalone Safari,
+remove saved native Gateway connections, or call Cloudflare’s cross-application
+logout endpoint. Complete the website sign-in with the intended account, then
+continue the normal connection flow. **Continue** keeps the existing browser
+sign-ins.
+
+Different Gateway origins can retain different Access accounts. Each origin keeps
+its expected issuer and account securely across app restarts, session expiry, and
+renewal. If the shared browser returns a different account, sign-in stops with an
+explanation. Choose **Use another account** and use the original account, or
+explicitly sign out of Access (or forget the Gateway) before changing it. A failed
+secure-storage operation does not release the saved account binding.
+
+The preliminary browser step still opens the Gateway website. An inert landing
+requires a server contract on the same Access-protected application: an arbitrary
+new path can be unprotected or covered by a different Access policy, and older
+Gateways have no advertised inert landing capability. The app therefore keeps the
+existing website flow and encrypted transfer for compatibility; it cannot promise
+to avoid loading the Dashboard during that preliminary step.
+
 If Access expires or is revoked, connections pause and Gateway settings asks you
 to sign in again. Your Gateway pairing and device keys remain saved. Signing out
 of Access removes the shared grant for that host and closes connections using

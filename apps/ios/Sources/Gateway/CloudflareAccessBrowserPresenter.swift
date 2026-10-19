@@ -21,23 +21,29 @@ final class CloudflareAccessBrowserPresenter: NSObject, @MainActor SFSafariViewC
     private var requestedIntentID: UUID?
     private var presentation: Task<Void, Error>?
     private var dismissal: (id: UUID, task: Task<Void, Never>)?
-    private var continuation: CheckedContinuation<Void, Error>?
+    private var continuation: CheckedContinuation<Bool, Error>?
     private var waitingStepID: UUID?
+    private var websiteDataReset: Task<Void, Never>?
     private let presentBrowser: (SFSafariViewController) async throws -> Void
     private let dismissBrowser: (SFSafariViewController) async -> Void
     private let presentPrompt: (UIAlertController) async throws -> Void
     private let dismissPrompt: (UIAlertController) async -> Void
+    private let clearWebsiteData: () async -> Void
 
     init(
         present: @escaping (SFSafariViewController) async throws -> Void = CloudflareAccessBrowserPresenter.present,
         dismiss: @escaping (SFSafariViewController) async -> Void = CloudflareAccessBrowserPresenter.dismiss,
         presentPrompt: @escaping (UIAlertController) async throws -> Void = CloudflareAccessBrowserPresenter.present,
-        dismissPrompt: @escaping (UIAlertController) async -> Void = CloudflareAccessBrowserPresenter.dismiss)
+        dismissPrompt: @escaping (UIAlertController) async -> Void = CloudflareAccessBrowserPresenter.dismiss,
+        clearWebsiteData: @escaping () async -> Void = {
+            await SFSafariViewController.DataStore.default.clearWebsiteData()
+        })
     {
         self.presentBrowser = present
         self.dismissBrowser = dismiss
         self.presentPrompt = presentPrompt
         self.dismissPrompt = dismissPrompt
+        self.clearWebsiteData = clearWebsiteData
         super.init()
     }
 
@@ -45,19 +51,29 @@ final class CloudflareAccessBrowserPresenter: NSObject, @MainActor SFSafariViewC
         try await self.claim(intentID: intentID, onCancel: onCancel)
         try await withTaskCancellationHandler {
             do {
-                try await self.prompt(
+                let switchAccount = try await self.prompt(
                     title: "Sign in to your website",
                     message: "Sign in to the gateway website in the browser, then tap Done. " +
-                        "You will return here to continue connecting OpenClaw.",
+                        "You will return here to continue connecting OpenClaw. " +
+                        "Use another account clears website sign-ins in OpenClaw’s browser for all gateways. " +
+                        "Saved gateway connections stay signed in.",
                     phase: .introduction,
                     intentID: intentID)
                 try self.check(intentID)
+                if switchAccount {
+                    // Safari has one app-wide store. Clear only by explicit choice, never through
+                    // Cloudflare's server logout, which revokes tokens across applications.
+                    let reset = Task { await self.clearWebsiteData() }
+                    self.websiteDataReset = reset
+                    await reset.value
+                    try self.check(intentID)
+                }
                 let browser = SFSafariViewController(url: origin.url)
                 browser.dismissButtonStyle = .done
                 browser.delegate = self
-                try await self.waitForAction(browser, phase: .website, intentID: intentID)
+                _ = try await self.waitForAction(browser, phase: .website, intentID: intentID)
                 try self.check(intentID)
-                try await self.prompt(
+                _ = try await self.prompt(
                     title: "Continue connecting?",
                     message: "If you finished signing in to the website, continue to securely connect OpenClaw. " +
                         "The next browser step verifies your access.",
@@ -92,6 +108,8 @@ final class CloudflareAccessBrowserPresenter: NSObject, @MainActor SFSafariViewC
         if let dismissal {
             await dismissal.task.value
         }
+        // A replacement must not open Safari while an earlier explicit reset is still clearing it.
+        await self.websiteDataReset?.value
         try Task.checkCancellation()
         guard self.requestedIntentID == intentID else { throw CancellationError() }
         if let previous = self.intentID, previous != intentID || controller != nil {
@@ -108,7 +126,7 @@ final class CloudflareAccessBrowserPresenter: NSObject, @MainActor SFSafariViewC
         guard self.intentID == intentID, self.requestedIntentID == intentID else { throw CancellationError() }
     }
 
-    private func prompt(title: String, message: String, phase: Phase, intentID: UUID) async throws {
+    private func prompt(title: String, message: String, phase: Phase, intentID: UUID) async throws -> Bool {
         // UIAlertController owns system typography and accessibility; it has no supported branded-font API.
         let prompt = UIAlertController(title: title, message: message, preferredStyle: .alert)
         prompt.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self, weak prompt] _ in
@@ -119,13 +137,20 @@ final class CloudflareAccessBrowserPresenter: NSObject, @MainActor SFSafariViewC
             guard let self, let prompt, self.controller === prompt, self.intentID == intentID else { return }
             self.continuePreparation(from: prompt)
         })
-        try await self.waitForAction(prompt, phase: phase, intentID: intentID)
+        if phase == .introduction {
+            let action = UIAlertAction(title: "Use another account", style: .default) { [weak self, weak prompt] _ in
+                guard let self, let prompt, self.controller === prompt, self.intentID == intentID else { return }
+                self.continuePreparation(from: prompt, clearWebsiteData: true)
+            }
+            prompt.addAction(action)
+        }
+        return try await self.waitForAction(prompt, phase: phase, intentID: intentID)
     }
 
-    private func waitForAction(_ controller: UIViewController, phase: Phase, intentID: UUID) async throws {
+    private func waitForAction(_ controller: UIViewController, phase: Phase, intentID: UUID) async throws -> Bool {
         try self.check(intentID)
         let stepID = UUID()
-        try await withCheckedThrowingContinuation { continuation in
+        let clearWebsiteData = try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             self.waitingStepID = stepID
             // Install the waiter before presentation, including synchronous injected actions.
@@ -142,6 +167,7 @@ final class CloudflareAccessBrowserPresenter: NSObject, @MainActor SFSafariViewC
         try self.check(intentID)
         await self.drainController(intentID: intentID)
         try self.check(intentID)
+        return clearWebsiteData
     }
 
     private func show(_ controller: UIViewController, phase: Phase, intentID: UUID) async throws {
@@ -167,19 +193,19 @@ final class CloudflareAccessBrowserPresenter: NSObject, @MainActor SFSafariViewC
         }
     }
 
-    func continuePreparation(from prompt: UIAlertController) {
+    func continuePreparation(from prompt: UIAlertController, clearWebsiteData: Bool = false) {
         guard self.controller === prompt, self.phase == .introduction || self.phase == .confirmation else { return }
-        self.finishStep()
+        self.finishStep(clearWebsiteData: clearWebsiteData && self.phase == .introduction)
     }
 
-    private func finishStep(throwing error: Error? = nil) {
+    private func finishStep(throwing error: Error? = nil, clearWebsiteData: Bool = false) {
         let continuation = self.continuation
         self.continuation = nil
         self.waitingStepID = nil
         if let error {
             continuation?.resume(throwing: error)
         } else {
-            continuation?.resume()
+            continuation?.resume(returning: clearWebsiteData)
         }
     }
 
