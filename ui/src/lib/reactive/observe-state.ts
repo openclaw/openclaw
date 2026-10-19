@@ -1,7 +1,7 @@
-import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "./projection.ts";
 
 /** RPC admission and drafts mutate synchronously; rendering observes their publication. */
-export function observeSkillState<T extends object>(initial: T) {
+export function observeState<T extends object>(initial: T) {
   let notify = () => {};
   const state = new Proxy(initial, {
     set(target, key, value, receiver) {
@@ -18,8 +18,11 @@ export function observeSkillState<T extends object>(initial: T) {
   return {
     state,
     read: projection.read,
+    revision: projection.revision,
     subscribe: projection.subscribe,
     dispose: projection.dispose,
+    // Nested edits and external owner receipts still need explicit publication.
+    invalidate: () => notify(),
     edit(this: void, change: (value: T) => void) {
       change(state);
       notify();
