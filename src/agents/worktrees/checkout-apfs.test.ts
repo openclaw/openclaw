@@ -14,6 +14,13 @@ const originalTime = 1_600_000_000;
 async function git(cwd: string, ...args: string[]) {
   return (await exec("git", ["-C", cwd, ...args])).stdout.trim();
 }
+async function modify(directory: string, name: string) {
+  const file = path.join(directory, name);
+  await fs.writeFile(file, "modified\n");
+  await fs.utimes(file, originalTime, originalTime);
+}
+const status = (cwd: string) => git(cwd, "status", "--porcelain");
+const debug = (cwd: string) => git(cwd, "ls-files", "--debug", "clean");
 
 describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -75,7 +82,12 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     return { source, destination, sourceIndex, destinationIndex, cloneCompletedAtMs, copy };
   }
 
-  it("does not wait again when Git preparation outlasts the clone timestamp boundary", async () => {
+  async function expectRefusedCopy(f: Awaited<ReturnType<typeof fixture>>, guard: () => void) {
+    await expect(f.copy(guard)).rejects.toThrow("allocation lease lost");
+    await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
+  it("does not wait past the clone timestamp boundary", async () => {
     const f = await fixture();
     const deadline = (Math.floor(f.cloneCompletedAtMs / 1_000) + 1) * 1_000;
     await timers.setTimeout(Math.max(0, deadline - Date.now()));
@@ -91,10 +103,9 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
       schedule.mockRestore();
       syncBuiltinESMExports();
     }
-    expect(await git(f.destination, "status", "--porcelain")).toBe("");
-    await fs.writeFile(path.join(f.destination, "clean"), "modified\n");
-    await fs.utimes(path.join(f.destination, "clean"), originalTime, originalTime);
-    expect(await git(f.destination, "status", "--porcelain")).toBe("M clean");
+    expect(await status(f.destination)).toBe("");
+    await modify(f.destination, "clean");
+    expect(await status(f.destination)).toBe("M clean");
   });
 
   it.each(["sha1", "sha256"])(
@@ -102,27 +113,22 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     async (algorithm) => {
       const f = await fixture(algorithm);
       const sourceIndex = await fs.readFile(f.sourceIndex);
-      await fs.writeFile(path.join(f.destination, "dirty-destination"), "modified\n");
-      await fs.utimes(path.join(f.destination, "dirty-destination"), originalTime, originalTime);
-      await fs.writeFile(path.join(f.source, "dirty-source"), "modified\n");
-      await fs.utimes(path.join(f.source, "dirty-source"), originalTime, originalTime);
+      await modify(f.destination, "dirty-destination");
+      await modify(f.source, "dirty-source");
       expect(await f.copy()).toBe(true);
-      const debugBefore = await git(f.destination, "ls-files", "--debug", "clean");
+      const debugBefore = await debug(f.destination);
       const stat = await fs.lstat(path.join(f.destination, "clean"), { bigint: true });
       expect(debugBefore).toContain(`ino: ${Number(stat.ino & 0xffffffffn)}`);
-      expect(await git(f.destination, "status", "--porcelain")).toBe("M dirty-destination");
-      expect(await git(f.destination, "ls-files", "--debug", "clean")).toBe(debugBefore);
+      expect(await status(f.destination)).toBe("M dirty-destination");
+      expect(await debug(f.destination)).toBe(debugBefore);
       expect(await fs.readFile(f.sourceIndex)).toEqual(sourceIndex);
       expect(await git(f.destination, "diff", "--cached", "--name-only")).toBe("");
 
-      await fs.writeFile(path.join(f.destination, "clean"), "modified\n");
-      await fs.utimes(path.join(f.destination, "clean"), originalTime, originalTime);
+      await modify(f.destination, "clean");
       expect((await fs.stat(path.join(f.destination, "clean"), { bigint: true })).mtimeNs).toBe(
         BigInt(originalTime) * 1_000_000_000n,
       );
-      expect(await git(f.destination, "status", "--porcelain")).toBe(
-        "M clean\n M dirty-destination",
-      );
+      expect(await status(f.destination)).toBe("M clean\n M dirty-destination");
     },
   );
 
@@ -130,11 +136,9 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     const f = await fixture();
     await fs.utimes(f.sourceIndex, originalTime, originalTime);
     expect(await f.copy()).toBe(true);
-    expect(await git(f.destination, "ls-files", "--debug", "clean")).toBe(
-      await git(f.source, "ls-files", "--debug", "clean"),
-    );
+    expect(await debug(f.destination)).toBe(await debug(f.source));
     await git(f.destination, "update-index", "--refresh");
-    expect(await git(f.destination, "status", "--porcelain")).toBe("");
+    expect(await status(f.destination)).toBe("");
   });
 
   it("leaves unsupported and damaged indexes to the existing Git fallback", async () => {
@@ -150,34 +154,28 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
 
   it("does not publish an index after allocation authority is lost", async () => {
     const f = await fixture();
-    await expect(
-      f.copy(() => {
-        throw new Error("allocation lease lost");
-      }),
-    ).rejects.toThrow("allocation lease lost");
-    await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectRefusedCopy(f, () => {
+      throw new Error("allocation lease lost");
+    });
   });
 
   it("observes allocation authority loss while skipping ineligible entries", async () => {
     const f = await fixture();
     await fs.utimes(f.sourceIndex, originalTime, originalTime);
     let authorized = true;
-    await expect(
-      f.copy(() => {
-        if (!authorized) {
-          throw new Error("allocation lease lost");
-        }
-        setImmediate(() => {
-          authorized = false;
-        });
-      }),
-    ).rejects.toThrow("allocation lease lost");
-    await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectRefusedCopy(f, () => {
+      if (!authorized) {
+        throw new Error("allocation lease lost");
+      }
+      setImmediate(() => {
+        authorized = false;
+      });
+    });
   });
 
   it("leaves files changed during a metadata batch for Git to validate", async () => {
     const f = await fixture();
-    const before = await git(f.source, "ls-files", "--debug", "clean");
+    const before = await debug(f.source);
     const readMetadata = nativeWorktreeFilesystem.readMetadata;
     const now = vi.spyOn(Date, "now");
     const metadata = vi
@@ -195,8 +193,8 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
       metadata.mockRestore();
       now.mockRestore();
     }
-    expect(await git(f.destination, "ls-files", "--debug", "clean")).toBe(before);
+    expect(await debug(f.destination)).toBe(before);
     await git(f.destination, "update-index", "--refresh");
-    expect(await git(f.destination, "status", "--porcelain")).toBe("");
+    expect(await status(f.destination)).toBe("");
   });
 });

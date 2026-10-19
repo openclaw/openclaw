@@ -65,11 +65,7 @@ const GiB = 1024 ** 3;
 function mockDiskSpace(root: string) {
   const stats = fs.statfsSync(root);
   vi.spyOn(fs, "statfsSync").mockReturnValue({
-    type: stats.type,
-    blocks: stats.blocks,
-    files: stats.files,
-    frsize: stats.frsize,
-    ffree: stats.ffree,
+    ...stats,
     bsize: 4096,
     bavail: (6 * GiB) / 4096,
     bfree: (6 * GiB) / 4096,

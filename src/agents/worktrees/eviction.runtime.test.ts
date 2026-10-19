@@ -17,11 +17,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function createEvictionCheckouts(root: string, count: number) {
-  const repoRoot = path.join(root, "source");
-  await fs.mkdir(root, { recursive: true });
-  await requireGit(root, ["init", "--template=", "-b", "main", repoRoot]);
-  await requireGit(repoRoot, [
+async function commitFixture(repo: string, message: string, allowEmpty = false) {
+  await requireGit(repo, [
     "-c",
     "user.name=OpenClaw Test",
     "-c",
@@ -29,10 +26,23 @@ async function createEvictionCheckouts(root: string, count: number) {
     "-c",
     "commit.gpgSign=false",
     "commit",
-    "--allow-empty",
+    ...(allowEmpty ? ["--allow-empty"] : []),
     "-m",
-    "eviction source",
+    message,
   ]);
+}
+const init = (cwd: string, repo: string) =>
+  requireGit(cwd, ["init", "--template=", "-b", "main", repo]);
+const read = (directory: string, filename: string) =>
+  fs.readFile(path.join(directory, filename), "utf8");
+const linkDirectory = (target: string, link: string) =>
+  fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+
+async function createEvictionCheckouts(root: string, count: number) {
+  const repoRoot = path.join(root, "source");
+  await fs.mkdir(root, { recursive: true });
+  await init(root, repoRoot);
+  await commitFixture(repoRoot, "eviction source", true);
   const records = Array.from({ length: count }, (_, index) => ({
     id: `tree-${index}`,
     path: path.join(root, `tree-${index}`),
@@ -72,7 +82,7 @@ it("purges a fleet checkout with a constant Git process budget despite ambient r
     [repoRoot, ...records.slice(1).map((record) => record.path)].toSorted(),
   );
   for (const record of [...records.slice(1), unrelatedCheckout]) {
-    expect(await fs.readFile(path.join(record.path, "unsaved.txt"), "utf8")).toBe(`${record.id}\n`);
+    expect(await read(record.path, "unsaved.txt")).toBe(`${record.id}\n`);
   }
   expect(await listGitWorktrees(unrelated.repoRoot)).toEqual(unrelatedInventory);
   expect(await requireGit(unrelated.repoRoot, ["rev-parse", "HEAD"])).toBe(unrelatedHead);
@@ -105,7 +115,7 @@ it("defers an expired metadata census before admitting or deleting the checkout"
   expect(
     commands.mock.calls.some(([, args]) => args[0] === "worktree" && args[1] === "remove"),
   ).toBe(false);
-  expect(await fs.readFile(path.join(victim.path, "unsaved.txt"), "utf8")).toBe(`${victim.id}\n`);
+  expect(await read(victim.path, "unsaved.txt")).toBe(`${victim.id}\n`);
   vi.restoreAllMocks();
   expect((await listGitWorktrees(repoRoot)).some((entry) => entry.path === victim.path)).toBe(true);
 });
@@ -117,7 +127,7 @@ it("refuses a purge target redirected through its parent during admission", asyn
   const source = path.join(protectedParent, "checkout");
   const record = { id: "claimed", repoRoot: source, path: path.join(claimedParent, "checkout") };
   await fs.mkdir(protectedParent);
-  await requireGit(root, ["init", "--template=", "-b", "main", source]);
+  await init(root, source);
   await fs.writeFile(path.join(source, "source-owned.txt"), "source bytes\n");
   await fs.mkdir(record.path, { recursive: true });
   await fs.writeFile(path.join(record.path, "claimed.txt"), "claimed bytes\n");
@@ -126,11 +136,7 @@ it("refuses a purge target redirected through its parent during admission", asyn
   vi.spyOn(workerContext, "requestGitWorkerEffect").mockImplementation(async (effect) => {
     if (effect.type === "worktree.eviction-admit") {
       await fs.rename(claimedParent, originalParent);
-      await fs.symlink(
-        protectedParent,
-        claimedParent,
-        process.platform === "win32" ? "junction" : "dir",
-      );
+      await linkDirectory(protectedParent, claimedParent);
       redirected = true;
     }
     return undefined;
@@ -139,17 +145,15 @@ it("refuses a purge target redirected through its parent during admission", asyn
   await expect(purgeWorktreeCheckout(record, [record])).rejects.toThrow("purge target changed");
 
   expect(redirected).toBe(true);
-  expect(await fs.readFile(path.join(source, "source-owned.txt"), "utf8")).toBe("source bytes\n");
-  expect(await fs.readFile(path.join(originalParent, "checkout", "claimed.txt"), "utf8")).toBe(
-    "claimed bytes\n",
-  );
+  expect(await read(source, "source-owned.txt")).toBe("source bytes\n");
+  expect(await read(path.join(originalParent, "checkout"), "claimed.txt")).toBe("claimed bytes\n");
   expect((await listGitWorktrees(source)).map((entry) => entry.path)).toContain(source);
 });
 
 it("recognizes a multi-commit squash, invalidates changed heads, and purges only the claimed checkout", async () => {
   const root = tempDirs.make("openclaw-eviction-");
   const repoRoot = path.join(root, "repo");
-  await requireGit(root, ["init", "--template=", "-b", "main", repoRoot]);
+  await init(root, repoRoot);
   await requireGit(repoRoot, ["config", "user.name", "OpenClaw Test"]);
   await requireGit(repoRoot, ["config", "user.email", "openclaw-test@example.invalid"]);
   await requireGit(repoRoot, ["config", "commit.gpgSign", "false"]);
@@ -225,12 +229,12 @@ it("recognizes a multi-commit squash, invalidates changed heads, and purges only
     .spyOn(workerContext, "requestGitWorkerEffect")
     .mockRejectedValueOnce(new Error("claim lost"));
   await expect(purgeWorktreeCheckout(squashed, [merged, squashed])).rejects.toThrow("claim lost");
-  expect(await fs.readFile(path.join(squashed.path, "unsaved"), "utf8")).toBe("dirty data\n");
+  expect(await read(squashed.path, "unsaved")).toBe("dirty data\n");
   authority.mockResolvedValue(undefined);
   await purgeWorktreeCheckout(squashed, [merged, squashed]);
   await expect(fs.stat(squashed.path)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await requireGit(repoRoot, ["rev-parse", squashed.branch])).toBe(branchHead);
-  expect(await fs.readFile(path.join(merged.path, "base"), "utf8")).toBe("base\n");
+  expect(await read(merged.path, "base")).toBe("base\n");
   expect((await runGit(repoRoot, ["status", "--porcelain"])).stdout).toBe("");
   await expect(
     purgeWorktreeCheckout({ id: "source", repoRoot, path: repoRoot }, [merged]),
@@ -247,19 +251,8 @@ it.each([
   const repoRoot = path.join(root, "repo");
   const source = path.join(root, "external-source");
   for (const repository of [repoRoot, source]) {
-    await requireGit(root, ["init", "--template=", "-b", "main", repository]);
-    await requireGit(repository, [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "synthetic source",
-    ]);
+    await init(root, repository);
+    await commitFixture(repository, "synthetic source", true);
   }
   const outer = { id: "outer", path: path.join(root, "outer"), repoRoot };
   const external = { id: "external", path: path.join(root, "external"), repoRoot: source };
@@ -310,11 +303,7 @@ it.each([
         await fs.writeFile(path.join(source, "source-data.txt"), "source data\n");
         const relocatedSource = path.join(outer.path, "relocated-source");
         await fs.rename(source, relocatedSource);
-        await fs.symlink(
-          relocatedSource,
-          source,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        await linkDirectory(relocatedSource, source);
       }
     }
     return undefined;
@@ -323,10 +312,10 @@ it.each([
     `repository dependency: ${external.id}`,
   );
   expect(relocated).toBe(true);
-  expect(await fs.readFile(path.join(outer.path, "preserved.txt"), "utf8")).toBe("outer data\n");
+  expect(await read(outer.path, "preserved.txt")).toBe("outer data\n");
   expect(await requireGit(external.path, ["rev-parse", "--verify", "HEAD"])).toBeTruthy();
   if (target === "source behind a symlink") {
-    expect(await fs.readFile(path.join(source, "source-data.txt"), "utf8")).toBe("source data\n");
+    expect(await read(source, "source-data.txt")).toBe("source data\n");
   }
   if (sourcePrivateDirectory) {
     expect(await fs.readFile(path.join(sourcePrivateDirectory, "HEAD"))).toEqual(sourcePrivateHead);
@@ -343,19 +332,8 @@ it.each(["available", "renamed", "replaced"] as const)(
     const root = tempDirs.make("openclaw-eviction-own-metadata-");
     const repoRoot = path.join(root, "source");
     const record = { id: "owned", path: path.join(root, "owned"), repoRoot };
-    await requireGit(root, ["init", "--template=", "-b", "main", repoRoot]);
-    await requireGit(repoRoot, [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "source objects",
-    ]);
+    await init(root, repoRoot);
+    await commitFixture(repoRoot, "source objects", true);
     const head = await requireGit(repoRoot, ["rev-parse", "HEAD"]);
     await requireGit(repoRoot, ["worktree", "add", "-b", "owned", record.path]);
     await requireGit(repoRoot, [
@@ -369,19 +347,8 @@ it.each(["available", "renamed", "replaced"] as const)(
       await fs.rename(repoRoot, path.join(root, "renamed-source"));
     }
     if (sourceState === "replaced") {
-      await requireGit(root, ["init", "--template=", "-b", "main", repoRoot]);
-      await requireGit(repoRoot, [
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=openclaw-test@example.invalid",
-        "-c",
-        "commit.gpgSign=false",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "unrelated replacement source",
-      ]);
+      await init(root, repoRoot);
+      await commitFixture(repoRoot, "unrelated replacement source", true);
       expect(await requireGit(repoRoot, ["rev-parse", "HEAD"])).not.toBe(head);
     }
     vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
@@ -390,9 +357,7 @@ it.each(["available", "renamed", "replaced"] as const)(
         ? /source Git metadata|primary repository/
         : /source Git metadata/,
     );
-    expect(await fs.readFile(path.join(record.path, "unsaved.txt"), "utf8")).toBe(
-      "owned checkout bytes\n",
-    );
+    expect(await read(record.path, "unsaved.txt")).toBe("owned checkout bytes\n");
     expect(await requireGit(record.path, ["rev-parse", "refs/heads/main"])).toBe(head);
     await expect(requireGit(record.path, ["cat-file", "-e", `${head}^{commit}`])).resolves.toBe("");
   },
@@ -407,20 +372,10 @@ it.each(["recorded source", "linked checkout source"] as const)(
     const donor = path.join(victim.path, "donor");
     const filename = "borrowed-only.txt";
     const contents = "source object bytes stored only inside the eviction candidate\n";
-    await requireGit(root, ["init", "--template=", "-b", "main", donor]);
+    await init(root, donor);
     await fs.writeFile(path.join(donor, filename), contents);
     await requireGit(donor, ["add", filename]);
-    await requireGit(donor, [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "-m",
-      "borrowed source objects",
-    ]);
+    await commitFixture(donor, "borrowed source objects");
     const commit = await requireGit(donor, ["rev-parse", "HEAD"]);
     const blob = await requireGit(donor, ["rev-parse", `HEAD:${filename}`]);
     await fs.writeFile(
@@ -445,8 +400,8 @@ it.each(["recorded source", "linked checkout source"] as const)(
       /source Git object dependencies are incomplete/,
     );
 
-    expect(await fs.readFile(path.join(victim.path, "unsaved.txt"), "utf8")).toBe(`${victim.id}\n`);
-    expect(await fs.readFile(path.join(donor, filename), "utf8")).toBe(contents);
+    expect(await read(victim.path, "unsaved.txt")).toBe(`${victim.id}\n`);
+    expect(await read(donor, filename)).toBe(contents);
     for (const repository of [actualSource, victim.path]) {
       expect(await requireGit(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
       expect(await requireGit(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
@@ -461,7 +416,7 @@ it("keeps an idle standalone replacement purgeable when no shared source metadat
     path: path.join(root, "owned"),
     repoRoot: path.join(root, "missing-source"),
   };
-  await requireGit(root, ["init", "--template=", "-b", "main", record.path]);
+  await init(root, record.path);
   await fs.writeFile(path.join(record.path, "unsaved.txt"), "eligible idle bytes\n");
   vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
   await purgeWorktreeCheckout(record, [record]);
@@ -488,17 +443,7 @@ it.each([true, false])(
     ]);
     await fs.writeFile(path.join(source, "source-owned.txt"), contents);
     await requireGit(source, ["add", "source-owned.txt"]);
-    await requireGit(source, [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "-m",
-      "synthetic source",
-    ]);
+    await commitFixture(source, "synthetic source");
     const head = await requireGit(source, ["rev-parse", "HEAD"]);
     if (registered) {
       await requireGit(source, ["worktree", "add", "--detach", record.path, "HEAD"]);
@@ -510,11 +455,7 @@ it.each([true, false])(
     vi.spyOn(workerContext, "requestGitWorkerEffect").mockImplementation(async (effect) => {
       if (effect.type === "worktree.eviction-admit" && !relocated) {
         await fs.rename(source, relocatedSource);
-        await fs.symlink(
-          relocatedSource,
-          source,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        await linkDirectory(relocatedSource, source);
         relocated = true;
       }
       return undefined;
@@ -524,8 +465,8 @@ it.each([true, false])(
 
     expect(relocated).toBe(true);
     expect(await fs.realpath(source)).toBe(relocatedSource);
-    expect(await fs.readFile(path.join(source, "source-owned.txt"), "utf8")).toBe(contents);
-    expect(await fs.readFile(path.join(record.path, "source-owned.txt"), "utf8")).toBe(contents);
+    expect(await read(source, "source-owned.txt")).toBe(contents);
+    expect(await read(record.path, "source-owned.txt")).toBe(contents);
     expect(await requireGit(source, ["rev-parse", "--verify", "HEAD"])).toBe(head);
     expect((await listGitWorktrees(source)).some((entry) => entry.path === record.path)).toBe(
       registered,

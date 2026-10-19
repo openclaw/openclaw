@@ -43,9 +43,13 @@ describe("empty managed workspaces", () => {
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
 
-  function create(name: string) {
-    return service.createEmpty({ name, ownerKind: "session", ownerId: `agent:main:${name}` });
-  }
+  const create = (name: string) =>
+    service.createEmpty({ name, ownerKind: "session", ownerId: `agent:main:${name}` });
+  const read = (directory: string, name: string) => fs.readFile(path.join(directory, name), "utf8");
+  const sourceEntries = () =>
+    fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktree-sources", "empty"));
+  const expire = (id: string) =>
+    updateRegistryWorktree(env, id, { removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1 });
 
   beforeEach(() => {
     root = tempDirs.make("openclaw-empty-workspace-");
@@ -59,7 +63,7 @@ describe("empty managed workspaces", () => {
     });
   });
 
-  it("concurrently reuses one session workspace without operator Git configuration", async () => {
+  it("concurrently reuses a workspace without operator Git config", async () => {
     const config = path.join(root, "operator.gitconfig");
     await fs.writeFile(
       config,
@@ -107,9 +111,7 @@ describe("empty managed workspaces", () => {
     expect(fsSync.existsSync(first.path)).toBe(false);
 
     const restored = await service.restore({ id: first.id });
-    expect(await fs.readFile(path.join(restored.path, "notes.md"), "utf8")).toBe(
-      "Committed task content\n",
-    );
+    expect(await read(restored.path, "notes.md")).toBe("Committed task content\n");
     expect(await fs.readFile(path.join(restored.path, "attachment.bin"))).toEqual(attachment);
     const second = await create("second");
     expect(second.repoRoot).not.toBe(first.repoRoot);
@@ -160,7 +162,7 @@ describe("empty managed workspaces", () => {
     },
   );
 
-  it("cleans unexposed bootstrap state when authority is revoked after Git initialization", async () => {
+  it("cleans bootstrap state on authority loss after Git init", async () => {
     const revoked = new Error("session creation no longer owns this request");
     let current = true;
     const execute = commandExec.runCommandWithTimeout;
@@ -182,9 +184,7 @@ describe("empty managed workspaces", () => {
         },
       }),
     ).rejects.toBe(revoked);
-    expect(
-      await fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktree-sources", "empty")),
-    ).toEqual([]);
+    expect(await sourceEntries()).toEqual([]);
   });
 
   it("expires source metadata only with its final retained snapshot record", async () => {
@@ -205,13 +205,9 @@ describe("empty managed workspaces", () => {
     expect((await service.gc()).snapshotsPruned).toBe(0);
     expect(fsSync.existsSync(created.repoRoot)).toBe(true);
     const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, "draft.txt"), "utf8")).toBe(
-      "Restorable work\n",
-    );
+    expect(await read(restored.path, "draft.txt")).toBe("Restorable work\n");
     await service.remove({ id: created.id, reason: "archive-again" });
-    await updateRegistryWorktree(env, created.id, {
-      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
-    });
+    await expire(created.id);
     const unavailableLease = vi
       .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
@@ -232,9 +228,7 @@ describe("empty managed workspaces", () => {
   it("removes an unbound source when checkout allocation fails", async () => {
     await expect(create("invalid name")).rejects.toThrow("worktree name must match");
     expect(await service.listRegistryRecords()).toEqual([]);
-    expect(
-      await fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktree-sources", "empty")),
-    ).toEqual([]);
+    expect(await sourceEntries()).toEqual([]);
   });
 
   it("preserves an expired source with extra files and retries after they are moved", async () => {
@@ -242,9 +236,7 @@ describe("empty managed workspaces", () => {
     await service.remove({ id: created.id, reason: "archive" });
     const marker = path.join(created.repoRoot, "keep.txt");
     await fs.writeFile(marker, "Keep this unowned source file\n");
-    await updateRegistryWorktree(env, created.id, {
-      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
-    });
+    await expire(created.id);
     expect((await service.gc()).snapshotsPruned).toBe(0);
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeDefined();
     expect(await fs.readFile(marker, "utf8")).toBe("Keep this unowned source file\n");
