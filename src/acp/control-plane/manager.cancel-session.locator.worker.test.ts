@@ -10,6 +10,7 @@ import {
   expectSuccessor,
   locatorSessionKey,
   memoryGuard,
+  observeControlRead,
   replaceRuntime,
   runtimeHandle,
   startTurn,
@@ -177,23 +178,10 @@ it.each([
         f.cancel.mockImplementationOnce(async () => {
           await cancelGate.wait();
         });
-        const prepare = DEFAULT_DEPS.prepareSessionControlRead;
-        let gated = false;
-        const reader = vi
-          .spyOn(DEFAULT_DEPS, "prepareSessionControlRead")
-          .mockImplementationOnce(async (params) => {
-            const read = await prepare(params);
-            return {
-              ...read,
-              readCurrent: async (cfg: typeof f.target.cfg) => {
-                if (boundary === "post-abort-read" && signal?.aborted && !gated) {
-                  gated = true;
-                  await readGate.wait();
-                }
-                return read.readCurrent(cfg);
-              },
-            };
-          });
+        const reader = observeControlRead(undefined, {
+          when: () => boundary === "post-abort-read" && Boolean(signal?.aborted),
+          wait: readGate.wait,
+        });
         const close = vi.spyOn(f.runtime, "close");
         const events: unknown[] = [];
         let turnSettled = false;

@@ -1,35 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createRuntimeConfigFixture as fixture } from "./manager.ownership.test-support.js";
 import {
   AcpRuntimeError,
-  AcpSessionManager,
-  baseCfg,
-  createRuntime,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockMutableSession,
-  readySessionMeta,
   type AcpRuntime,
-  type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager runtime config", () => {
   installAcpSessionManagerTestLifecycle();
-
-  function fixture(overrides: Partial<SessionAcpMeta> = {}) {
-    const state = createRuntime();
-    const persisted = { currentMeta: readySessionMeta(overrides) };
-    const sessionKey = `agent:${persisted.currentMeta.agent}:acp:runtime-config`;
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-    mockMutableSession(sessionKey, persisted);
-    const manager = new AcpSessionManager();
-    const target = { cfg: baseCfg, sessionKey };
-    const run = (requestId = "turn") =>
-      manager.runTurn({ ...target, provenance: "system", mode: "prompt", text: "work", requestId });
-    const setOption = (key: string, value: string) =>
-      manager.setSessionConfigOption({ ...target, key, value });
-    return { ...state, persisted, manager, target, run, setOption };
-  }
 
   it("persists selected controls and replays their advertised aliases before the next prompt", async () => {
     const f = fixture({ runtimeOptions: { timeoutSeconds: 120 } });
@@ -81,12 +61,8 @@ describe("AcpSessionManager runtime config", () => {
       runtimeSessionName: "runtime-oneshot",
       backendSessionId: "ensured-session",
     });
-    f.getStatus.mockResolvedValue({
-      summary: "status=done",
-      backendSessionId: "final-session",
-      agentSessionId: "final-agent",
-      details: { status: "done" },
-    });
+    const finalIds = { backendSessionId: "final-session", agentSessionId: "final-agent" };
+    f.getStatus.mockResolvedValue(finalIds);
     await f.run();
     expect(f.ensureSession).toHaveBeenCalledOnce();
     expect(f.ensureSession.mock.calls[0]?.[0]).toMatchObject({
@@ -97,10 +73,7 @@ describe("AcpSessionManager runtime config", () => {
     expect(f.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
     expect(f.getStatus).toHaveBeenCalledOnce();
     expect(f.close).toHaveBeenCalledWith({
-      handle: expect.objectContaining({
-        backendSessionId: "final-session",
-        agentSessionId: "final-agent",
-      }),
+      handle: expect.objectContaining(finalIds),
       reason: "oneshot-complete",
     });
     expect(f.persisted.currentMeta.identity).toMatchObject({
@@ -130,6 +103,7 @@ describe("AcpSessionManager runtime config", () => {
 
   it("closes the retained cwd handle before the next turn", async () => {
     const f = fixture();
+    const cwd = "/workspace/next";
     const lifecycle: string[] = [];
     f.ensureSession.mockImplementation(async (input) => {
       lifecycle.push(`ensure:${input.cwd ?? "default"}`);
@@ -145,27 +119,28 @@ describe("AcpSessionManager runtime config", () => {
     });
     await f.run("first");
     await expect(
-      f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd: "/workspace/next" } }),
-    ).resolves.toEqual({ cwd: "/workspace/next" });
-    expect(f.persisted.currentMeta.runtimeOptions).toEqual({ cwd: "/workspace/next" });
-    expect(f.persisted.currentMeta.cwd).toBe("/workspace/next");
+      f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd } }),
+    ).resolves.toEqual({ cwd });
+    expect(f.persisted.currentMeta.runtimeOptions).toEqual({ cwd });
+    expect(f.persisted.currentMeta.cwd).toBe(cwd);
     await f.run("second");
     expect(f.ensureSession).toHaveBeenCalledTimes(2);
     expect(f.ensureSession.mock.calls[1]?.[0]).toMatchObject({
       sessionKey: f.target.sessionKey,
-      cwd: "/workspace/next",
+      cwd,
     });
     expect(lifecycle).toEqual(["ensure:default", "close:default", "ensure:/workspace/next"]);
   });
 
   it("rejects config controls when the backend has no setter", async () => {
     const f = fixture();
+    const { ensureSession, runTurn, cancel, close } = f;
     const runtime: AcpRuntime = {
-      ensureSession: f.ensureSession,
-      runTurn: f.runTurn,
-      cancel: f.cancel,
-      close: f.close,
-      getCapabilities: vi.fn(async () => ({ controls: [] })),
+      ensureSession,
+      runTurn,
+      cancel,
+      close,
+      getCapabilities: async () => ({ controls: [] }),
     };
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime });
     await expect(f.setOption("model", "gpt-5.4")).rejects.toMatchObject({
@@ -188,8 +163,7 @@ describe("AcpSessionManager runtime config", () => {
   it("maps thinking through status config options when capabilities omit keys", async () => {
     const f = fixture({ agent: "claude" });
     f.getStatus.mockResolvedValue({
-      summary: "status=alive",
-      details: { configOptions: [{ id: "mode" }, { id: "model" }, { id: "effort" }] },
+      details: { configOptions: [{ id: "effort" }] },
     });
     await expect(f.setOption("thinking", "high")).resolves.toEqual({ thinking: "high" });
     expect(f.getStatus).toHaveBeenCalled();

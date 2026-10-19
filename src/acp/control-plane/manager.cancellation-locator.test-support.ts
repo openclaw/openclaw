@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
@@ -7,8 +7,36 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { readAcpSessionEntryAsync, upsertAcpSessionMeta } from "../runtime/session-meta.js";
 import type { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
+import { DEFAULT_DEPS } from "./manager.types.js";
 
 type Fixture = Parameters<Parameters<typeof withAcpCancellationFixture>[0]>[0];
+
+export function observeControlRead(
+  onPrepared?: () => void,
+  beforeRead?: { when: () => boolean; wait: () => Promise<void> },
+) {
+  const prepare = DEFAULT_DEPS.prepareSessionControlRead;
+  let gated = false;
+  return vi
+    .spyOn(DEFAULT_DEPS, "prepareSessionControlRead")
+    .mockImplementationOnce(async (params) => {
+      const read = await prepare(params);
+      onPrepared?.();
+      if (!beforeRead) {
+        return read;
+      }
+      return {
+        ...read,
+        readCurrent: async (cfg: Fixture["target"]["cfg"]) => {
+          if (beforeRead.when() && !gated) {
+            gated = true;
+            await beforeRead.wait();
+          }
+          return read.readCurrent(cfg);
+        },
+      };
+    });
+}
 
 export function createGate(label: string) {
   const entered = createDeferred();

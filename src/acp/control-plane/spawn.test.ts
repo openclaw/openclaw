@@ -51,6 +51,18 @@ function gatewayScope() {
   }
   return { ...scope, context: scope.context };
 }
+function createGate() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    entered: entered.promise,
+    open: release.resolve,
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  };
+}
 function lazyDeletion(prepare: () => Promise<void>) {
   const deletion = vi.fn(sessionDeleteHandlers["sessions.delete"]!);
   const lazy = createLazyCoreHandlers({
@@ -270,12 +282,8 @@ describe("failed ACP provisional cleanup", () => {
       const scope = gatewayScope();
       const initialized = await initialize();
       const before = readEntry();
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const { deletion, getGatewayMethodRegistry } = lazyDeletion(async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      const gate = createGate();
+      const { deletion, getGatewayMethodRegistry } = lazyDeletion(gate.wait);
       const lifetime = new GatewayRequestEntryLifetime();
       const context = {
         ...scope.context,
@@ -288,11 +296,11 @@ describe("failed ACP provisional cleanup", () => {
         async () => {
           const cleaning = cleanup(initialized);
           try {
-            await entered.promise;
+            await gate.entered;
             current = false;
             lifetime.beginClose();
           } finally {
-            release.resolve();
+            gate.open();
           }
           await cleaning;
           await lifetime.sealAndJoin();
@@ -315,19 +323,12 @@ describe("failed ACP provisional cleanup", () => {
         const scope = gatewayScope();
         const initialized = await initialize();
         const before = readEntry();
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const { deletion, getGatewayMethodRegistry } = lazyDeletion(async () => {
-          if (boundary === "before admission") {
-            entered.resolve();
-            await release.promise;
-          }
-        });
+        const gate = createGate();
+        const { deletion, getGatewayMethodRegistry } = lazyDeletion(
+          boundary === "before admission" ? gate.wait : async () => {},
+        );
         if (boundary === "after admission") {
-          close.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-          });
+          close.mockImplementationOnce(gate.wait);
         }
         const executions: Promise<unknown>[] = [];
         const context = {
@@ -349,7 +350,7 @@ describe("failed ACP provisional cleanup", () => {
               closeRuntimeOnFailure: retainedRelease,
             }).then(settled);
             try {
-              await entered.promise;
+              await gate.entered;
               await vi.advanceTimersByTimeAsync(10_001);
               if (boundary === "before admission") {
                 await cleaning;
@@ -363,11 +364,11 @@ describe("failed ACP provisional cleanup", () => {
                 boundary === "before admission" ? 1 : 0,
               );
               expect(close).toHaveBeenCalledOnce();
-              release.resolve();
+              gate.open();
               await cleaning;
               expect(readEntry()).toEqual(boundary === "before admission" ? before : undefined);
             } finally {
-              release.resolve();
+              gate.open();
               await cleaning;
               await Promise.allSettled(executions);
             }
@@ -482,12 +483,10 @@ describe("failed ACP provisional cleanup", () => {
     await withCleanupFixture(async ({ manager, initialize, cleanup, ensureSession, close }) => {
       const scope = gatewayScope();
       let current = true;
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = createGate();
       const originalEnsure = ensureSession.getMockImplementation()!;
       ensureSession.mockImplementationOnce(async (input) => {
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
         return await originalEnsure(input);
       });
       await withPluginRuntimeGatewayRequestScope(
@@ -495,12 +494,12 @@ describe("failed ACP provisional cleanup", () => {
         async () => {
           const initializing = initialize();
           try {
-            await entered.promise;
+            await gate.entered;
             current = false;
             await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
             expect(close).not.toHaveBeenCalled();
           } finally {
-            release.resolve();
+            gate.open();
           }
           const initialized = await initializing;
           await cleanup(initialized);

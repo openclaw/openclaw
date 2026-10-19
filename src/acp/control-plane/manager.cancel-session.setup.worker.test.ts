@@ -18,6 +18,7 @@ import {
   locatorSessionKey,
   expectNoRuntimeEffects,
   memoryGuard,
+  observeControlRead,
   replaceRuntime,
   runtimeHandle,
   startTurn,
@@ -54,7 +55,6 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
     const publicationGate = createGate("publicationGate settled before its controlled boundary");
     let ensureReturned = false;
     let controlPrepared = false;
-    let gated = false;
     f.ensureSession.mockImplementationOnce(async () => {
       await ensureGate.wait();
       ensureReturned = true;
@@ -66,23 +66,12 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
       };
     });
     f.getStatus.mockResolvedValue({ agentSessionId: "old-runtime-observation" });
-    const prepare = DEFAULT_DEPS.prepareSessionControlRead;
-    const reader = vi
-      .spyOn(DEFAULT_DEPS, "prepareSessionControlRead")
-      .mockImplementationOnce(async (params) => {
-        const read = await prepare(params);
+    const reader = observeControlRead(
+      () => {
         controlPrepared = true;
-        return {
-          ...read,
-          readCurrent: async (cfg: typeof f.target.cfg) => {
-            if (ensureReturned && !gated) {
-              gated = true;
-              await publicationGate.wait();
-            }
-            return read.readCurrent(cfg);
-          },
-        };
-      });
+      },
+      { when: () => ensureReturned, wait: publicationGate.wait },
+    );
     const close = vi.spyOn(f.runtime, "close");
     let turnResult: Promise<PromiseSettledResult<void>[]> | undefined;
     let cancelResult: Promise<PromiseSettledResult<void>[]> | undefined;
@@ -194,15 +183,10 @@ it.each([
                 await normalizationGate.wait();
                 return upsert(params);
               });
-        const prepare = DEFAULT_DEPS.prepareSessionControlRead;
         let controlPrepared = false;
-        const reader = vi
-          .spyOn(DEFAULT_DEPS, "prepareSessionControlRead")
-          .mockImplementationOnce(async (params) => {
-            const read = await prepare(params);
-            controlPrepared = true;
-            return read;
-          });
+        const reader = observeControlRead(() => {
+          controlPrepared = true;
+        });
         const close = vi.spyOn(f.runtime, "close");
         let turnSettled = false;
         let cancelSettled = false;
