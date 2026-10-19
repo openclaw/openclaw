@@ -163,15 +163,69 @@ describe("Control UI service-worker reconnect refresh", () => {
 
   it("bounds unanswered identity queries without holding reconnect work", async () => {
     vi.useFakeTimers();
-    const worker = createWorker();
-    worker.postMessage.mockImplementation(() => undefined);
-    const registration = installRegistration(worker);
-    const refresh = refreshControlUiServiceWorker();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(refresh).resolves.toBe(false);
-    expect(registration.update).toHaveBeenCalledOnce();
-    expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+    let diagnostic: string | undefined;
+    try {
+      const worker = createWorker();
+      worker.postMessage.mockImplementation(() => undefined);
+      const registration = installRegistration(worker);
+      const refresh = refreshControlUiServiceWorker();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(refresh).resolves.toBe(false);
+      expect(registration.update).toHaveBeenCalledOnce();
+      expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } catch (error) {
+      // Temporary evidence only: these are private fields of the pinned Vitest/Sinon clock.
+      type ClockEntry = {
+        type?: string;
+        delay?: number;
+        interval?: number;
+        createdAt?: number;
+        callAt?: number;
+        func?: unknown;
+      };
+      const clock = (
+        setTimeout as typeof setTimeout & {
+          clock?: {
+            now: number;
+            methods: string[];
+            timers?: Map<number, ClockEntry>;
+            jobs?: ClockEntry[];
+          };
+        }
+      ).clock;
+      const callback = (value: unknown) =>
+        typeof value === "function"
+          ? { name: value.name, source: Function.prototype.toString.call(value).slice(0, 400) }
+          : { type: typeof value };
+      diagnostic = JSON.stringify(
+        clock
+          ? {
+              now: clock.now,
+              methods: clock.methods,
+              timers: Array.from(clock.timers ?? [], ([id, timer]) => ({
+                id,
+                type: timer.type,
+                delay: timer.delay,
+                interval: timer.interval,
+                createdAt: timer.createdAt,
+                callAt: timer.callAt,
+                callback: callback(timer.func),
+              })),
+              jobs: (clock.jobs ?? []).map((job, index) => ({
+                index,
+                callback: callback(job.func),
+              })),
+            }
+          : { unavailable: "Pinned fake-clock introspection is unavailable" },
+      );
+      throw error;
+    } finally {
+      if (diagnostic) {
+        vi.useRealTimers();
+        console.error("[service-worker-clock-diagnostic]", diagnostic);
+      }
+    }
   });
 
   it("releases reconnect work when service workers are unavailable", async () => {

@@ -1,9 +1,7 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  beginSessionEffect,
-  getSessionWorkAdmissionOwnerRelease,
-} from "./session-controller.lifecycle.js";
+import { getSessionWorkAdmissionOwnerRelease } from "./session-controller.lifecycle-work.js";
+import { beginSessionEffect } from "./session-controller.lifecycle.js";
 
 it("captures acquired owners without waiting for pending successors", async () => {
   const scope = "store-named-owner";

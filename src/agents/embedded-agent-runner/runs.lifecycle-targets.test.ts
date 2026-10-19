@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createReplyOperation, isSessionRunActive } from "../../sessions/session-controller.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";

@@ -158,6 +158,7 @@ export function renderSidebarCatalogViewMenuForMenus(
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["catalogViewMenuPosition"]>,
 ): JSX.Element {
+  const menuRef = menus.menuRef("catalogView");
   const ownerFilter = createMemo(() => ({
     owners: host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
@@ -179,6 +180,7 @@ export function renderSidebarCatalogViewMenuForMenus(
   );
   return (
     <SidebarDropdown
+      ref={menuRef}
       position={position}
       class={[
         "sidebar-session-sort-menu sidebar-catalog-view-menu",

@@ -429,11 +429,9 @@ describe("lobster pet element", () => {
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-pet");
   });
 
-  it("droops instead of cheering when the finished run failed", async () => {
-    const element = createPet(42, "busy");
-    element.runOutcome = "error";
-    await arrive(element);
-    await updatePet(element, { mode: "idle" });
+  it("uses the finished outcome from the complete mode-change property burst", async () => {
+    const element = await visitingPet(42, "busy");
+    await updatePet(element, { mode: "idle", runOutcome: "error" });
     expect(spriteClasses(element)).toContain("lobster-pet--act-droop");
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-cheer");
   });

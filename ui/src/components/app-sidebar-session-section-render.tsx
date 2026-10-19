@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -195,6 +195,12 @@ export function renderSessionSection(params: {
       </>
     ) : undefined,
   );
+  let personHeader: HTMLElement | undefined;
+  onCleanup(() => {
+    if (host().presencePeople?.get(section().id) === personHeader) {
+      host().presencePeople?.delete(section().id);
+    }
+  });
   return (
     <div
       class={[
@@ -231,6 +237,7 @@ export function renderSessionSection(params: {
       {section().renderHeader ? (
         <SessionSectionHeader
           sectionId={section().id}
+          sectionHeaders={host().sessionOrganizer.sectionHeaders}
           status={
             headerStatus()
               ? {
@@ -281,6 +288,10 @@ export function renderSessionSection(params: {
                     {chevron}
                   </button>
                   <button
+                    ref={(element) => {
+                      personHeader = element;
+                      host().presencePeople?.set(section().id, element);
+                    }}
                     type="button"
                     class="sidebar-session-group-person"
                     data-person-card=""

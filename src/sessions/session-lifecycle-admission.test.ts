@@ -8,9 +8,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { cancelSessionEffectHandoff as cancelHandoff } from "./session-controller.lifecycle-observation.js";
 import {
   beginSessionEffect as beginAdmission,
-  cancelSessionEffectHandoff as cancelHandoff,
   consumeSessionEffectHandoff as consumeHandoff,
   getSessionMutationCount,
   getSessionControllerWorkCount,
