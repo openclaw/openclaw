@@ -12,7 +12,7 @@ import type {
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
-export type SessionWorkspaceTreeState = {
+type SessionWorkspaceTreeState = {
   expandedPaths: string[];
   searchOpen: boolean;
   sessionExpanded: boolean;
@@ -44,8 +44,8 @@ export type SessionWorkspaceArtifacts = {
   error: string | null;
 };
 
-export type SessionWorkspaceMobileGroupKind = "changed" | "read" | "artifacts" | "workspace";
-export type SessionWorkspaceMobileNavigation = {
+type SessionWorkspaceMobileGroupKind = "changed" | "read" | "artifacts" | "workspace";
+type SessionWorkspaceMobileNavigation = {
   expandedGroups: Record<SessionWorkspaceMobileGroupKind, boolean>;
   scrollTop: number;
   locations: Record<string, { search: string; filter: SessionWorkspaceFilter; scrollTop: number }>;
