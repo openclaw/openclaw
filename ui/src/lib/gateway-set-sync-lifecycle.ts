@@ -1,13 +1,21 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
+import { listen } from "./reactive/listener.ts";
 
-/** Active consumers own registrations and fence queued work when their set detaches. */
+type SetSyncRequest = {
+  hello: ApplicationGateway["snapshot"]["hello"];
+  signature: string | null;
+  controller: AbortController;
+  acknowledged: boolean;
+};
+
 export function createGatewaySetSyncLifecycle(
   gateway: ApplicationGateway,
   options: {
     sync: () => void;
-    onAttach: () => void;
-    onDetach: () => void;
+    onAttach?: () => void;
+    onDetach?: () => void;
     onSnapshot?: Parameters<ApplicationGateway["subscribe"]>[0];
     onEvent?: Parameters<ApplicationGateway["subscribeEvents"]>[0];
   },
@@ -15,10 +23,15 @@ export function createGatewaySetSyncLifecycle(
   const retry = createGatewayRetryOwner();
   let attached = false;
   let scheduled = false;
-  let scheduleGeneration = 0;
   let stopSnapshots: (() => void) | null = null;
   let stopEvents: (() => void) | null = null;
-  let visibilityDocument: Document | null = null;
+  let stopVisibility: (() => void) | undefined;
+  let request: SetSyncRequest | null = null;
+
+  function clearRequest() {
+    request?.controller.abort();
+    request = null;
+  }
 
   function sync() {
     scheduled = false;
@@ -32,12 +45,8 @@ export function createGatewaySetSyncLifecycle(
       return;
     }
     scheduled = true;
-    const generation = scheduleGeneration;
-    globalThis.queueMicrotask(() => {
-      if (generation === scheduleGeneration) {
-        sync();
-      }
-    });
+    // A same-turn reattach may sync twice; consumers deduplicate the current set.
+    globalThis.queueMicrotask(sync);
   }
 
   const handleVisibilityChange = () => {
@@ -54,17 +63,73 @@ export function createGatewaySetSyncLifecycle(
     },
     sync,
     schedule,
+    clearRequest,
+    matchesRequest(signature: string) {
+      return request?.hello === gateway.snapshot.hello && request?.signature === signature;
+    },
+    get requestAcknowledged() {
+      return request?.acknowledged === true;
+    },
+    get requestHello() {
+      return request?.hello ?? null;
+    },
+    send(
+      client: NonNullable<ApplicationGateway["snapshot"]["client"]>,
+      method: string,
+      params: unknown,
+      signature: string,
+      callbacks: {
+        onSuccess?: () => void;
+        onError?: () => void;
+        onSettled?: (acknowledged: boolean) => void;
+      } = {},
+    ) {
+      clearRequest();
+      const attempt: SetSyncRequest = {
+        hello: gateway.snapshot.hello,
+        signature,
+        controller: new AbortController(),
+        acknowledged: false,
+      };
+      request = attempt;
+      // Navigation and reconnects retire the whole attempt, including its callbacks.
+      const isCurrent = () => attached && request === attempt;
+      retry.cancel();
+      void client
+        .request(method, params, {
+          timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+          signal: attempt.controller.signal,
+        })
+        .then(() => {
+          if (isCurrent()) {
+            attempt.acknowledged = true;
+            retry.reset();
+            callbacks.onSuccess?.();
+          }
+        })
+        .catch(() => {
+          if (isCurrent()) {
+            attempt.signature = null;
+            callbacks.onError?.();
+          }
+        })
+        .finally(() => {
+          if (isCurrent()) {
+            callbacks.onSettled?.(attempt.signature !== null);
+          }
+        });
+    },
     attach() {
       if (attached) {
         return;
       }
       attached = true;
-      options.onAttach();
+      options.onAttach?.();
+      // Active consumers own registrations; detached sets skip queued work.
       stopSnapshots = gateway.subscribe(options.onSnapshot ?? schedule);
       stopEvents = options.onEvent ? gateway.subscribeEvents(options.onEvent) : null;
       if (typeof document !== "undefined") {
-        document.addEventListener("visibilitychange", handleVisibilityChange);
-        visibilityDocument = document;
+        stopVisibility = listen(document, "visibilitychange", handleVisibilityChange);
       }
     },
     detach() {
@@ -72,16 +137,16 @@ export function createGatewaySetSyncLifecycle(
         return;
       }
       attached = false;
+      clearRequest();
       stopSnapshots?.();
       stopSnapshots = null;
       stopEvents?.();
       stopEvents = null;
-      visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
-      visibilityDocument = null;
+      stopVisibility?.();
+      stopVisibility = undefined;
       retry.reset();
-      scheduleGeneration += 1;
       scheduled = false;
-      options.onDetach();
+      options.onDetach?.();
     },
   };
 }

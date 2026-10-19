@@ -4,12 +4,8 @@ import type {
   ProviderPrepareRuntimeAuthContext,
 } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
-import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { ensureAuthProfileStoreAsync } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getAccessTokenResultAsync } from "./cli.js";
 import {
@@ -45,11 +41,8 @@ async function refreshEntraToken(params?: {
 }): Promise<FoundryToken> {
   const result = await getAccessTokenResultAsync(params);
   const rawExpiry = result.expiresOn ? new Date(result.expiresOn).getTime() : Number.NaN;
-  const now = resolveDateTimestampMs(Date.now());
-  const expiresAt =
-    asDateTimestampMs(rawExpiry) ??
-    resolveExpiresAtMsFromDurationMs(FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS, { nowMs: now }) ??
-    now;
+  const now = Date.now();
+  const expiresAt = asDateTimestampMs(rawExpiry) ?? now + FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS;
   for (const [cacheKey, cachedToken] of cachedTokens) {
     if (cachedToken.expiresAt <= now) {
       cachedTokens.delete(cacheKey);
@@ -77,23 +70,16 @@ export async function prepareFoundryRuntimeAuth(
     };
   }
   try {
-    const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
       allowKeychainPrompt: false,
     });
     const credential = ctx.profileId ? authStore.profiles[ctx.profileId] : undefined;
     const metadata = credential?.type === "api_key" ? credential.metadata : undefined;
-    const modelId =
-      normalizeOptionalString(ctx.modelId) ??
-      normalizeOptionalString(metadata?.modelId) ??
-      ctx.modelId;
     const requestedModelId = normalizeOptionalString(ctx.modelId);
     const metadataModelId = normalizeOptionalString(metadata?.modelId);
+    const modelId = requestedModelId ?? metadataModelId ?? ctx.modelId;
     const activeModelUsesMetadata = !requestedModelId || requestedModelId === metadataModelId;
-    const activeModelNameHint = activeModelUsesMetadata ? metadata?.modelName : undefined;
-    const modelNameHint = resolveConfiguredModelNameHint(
-      modelId,
-      ctx.model.name ?? activeModelNameHint,
-    );
+    const modelNameHint = resolveConfiguredModelNameHint(modelId, ctx.model.name);
     const configuredApi = isFoundryProviderApi(ctx.model.api)
       ? ctx.model.api
       : activeModelUsesMetadata &&
@@ -115,13 +101,8 @@ export async function prepareFoundryRuntimeAuth(
       tenantId: metadata?.tenantId,
     });
     const cachedToken = cachedTokens.get(cacheKey);
-    const rawNow = Date.now();
-    const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
-    const now = resolveDateTimestampMs(rawNow);
-    const refreshAfterMs =
-      resolveExpiresAtMsFromDurationMs(TOKEN_REFRESH_MARGIN_MS, { nowMs: now }) ?? now;
     let token: FoundryToken;
-    if (cachedToken && hasValidClock && cachedToken.expiresAt > refreshAfterMs) {
+    if (cachedToken && cachedToken.expiresAt > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
       // Map insertion order is the eviction order; touch valid hits to retain active accounts.
       cachedTokens.delete(cacheKey);
       cachedTokens.set(cacheKey, cachedToken);

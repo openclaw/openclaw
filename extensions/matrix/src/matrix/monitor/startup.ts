@@ -31,29 +31,24 @@ const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
   })),
 );
 
-type MatrixStartupMaintenanceDeps = Awaited<ReturnType<typeof loadMatrixStartupMaintenanceDeps>>;
-
-export async function runMatrixStartupMaintenance(
-  params: {
-    client: MatrixStartupClient;
-    auth: MatrixAuth;
-    accountId: string;
-    effectiveAccountId: string;
-    accountConfig: MatrixConfig;
-    logger: RuntimeLogger;
-    logVerboseMessage: (message: string) => void;
-    getRuntimeConfig: () => CoreConfig;
-    replaceConfigFile: (cfg: CoreConfig) => Promise<void>;
-    loadWebMedia: (
-      url: string,
-      maxBytes: number,
-    ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
-    env?: NodeJS.ProcessEnv;
-    abortSignal?: AbortSignal;
-  },
-  deps?: MatrixStartupMaintenanceDeps,
-): Promise<void> {
-  const runtimeDeps = deps ?? (await loadMatrixStartupMaintenanceDeps());
+export async function runMatrixStartupMaintenance(params: {
+  client: MatrixStartupClient;
+  auth: MatrixAuth;
+  accountId: string;
+  effectiveAccountId: string;
+  accountConfig: MatrixConfig;
+  logger: RuntimeLogger;
+  logVerboseMessage: (message: string) => void;
+  getRuntimeConfig: () => CoreConfig;
+  replaceConfigFile: (cfg: CoreConfig) => Promise<void>;
+  loadWebMedia: (
+    url: string,
+    maxBytes: number,
+  ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
+  env?: NodeJS.ProcessEnv;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  const runtimeDeps = await loadMatrixStartupMaintenanceDeps();
   throwIfMatrixStartupAborted(params.abortSignal);
   try {
     const profileSync = await runtimeDeps.syncMatrixOwnProfile({

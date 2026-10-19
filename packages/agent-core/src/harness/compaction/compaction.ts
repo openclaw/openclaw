@@ -3,85 +3,43 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
-import { isRuntimeContextCarrier } from "../messages.js";
-import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
+import { buildSessionContext } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
+import {
+  estimateTokens,
+  findCutPoint,
+  getMessageFromEntryForCompaction,
+  type CompactionRetentionConstraints,
+} from "./compaction-cut-point.js";
+import {
+  type CompactionDetails,
+  MAX_LATEST_USER_REQUEST_CHARS,
+  parseCompactionDetails,
+} from "./compaction-details.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
+import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
-  formatPersistedSenderSuffix,
   getCompactionContent,
   mergeSummaryFileOperations,
-  stringifyCompactionValue,
 } from "./utils.js";
 
-/** File-operation details stored on generated compaction entries. */
-export interface CompactionDetails {
-  readFiles: string[];
-  modifiedFiles: string[];
-  /** Run-owned request that remains active across another compaction generation. */
-  latestUnresolvedUserRequest?: string;
-}
+export {
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  IMAGE_BLOCK_TOKENS,
+} from "./compaction-cut-point.js";
 
-function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
-  const details = asOptionalRecord(value);
-  if (
-    !details ||
-    !Array.isArray(details.readFiles) ||
-    !details.readFiles.every((file): file is string => typeof file === "string") ||
-    !Array.isArray(details.modifiedFiles) ||
-    !details.modifiedFiles.every((file): file is string => typeof file === "string")
-  ) {
-    return undefined;
-  }
-  const request = details.latestUnresolvedUserRequest;
-  const latestUnresolvedUserRequest =
-    typeof request === "string" && request.length <= MAX_LATEST_USER_REQUEST_CHARS
-      ? request
-      : undefined;
-  return {
-    readFiles: details.readFiles,
-    modifiedFiles: details.modifiedFiles,
-    ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
-  };
-}
-
-function extractFileOperations(
-  messages: AgentMessage[],
-  entries: SessionTreeEntry[],
-  prevBoundaryIndex: number,
-): FileOperations {
-  const fileOps = createFileOps();
-  if (prevBoundaryIndex >= 0) {
-    const prevCompaction = entries[prevBoundaryIndex];
-    if (prevCompaction?.type === "compaction" && !prevCompaction.fromHook) {
-      const details = parseCompactionDetails(prevCompaction.details);
-      if (details) {
-        mergeSummaryFileOperations(fileOps, details);
-      }
-    }
-  }
-  for (const msg of messages) {
-    extractFileOpsFromMessage(msg, fileOps);
-  }
-
-  return fileOps;
-}
-function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
-  if (entry.type === "compaction") {
-    return undefined;
-  }
-  return projectSessionEntryMessage(entry);
-}
+export type { CompactionDetails } from "./compaction-details.js";
 
 /** Generated compaction data ready to be persisted as a compaction entry. */
 export interface CompactionResult<T = unknown> {
@@ -99,7 +57,6 @@ export interface CompactionResult<T = unknown> {
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
-const MAX_LATEST_USER_REQUEST_CHARS = 800;
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
 const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
 const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
@@ -162,12 +119,11 @@ export function fitCompactionSummary<T extends { summary: string }>(
   tokenBudget: number | undefined,
   render: (maxChars: number) => T | undefined,
 ): Result<T, CompactionError> {
+  const fits = (candidate: T) =>
+    tokenBudget === undefined ||
+    estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget;
   const full = render(MAX_COMPACTION_SUMMARY_CHARS);
-  if (
-    full &&
-    (tokenBudget === undefined ||
-      estimateStringChars(full.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget)
-  ) {
+  if (full && fits(full)) {
     return ok(full);
   }
   let low = 1;
@@ -178,10 +134,7 @@ export function fitCompactionSummary<T extends { summary: string }>(
     const candidate = render(mid);
     if (!candidate) {
       low = mid + 1;
-    } else if (
-      tokenBudget === undefined ||
-      estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget
-    ) {
+    } else if (fits(candidate)) {
       fitted = candidate;
       low = mid + 1;
     } else {
@@ -315,258 +268,22 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-export const IMAGE_BLOCK_TOKENS = 2_000;
-const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
+const SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({
+  introduction:
+    "The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.",
+  goal: "[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]",
+  constraints:
+    '- [Any constraints, preferences, or requirements mentioned by user]\n- [Or "(none)" if none were mentioned]',
+  inProgress: "- [ ] [Current work]",
+  blocked: "- [Issues preventing progress, if any]",
+  decisions: "- **[Decision]**: [Brief rationale]",
+  nextSteps: "1. [Ordered list of what should happen next]",
+  criticalContext:
+    '- [Any data, examples, or references needed to continue]\n- [Or "(none)" if not applicable]',
+});
 
-function countContentChars(
-  content: string | Array<{ type: string; content?: unknown; text?: string }>,
-): number {
-  const { text, omissionText } = getCompactionContent(content);
-  const images =
-    typeof content === "string" ? 0 : content.filter((block) => block.type === "image").length;
-  // Charge the largest role/separator even for mixed text. Any suppressed message's
-  // minimum 56-character charge also covers the serializer's single 55-character overflow.
-  const omissionChars = omissionText ? omissionText.length + "\n\n[Tool result]: ".length : 0;
-  return estimateStringChars(text) + images * IMAGE_BLOCK_CHARS + omissionChars;
-}
-
-/** Estimate token count for one message using a conservative character heuristic. */
-export function estimateTokens(message: AgentMessage): number {
-  if ("excludeFromContext" in message && message.excludeFromContext === true) {
-    return 0;
-  }
-  let chars = 0;
-
-  switch (message.role) {
-    case "assistant": {
-      for (const block of message.content) {
-        if (block.type === "text") {
-          chars += estimateStringChars(block.text);
-        } else if (block.type === "thinking") {
-          chars += estimateStringChars(block.thinking);
-        } else if (block.type === "toolCall") {
-          chars +=
-            estimateStringChars(block.name) +
-            estimateStringChars(stringifyCompactionValue(block.arguments));
-        }
-      }
-      break;
-    }
-    case "user": {
-      chars = countContentChars(message.content);
-      // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(message));
-      break;
-    }
-    case "custom":
-    case "toolResult": {
-      chars = countContentChars(message.content);
-      break;
-    }
-    case "bashExecution": {
-      chars = estimateStringChars(message.command) + estimateStringChars(message.output);
-      break;
-    }
-    case "branchSummary":
-    case "compactionSummary": {
-      chars = estimateStringChars(message.summary);
-      break;
-    }
-  }
-
-  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
-}
-function isCutPointMessage(message: AgentMessage): boolean {
-  return message.role === "assistant" || isTurnStartMessage(message);
-}
-
-function isTurnStartMessage(message: AgentMessage): boolean {
-  const role = message.role;
-  return role === "custom"
-    ? !isRuntimeContextCarrier(message)
-    : role === "user" ||
-        role === "bashExecution" ||
-        role === "branchSummary" ||
-        role === "compactionSummary";
-}
-
-function isTurnStartEntry(entry: SessionTreeEntry): boolean {
-  const message = getMessageFromEntryForCompaction(entry);
-  return message ? isTurnStartMessage(message) : false;
-}
-
-/** Find the user-visible message that starts the turn containing an entry. */
-export function findTurnStartIndex(
-  entries: SessionTreeEntry[],
-  entryIndex: number,
-  startIndex: number,
-): number {
-  for (let i = entryIndex; i >= startIndex; i--) {
-    const entry = entries[i];
-    if (entry && isTurnStartEntry(entry)) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-interface CutPointResult {
-  /** Index of the first entry retained after compaction. */
-  firstKeptEntryIndex: number;
-  /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
-  turnStartIndex: number;
-  /** Whether the selected cut point splits an in-progress turn. */
-  isSplitTurn: boolean;
-}
-
-/** Automatic callers supply the remaining foreground budget and its message estimator. */
-interface CompactionRetentionBudget {
-  maxTokens: number;
-  reserveTokens: number;
-  estimateTokens: (message: AgentMessage) => number;
-}
-
-interface CompactionRetentionConstraints {
-  /** An admitted, unprocessed user remains intact even before its budget is prepared. */
-  preserveFromEntryId?: string;
-  budget?: CompactionRetentionBudget;
-}
-
-/** Find the compaction cut point that keeps approximately the requested recent-token budget. */
-export function findCutPoint(
-  entries: SessionTreeEntry[],
-  startIndex: number,
-  endIndex: number,
-  keepRecentTokens: number,
-  constraints?: CompactionRetentionConstraints,
-): CutPointResult {
-  const retention = constraints?.budget;
-  // Projection validates persisted custom/branch timestamps even outside the
-  // retained tail. Keep that eager validation without storing every cut point.
-  let cutIndex: number | undefined;
-  let lastAllowedCut = endIndex - 1;
-  for (let i = startIndex; i < endIndex; i++) {
-    const entry = entries[i];
-    const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-    if (entry && entry.id === constraints?.preserveFromEntryId) {
-      lastAllowedCut = i;
-    }
-    if (message && isCutPointMessage(message)) {
-      cutIndex = i;
-    }
-  }
-  if (cutIndex === undefined) {
-    return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
-  }
-  let accumulatedTokens = 0;
-
-  // The latest valid cut also handles an oversized trailing tool result that
-  // exhausts the budget before the reverse walk reaches its preceding boundary.
-  for (let i = endIndex - 1; i >= startIndex; i--) {
-    const entry = entries[i];
-    if (!entry) {
-      continue;
-    }
-    const message = getMessageFromEntryForCompaction(entry);
-    if (!message) {
-      continue;
-    }
-    if (isCutPointMessage(message)) {
-      cutIndex = i;
-    }
-    accumulatedTokens += retention?.estimateTokens(message) ?? estimateTokens(message);
-    if (accumulatedTokens >= keepRecentTokens) {
-      break;
-    }
-  }
-  cutIndex = Math.min(cutIndex, lastAllowedCut);
-  if (retention) {
-    let retainedTokens = 0;
-    let fittingCut = endIndex;
-    let tailLimit = retention.maxTokens;
-    for (let i = endIndex - 1; i >= cutIndex; i--) {
-      const entry = entries[i];
-      const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      retainedTokens += message ? retention.estimateTokens(message) : 0;
-      if (retainedTokens > tailLimit) {
-        break;
-      }
-      if (i <= lastAllowedCut && message && isCutPointMessage(message)) {
-        if (fittingCut === endIndex) {
-          // The summary maximum is a reservation, not a minimum: small windows
-          // retain one complete atom and give the summary the remaining room.
-          tailLimit = Math.max(retainedTokens, retention.maxTokens - retention.reserveTokens);
-        }
-        fittingCut = i;
-      }
-    }
-    if (fittingCut === endIndex) {
-      return { firstKeptEntryIndex: endIndex, turnStartIndex: -1, isSplitTurn: false };
-    }
-    cutIndex = fittingCut;
-  }
-  while (cutIndex > startIndex) {
-    const prevEntry = entries[cutIndex - 1];
-    if (!prevEntry) {
-      break;
-    }
-    if (prevEntry.type === "compaction" || prevEntry.type === "reset") {
-      break;
-    }
-    // Metadata can follow the cut, but private persisted messages cannot become its boundary.
-    if (prevEntry.type === "message" || getMessageFromEntryForCompaction(prevEntry)) {
-      break;
-    }
-    cutIndex--;
-  }
-  const cutEntry = entries[cutIndex];
-  if (!cutEntry) {
-    throw new Error("compaction cut point does not reference a session entry");
-  }
-  const startsTurn = isTurnStartEntry(cutEntry);
-  const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
-
-  return {
-    firstKeptEntryIndex: cutIndex,
-    turnStartIndex,
-    isSplitTurn: !startsTurn && turnStartIndex !== -1,
-  };
-}
-
-const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
-
-Use this EXACT format:
-
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
-
-const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+const UPDATE_SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({
+  introduction: `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
 Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
@@ -574,36 +291,16 @@ Update the existing structured summary with new information. RULES:
 - UPDATE the Progress section: move items from "In Progress" to "Done" when completed. Record checks that ran and their results as completed, even when they failed; keep unresolved blockers separate.
 - UPDATE "Next Steps" based on what was accomplished
 - PRESERVE exact file paths, function names, and error messages
-- If something is no longer relevant, you may remove it
-
-Use this EXACT format:
-
-## Goal
-[Preserve existing goals, add new ones if the task expanded]
-
-## Constraints & Preferences
-- [Preserve existing, add new ones discovered]
-
-## Progress
-### Done
-- [x] [Include previously done items AND newly completed items]
-
-### In Progress
-- [ ] [Current work - update based on progress]
-
-### Blocked
-- [Current blockers - remove if resolved]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
-
-## Next Steps
-1. [Update based on current state]
-
-## Critical Context
-- [Preserve important context, add new if needed]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+- If something is no longer relevant, you may remove it`,
+  goal: "[Preserve existing goals, add new ones if the task expanded]",
+  constraints: "- [Preserve existing, add new ones discovered]",
+  done: "- [x] [Include previously done items AND newly completed items]",
+  inProgress: "- [ ] [Current work - update based on progress]",
+  blocked: "- [Current blockers - remove if resolved]",
+  decisions: "- **[Decision]**: [Brief rationale] (preserve all previous, add new)",
+  nextSteps: "1. [Update based on current state]",
+  criticalContext: "- [Preserve important context, add new if needed]",
+});
 
 /** Caller-owned formats replace the default headings; focus remains additive. */
 export type CompactionSummaryPrompt =
@@ -700,7 +397,7 @@ export function prepareCompaction(
     return ok(undefined);
   }
 
-  let prevBoundaryIndex = pathEntries.findLastIndex(
+  const prevBoundaryIndex = pathEntries.findLastIndex(
     (entry) => entry?.type === "compaction" || entry?.type === "reset",
   );
 
@@ -735,7 +432,6 @@ export function prepareCompaction(
         return message ? [message] : [];
       });
       effectiveEntries = pathEntries.slice(prevBoundaryIndex + 1);
-      prevBoundaryIndex = -1;
     } else {
       boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevBoundaryIndex + 1;
     }
@@ -815,7 +511,13 @@ export function prepareCompaction(
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
     return ok(undefined);
   }
-  const fileOps = extractFileOperations(messagesToSummarize, effectiveEntries, prevBoundaryIndex);
+  const fileOps = createFileOps();
+  if (previousSummaryDetails) {
+    mergeSummaryFileOperations(fileOps, previousSummaryDetails);
+  }
+  for (const msg of messagesToSummarize) {
+    extractFileOpsFromMessage(msg, fileOps);
+  }
   if (cutPoint.isSplitTurn) {
     for (const msg of turnPrefixMessages) {
       extractFileOpsFromMessage(msg, fileOps);
@@ -1026,4 +728,3 @@ function finalizeCompaction(
     } as CompactionDetails,
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

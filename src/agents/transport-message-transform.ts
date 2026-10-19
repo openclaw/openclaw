@@ -29,7 +29,6 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 ]);
 
 // Responses-family APIs retain their inherited "aborted" synthetic-result convention.
-/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model,
@@ -106,20 +105,13 @@ export function transformTransportMessages(
         if (modelBoundThinkingReplayMode === "drop") {
           continue;
         }
-        if (block.redacted) {
-          if (isSameModel) {
-            content.push(block);
-          }
-          continue;
+        if (
+          block.redacted
+            ? isSameModel
+            : (isSameModel && block.thinkingSignature) || block.thinking.trim()
+        ) {
+          content.push(isSameModel ? block : { type: "text", text: block.thinking });
         }
-        if (isSameModel && block.thinkingSignature) {
-          content.push(block);
-          continue;
-        }
-        if (!block.thinking.trim()) {
-          continue;
-        }
-        content.push(isSameModel ? block : { type: "text", text: block.thinking });
         continue;
       }
       if (block.type === "text") {

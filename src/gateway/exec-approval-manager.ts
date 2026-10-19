@@ -34,6 +34,7 @@ import {
   prepareExecApprovalPresentation,
   prepareExecApprovalRegistration,
 } from "./exec-approval-registration.js";
+import { assertExecApprovalStandingGrantCurrent } from "./exec-approval-resolution-authority.js";
 import {
   prepareExecApprovalStandingGrant,
   projectClosedApprovalResolution,
@@ -160,7 +161,7 @@ export class ExecApprovalManager<
     });
   }
 
-  private scheduleAuthorityClosure(recordId: string): void {
+  protected override scheduleAuthorityClosure(recordId: string): void {
     void this.forceDenyIfRuntimeAuthorityClosed(recordId)
       .then((closed) => {
         if (closed?.outcome === "denied" && closed.liveRecord) {
@@ -245,19 +246,11 @@ export class ExecApprovalManager<
             ) {
               throw new ApprovalMutationRefusedError("approval authority is no longer active");
             }
-            if (
-              standingGrantSpec &&
-              localEntry &&
-              (JSON.stringify(
-                this.options.resolveStandingGrantMint?.(localEntry.record.request),
-              ) !== JSON.stringify(standingGrantSpec) ||
-                (standingGrantSpec.kind === "mcp-tool" &&
-                  localEntry.record.mcpToolApprovalActive?.() !== true))
-            ) {
-              throw new ApprovalMutationRefusedError(
-                "approval standing grant authority is no longer active",
-              );
-            }
+            assertExecApprovalStandingGrantCurrent(
+              this.options,
+              localEntry?.record,
+              standingGrantSpec,
+            );
           },
           options,
         );
@@ -682,21 +675,35 @@ export class ExecApprovalManager<
     }, recordId);
   }
 
-  /** Observes a registered decision; Gateway closure rejects the wait, not the approval. */
-  awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
-    this.assertNotRetired();
-    this.scheduleAuthorityClosure(recordId);
-    const snapshot = this.getLocalSnapshot(recordId);
-    if (!snapshot) {
-      return null;
+  /** Exact accepted record liveness for owner-bound waits; never grants a decision. */
+  isPending(record: ExecApprovalRecord<TPayload>): boolean {
+    const entry = this.pending.get(record.id);
+    return (
+      !this.retired &&
+      entry !== undefined &&
+      entry.record === record &&
+      !entry.uncertainVerdict &&
+      record.resolvedAtMs === undefined &&
+      record.expiresAtMs > Date.now() &&
+      isExecApprovalRuntimeActive(this.options, record)
+    );
+  }
+
+  /** Delivery eligibility stays with the exact pending record across adapter awaits. */
+  isPendingDeliveryCurrent(record: ExecApprovalRecord<TPayload>): boolean {
+    if (
+      this.retired ||
+      this.pending.get(record.id)?.record !== record ||
+      record.resolvedAtMs !== undefined ||
+      record.expiresAtMs <= Date.now()
+    ) {
+      return false;
     }
-    if (snapshot.resolvedAtMs === undefined && snapshot.expiresAtMs <= Date.now()) {
-      void this.expireDue(recordId).catch((error: unknown) => {
-        this.reportError(error, { approvalId: recordId, operation: "expire" });
-      });
+    if (isExecApprovalRuntimeActive(this.options, record)) {
+      return true;
     }
-    const entry = this.pending.get(recordId);
-    return entry ? this.observeEntry(entry, entry.promise) : null;
+    this.scheduleAuthorityClosure(record.id);
+    return false;
   }
 
   /** Projects an allowed decision only while its exact runtime authority is live. */

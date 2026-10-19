@@ -10,25 +10,30 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import {
   createOpenClawCodingToolsInternalAsync,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
-import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
+import { gateBoundTool } from "../../harness/host-bound-tool.js";
+import { isWorkspaceTool } from "../../harness/host-capability-workspace.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "../../local-model-lean.js";
-import { resolveModelAuthMode } from "../../model-auth.js";
+import { resolveModelAuthModeAsync } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
@@ -46,6 +51,8 @@ import type {
   CronCreatorToolAllowlistEntry,
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import { captureAgentWorkspaceReadiness } from "../../workspace-readiness.js";
 import { log } from "../logger.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -81,6 +88,31 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
+  const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
+  const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
+  const captureBaseline = attempt.awaitSessionDiffBaseline;
+  const assertBaselineSource = captureBaseline
+    ? resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        params.runAbortController.signal,
+      )
+    : undefined;
+  const awaitSessionDiffBaseline = captureBaseline
+    ? async () => {
+        try {
+          if (!assertBaselineSource) {
+            throw new Error("session attribution requires active admitted run authority");
+          }
+          assertBaselineSource();
+          await captureBaseline();
+          assertBaselineSource();
+        } catch (error) {
+          params.runAbortController.abort(error);
+          throw error;
+        }
+      }
+    : undefined;
   const completionCheck = attempt.completionCheck;
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
@@ -101,6 +133,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
+    trigger: attempt.trigger,
     agentId: params.setup.sessionAgentId,
     sessionKey: params.setup.sandboxSessionKey,
     forceMessageTool: forceDirectMessageTool,
@@ -155,7 +188,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // Compaction summaries omit screenshot image blocks. Frames are bound to this
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
-  const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+  const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
@@ -164,6 +197,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
+  const inheritedPublicationToolRef: NonNullable<
+    OpenClawCodingToolsOptions["inheritedPublicationToolRef"]
+  > = {};
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -171,9 +207,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const cleanups = generationCleanups.splice(0);
     const settled = Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(reason))).then(
       (results) => {
-        if (results.some((result) => result.status === "rejected")) {
-          retiredCleanupFailed = true;
-        }
+        retiredCleanupFailed ||= results.some((result) => result.status === "rejected");
       },
     );
     retiringGenerations.add(settled);
@@ -210,7 +244,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     skillsSnapshot: params.skillsSnapshot,
     runtimeToolAllowlist: effectiveToolsAllow,
   });
-  const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+  const runtimeCapabilityProfile = await prepareConversationCapabilityProfile({
     ...buildConversationContext(),
     agentId: attempt.sandboxAgentId ?? params.setup.sessionAgentId,
     conversationToolPolicy: attempt.conversationToolPolicy,
@@ -274,10 +308,19 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     abortSignal: AbortSignal,
   ) => {
     webSearchUnconfigured = false;
+    inheritedPublicationToolRef.current = undefined;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
     if (shouldConstructTools) {
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        abortSignal,
+      );
       const codingToolOptions: OpenClawCodingToolsOptions = {
+        awaitSessionDiffBaseline,
+        pluginExecutionAuthority,
+        pluginExecutionSkillsSnapshot,
+        assertInvocationCurrent: assertActive,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         exec: {
@@ -318,6 +361,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
               webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
               sandboxToolPolicy: params.setup.sandbox?.tools,
               authStore: attempt.authProfileStore,
+              preparedRequesterPolicy: runtimeCapabilityProfile.policy,
               pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
             }).kind === "managed";
         },
@@ -329,9 +373,14 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         },
         modelCompat: extractModelCompat(attempt.model),
         delegationCapability: attempt.delegationCapability,
-        modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
-          workspaceDir: params.setup.effectiveWorkspace,
-        }),
+        modelAuthMode: await resolveModelAuthModeAsync(
+          attempt.model.provider,
+          attempt.config,
+          attempt.authProfileStore,
+          {
+            workspaceDir: params.setup.effectiveWorkspace,
+          },
+        ),
         includeCoreTools: toolConstructionPlan.includeCoreTools,
         includeToolSearchControls: toolSearchControlsEnabledForRun,
         toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
@@ -346,6 +395,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         enableHeartbeatTool: attempt.enableHeartbeatTool,
         forceHeartbeatTool: attempt.forceHeartbeatTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
+        inheritedPublicationToolRef,
         cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
         cronCreatorToolAllowlistCaptureRef,
         authProfileStore: attempt.authProfileStore,
@@ -368,14 +418,24 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         undefined,
         undefined,
         {
-          assertCurrent: resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, abortSignal),
+          reader: getReplyOperationSessionReader(attempt.replyOperation),
+          assertCurrent: assertActive,
         },
       );
-      // The built-in harness retains its existing authoritative wrappers.
-      // Only plugin harnesses receive and require the projected host capability.
-      const boundTools = attempt.hostCapabilities
-        ? attempt.hostCapabilities.bindToolSurface(allTools)
-        : allTools;
+      // Built-in tools retain their own authority wrappers; both harness paths share readiness.
+      let boundTools = allTools;
+      if (attempt.hostCapabilities) {
+        boundTools = attempt.hostCapabilities.bindToolSurface(allTools);
+      } else if (workspaceReadiness) {
+        if (!assertActive) {
+          throw new Error("Workspace tools require active run authority");
+        }
+        boundTools = allTools.map((tool) =>
+          isWorkspaceTool(tool)
+            ? gateBoundTool(tool, assertActive, () => {}, workspaceReadiness)
+            : tool,
+        );
+      }
       params.markCoreToolStage("attempt:create-openclaw-coding-tools");
       constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
         toolMeta: (tool) => getPluginToolMeta(tool),
@@ -415,6 +475,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const toolsRaw = await constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
     return {
       toolHookContext: {
+        awaitSessionDiffBaseline,
+        watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,
         agentId: params.setup.sessionAgentId,
         config: attempt.config,
         cwd: params.setup.effectiveCwd,
@@ -468,6 +530,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       forceDirectMessageTool,
       requireExplicitMessageTarget,
       inheritedToolAllowlist,
+      inheritedPublicationToolRef,
       localModelLeanEnabled,
       localModelLeanPreserveToolNames,
       replaySafetyOptions,
@@ -485,7 +548,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   } catch (error) {
     try {
       await runOwnedAgentCleanup({
-        ...attempt,
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        oneShotCliRun: attempt.oneShotCliRun,
         step: "embedded-tool-preparation",
         cleanup: () => releaseTools("error"),
         log,

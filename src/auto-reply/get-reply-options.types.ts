@@ -3,6 +3,10 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type {
+  AsyncSessionSourceCheck,
+  SessionSourceCheck,
+} from "../config/sessions/session-source-authority.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
@@ -51,6 +55,14 @@ export type PreparedReplyTranscriptStart = {
   maxSeq: number | null;
 };
 
+/** Run-start notification after the runtime has prepared its transcript boundary. */
+export type PreparedAgentRunStart = {
+  runId: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  options?: ReplyDispatchRun;
+  transcriptStart: PreparedReplyTranscriptStart | null;
+};
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -86,7 +98,22 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
-  begin: () => (() => void) | void;
+  /** Source-owned suppression for origin-routed replies that bypass the dispatcher.
+   * A collected batch is suppressed only when all participating policies agree. */
+  shouldSuppressReply?: (payload: ReplyPayload) => boolean;
+  /** Called only after the origin transport confirms visible delivery. */
+  onReplyDelivered?: (payload: ReplyPayload) => void;
+  /** No settlement means a source retry or a separate source-owned delivery outcome. */
+  begin: () =>
+    | ((settlement?: {
+        visibleReplySent: boolean;
+        failed: boolean;
+        /** True only for a successfully completed execution, not cancellation. */
+        completed?: boolean;
+        /** Transport retained delivery without a callback to this source; clear activity UI. */
+        transportPending?: boolean;
+      }) => void)
+    | void;
 };
 
 /**
@@ -116,9 +143,9 @@ export type TurnAdoptionLifecycle = {
   /** Requested cadence for pre-adoption heartbeats. */
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
-  onAbandoned?: () => void;
+  onAbandoned?: () => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
-  onSettled?: () => void;
+  onSettled?: () => void | Promise<void>;
   /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
   /** Stable cancellation owner for collect-mode batches. */
@@ -170,14 +197,17 @@ export type GetReplyOptions = {
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
   /** Ephemeral channel owner check for a targeted Stop; never serialized as authority. */
-  isCommandTargetCurrent?: () => boolean;
+  isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */
   media?: MediaFact[];
+  /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
+  onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
   /**
+   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
    * completion ownership offered in options; all other legacy callback results are ignored.
    */
@@ -189,8 +219,19 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
-  /** Reports visible work sessions this agent run spawned, in acceptance order. */
-  onVisibleWorkSessions?: (sessions: readonly VisibleWorkSession[]) => void;
+  /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
+  onFollowupQueueDisposition?: (
+    disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
+  ) => void;
+  /**
+   * Reports fresh visible children before their first turn and accepted spawns at settlement.
+   * Creation reports include the key even when no public session URL is configured.
+   * Awaited before child dispatch; a child may be reported again at settlement.
+   */
+  onVisibleWorkSessions?: (
+    sessions: readonly VisibleWorkSession[],
+    creation?: { createdSessionKey: string },
+  ) => void | Promise<void>;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
@@ -198,7 +239,11 @@ export type GetReplyOptions = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Gateway-owned start-or-steer decision for this turn. */
-  messageInjectionDisposition?: "none" | "accepted" | "rejected";
+  messageInjectionDisposition?:
+    | "none"
+    | "accepted"
+    | "rejected"
+    | "collaborative-steering-disabled";
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -226,6 +271,10 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
+  forceRestartSafeTools?: boolean;
+  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
+  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -257,7 +306,7 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
-   * @deprecated Use onVerboseProgressVisibilityAsync; retained until the next Plugin SDK major.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */

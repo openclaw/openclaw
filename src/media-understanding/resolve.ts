@@ -3,8 +3,12 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
@@ -21,7 +25,6 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
 } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
-import { resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 export type ResolvedMediaModelEntry = {
@@ -96,23 +99,21 @@ type MediaEntryRunParams = {
 
 function resolveMaxChars(params: MediaEntryRunParams): number | undefined {
   const { capability, entry, cfg } = params;
-  const configured =
-    entry.maxChars ?? params.config?.maxChars ?? cfg.tools?.media?.[capability]?.maxChars;
-  if (typeof configured === "number") {
-    return configured;
-  }
-  return DEFAULT_MAX_CHARS_BY_CAPABILITY[capability];
+  return (
+    entry.maxChars ??
+    params.config?.maxChars ??
+    cfg.tools?.media?.[capability]?.maxChars ??
+    DEFAULT_MAX_CHARS_BY_CAPABILITY[capability]
+  );
 }
 
 export function resolveMaxBytes(params: MediaEntryRunParams): number {
-  const configured =
+  return (
     params.entry.maxBytes ??
     params.config?.maxBytes ??
-    params.cfg.tools?.media?.[params.capability]?.maxBytes;
-  if (typeof configured === "number") {
-    return configured;
-  }
-  return DEFAULT_MAX_BYTES[params.capability];
+    params.cfg.tools?.media?.[params.capability]?.maxBytes ??
+    DEFAULT_MAX_BYTES[params.capability]
+  );
 }
 
 export function resolveEntryRunOptions(params: MediaEntryRunParams): {
@@ -153,12 +154,36 @@ export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;
 }): "allow" | "deny" {
-  return resolveMediaUnderstandingScope({
-    scope: params.scope,
-    sessionKey: params.ctx.SessionKey,
-    channel: params.ctx.Surface ?? params.ctx.Provider,
-    chatType: params.ctx.ChatType,
-  });
+  const scope = params.scope;
+  if (!scope) {
+    return "allow";
+  }
+
+  const channel = normalizeOptionalLowercaseString(params.ctx.Surface ?? params.ctx.Provider);
+  const chatType = normalizeChatType(params.ctx.ChatType);
+  const sessionKey = normalizeOptionalLowercaseString(params.ctx.SessionKey) ?? "";
+
+  for (const rule of scope.rules ?? []) {
+    // Rules are first-match-wins so operators can place specific denials before
+    // broader default allow rules.
+    const match = rule.match ?? {};
+    const matchChannel = normalizeOptionalLowercaseString(match.channel);
+    const matchChatType = normalizeChatType(match.chatType);
+    const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+
+    if (matchChannel && matchChannel !== channel) {
+      continue;
+    }
+    if (matchChatType && matchChatType !== chatType) {
+      continue;
+    }
+    if (matchPrefix && !sessionKey.startsWith(matchPrefix)) {
+      continue;
+    }
+    return rule.action;
+  }
+
+  return scope.default ?? "allow";
 }
 
 export function resolveModelEntries(params: {
@@ -187,7 +212,7 @@ export function resolveModelEntries(params: {
       entries.push({ entry, secretOwnerId: runtimeMediaModelSecretOwnerId(index) });
     }
   });
-  const preferred = config?.preferredModel?.trim();
+  const preferred = config?.preferredModel;
   if (preferred) {
     entries.sort(
       (left, right) =>
@@ -213,9 +238,5 @@ function preferredMediaModelRank(entry: MediaUnderstandingModelConfig, preferred
 }
 
 export function resolveConcurrency(cfg: OpenClawConfig): number {
-  const configured = cfg.tools?.media?.concurrency;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured);
-  }
-  return DEFAULT_MEDIA_CONCURRENCY;
+  return cfg.tools?.media?.concurrency ?? DEFAULT_MEDIA_CONCURRENCY;
 }

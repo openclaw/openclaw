@@ -213,60 +213,40 @@ export async function finalizeNodeAdoptedSession(params: {
 }): Promise<void> {
   const changedError = () =>
     new CatalogParamsError("Codex OpenClaw session changed before it could be bound. Retry.");
-  let finalized: CatalogSessionEntry | null;
-  try {
-    finalized = await params.api.runtime.agent.session.patchSessionEntry({
-      sessionKey: params.adopted.key,
-      readConsistency: "latest",
-      preserveActivity: true,
-      update: (entry) => {
-        const current = readNodeSessionMarker(entry);
-        if (
-          entry.sessionId?.trim() !== params.adopted.sessionId ||
-          entry.initializationPending === true ||
-          entry.agentHarnessId !== "codex" ||
-          entry.modelSelectionLocked !== true ||
-          !current ||
-          current.sourceHostId !== params.marker.sourceHostId ||
-          current.sourceThreadId !== params.marker.sourceThreadId ||
-          current.sourceHomeId !== params.marker.sourceHomeId ||
-          current.nodeId !== params.marker.nodeId
-        ) {
-          throw changedError();
-        }
-        if (current.initializing !== true) {
-          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
-        }
-        const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
-        return {
-          archivedAt: undefined,
-          archivedBy: undefined,
-          archiveReason: undefined,
-          pluginExtensions: {
-            ...entry.pluginExtensions,
-            codex: { ...codex, sessionCatalog: params.marker },
-          },
-        };
-      },
-    });
-  } catch (error) {
-    const currentEntry = params.api.runtime.agent.session.getSessionEntry({
-      sessionKey: params.adopted.key,
-      readConsistency: "latest",
-    });
-    const current = currentEntry ? readNodeSessionMarker(currentEntry) : undefined;
-    if (
-      currentEntry?.sessionId?.trim() === params.adopted.sessionId &&
-      current?.initializing !== true &&
-      current?.sourceHostId === params.marker.sourceHostId &&
-      current.sourceThreadId === params.marker.sourceThreadId &&
-      current.sourceHomeId === params.marker.sourceHomeId &&
-      current.nodeId === params.marker.nodeId
-    ) {
-      return;
-    }
-    throw error;
-  }
+  const finalized = await params.api.runtime.agent.session.prepareSessionEntryPatch({
+    sessionKey: params.adopted.key,
+    readConsistency: "latest",
+    preserveActivity: true,
+    prepare: (entry) => {
+      const current = readNodeSessionMarker(entry);
+      if (
+        entry.sessionId?.trim() !== params.adopted.sessionId ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true ||
+        !current ||
+        current.sourceHostId !== params.marker.sourceHostId ||
+        current.sourceThreadId !== params.marker.sourceThreadId ||
+        current.sourceHomeId !== params.marker.sourceHomeId ||
+        current.nodeId !== params.marker.nodeId
+      ) {
+        throw changedError();
+      }
+      if (current.initializing !== true) {
+        return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
+      }
+      const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
+      return {
+        archivedAt: undefined,
+        archivedBy: undefined,
+        archiveReason: undefined,
+        pluginExtensions: {
+          ...entry.pluginExtensions,
+          codex: { ...codex, sessionCatalog: params.marker },
+        },
+      };
+    },
+  });
   if (!finalized) {
     throw changedError();
   }

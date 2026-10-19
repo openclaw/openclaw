@@ -1,4 +1,5 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import type { SessionState } from "../sessions/session-capability.ts";
 import {
   nextDraftRevision,
   readDraftRevisionState,
@@ -14,11 +15,7 @@ import {
   notifyStoredChatOutboxChanges,
   type ChatComposerScope,
 } from "./outbox-store.ts";
-type StoredComposerRetirementTarget = {
-  key: string;
-  agentId?: string;
-  retireBeforeRevision: number;
-};
+type StoredComposerRetirementTarget = SessionState["deletedSessions"][number];
 
 type StoredComposerRetirement = {
   scope: StoredChatOutboxScope;
@@ -59,7 +56,6 @@ export function retireStoredComposerDrafts(
   let visibleChanged = false;
   try {
     const store = readStoredOutboxStore(storage, storageTarget);
-    let changed = false;
     for (const target of targets) {
       if (!target.key.trim()) {
         return { gatewayOwner: storageTarget.gatewayOwner, retirements, storageFailed: true };
@@ -88,7 +84,6 @@ export function retireStoredComposerDrafts(
           storeSessionKey,
           revision: minimumRevision,
         });
-        changed = true;
       }
       retirements.push({
         scope,
@@ -96,7 +91,7 @@ export function retireStoredComposerDrafts(
         retireBeforeRevision: target.retireBeforeRevision,
       });
     }
-    if (!changed) {
+    if (written.length === 0) {
       return { gatewayOwner: storageTarget.gatewayOwner, retirements, storageFailed: false };
     }
     writeStoredOutboxStore(storage, storageTarget, store);

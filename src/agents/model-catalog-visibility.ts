@@ -10,7 +10,11 @@ import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
-import { compareModelCatalogEntries, orderModelCatalogForPicker } from "./model-catalog-order.js";
+import {
+  compareModelCatalogEntries,
+  createModelPickerRecommendationRank,
+  orderModelCatalogForPicker,
+} from "./model-catalog-order.js";
 import type {
   ModelCatalogRoutePolicy,
   ModelCatalogRouteProjection,
@@ -57,10 +61,6 @@ export function resolveLogicalModelCatalogEntryState(params: {
     routeProjection,
     ...(params.evaluation.runtimeAuth ? { nativeRuntime: params.evaluation.runtimeAuth.id } : {}),
   };
-}
-
-function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.toSorted(compareModelCatalogEntries);
 }
 
 type LogicalModelCatalogParams = {
@@ -135,7 +135,9 @@ export async function prepareLogicalVisibleModelCatalog(
     (entry) => retainedKeys.has(keyOf(entry)) || keyOf(entry) === retainedKey,
   );
   const wildcard = policy.allowAny || policy.hasProviderWildcards;
-  const configuredCatalog = wildcard ? sortModelCatalogEntries([...policy.configuredCatalog]) : [];
+  const configuredCatalog = wildcard
+    ? policy.configuredCatalog.toSorted(compareModelCatalogEntries)
+    : [];
   const candidates =
     params.view === "all"
       ? params.catalog
@@ -200,12 +202,7 @@ export async function prepareLogicalVisibleModelCatalog(
         previousCatalog = undefined;
         return catalog;
       }
-      previousStates = new Map(
-        [...states].map(([key, state]) => [
-          key,
-          { ...state, routeProjection: { ...state.routeProjection } },
-        ]),
-      );
+      previousStates = states;
       previousCatalog = [...catalog];
       return catalog;
     };
@@ -238,6 +235,7 @@ export async function prepareLogicalVisibleModelCatalog(
       return orderModelCatalogForPicker(
         dedupeByKey(projected, publicationKeyOf),
         params.selectedModel ?? params.retainedModel,
+        createModelPickerRecommendationRank(params.cfg),
       );
     };
     if (params.view === "all") {
@@ -245,28 +243,26 @@ export async function prepareLogicalVisibleModelCatalog(
     }
     // Authored refs stay listed, unavailable, until their login or key returns.
     const defaultVisibleCatalog = wildcard
-      ? sortModelCatalogEntries(
-          dedupeModelCatalogEntries([
-            ...configuredCatalog,
-            ...params.catalog.filter(
-              (entry) =>
-                configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
-            ),
-          ]),
-        )
+      ? dedupeModelCatalogEntries([
+          ...configuredCatalog,
+          ...params.catalog.filter(
+            (entry) =>
+              configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
+          ),
+        ]).toSorted(compareModelCatalogEntries)
       : [];
-    const visible = sortModelCatalogEntries(
-      dedupeModelCatalogEntries(
-        policy.visibleCatalog({
-          catalog: params.catalog,
-          defaultVisibleCatalog,
-          view: params.view,
-        }),
-      ),
-    ).filter(
-      (entry) =>
-        catalogKeys.has(publicationKeyOf(entry)) || configuredKeys.has(publicationKeyOf(entry)),
-    );
+    const visible = dedupeModelCatalogEntries(
+      policy.visibleCatalog({
+        catalog: params.catalog,
+        defaultVisibleCatalog,
+        view: params.view,
+      }),
+    )
+      .toSorted(compareModelCatalogEntries)
+      .filter(
+        (entry) =>
+          catalogKeys.has(publicationKeyOf(entry)) || configuredKeys.has(publicationKeyOf(entry)),
+      );
     const preferredKeys = new Set([...visible, ...retained].map(publicationKeyOf));
     const preferred: ModelCatalogEntry[] = [];
     const routeBacked = new Set<ModelCatalogEntry>();

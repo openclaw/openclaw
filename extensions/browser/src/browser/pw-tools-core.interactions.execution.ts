@@ -1,10 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page } from "playwright-core";
-import {
-  ACT_MAX_BATCH_ACTIONS,
-  ACT_MAX_BATCH_DEPTH,
-  BROWSER_ACTION_NAVIGATION_GRACE_MS,
-} from "./act-policy.js";
+import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
@@ -47,32 +43,25 @@ import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-
 
 const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
 
+type ActionExecutionOptions = GuardedInteractionOptions & {
+  evaluateEnabled?: boolean;
+};
+
 async function executeSingleAction(
   action: BrowserActRequest,
-  cdpUrl: string,
-  targetId?: string,
-  evaluateEnabled?: boolean,
-  navigationPolicy: BrowserNavigationPolicyOptions = {},
-  depth = 0,
-  signal?: AbortSignal,
-  assertCurrent?: GuardedInteractionOptions["assertCurrent"],
+  opts: ActionExecutionOptions,
 ): Promise<unknown> {
-  if (depth > ACT_MAX_BATCH_DEPTH) {
-    throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
-  }
-  const effectiveTargetId = action.targetId ?? targetId;
+  const effectiveTargetId = action.targetId ?? opts.targetId;
   const interaction = {
-    cdpUrl,
+    cdpUrl: opts.cdpUrl,
     targetId: effectiveTargetId,
-    ...navigationPolicy,
-    signal,
-    assertCurrent,
+    ...interactionNavigationPolicy(opts),
+    signal: opts.signal,
+    assertCurrent: opts.assertCurrent,
   };
-  if (assertCurrent) {
-    const assertion = assertInteractionCurrent(interaction);
-    if (assertion) {
-      await assertion;
-    }
+  const assertion = assertInteractionCurrent(interaction);
+  if (assertion) {
+    await assertion;
   }
   switch (action.kind) {
     case "click":
@@ -80,9 +69,7 @@ async function executeSingleAction(
         ...action,
         ...interaction,
         button: action.button as "left" | "right" | "middle" | undefined,
-        modifiers: action.modifiers as Array<
-          "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
-        >,
+        modifiers: action.modifiers as Parameters<typeof clickViaPlaywright>[0]["modifiers"],
       });
     case "clickCoords":
       return await clickCoordsViaPlaywright({
@@ -108,35 +95,34 @@ async function executeSingleAction(
       return await fillFormViaPlaywright({ ...action, ...interaction });
     case "resize":
       return await resizeViewportViaPlaywright({
-        cdpUrl,
+        cdpUrl: opts.cdpUrl,
         targetId: effectiveTargetId,
         width: action.width,
         height: action.height,
-        signal,
-        assertCurrent,
+        signal: opts.signal,
+        assertCurrent: opts.assertCurrent,
       });
     case "wait":
-      if (action.fn && !evaluateEnabled) {
+      if (action.fn && !opts.evaluateEnabled) {
         throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
       }
       return await waitForViaPlaywright({ ...action, ...interaction });
     case "evaluate":
-      if (!evaluateEnabled) {
+      if (!opts.evaluateEnabled) {
         throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
       }
       return await evaluateViaPlaywright({ ...action, ...interaction });
     case "close":
       return await closePageViaPlaywright({
-        cdpUrl,
+        cdpUrl: opts.cdpUrl,
         targetId: effectiveTargetId,
-        assertCurrent,
+        assertCurrent: opts.assertCurrent,
       });
     case "batch": {
       const batch = await batchViaPlaywright({
         ...action,
         ...interaction,
-        evaluateEnabled,
-        depth: depth + 1,
+        evaluateEnabled: opts.evaluateEnabled,
       });
       // A nested batch is one parent action; surface its first failure so each
       // level applies its own stopOnError without discarding the child outcome.
@@ -222,18 +208,21 @@ export async function executeActViaPlaywright(
     page,
     parentSignal: opts.signal,
   });
+  const execution = {
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    ...navigationPolicy,
+    evaluateEnabled: opts.evaluateEnabled,
+    signal: dialogAbort.signal,
+    assertCurrent: opts.assertCurrent,
+  };
   try {
     if (opts.action.kind === "batch") {
       const batch = await batchViaPlaywright({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
+        ...execution,
         page,
-        ...navigationPolicy,
         actions: opts.action.actions,
         stopOnError: opts.action.stopOnError,
-        evaluateEnabled: opts.evaluateEnabled,
-        signal: dialogAbort.signal,
-        assertCurrent: opts.assertCurrent,
       });
       const newDownloads = await drainDownloads();
       return await withOperationTarget({
@@ -242,16 +231,7 @@ export async function executeActViaPlaywright(
         ...(newDownloads ? { downloads: newDownloads } : {}),
       });
     }
-    const result = await executeSingleAction(
-      opts.action,
-      opts.cdpUrl,
-      opts.targetId,
-      opts.evaluateEnabled,
-      navigationPolicy,
-      0,
-      dialogAbort.signal,
-      opts.assertCurrent,
-    );
+    const result = await executeSingleAction(opts.action, execution);
     const newDownloads = await drainDownloads();
     return await withOperationTarget({
       ...(opts.action.kind === "evaluate" ? { result } : {}),
@@ -294,22 +274,13 @@ export async function executeActViaPlaywright(
 }
 
 async function batchViaPlaywright(
-  opts: GuardedInteractionOptions & {
+  opts: ActionExecutionOptions & {
     actions: BrowserActRequest[];
     stopOnError?: boolean;
-    evaluateEnabled?: boolean;
-    depth?: number;
     page?: Page;
   },
 ): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
-  const depth = opts.depth ?? 0;
-  if (depth > ACT_MAX_BATCH_DEPTH) {
-    throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
-  }
-  if (opts.actions.length > ACT_MAX_BATCH_ACTIONS) {
-    throw new Error(`Batch exceeds maximum of ${ACT_MAX_BATCH_ACTIONS} actions`);
-  }
   const page = opts.page ?? (await getPageForTargetId(opts));
   const results: BrowserBatchActionResult[] = [];
   const finishAborted = (
@@ -321,11 +292,10 @@ async function batchViaPlaywright(
     skipped === 0
       ? { results }
       : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
-  let mainFrameNavigations = 0;
-  let navigationsAtLastDispatch = 0;
+  let navigated = false;
   const onFrameNavigated = (frame: Frame) => {
     if (frame === page.mainFrame()) {
-      mainFrameNavigations += 1;
+      navigated = true;
     }
   };
   const finishNavigation = (afterAction: number, skipped: number) => {
@@ -346,25 +316,15 @@ async function batchViaPlaywright(
       if (opts.signal?.aborted) {
         throw opts.signal.reason ?? new Error("aborted");
       }
-      if (mainFrameNavigations > navigationsAtLastDispatch) {
+      if (navigated) {
         return finishNavigation(index, opts.actions.length - index);
       }
       if (page.isClosed()) {
         return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
-      navigationsAtLastDispatch = mainFrameNavigations;
       let result: BrowserBatchActionResult;
       try {
-        await executeSingleAction(
-          action,
-          opts.cdpUrl,
-          opts.targetId,
-          opts.evaluateEnabled,
-          navigationPolicy,
-          depth,
-          opts.signal,
-          opts.assertCurrent,
-        );
+        await executeSingleAction(action, { ...opts, ...navigationPolicy });
         result = { ok: true };
       } catch (err) {
         if (
@@ -382,7 +342,7 @@ async function batchViaPlaywright(
       if (page.isClosed()) {
         return finishAborted("closed", index + 1, page.url(), opts.actions.length - index - 1);
       }
-      if (mainFrameNavigations > navigationsAtLastDispatch) {
+      if (navigated) {
         return finishNavigation(index + 1, opts.actions.length - index - 1);
       }
       if (!result.ok && opts.stopOnError !== false) {

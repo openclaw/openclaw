@@ -46,22 +46,12 @@ import {
   pluginCacheStatSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import { groupPluginRecords } from "./record-groups.js";
+import { groupPluginRecords, PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
   record: PluginManifestRecord;
-};
-
-// Canonicalize identical physical plugin roots with the most explicit source.
-// This only applies when multiple candidates resolve to the same on-disk plugin.
-const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  workspace: 1,
-  global: 2,
-  bundled: 3,
 };
 
 function rejectCaseFoldedIdCollisions(
@@ -333,6 +323,9 @@ export function buildPluginManifestRegistry(
                 manifest: {
                   id: candidate.idHint,
                   configSchema: { type: "object", additionalProperties: false },
+                  // A standalone file has nowhere to declare activation; listing it in
+                  // plugins.load.paths is the startup opt-in. Enablement policy still applies.
+                  activation: { onStartup: true },
                 },
                 manifestPath: candidate.source,
               }
@@ -481,7 +474,10 @@ export function buildPluginManifestRegistry(
         }
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        if (
+          PLUGIN_ORIGIN_PRIORITIES[candidate.origin]?.explicit <
+          PLUGIN_ORIGIN_PRIORITIES[existing.candidate.origin]?.explicit
+        ) {
           seenIds.set(effectivePluginId, { candidate, record });
         }
         continue;

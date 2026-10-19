@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DOMParser } from "linkedom";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
@@ -96,20 +96,6 @@ function resolveScheduledTaskRenderEnv(
   return merged;
 }
 
-function resolveScheduledTaskScriptEnvironment(
-  taskEnv: GatewayServiceEnv,
-  environment: GatewayServiceEnv | undefined,
-): GatewayServiceEnv | undefined {
-  const scriptEnv = environment ? { ...environment } : {};
-  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
-    const value = taskEnv[key]?.trim();
-    if (value) {
-      scriptEnv[key] = value;
-    }
-  }
-  return Object.keys(scriptEnv).length > 0 ? scriptEnv : undefined;
-}
-
 const SCHEDULED_TASK_ACTIVATION_KEYS = [
   "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",
   "OPENCLAW_TASK_SCRIPT_NAME",
@@ -162,11 +148,18 @@ async function writeScheduledTaskScript(
     env: taskEnv,
     description,
   });
+  const scriptEnv = environment ? { ...environment } : {};
+  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
+    const value = taskEnv[key]?.trim();
+    if (value) {
+      scriptEnv[key] = value;
+    }
+  }
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
     workingDirectory,
-    environment: resolveScheduledTaskScriptEnvironment(taskEnv, environment),
+    environment: Object.keys(scriptEnv).length > 0 ? scriptEnv : undefined,
   });
   const files = [
     { path: scriptPath, contents: encodeWindowsLauncherScript({ format: "cmd", content: script }) },
@@ -264,6 +257,10 @@ async function activateScheduledTask(
       throw new Error("Scheduled Task registration change did not confirm completion.");
     }
     updating = change.code === 0;
+    if (updating) {
+      // This changes the registration before XML publication can fail.
+      await params.registration?.recordRegistration();
+    }
   }
 
   // Re-apply the full XML so existing tasks inherit both false battery flags (#59299).
@@ -416,10 +413,18 @@ export async function installScheduledTask(
       });
     }
     if (!args.definitionTransaction) {
-      restoreTask = await backupScheduledTaskDefinition(
-        activationEnv,
-        resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
+      const scriptPath = resolveTaskScriptPath(
+        resolveScheduledTaskRenderEnv(args.env, args.environment),
       );
+      restoreTask = await backupScheduledTaskDefinition(activationEnv, scriptPath);
+      if (restoreTask.registered) {
+        writeFormattedLines(args.stdout, [
+          {
+            label: "Recovery backups",
+            value: `${scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+          },
+        ]);
+      }
     }
     staged = await writeScheduledTaskScript(args, async (files) => {
       recovery = files;
@@ -597,11 +602,7 @@ export async function uninstallScheduledTask({
     `${scriptPath}.task.xml.bak`,
     `${launcherPath}.bak`,
   ])) {
-    await fs.unlink(backupPath).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-    });
+    await fs.unlink(backupPath).catch(ignoreMissingPath);
   }
   try {
     await fs.unlink(scriptPath);

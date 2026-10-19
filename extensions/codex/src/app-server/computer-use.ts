@@ -1,15 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
-import {
-  isCodexAppServerConnectionClosedError,
-  isCodexAppServerIndeterminateRequestCancellationError,
-  isCodexAppServerIndeterminateTransportError,
-  type CodexAppServerClient,
-} from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
+import { reconcileCodexComputerUseStartArtifacts } from "./computer-use-artifacts.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import {
   resolveBundledComputerUseMarketplacePath,
@@ -36,16 +31,16 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   type CodexComputerUseConfig,
+  type CodexPluginConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
 import { resolveMacOSDesktopCodexBundledMarketplaceCandidates } from "./desktop-app-paths.js";
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
-import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { findCodexMcpServerStatus } from "./mcp-server-status.js";
 import type {
   CodexAppServerRequestResult,
   CodexConfigReadResponse,
   CodexListMcpServerStatusResponse,
-  CodexMcpServerStatus,
   CodexPluginDetail,
   CodexPluginListResponse,
   CodexPluginReadResponse,
@@ -54,14 +49,11 @@ import type {
 } from "./protocol.js";
 import { requestCodexAppServerClientJson } from "./request.js";
 import {
-  assertCodexAppServerClientStartSelectionCurrent,
   getLeasedSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGeneration,
   readCodexAppServerClientProcessIdentity,
   releaseLeasedSharedCodexAppServerClient,
-  resolveCodexNativeConfigFenceKey,
-  waitForCodexAppServerClientDesktopGenerationDrain,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
 } from "./shared-client.js";
 
@@ -78,7 +70,7 @@ class CodexComputerUseSetupError extends Error {
 }
 
 export type CodexComputerUseSetupParams = {
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   config?: Parameters<typeof requestCodexAppServerClientJson>[0]["config"];
   agentDir?: string;
   overrides?: Partial<CodexComputerUseConfig>;
@@ -91,7 +83,6 @@ export type CodexComputerUseSetupParams = {
   forceEnable?: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
-  releaseNativeConfigFence?: () => void;
 };
 
 type CodexComputerUseInspectionParams = Omit<
@@ -106,7 +97,6 @@ type CodexComputerUseInspectionParams = Omit<
 };
 
 type ExplicitManagedComputerUseInstallContext = {
-  client: CodexAppServerClient;
   agentDir: string;
   codexHome: string;
   command: string;
@@ -254,12 +244,11 @@ async function inspectCodexComputerUse(
       if (!lease.client) {
         return await inspectCodexComputerUseWithoutFence(params);
       }
-      return await withLeasedCodexAppServerClientStartSelectionRetry({
+      return await withCodexAppServerClientRequestScope({
         lease,
         options: { ...clientOptions, timeoutMs: remainingTimeoutMs() },
         signal: params.signal,
         run: async (readClient, requestOptions) => {
-          const { assertCurrent } = requestOptions();
           return await inspectCodexComputerUseWithoutFence({
             ...params,
             client: readClient,
@@ -274,7 +263,7 @@ async function inspectCodexComputerUse(
                   ? {
                       timeoutMs: options?.timeoutMs ?? operationTimeoutMs,
                       signal: options?.signal,
-                      assertCurrent,
+                      assertCurrent: undefined,
                     }
                   : requestOptions();
               return await requestCodexAppServerClientJson<T>({
@@ -298,59 +287,13 @@ async function inspectCodexComputerUse(
       client && !resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall
         ? await resolveExplicitManagedComputerUseInstallContext({ ...params, client })
         : undefined;
-    if (explicitManagedInstall) {
-      await waitForCodexAppServerClientDesktopGenerationDrain({
-        client: explicitManagedInstall.client,
-        timeoutMs: remainingTimeoutMs(),
-        ...(params.signal ? { signal: params.signal } : {}),
-      });
-      assertCodexAppServerClientStartSelectionCurrent({ client: explicitManagedInstall.client });
-    }
     const inspectionParams: CodexComputerUseInspectionParams = {
       ...params,
       ...(client ? { client } : {}),
       timeoutMs: remainingTimeoutMs(),
       ...(explicitManagedInstall ? { explicitManagedInstall } : {}),
     };
-    const fenceKey = resolveCodexNativeConfigFenceKey({
-      client,
-      startOptions: resolvedRuntime.start,
-      agentDir: params.agentDir,
-      config: params.config,
-    });
-    if (!fenceKey) {
-      return await inspectCodexComputerUseWithoutFence(inspectionParams);
-    }
-    const release = await acquireCodexNativeConfigFence(fenceKey, {
-      signal: params.signal,
-      timeoutMs: remainingTimeoutMs(),
-      timeoutMessage: "Codex Computer Use install timed out waiting for native config",
-      abortMessage: "Codex Computer Use install aborted waiting for native config",
-    });
-    let releaseFenceOnReturn = true;
-    try {
-      return await inspectCodexComputerUseWithoutFence({
-        ...inspectionParams,
-        releaseNativeConfigFence: release,
-      });
-    } catch (error) {
-      if (
-        client &&
-        (isCodexAppServerIndeterminateRequestCancellationError(error) ||
-          isCodexAppServerIndeterminateTransportError(error) ||
-          isCodexAppServerConnectionClosedError(error))
-      ) {
-        // Codex may still commit a config mutation after local cancellation.
-        // Transfer fence ownership to physical process exit before surfacing it.
-        releaseFenceOnReturn = false;
-        await client.closeAndRunAfterExit(release, "Computer Use config mutation");
-      }
-      throw error;
-    } finally {
-      if (releaseFenceOnReturn) {
-        release();
-      }
-    }
+    return await inspectCodexComputerUseWithoutFence(inspectionParams);
   } finally {
     if (lease.client) {
       releaseLeasedSharedCodexAppServerClient(lease.client);
@@ -441,16 +384,12 @@ async function inspectCodexComputerUseWithoutFence(
     params.agentDir &&
     params.client
   ) {
-    const client = params.client;
     await ensureCodexComputerUseSharedPluginCache({
       codexHome: managedCodexHome,
       ownershipRoot: params.agentDir,
       bundledMarketplacePath: managedMarketplacePath,
       config: computerUseConfig,
-      assertCurrent: () => {
-        params.assertCurrent?.();
-        assertCodexAppServerClientStartSelectionCurrent({ client });
-      },
+      assertCurrent: params.assertCurrent,
     });
   }
 
@@ -498,12 +437,26 @@ async function inspectCodexComputerUseWithoutFence(
     plugin: CodexPluginDetail,
     installPlugin: boolean,
   ): Promise<CodexComputerUseStatus> {
-    const { client, signal, runLiveTest, releaseNativeConfigFence } = params;
-    let server = await readMcpServerStatus(request, computerUseConfig.mcpServerName);
+    const { client, signal, runLiveTest } = params;
+    const readServer = () =>
+      findCodexMcpServerStatus(
+        (cursor) =>
+          request<CodexListMcpServerStatusResponse>("mcpServerStatus/list", {
+            cursor,
+            limit: 100,
+            detail: "toolsAndAuthOnly",
+          } satisfies CodexRequestObject),
+        computerUseConfig.mcpServerName,
+        {
+          repeatedCursor: "Codex Computer Use MCP server status repeated a cursor",
+          pageLimit: "Codex Computer Use MCP server status exceeded the page limit",
+        },
+      );
+    let server = await readServer();
     let tools = Object.keys(server?.tools ?? {}).toSorted();
     if ((!server || tools.length === 0) && installPlugin) {
       await request("config/mcpServer/reload", undefined);
-      server = await readMcpServerStatus(request, computerUseConfig.mcpServerName);
+      server = await readServer();
       tools = Object.keys(server?.tools ?? {}).toSorted();
     }
     if (!server || tools.length === 0) {
@@ -531,7 +484,6 @@ async function inspectCodexComputerUseWithoutFence(
       return status;
     }
     // The readiness thread reacquires this fence before loading native config.
-    releaseNativeConfigFence?.();
     const { liveTest, repair } = await runCodexComputerUseLiveTest({
       request,
       client,
@@ -551,7 +503,7 @@ async function inspectCodexComputerUseWithoutFence(
         ...(repair?.warnings ?? []),
         ...(compatibilityStartupAllowed
           ? [
-              "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+              "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to block startup after a failed live test.",
             ]
           : []),
       ],
@@ -585,10 +537,7 @@ async function prepareExplicitManagedComputerUseInstall(
     ownsIsolatedCodexHome: true,
     desktopGeneration: context.desktopGeneration,
     forceCacheRefresh: true,
-    assertCurrent: () => {
-      params.assertCurrent?.();
-      assertCodexAppServerClientStartSelectionCurrent({ client: context.client });
-    },
+    assertCurrent: params.assertCurrent,
   });
 }
 
@@ -623,7 +572,6 @@ async function resolveExplicitManagedComputerUseInstallContext(
     return undefined;
   }
   return {
-    client: params.client,
     agentDir: params.agentDir,
     codexHome,
     command,
@@ -847,26 +795,6 @@ async function readComputerUsePlugin(
     pluginRequestParams(marketplace, pluginName),
   );
   return response.plugin;
-}
-
-async function readMcpServerStatus(
-  request: CodexComputerUseRequest,
-  serverName: string,
-): Promise<CodexMcpServerStatus | undefined> {
-  let cursor: string | null | undefined;
-  do {
-    const response = await request<CodexListMcpServerStatusResponse>("mcpServerStatus/list", {
-      cursor,
-      limit: 100,
-      detail: "toolsAndAuthOnly",
-    } satisfies CodexRequestObject);
-    const found = response.data.find((server) => server.name === serverName);
-    if (found) {
-      return found;
-    }
-    cursor = response.nextCursor;
-  } while (cursor);
-  return undefined;
 }
 
 function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {

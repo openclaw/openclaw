@@ -1,6 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  registerSessionBindingAdapter,
   resolveThreadBindingFarewellText,
   resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
@@ -12,10 +11,11 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
-  asOptionalObjectRecord,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { registerSessionBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bindings-runtime";
+import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
 import {
@@ -36,7 +36,7 @@ import {
   drainThreadBindingAccountOperations,
   drainThreadBindingMutations,
   shouldPersistAnyBindingState,
-  snapshotThreadBindingJson,
+  snapshotThreadBindingMetadata,
 } from "./thread-bindings.persistence.js";
 import { createThreadBindingSessionAdapter } from "./thread-bindings.session-adapter.js";
 import {
@@ -194,9 +194,8 @@ function createLoadedThreadBindingManager(
       }
       if (!rest) {
         try {
-          const cfg = resolveCurrentCfg();
           rest = createDiscordRestClient({
-            cfg,
+            cfg: resolveCurrentCfg(),
             accountId,
             token: resolveCurrentToken(),
           }).rest;
@@ -301,18 +300,21 @@ function createLoadedThreadBindingManager(
     getMaxAgeMs: () => maxAgeMs,
     getByThreadId: (threadId) => getBinding(threadId)?.record,
     getBySessionKey: (targetSessionKey) => manager.listBySessionKey(targetSessionKey)[0],
-    listBySessionKey: (targetSessionKey) => {
-      const ids = resolveBindingIdsForSession({
+    listBySessionKey: (targetSessionKey) =>
+      resolveBindingIdsForSession({
         targetSessionKey,
         accountId,
-      });
-      return ids
+      })
         .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
-        .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
-    },
+        .filter((entry): entry is ThreadBindingRecord => Boolean(entry)),
     listBindings: () =>
       [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
     touchThreadSync: (input) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "ThreadBindingManager.touchThreadSync",
+        replacement: "ThreadBindingManager.touchThread",
+      });
       assertManagerCurrent();
       if (stopping) {
         throw new Error("Discord thread binding manager is stopping");
@@ -355,9 +357,7 @@ function createLoadedThreadBindingManager(
     bindTarget: async (input) => {
       const bindParams = {
         ...input,
-        metadata: asOptionalObjectRecord(
-          snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
-        ),
+        metadata: snapshotThreadBindingMetadata(input),
       };
       return runOwnedMutation(async () => {
         const assertCurrent = bindParams.assertCurrent;
@@ -604,15 +604,15 @@ function createLoadedThreadBindingManager(
     defaults: { idleTimeoutMs, maxAgeMs },
     resolveCurrentCfg,
     resolveCurrentToken,
+    assertCurrent: assertManagerCurrent,
   });
 
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;
 }
 
 export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {
-  const normalized = normalizeAccountId(accountId);
-  return MANAGERS_BY_ACCOUNT_ID.get(normalized) ?? null;
+  return MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId)) ?? null;
 }

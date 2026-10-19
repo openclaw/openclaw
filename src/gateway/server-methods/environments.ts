@@ -31,13 +31,17 @@ import {
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
-import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import { formatForLog } from "../ws-log.js";
 import { respondDesktopLaunch, respondDesktopObserve } from "./environments.desktop.js";
+import { listWorkerProfilesWithMachines } from "./environments.profiles.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
+import {
+  adoptSuggestedWorkerProfile,
+  listSuggestedWorkerProfile,
+} from "./environments.suggested-profile.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
@@ -107,6 +111,9 @@ function summarizeNodeEnvironment(
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.sessionHost === true,
+    ...(node.connected && node.workerHost?.deviceFolders === true
+      ? { workerHost: { deviceFolders: true as const } }
+      : {}),
     ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),
     ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
     ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
@@ -188,61 +195,6 @@ function readWorkerInventory(context: GatewayRequestContext, includePreparedDeta
     throw new Error("environment inventory unavailable");
   }
 }
-export function listWorkerProfiles(context: GatewayRequestContext) {
-  if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
-    return [];
-  }
-  const profiles = context.getRuntimeConfig().cloudWorkers?.profiles ?? {};
-  return Object.entries(profiles)
-    .flatMap(([id, profile]) => {
-      const providerId = typeof profile.provider === "string" ? profile.provider.trim() : "";
-      return id.trim() && providerId
-        ? [
-            {
-              id: id.trim(),
-              providerId,
-              ...workerInferenceMetadata({ providerId, profileSnapshot: profile }),
-            },
-          ]
-        : [];
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
-}
-async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
-  const summaries = listWorkerProfiles(context);
-  return await Promise.all(
-    summaries.map(async (summary) => {
-      const executionModes = (["worker-turn", "remote-exec"] as const).filter(
-        (mode) =>
-          context.workerEnvironmentService?.supportsExecutionMode(summary.id, mode) === true,
-      );
-      const executionMode = executionModes[0];
-      const providerDisplayId = context.workerEnvironmentService?.readProviderDisplayId(summary.id);
-      const resolvedSummary = Object.assign(
-        summary,
-        executionMode ? { executionMode, executionModes } : {},
-        providerDisplayId ? { providerDisplayId } : {},
-      );
-      try {
-        const [options, operatingSystems] = await Promise.all([
-          context.workerEnvironmentService?.listMachineOptions?.(summary.id),
-          context.workerEnvironmentService?.listOperatingSystems?.(summary.id),
-        ]);
-        const machines = options ?? [];
-        return Object.assign(
-          resolvedSummary,
-          machines.length > 0 ? { machines } : {},
-          operatingSystems && operatingSystems.length > 1 ? { operatingSystems } : {},
-        );
-      } catch (error) {
-        context.logGateway.warn(
-          `worker machine catalog unavailable (${summary.id}): ${formatForLog(error)}`,
-        );
-        return resolvedSummary;
-      }
-    }),
-  );
-}
 function defineEnvironmentMutation<T extends Record<string, unknown>>(
   method: "create" | "prepare" | "destroy",
   validate: Validator<T>,
@@ -298,6 +250,7 @@ function defineEnvironmentMutation<T extends Record<string, unknown>>(
 
 export const environmentsHandlers: GatewayRequestHandlers = {
   ...environmentsSessionHandlers,
+  "environments.adoptSuggestedProfile": adoptSuggestedWorkerProfile,
   ...environmentsSessionExecHandlers,
   "environments.list": async (options) => {
     const { params, respond, client, context } = options;
@@ -336,6 +289,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         );
       }
       const profiles = await listWorkerProfilesWithMachines(context);
+      const suggestedProfile = await listSuggestedWorkerProfile(context);
       authority.assertCurrent();
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
@@ -355,6 +309,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         true,
         {
           environments,
+          ...(suggestedProfile ? { suggestedProfile } : {}),
+          ...(context.getRuntimeConfig().cloudWorkers?.requiredProfile
+            ? { requiredProfile: context.getRuntimeConfig().cloudWorkers?.requiredProfile }
+            : {}),
           ...(profiles.length > 0
             ? {
                 profiles: includeCurrentPreparedDetails

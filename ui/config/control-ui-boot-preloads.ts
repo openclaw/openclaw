@@ -89,7 +89,13 @@ export function controlUiBootPreloadsPlugin(): Plugin {
         const assets = collectControlUiBootAssets(bundle);
         const templates = (["chat", "new"] as const).map((route) => {
           const links = [...assets[route]]
-            .filter((file) => !assets.initial.has(file) && /\.(?:js|css)$/u.test(file))
+            // URL assets such as attachment workers belong to the offline cache,
+            // but are not modules in the document's boot graph.
+            .filter(
+              (file) =>
+                !assets.initial.has(file) &&
+                (bundle[file]?.type === "chunk" || file.endsWith(".css")),
+            )
             .map((file) => ({
               tag: "link",
               attrs: file.endsWith(".css")

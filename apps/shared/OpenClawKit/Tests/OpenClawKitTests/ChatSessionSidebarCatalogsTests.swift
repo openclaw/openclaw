@@ -24,31 +24,6 @@ private final class CatalogTestQueue<Value: Sendable> {
 }
 
 @MainActor
-private final class CatalogAcknowledgedEvents {
-    private let input = CatalogTestQueue<OpenClawSidebarCatalogEvent?>()
-    private let demands = CatalogTestQueue<Void>()
-
-    func next() async -> OpenClawSidebarCatalogEvent? {
-        self.demands.send(())
-        return await self.input.next()
-    }
-
-    func ready() async {
-        await self.demands.next()
-    }
-
-    func send(_ event: OpenClawSidebarCatalogEvent) async {
-        self.input.send(event)
-        // Asking for the next event acknowledges that the prior event was fully handled.
-        await self.demands.next()
-    }
-
-    func finish() {
-        self.input.send(nil)
-    }
-}
-
-@MainActor
 private final class CatalogTestClock {
     struct Wait: Sendable {
         let id: UUID
@@ -97,22 +72,18 @@ private final class CatalogTestFixture {
     var intercept: ((Call) -> Bool)?
     private let suite = "ChatSessionSidebarCatalogsTests.\(UUID().uuidString)"
     private let defaults: UserDefaults
-    private let acknowledgedEvents: CatalogAcknowledgedEvents?
     private var observer: Task<Void, Never>?
 
-    init(events: CatalogAcknowledgedEvents? = nil) throws {
+    init() throws {
         self.defaults = try #require(UserDefaults(suiteName: self.suite))
-        self.acknowledgedEvents = events
         let clock = self.clock
         self.owner = ChatSessionSidebarCatalogs(defaults: self.defaults, sleep: { try await clock.sleep($0) })
-        let stream = events.map { source in AsyncStream(unfolding: { await source.next() }) } ?? self.events.stream
-        self.observer = Task { await self.owner.observe(stream, agentID: "main") }
+        self.observer = Task { await self.owner.observe(self.events.stream, agentID: "main") }
     }
 
     func stop() {
         self.owner.stop()
         self.events.continuation.finish()
-        self.acknowledgedEvents?.finish()
         self.observer?.cancel()
         self.defaults.removePersistentDomain(forName: self.suite)
     }
@@ -124,12 +95,11 @@ private final class CatalogTestFixture {
 
     @discardableResult
     func connect(
-        _ data: Data, profile: String = "profile-a", changedEvents: Bool = false, allowsArchive: Bool = true) async
+        _ data: Data, profile: String = "profile-a", allowsArchive: Bool = true) async
         -> CatalogTestClock.Wait
     {
         let event = OpenClawSidebarCatalogEvent.connected(.init(
             profileID: profile,
-            changedEvents: changedEvents,
             allowsArchive: allowsArchive,
             request: { request in
                 let completion = CatalogTestQueue<Bool>()
@@ -142,11 +112,7 @@ private final class CatalogTestFixture {
             },
             isCurrent: { true },
             openSources: {}))
-        if let acknowledgedEvents {
-            await acknowledgedEvents.send(event)
-        } else {
-            self.events.continuation.yield(event)
-        }
+        self.events.continuation.yield(event)
         let call = await self.calls.next()
         #expect(call.request.method == "sessions.catalog.list")
         #expect(call.request.params["agentId"]?.value as? String == "main")
@@ -434,120 +400,23 @@ struct ChatSessionSidebarCatalogsTests {
     }
 
     @Test(arguments: [false, true])
-    func `catalog page overlap retains one event refresh in either completion order`(
-        rootFirst: Bool) async throws
-    {
-        let events = CatalogAcknowledgedEvents()
-        let fixture = try CatalogTestFixture(events: events)
+    func `refresh clock polls every two minutes and is cancelled on disconnect or stop`(disconnect: Bool) async throws {
+        let fixture = try CatalogTestFixture()
         defer { fixture.stop() }
-        await events.ready()
-        await fixture.connect(self.page([
-            self.catalog("alpha", [self.host("local", [self.row("held")], cursor: "one")]),
-            self.catalog("beta", [self.host("local", [self.row("sibling-old")])]),
-        ]), changedEvents: true)
-        let load = Task { await fixture.owner.loadMore("alpha") }
-        let page = await fixture.calls.next()
-        await events.send(.changed("main"))
-        let root = await fixture.calls.next()
-        let subsequent = CatalogTestQueue<CatalogTestFixture.Call?>()
-        var requests = 0
-        fixture.intercept = { call in
+        var next = await fixture.connect(self.page([]))
+        var elapsed = Duration.zero
+        var requests = 1
+        while elapsed < .seconds(600) {
+            #expect(next.duration == .seconds(120))
+            elapsed += next.duration
+            fixture.clock.advance(next)
+            let refresh = await fixture.calls.next()
             requests += 1
-            subsequent.send(call)
-            return true
+            refresh.reply.resume(returning: self.page([]))
+            next = await fixture.clock.waits.next()
         }
-        let response = self.page([
-            self.catalog("alpha", [self.host("local", [self.row("replacement-prefix")])]),
-            self.catalog("beta", [self.host("local", [self.row("sibling-fresh")])]),
-        ])
-        if rootFirst {
-            root.reply.resume(returning: response)
-            _ = await fixture.clock.waits.next()
-            #expect(self.rows(fixture, "alpha", "local") == ["held"])
-            #expect(self.rows(fixture, "beta", "local") == ["sibling-fresh"])
-            #expect(requests == 0)
-        }
-        page.reply.resume(returning: self.page([self.catalog("alpha", [self.host("local", [self.row("later")])])]))
-        _ = await load.value
-        if !rootFirst { root.reply.resume(returning: response) }
-        // No production clock advance: a dropped invalidation must fail without waiting for its ten-minute timer.
-        let deadline = Task { @MainActor in
-            do { try await Task.sleep(for: .seconds(5)) } catch { return }
-            subsequent.send(nil)
-        }
-        defer { deadline.cancel() }
-        let replacement = try #require(await subsequent.next(), "Overlapped catalog refresh was not resumed")
-        #expect(replacement.request.params["catalogId"] == nil)
-        #expect(self.rows(fixture, "alpha", "local") == ["held", "later"])
-        #expect(self.rows(fixture, "beta", "local") == ["sibling-fresh"])
-        replacement.reply.resume(returning: self.page([
-            self.catalog("alpha", [self.host("local", [self.row("fresh")], cursor: "new-page")]),
-            self.catalog("beta", [self.host("local", [self.row("sibling-fresh")])]),
-        ]))
-        let replay = try #require(await subsequent.next(), "Retained catalog page was not replayed")
-        #expect(replay.request.params["cursors"]?.value as? [String: String] == ["local": "new-page"])
-        #expect(self.rows(fixture, "alpha", "local") == ["held", "later"])
-        replay.reply.resume(returning: self.page([self.catalog(
-            "alpha",
-            [self.host("local", [self.row("fresh-page")])])]))
-        _ = await fixture.clock.waits.next()
-        deadline.cancel()
-        await deadline.value
-        #expect(self.rows(fixture, "alpha", "local") == ["fresh", "fresh-page"])
-        #expect(requests == 2)
-    }
-
-    @Test func `archive settlement fences reads admitted during the mutation`() async throws {
-        let fixture = try CatalogTestFixture()
-        defer { fixture.stop() }
-        let original = [self.row("delete"), self.row("keep")]
-        await fixture.connect(self.page([self.catalog("alpha", [self.host("local", original, cursor: "one")])]))
-        let catalog = try #require(fixture.owner.catalogs.first)
-        let host = try #require(catalog.hosts.first)
-        let row = try #require(host.sessions.first)
-        let archive = Task { await fixture.owner.archive(catalog, host: host, row: row) }
-        let mutation = await fixture.calls.next()
-        let pages = CatalogTestQueue<CatalogTestFixture.Call?>(), roots = CatalogTestQueue<CatalogTestFixture.Call?>()
-        fixture.intercept = { call in
-            if call.request.params["catalogId"] == nil { roots.send(call) } else { pages.send(call) }
-            return true
-        }
-        let load = Task { await fixture.owner.loadMore("alpha")
-            pages.send(nil)
-        }
-        let page = await pages.next()
-        let refresh = Task { await fixture.owner.refresh()
-            roots.send(nil)
-        }
-        let root = await roots.next()
-        mutation.reply.resume(returning: Data(#"{"ok":true}"#.utf8))
-        #expect(await archive.value)
-        #expect(self.rows(fixture, "alpha", "local") == ["keep"])
-        page?.reply.resume(returning: self.page([self.catalog("alpha", [self.host("local", [self.row("delete")])])]))
-        _ = await load.value
-        let committed = self.page([self.catalog("alpha", [self.host("local", [self.row("keep")])])])
-        fixture.intercept = { call in
-            call.reply.resume(returning: committed)
-            return true
-        }
-        root?.reply.resume(returning: self.page([self.catalog("alpha", [self.host("local", original)])]))
-        await refresh.value
-        _ = await fixture.clock.waits.next()
-        #expect(self.rows(fixture, "alpha", "local") == ["keep"])
-    }
-
-    @Test(arguments: [false, true])
-    func `refresh clock uses advertised cadence and is cancelled on disconnect or stop`(advertised: Bool) async throws {
-        let fixture = try CatalogTestFixture()
-        defer { fixture.stop() }
-        let first = await fixture.connect(self.page([]), changedEvents: advertised)
-        #expect(first.duration == .seconds(advertised ? 600 : 30))
-        fixture.clock.advance(first)
-        let refresh = await fixture.calls.next()
-        refresh.reply.resume(returning: self.page([]))
-        let next = await fixture.clock.waits.next()
-        #expect(next.duration == first.duration)
-        if advertised { fixture.events.continuation.yield(.disconnected) } else { await fixture.cancelObservation() }
+        #expect(requests == 6)
+        if disconnect { fixture.events.continuation.yield(.disconnected) } else { await fixture.cancelObservation() }
         #expect(await fixture.clock.cancellations.next() == next.id)
         #expect(fixture.owner.connection == nil)
     }
@@ -576,26 +445,24 @@ struct ChatSessionSidebarCatalogsTests {
         #expect(fixture.owner.catalogs.isEmpty && fixture.owner.errors.isEmpty)
     }
 
-    @Test func `advertised catalog changes replace the safety wait with an authoritative refresh`() async throws {
+    @Test func `explicit refresh replaces the polling wait with an authoritative refresh`() async throws {
         let fixture = try CatalogTestFixture()
         defer { fixture.stop() }
-        let waiting = await fixture.connect(self.page([]), changedEvents: true)
-        fixture.events.continuation.yield(.changed("MAIN"))
+        let waiting = await fixture.connect(self.page([]))
+        fixture.owner.scheduleRefresh()
         let refresh = await fixture.calls.next()
         #expect(await fixture.clock.cancellations.next() == waiting.id)
         refresh.reply.resume(returning: self.page([self.catalog("alpha", [self.host("local", [self.row("new")])])]))
         let next = await fixture.clock.waits.next()
         #expect(self.rows(fixture, "alpha", "local") == ["new"])
-        #expect(next.duration == .seconds(600))
+        #expect(next.duration == .seconds(120))
     }
 
-    @Test func `catalog event bursts settle the active refresh before one trailing read`() async throws {
-        let events = CatalogAcknowledgedEvents()
-        let fixture = try CatalogTestFixture(events: events)
+    @Test func `refresh bursts settle the active refresh before one trailing read`() async throws {
+        let fixture = try CatalogTestFixture()
         defer { fixture.stop() }
-        await events.ready()
-        await fixture.connect(self.page([]), changedEvents: true)
-        await events.send(.changed("main"))
+        await fixture.connect(self.page([]))
+        fixture.owner.scheduleRefresh()
         let active = await fixture.calls.next()
         var trailingWindows: [[String]] = []
         let final = self.page([self.catalog("alpha", [self.host("local", [self.row("final")])])])
@@ -605,7 +472,7 @@ struct ChatSessionSidebarCatalogsTests {
             return true
         }
         for _ in 0..<3 {
-            await events.send(.changed("main"))
+            fixture.owner.scheduleRefresh()
         }
         #expect(trailingWindows.isEmpty)
         active.reply.resume(returning: self.page([self.catalog("alpha", [self.host("local", [self.row("first")])])]))
@@ -613,7 +480,7 @@ struct ChatSessionSidebarCatalogsTests {
         let waiting = await fixture.clock.waits.next()
         #expect(trailingWindows == [["first"]])
         #expect(self.rows(fixture, "alpha", "local") == ["final"])
-        #expect(waiting.duration == .seconds(600))
+        #expect(waiting.duration == .seconds(120))
     }
 
     @Test func `hidden sources and grouping persist per profile and return adopted rows to the roster`() async throws {

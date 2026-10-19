@@ -1,6 +1,6 @@
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-computer.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -19,10 +19,13 @@ import {
 import { saveMediaBuffer } from "../../media/store.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
+import * as githubBinding from "./worker-github-binding.js";
 import {
   createWorkerTurnTunnel,
   ENVIRONMENT_ID,
@@ -40,6 +43,7 @@ import {
   computerDescriptor,
   createWorkerSessionTurnPlacementProvider,
   readLaunchToolNames,
+  measureLaunchTurn,
   placements,
   seedActivePlacement,
   setupWorkerTurnLauncherTest,
@@ -47,21 +51,28 @@ import {
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 
-const prepareGitHubBinding = vi.hoisted(() => vi.fn());
-vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: prepareGitHubBinding,
+afterAll(closeStateDatabaseForTest);
+
+const readGitHubFact = vi.hoisted(() => vi.fn());
+// mock-isolation: Worker launches consume facts without starting identity discovery.
+vi.mock("../github-publication-discovery.js", () => ({
+  readGitHubPublicationFact: readGitHubFact,
 }));
 
 describe("worker launch capabilities", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   beforeEach(() => {
-    prepareGitHubBinding.mockReset().mockResolvedValue(undefined);
+    readGitHubFact.mockReset().mockReturnValue({ available: false });
   });
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
-  it.each([true, false])(
-    "carries only an available GitHub identity in the launch envelope (%s)",
-    async (available) => {
+  it.each([
+    { label: "available", available: true, revoked: false },
+    { label: "unavailable", available: false, revoked: false },
+    { label: "revoked before launch", available: true, revoked: true },
+  ])(
+    "carries only a current GitHub identity in the launch envelope ($label)",
+    async ({ available, revoked }) => {
       await seedActivePlacement();
       const github: WorkerGitHubLaunchBinding = {
         token: "synthetic-turn-bound-github-token",
@@ -70,37 +81,79 @@ describe("worker launch capabilities", () => {
         remoteUrl: "https://github.com/owner/repo.git",
         gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
       };
-      prepareGitHubBinding.mockResolvedValue(available ? github : undefined);
-      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
-        if (available) {
-          expect(plan.assignment.github).toEqual(github);
-        } else {
-          expect(plan.assignment).not.toHaveProperty("github");
-        }
-        throw new WorkerRunnerCapacityError();
-      });
+      let current = true;
+      const controller = new AbortController();
+      const revokedError = new Error("GitHub grant revoked before dispatch");
+      const grant: WorkerGitHubBindingGrant = {
+        binding: github,
+        signal: controller.signal,
+        assertCurrent() {
+          if (!current) {
+            throw revokedError;
+          }
+        },
+        refresh: async () => undefined,
+        revoke: async () => controller.abort(),
+      };
+      using binding = vi.spyOn(githubBinding, "bindWorkerGitHubTurn");
+      binding.mockResolvedValue(available ? grant : undefined);
+      const dispatchLaunch = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(
+        async ({ plan }) => {
+          if (available) {
+            expect(plan.assignment.github).toEqual(github);
+          } else {
+            expect(plan.assignment).not.toHaveProperty("github");
+          }
+          throw new WorkerRunnerCapacityError();
+        },
+      );
       const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
-        launchTurn,
+        launchTurn: async (request) => {
+          request.assertCurrent?.();
+          return dispatchLaunch(request);
+        },
+        measureLaunchTurn: (plan, claim) => {
+          if (revoked) {
+            expect(plan.assignment.github).toEqual(github);
+            current = false;
+          }
+          return measureLaunchTurn(plan, claim);
+        },
         stageAttachments: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
       });
+      let publicationOffered = false;
+      const createGatewayTools: NonNullable<
+        WorkerTurnEnvironmentService["createGatewayTools"]
+      > = async ({ prepareTools }) => {
+        const tools = (await prepareTools?.([])) ?? [];
+        publicationOffered = tools.some((tool) => tool.name === "github_publish");
+        return tools;
+      };
       const environments = {
         ...unusedEnvironments(),
+        createGatewayTools,
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),
         startTunnel: vi.fn(async () => tunnel),
       };
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      await expect(
-        provider.executeTurn(
-          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
-          turn("run-github"),
-          vi.fn(),
-        ),
-      ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
-      expect(launchTurn).toHaveBeenCalledOnce();
+      const execution = provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
+        turn("run-github"),
+        vi.fn(),
+      );
+      if (revoked) {
+        await expect(execution).rejects.toBe(revokedError);
+        expect(dispatchLaunch).not.toHaveBeenCalled();
+      } else {
+        await expect(execution).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+        expect(dispatchLaunch).toHaveBeenCalledOnce();
+      }
+      expect(publicationOffered).toBe(true);
+      expect(controller.signal.aborted).toBe(available);
     },
   );
 
@@ -401,7 +454,7 @@ describe("worker launch capabilities", () => {
           );
           expect(placements.get(SESSION_ID)).toEqual(placementBefore);
           expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
-          expect(placements.get("session-remote-successor")).toBeUndefined();
+          expect(await placements.getAsync("session-remote-successor")).toBeUndefined();
           if (nodeDeviceId) {
             const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
             expect(assertCurrent).toBeTypeOf("function");
@@ -458,7 +511,7 @@ describe("worker launch capabilities", () => {
         ? { entered: createDeferred(), release: createDeferred() }
         : undefined;
       const skillCleanupError = new Error("synthetic security cleanup failure");
-      const snapshot = { skills: [], resolvedSkills: [], prompt: "" };
+      const snapshot = { skills: [], resolvedSkills: [], discoverySkills: [], prompt: "" };
       const transfer = resourceCleanup
         ? vi.spyOn(skillTransfer, "transferSkillResources").mockResolvedValue({
             source: snapshot,

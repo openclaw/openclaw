@@ -11,23 +11,28 @@ import {
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeStatus } from "../../../config/sessions/session-accessor.sqlite-status.js";
+import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import { parseSqliteSessionEntryRecord } from "../../../config/sessions/session-entry-json.js";
+import { attachSessionEntrySnapshots } from "../../../config/sessions/session-entry-snapshot-values.js";
 import {
-  attachSessionEntrySnapshots,
   sessionEntrySnapshotColumns,
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "../../../config/sessions/session-entry-snapshots.js";
 import { LEGACY_SESSION_ENTRY_STATE_FIELDS } from "../../../config/sessions/session-entry-state-format.js";
+import { deriveSessionPredicateColumns } from "../../../config/sessions/session-predicate-columns.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
+import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import {
@@ -62,8 +67,15 @@ export function scanDoctorSessionEntryRecords(
         .selectFrom("session_nodes")
         .select(["session_key", "entry_json"])
         .where(
-          /* kysely-allow-raw: coarse key filtering bounds parsing; JSON.parse owns duplicate-key precedence. */
-          sql<boolean>`CASE WHEN json_valid(entry_json) THEN EXISTS (
+          isPostgresSqlConnection(database.db)
+            ? /* kysely-allow-raw: native JSON filtering bounds parsing; JSON.parse owns duplicate-key precedence. */ sql<boolean>`CASE WHEN entry_json IS JSON OBJECT THEN EXISTS (
+                SELECT 1 FROM json_each(entry_json::json)
+                WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
+                  OR key IN ('provider', 'lastProvider', 'room')
+                  OR (key = 'pendingFinalDelivery' AND json_typeof(value) = 'boolean')
+                  OR (key = 'status' AND value #>> '{}' IN ('running', 'queued'))
+              ) WHEN entry_json IS JSON THEN FALSE ELSE TRUE END`
+            : /* kysely-allow-raw: native JSON filtering bounds parsing; JSON.parse owns duplicate-key precedence. */ sql<boolean>`CASE WHEN json_valid(entry_json) THEN EXISTS (
             SELECT 1 FROM json_each(entry_json)
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
@@ -92,36 +104,46 @@ export async function repairLegacySessionRunOutcomes(
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
   const sessionKeys: string[] = [];
-  scanDoctorSessionEntryRecords(
-    scope,
-    ({ entry, sessionKey }) => {
-      if (entry.status === "running" || entry.status === "queued") {
-        sessionKeys.push(sessionKey);
-      }
-    },
-    expectedIdentity,
+  withEngineStoreAdmission(() =>
+    scanDoctorSessionEntryRecords(
+      scope,
+      ({ entry, sessionKey }) => {
+        if (entry.status === "running" || entry.status === "queued") {
+          sessionKeys.push(sessionKey);
+        }
+      },
+      expectedIdentity,
+    ),
   );
   assertCurrent();
-  return sessionKeys.length === 0
-    ? 0
+  if (sessionKeys.length === 0) {
+    return 0;
+  }
+  const assertRepairCurrent = () => {
+    assertCurrent();
+    assertExistingDatabaseIdentity(
+      scope.storePath,
+      expectedIdentity.key,
+      expectedIdentity.birthtime,
+    );
+  };
+  const repair = () =>
+    withEngineStoreAdmission(() => {
+      assertRepairCurrent();
+      return rewriteDoctorSessionEntries({
+        scope,
+        sessionKeys,
+        rawTransform: migrateLegacySessionRunOutcome,
+        expectedIdentity,
+        assertCurrent,
+      });
+    });
+  return agentEngineInput()
+    ? repair()
     : withOpenClawAgentDatabaseAsync(
         toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" })),
-        () =>
-          rewriteDoctorSessionEntries({
-            scope,
-            sessionKeys,
-            rawTransform: migrateLegacySessionRunOutcome,
-            expectedIdentity,
-            assertCurrent,
-          }),
-        () => {
-          assertCurrent();
-          assertExistingDatabaseIdentity(
-            scope.storePath,
-            expectedIdentity.key,
-            expectedIdentity.birthtime,
-          );
-        },
+        repair,
+        assertRepairCurrent,
       );
 }
 
@@ -133,6 +155,7 @@ export function rewriteDoctorSessionEntries(
     updateDeliveryProjection?: boolean;
     assertCurrent?: () => void;
     expectedIdentity?: DatabaseFileIdentity;
+    integrityCheck?: "quick" | "full";
   } & (
     | { transform: (entry: SessionEntry, sessionKey: string) => SessionEntry; rawTransform?: never }
     | {
@@ -152,10 +175,13 @@ export function rewriteDoctorSessionEntries(
     params.assertCurrent?.();
     rewritten += runOpenClawAgentWriteTransaction(
       (database) => {
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        const assertRepairCurrent = () => {
+          params.assertCurrent?.();
+          if (params.expectedIdentity) {
+            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
+          }
+        };
+        assertRepairCurrent();
         const db = getSessionKysely(database.db);
         let batchRewritten = 0;
         for (const sessionKey of batch) {
@@ -207,11 +233,18 @@ export function rewriteDoctorSessionEntries(
                 continue;
               }
               const jsonPath = `$.${JSON.stringify(key)}`;
-              // SQLite preserves untouched numeric tokens and opaque values outside this repair.
-              patched =
-                value === undefined
-                  ? /* kysely-allow-raw: migration removes only changed top-level JSON fields. */ sql<string>`json_remove(${patched}, ${jsonPath})`
-                  : /* kysely-allow-raw: migration changes only owned top-level JSON fields. */ sql<string>`json_set(${patched}, ${jsonPath}, json(${value}))`;
+              // Keep untouched numeric values in SQL instead of rounding them through JSON.parse.
+              if (isPostgresSqlConnection(database.db)) {
+                patched =
+                  value === undefined
+                    ? /* kysely-allow-raw: migration removes one bound top-level member. */ sql<string>`(${patched}::jsonb - ${key}::text)::text`
+                    : /* kysely-allow-raw: a bound text[] names one exact member, including dots and quotes. */ sql<string>`jsonb_set(${patched}::jsonb, ARRAY[${key}]::text[], ${value}::jsonb)::text`;
+              } else {
+                patched =
+                  value === undefined
+                    ? /* kysely-allow-raw: migration removes only changed top-level JSON fields. */ sql<string>`json_remove(${patched}, ${jsonPath})`
+                    : /* kysely-allow-raw: migration changes only owned top-level JSON fields. */ sql<string>`json_set(${patched}, ${jsonPath}, json(${value}))`;
+              }
             }
             entryJson = executeSqliteQuerySync(
               database.db,
@@ -256,23 +289,27 @@ export function rewriteDoctorSessionEntries(
               runOutcome = nextEntry;
             }
           }
-          params.assertCurrent?.();
-          if (params.expectedIdentity) {
-            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-          }
+          assertRepairCurrent();
           invalidateSessionEntryMaintenanceAgeFact(database.db);
+          markCanonicalSessionValidationPending(database, [sessionKey]);
           const runProjection = runOutcome
             ? {
                 status: normalizeStatus(runOutcome.status),
                 ended_at: asFiniteNumber(runOutcome.endedAt) ?? null,
               }
             : undefined;
+          const predicateColumns = deriveSessionPredicateColumns(entryJson);
           executeSqliteQuerySync(
             database.db,
             db
               .updateTable("session_nodes")
               .set({
                 entry_json: entryJson,
+                ...predicateColumns,
+                session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
+                  number | null
+                >`${predicateColumns.session_started_at}`,
+                entry_valid: entryValid,
                 ...(runProjection ? { status: runProjection.status } : {}),
               })
               .where("session_key", "=", sessionKey),
@@ -280,13 +317,6 @@ export function rewriteDoctorSessionEntries(
           if (snapshots) {
             writeSessionEntrySnapshots(database, sessionKey, snapshots);
           }
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .updateTable("session_nodes")
-              .set({ entry_valid: entryValid })
-              .where("session_key", "=", sessionKey),
-          );
           const projected = deliveryProjectionEntry ?? nextEntry;
           const deliveryProjection =
             projected && params.updateDeliveryProjection
@@ -308,16 +338,20 @@ export function rewriteDoctorSessionEntries(
           publishSessionEntryCacheInvalidation(database, { sessionKey });
           batchRewritten += 1;
         }
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        assertRepairCurrent();
         return batchRewritten;
       },
       databaseOptions,
       {
         operationLabel: "doctor.rewrite-session-entries",
         repairAdmission: {
+          integrityCheck: params.integrityCheck,
+          integrityTables: [
+            "session_nodes",
+            "session_entry_snapshots",
+            "session_windows",
+            "session_canonical_validation_pending",
+          ],
           expectedIdentity: params.expectedIdentity,
           assertCurrent: params.assertCurrent,
         },

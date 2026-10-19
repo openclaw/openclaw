@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   createOpenClawTestInstance,
@@ -41,7 +42,7 @@ it("recovers legacy dist/index.js Doctor before refusing its unsupported Node", 
        fs.writeFileSync(${JSON.stringify(calls)}, JSON.stringify({ command, args, stdio: options.stdio, marker: options.env.OPENCLAW_NODE_UPDATE_RESPAWNED }));
        const child = new EventEmitter();
        child.kill = () => true;
-       setImmediate(() => child.emit("exit", 23, null));
+       setImmediate(() => { child.emit("exit", 23, null); child.emit("close", 23, null); });
        return child;
      };
      syncBuiltinESMExports();`,
@@ -55,12 +56,14 @@ it("recovers legacy dist/index.js Doctor before refusing its unsupported Node", 
   expect(JSON.parse(await fs.readFile(calls, "utf8"))).toMatchObject({
     command: node,
     args: [
+      "--import",
+      CLI_PARENT_BOUND_PRELOAD,
       expect.stringMatching(/dist[/\\]index\.(?:m?js)$/),
       "doctor",
       "--non-interactive",
       "--fix",
     ],
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     marker: "1",
   });
   expect(result.stderr).not.toContain("Upgrade Node and re-run");
@@ -71,7 +74,10 @@ it.each([
   { name: "honors inherited NVM_DIR without forwarding workspace roots", source: "inherited" },
   { name: "rejects workspace PATH before runtime discovery", source: "path" },
   { name: "checks launcher admission before loading workspace dotenv", source: "launcher" },
-  { name: "keeps workspace roots out of compile-cache respawns", source: "compile-cache" },
+  {
+    name: "keeps compiled-entry compile caching through workspace-free startup respawns",
+    source: "compile-cache",
+  },
   { name: "keeps workspace roots out of startup-environment respawns", source: "startup-env" },
 ])(
   "$name",
@@ -121,7 +127,7 @@ it.each([
          startupMarker: options.env.OPENCLAW_NODE_OPTIONS_READY };
        const child = new EventEmitter();
        child.kill = () => true;
-       setImmediate(() => child.emit("exit", 23, null));
+       setImmediate(() => { child.emit("exit", 23, null); child.emit("close", 23, null); });
        return child;
      };
      process.on("exit", () => fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({
@@ -174,9 +180,9 @@ it.each([
         expect(result.status, result.stdout + result.stderr).toBe(23);
         expect(observed.child.nvm).toBeUndefined();
         expect(observed.child.fnm).toBeUndefined();
-        if (source === "compile-cache") {
-          expect(observed.child.cacheMarker).toBe("1");
-        } else if (process.platform === "win32") {
+        // Compiled entries keep the build-scoped cache; only source entries disable it.
+        expect(observed.child.cacheMarker).toBeUndefined();
+        if (process.platform === "win32") {
           expect(observed.child.args).toContain("--stack-size=8192");
         } else {
           expect(observed.child.startupMarker).toBe("1");

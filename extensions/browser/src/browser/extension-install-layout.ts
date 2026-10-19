@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { inspectPathPermissions } from "openclaw/plugin-sdk/file-access-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
@@ -52,7 +53,7 @@ export function generateChromeExtensionIdForPath(
   const isAbsolute =
     platform === "win32" ? path.win32.isAbsolute(canonicalPath) : path.isAbsolute(canonicalPath);
   if (!isAbsolute) {
-    throw new Error("Chrome extension ID paths must be canonical absolute paths");
+    throw new Error("Chrome extension ID paths must be resolved absolute paths");
   }
   let nativePath = canonicalPath;
   if (platform === "win32" && /^[a-z]:/u.test(nativePath)) {
@@ -138,19 +139,6 @@ export function stableChromeExtensionDir(): string {
   return path.join(path.resolve(resolveStateDir()), "browser", "chrome-extension");
 }
 
-export async function pathInfo(
-  target: string,
-): Promise<Awaited<ReturnType<typeof fs.lstat>> | null> {
-  try {
-    return await fs.lstat(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
 export async function assertOwnedPath(
   target: string,
   kind: "file" | "directory",
@@ -189,7 +177,7 @@ export async function assertOwnedPath(
       ? canonical.toLowerCase() !== expected.toLowerCase()
       : canonical !== expected
   ) {
-    throw new Error(`Refusing non-canonical path at ${target}`);
+    throw new Error(`Refusing unresolved path at ${target}`);
   }
 }
 
@@ -204,7 +192,7 @@ export async function ensurePrivateDirectory(target: string): Promise<void> {
 export async function inspectInstalledCopy(
   target: string,
 ): Promise<{ present: boolean; owned: boolean }> {
-  if (!(await pathInfo(target))) {
+  if (!(await lstatIfExists(target, "ENOENT"))) {
     return { present: false, owned: false };
   }
   await assertOwnedPath(target, "directory");
@@ -325,7 +313,7 @@ export async function discoverChromeExtensionIds(params: {
   const issues: string[] = [];
   const identityMismatches: string[] = [];
   for (const root of chromeProductRoots()) {
-    if (!(await pathInfo(root.userDataDir))) {
+    if (!(await lstatIfExists(root.userDataDir, "ENOENT"))) {
       continue;
     }
     try {
@@ -349,7 +337,7 @@ export async function discoverChromeExtensionIds(params: {
       // Chromium partitions extension settings by enforcement policy across both stores.
       for (const filename of ["Preferences", "Secure Preferences"]) {
         const preferencesPath = path.join(profileDir, filename);
-        const preferencesInfo = await pathInfo(preferencesPath);
+        const preferencesInfo = await lstatIfExists(preferencesPath, "ENOENT");
         if (!preferencesInfo) {
           continue;
         }

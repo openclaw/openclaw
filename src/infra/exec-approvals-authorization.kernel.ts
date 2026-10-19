@@ -13,7 +13,6 @@ import type {
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { isGeneratedHashedArgPattern } from "./exec-command-resolution.js";
 
 export function assertCurrentUsageAuthorization(params: {
@@ -124,29 +123,6 @@ export function assertCurrentUsageAuthorization(params: {
   }
 }
 
-export function applyRecordedAllowlistUse(params: {
-  file: ExecApprovalsFile;
-  agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
-  command: string;
-  resolvedPath?: string;
-  authorization?: ExecApprovalUsageAuthorization;
-}): ExecApprovalsFile | null {
-  const keys = new Set(
-    params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
-  );
-  if (params.authorization) {
-    assertCurrentUsageAuthorization({
-      file: params.file,
-      agentId: params.agentId,
-      command: params.command,
-      matchKeys: keys,
-      authorization: params.authorization,
-    });
-  }
-  return applyRecordedAllowlistMetadata({ ...params, keys });
-}
-
 function applyRecordedAllowlistMetadata(params: {
   file: ExecApprovalsFile;
   agentId: string | undefined;
@@ -200,13 +176,6 @@ export function applyExecAuthorizationCommit(
   file: ExecApprovalsFile,
   params: ExecAuthorizationCommitInput,
 ): ExecApprovalsFile | null {
-  if (
-    (params.authorization.source === "explicit-approval" ||
-      params.authorization.source === "auto-review") &&
-    !params.authorization.policySnapshot
-  ) {
-    throw new Error("Delayed exec authorization requires a policy snapshot");
-  }
   if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
     if (params.authorization.source !== "explicit-approval") {
       throw new Error("Allow-always persistence requires explicit approval");

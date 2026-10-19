@@ -1,36 +1,25 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
+  parseMattermostApiStatus,
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
-import {
-  renderMattermostModelSummaryView,
-  renderMattermostModelsPickerView,
-  renderMattermostProviderPickerView,
-  resolveMattermostModelPickerCurrentModel,
-  resolveMattermostModelPickerEntry,
-} from "./model-picker.js";
+import { resolveMattermostModelPickerEntry } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
-  buildPreparedModelsProviderData,
   isRequestBodyLimitError,
   logTypingFailure,
   readRequestBodyWithLimit,
@@ -48,9 +37,9 @@ import {
   resolveCommandText,
   type MattermostRegisteredCommand,
   type MattermostCommandResponse,
-  type MattermostSlashCommandResponse,
   type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
+import { deliverMattermostSlashModelPicker } from "./slash-model-picker.js";
 
 type SlashHttpHandlerParams = {
   account: ResolvedMattermostAccount;
@@ -86,23 +75,31 @@ type CommandValidationRateLimitEntry = {
 const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
 const commandValidationFailureCache = new Map<string, { accountId: string; expiresAt: number }>();
 const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
-const SECRET_LOG_KEYS = new Set([
-  "access_token",
-  "authorization",
-  "bottoken",
-  "client_secret",
-  "refresh_token",
-  "token",
-]);
 
-export function sendSlashCommandResponse(
+export function sendSlashCommandResponse(res: ServerResponse, status: number, text: string) {
+  sendJson(res, status, { response_type: "ephemeral", text });
+}
+
+export async function readSlashCommandBody(
+  req: IncomingMessage,
   res: ServerResponse,
-  status: number,
-  body: MattermostSlashCommandResponse,
-) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
+  timeoutMs = BODY_READ_TIMEOUT_MS,
+): Promise<string | undefined> {
+  try {
+    return await readRequestBodyWithLimit(req, {
+      maxBytes: MAX_BODY_BYTES,
+      timeoutMs,
+      // Let rejection reach Mattermost before closing the connection.
+      destroyOnLimit: false,
+    });
+  } catch (error) {
+    if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+      await sendHttpRequestRejection(req, res, 408, "Request body timeout");
+    } else {
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+    }
+    return undefined;
+  }
 }
 
 function findRegisteredCommandForPayload(params: {
@@ -117,39 +114,6 @@ function findRegisteredCommandForPayload(params: {
 
 function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
   return typeof command.delete_at === "number" && command.delete_at > 0;
-}
-
-function sanitizeCommandLookupError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const sanitized = raw
-    .replace(/[\r\n\t]/gu, " ")
-    .replace(/https?:\/\/[^\s)\]}]+/giu, (urlText) => {
-      try {
-        const url = new URL(urlText);
-        if (url.username || url.password) {
-          url.username = "redacted";
-          url.password = "redacted";
-        }
-        for (const key of url.searchParams.keys()) {
-          if (SECRET_LOG_KEYS.has(key.toLowerCase())) {
-            url.searchParams.set(key, "redacted");
-          }
-        }
-        return url.toString();
-      } catch {
-        return urlText;
-      }
-    })
-    .replace(/(^|[^\w-])(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1$2 [redacted]")
-    .replace(
-      /\b(token|authorization|access_token|refresh_token|client_secret|botToken)\b(\s*["']?\s*(?:=|:)\s*["']?)[^"',\s;}]+/giu,
-      "$1$2[redacted]",
-    );
-  return truncateUtf16Safe(sanitized, 300);
-}
-
-function sanitizeMattermostLogValue(value: string): string {
-  return truncateUtf16Safe(value.replace(/[\r\n\t]/gu, " "), 200);
 }
 
 async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -185,14 +149,8 @@ export function clearMattermostSlashCommandValidationCacheForAccount(accountId: 
 }
 
 function sweepCommandValidationFailureCache(now = Date.now()): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    commandValidationFailureCache.clear();
-    return;
-  }
   for (const [key, entry] of commandValidationFailureCache) {
-    const expiresAt = asDateTimestampMs(entry.expiresAt);
-    if (expiresAt === undefined || expiresAt <= validNow) {
+    if (entry.expiresAt <= now) {
       commandValidationFailureCache.delete(key);
     }
   }
@@ -207,29 +165,16 @@ function hasCachedCommandValidationFailure(key: string, now = Date.now()): boole
 function cacheCommandValidationFailure(key: string, accountId: string): void {
   const now = Date.now();
   sweepCommandValidationFailureCache(now);
-  const expiresAt = resolveExpiresAtMsFromDurationMs(COMMAND_VALIDATION_FAILURE_CACHE_MS, {
-    nowMs: now,
-  });
-  if (expiresAt === undefined) {
-    commandValidationFailureCache.delete(key);
-    return;
-  }
   commandValidationFailureCache.set(key, {
     accountId,
-    expiresAt,
+    expiresAt: now + COMMAND_VALIDATION_FAILURE_CACHE_MS,
   });
 }
 
 function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    commandValidationLookupRateLimit.clear();
-    return;
-  }
   const staleAfterMs = COMMAND_VALIDATION_LOOKUP_REFILL_MS * COMMAND_VALIDATION_LOOKUP_BURST * 2;
   for (const [key, entry] of commandValidationLookupRateLimit) {
-    const updatedAt = asDateTimestampMs(entry.updatedAt);
-    if (updatedAt === undefined || validNow - updatedAt > staleAfterMs) {
+    if (now - entry.updatedAt > staleAfterMs) {
       commandValidationLookupRateLimit.delete(key);
     }
   }
@@ -242,14 +187,8 @@ function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
 function reserveCommandValidationLookup(params: {
   key: string;
   accountId: string;
-  now?: number;
 }): { allowed: true } | { allowed: false; shouldLog: boolean } {
-  const rawNow = params.now ?? Date.now();
-  const now = asDateTimestampMs(rawNow);
-  if (now === undefined) {
-    commandValidationLookupRateLimit.clear();
-    return { allowed: true };
-  }
+  const now = Date.now();
   sweepCommandValidationLookupRateLimit(now);
   const existing = commandValidationLookupRateLimit.get(params.key);
   if (!existing) {
@@ -293,7 +232,7 @@ async function fetchCurrentMattermostCommandUncached(params: {
     if (!isDeletedMattermostCommand(commandLookupResult)) {
       return commandLookupResult;
     }
-    commandLookupFallbackDetail = `command lookup by id returned deleted command ${sanitizeMattermostLogValue(commandLookupResult.id)}`;
+    commandLookupFallbackDetail = "command lookup by id returned deleted command";
   } catch (err) {
     commandLookupError = err;
     // Older Mattermost servers may not expose GET /commands/{id}; fall back to
@@ -306,22 +245,22 @@ async function fetchCurrentMattermostCommandUncached(params: {
     );
     if (commandLookupError) {
       params.log?.(
-        `mattermost: slash command lookup by id failed for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback: ${sanitizeCommandLookupError(commandLookupError)}`,
+        `mattermost: slash command lookup by id failed for /${params.registered.trigger}; using team list fallback (status=${parseMattermostApiStatus(commandLookupError) ?? "unknown"})`,
       );
     } else if (commandLookupFallbackDetail) {
       params.log?.(
-        `mattermost: slash ${commandLookupFallbackDetail} for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback`,
+        `mattermost: slash ${commandLookupFallbackDetail} for /${params.registered.trigger}; using team list fallback`,
       );
     }
     return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? commandLookupResult;
   } catch (err) {
     const primaryDetail = commandLookupError
-      ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
+      ? `; command lookup status=${parseMattermostApiStatus(commandLookupError) ?? "unknown"}`
       : commandLookupFallbackDetail
         ? `; command lookup: ${commandLookupFallbackDetail}`
         : "";
     params.log?.(
-      `mattermost: slash command registration check failed for /${sanitizeMattermostLogValue(params.registered.trigger)}: ${sanitizeCommandLookupError(err)}${primaryDetail}`,
+      `mattermost: slash command registration check failed for /${params.registered.trigger} (status=${parseMattermostApiStatus(err) ?? "unknown"})${primaryDetail}`,
     );
     return null;
   }
@@ -365,7 +304,7 @@ async function validateMattermostSlashCommandToken(params: {
     if (!reservation.allowed) {
       if (reservation.shouldLog) {
         params.log?.(
-          `mattermost: slash command validation lookup rate-limited for /${sanitizeMattermostLogValue(params.registeredCommand.trigger)}`,
+          `mattermost: slash command validation lookup rate-limited for /${params.registeredCommand.trigger}`,
         );
       }
       return false;
@@ -401,7 +340,7 @@ async function validateMattermostSlashCommandToken(params: {
 
 type SlashInvocationAuth =
   | Extract<Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>, { ok: true }>
-  | { ok: false; denyResponse: MattermostSlashCommandResponse };
+  | { ok: false; denyText: string };
 
 async function authorizeSlashInvocation(params: {
   account: ResolvedMattermostAccount;
@@ -421,17 +360,14 @@ async function authorizeSlashInvocation(params: {
     channelInfo = await fetchMattermostChannel(client, channelId);
   } catch (err) {
     log?.(
-      `mattermost: slash channel lookup failed for ${sanitizeMattermostLogValue(channelId)}: ${sanitizeCommandLookupError(err)}`,
+      `mattermost: slash channel lookup failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
     );
   }
 
   if (!channelInfo) {
     return {
       ok: false,
-      denyResponse: {
-        response_type: "ephemeral",
-        text: "Temporary error: unable to determine channel type. Please try again.",
-      },
+      denyText: "Temporary error: unable to determine channel type. Please try again.",
     };
   }
 
@@ -470,14 +406,11 @@ async function authorizeSlashInvocation(params: {
       });
       return {
         ok: false,
-        denyResponse: {
-          response_type: "ephemeral",
-          text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${senderId}`,
-            code,
-          }),
-        },
+        denyText: core.channel.pairing.buildPairingReply({
+          channel: "mattermost",
+          idLine: `Your Mattermost user id: ${senderId}`,
+          code,
+        }),
       };
     }
 
@@ -491,13 +424,7 @@ async function authorizeSlashInvocation(params: {
             : decision.denyReason === "channel-no-allowlist"
               ? "Slash commands are not configured for this channel (no allowlist)."
               : "Unauthorized.";
-    return {
-      ok: false,
-      denyResponse: {
-        response_type: "ephemeral",
-        text: denyText,
-      },
-    };
+    return { ok: false, denyText };
   }
 
   return decision;
@@ -519,32 +446,15 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    let body: string;
-    try {
-      body =
-        bufferedBody ??
-        (await readRequestBodyWithLimit(req, {
-          maxBytes: MAX_BODY_BYTES,
-          timeoutMs: bodyTimeoutMs ?? BODY_READ_TIMEOUT_MS,
-          // Let rejection reach Mattermost before closing the connection.
-          destroyOnLimit: false,
-        }));
-    } catch (error) {
-      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
-        return;
-      }
-      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+    const body = bufferedBody ?? (await readSlashCommandBody(req, res, bodyTimeoutMs));
+    if (body === undefined) {
       return;
     }
 
     const contentType = req.headers["content-type"] ?? "";
     const payload = parseSlashCommandPayload(body, contentType);
     if (!payload) {
-      sendSlashCommandResponse(res, 400, {
-        response_type: "ephemeral",
-        text: "Invalid slash command payload.",
-      });
+      sendSlashCommandResponse(res, 400, "Invalid slash command payload.");
       return;
     }
 
@@ -558,10 +468,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // which would otherwise let an attacker poison the per-command failure
     // cache and DoS legitimate invocations of command B.
     if (!registeredCommand || !safeEqualSecret(payload.token, registeredCommand.token)) {
-      sendSlashCommandResponse(res, 401, {
-        response_type: "ephemeral",
-        text: "Unauthorized: invalid command token.",
-      });
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
       return;
     }
 
@@ -579,10 +486,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       log,
     });
     if (!tokenIsCurrent) {
-      sendSlashCommandResponse(res, 401, {
-        response_type: "ephemeral",
-        text: "Unauthorized: invalid command token.",
-      });
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
       return;
     }
 
@@ -606,19 +510,12 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     });
 
     if (!auth.ok) {
-      sendSlashCommandResponse(res, 200, auth.denyResponse);
+      sendSlashCommandResponse(res, 200, auth.denyText);
       return;
     }
 
-    log?.(
-      `mattermost: slash command /${sanitizeMattermostLogValue(trigger)} from ${sanitizeMattermostLogValue(senderName)} in ${sanitizeMattermostLogValue(channelId)}`,
-    );
-
     // Acknowledge immediately — we'll send the actual reply asynchronously
-    sendSlashCommandResponse(res, 200, {
-      response_type: "ephemeral",
-      text: "Processing...",
-    });
+    sendSlashCommandResponse(res, 200, "Processing...");
 
     try {
       await handleSlashCommandAsync({
@@ -640,7 +537,9 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         log,
       });
     } catch (err) {
-      log?.(`mattermost: slash command handler error: ${sanitizeCommandLookupError(err)}`);
+      log?.(
+        `mattermost: slash command handler error (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+      );
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
@@ -709,46 +608,22 @@ async function handleSlashCommandAsync(params: {
       : `Mattermost message in ${roomLabel} from ${senderName}`;
 
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
+  const messageSid = triggerId ?? `slash-${Date.now()}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const sessionEntry = getSessionEntry({
-      storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
-      sessionKey: route.sessionKey,
-      readConsistency: "latest",
-    });
-    const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
-    if (data.providers.length === 0) {
-      await sendMessageMattermost(
-        `channel:${channelId}`,
-        [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
-        { cfg, accountId: account.accountId },
-      );
-      return;
-    }
-
-    const currentModel = resolveMattermostModelPickerCurrentModel({
+    const hasModels = await deliverMattermostSlashModelPicker({
       cfg,
       route,
-      data,
+      accountId: account.accountId,
+      channelId,
+      senderId,
+      commandText,
+      messageSid,
+      entry: pickerEntry,
     });
-    const viewParams = { ownerUserId: senderId, data, currentModel };
-    const view =
-      pickerEntry.kind === "summary"
-        ? renderMattermostModelSummaryView(viewParams)
-        : pickerEntry.kind === "providers"
-          ? renderMattermostProviderPickerView(viewParams)
-          : renderMattermostModelsPickerView({
-              ...viewParams,
-              provider: pickerEntry.provider,
-              page: 1,
-            });
-
-    await sendMessageMattermost(
-      `channel:${channelId}`,
-      [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
-      { cfg, accountId: account.accountId, buttons: view.buttons },
-    );
-    runtime.log?.(`delivered model picker to ${to}`);
+    if (hasModels) {
+      runtime.log?.(`delivered model picker to ${to}`);
+    }
     return;
   }
 
@@ -776,7 +651,7 @@ async function handleSlashCommandAsync(params: {
     SenderId: senderId,
     Provider: "mattermost" as const,
     Surface: "mattermost" as const,
-    MessageSid: triggerId ?? `slash-${Date.now()}`,
+    MessageSid: messageSid,
     Timestamp: Date.now(),
     WasMentioned: true,
     CommandAuthorized: commandAuthorized,
@@ -826,7 +701,7 @@ async function handleSlashCommandAsync(params: {
       },
       onError: (err, info) => {
         runtime.error?.(
-          `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
+          `mattermost slash ${info.kind} reply failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
         );
       },
     },
@@ -850,4 +725,3 @@ async function handleSlashCommandAsync(params: {
     },
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

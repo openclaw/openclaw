@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { A2aMessageRecord, A2aTaskRecord } from "./protocol.js";
 
 const A2A_TERMINAL_MAX_TASKS = 500;
 const A2A_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 const A2A_ERROR_MAX_LENGTH = 512;
 
-type A2aTaskWaiter = {
-  resolve: (task: A2aTaskRecord) => void;
-  timer: ReturnType<typeof setTimeout>;
-};
+type A2aTaskWaiter = (task: A2aTaskRecord) => void;
 
 function isTerminalTask(task: A2aTaskRecord): boolean {
   return task.status.state !== "TASK_STATE_SUBMITTED" && task.status.state !== "TASK_STATE_WORKING";
@@ -27,12 +26,18 @@ function createStatusMessage(contextId: string, text: string): A2aMessageRecord 
 export class A2aTaskStore {
   readonly #tasks = new Map<string, A2aTaskRecord>();
   readonly #taskOwners = new Map<string, string>();
-  readonly #pendingByContext = new Map<string, string[]>();
+  readonly #messageTasks = new Map<string, A2aTaskRecord>();
+  readonly #taskMessageKeys = new Map<string, string>();
   readonly #terminalTasks = new Map<string, number>();
   readonly #waiters = new Map<string, Set<A2aTaskWaiter>>();
 
-  create(contextId: string, ownerPeer?: string): A2aTaskRecord {
+  create(contextId: string, ownerPeer?: string, messageId?: string): A2aTaskRecord {
     this.#pruneTerminalTasks();
+    const messageKey = messageId === undefined ? undefined : JSON.stringify([ownerPeer, messageId]);
+    const existing = messageKey === undefined ? undefined : this.#messageTasks.get(messageKey);
+    if (existing) {
+      return existing;
+    }
     const task: A2aTaskRecord = {
       id: randomUUID(),
       contextId,
@@ -44,10 +49,10 @@ export class A2aTaskStore {
     if (ownerPeer !== undefined) {
       this.#taskOwners.set(task.id, ownerPeer);
     }
-    const conversationKey = this.#conversationKey(contextId, ownerPeer);
-    const pending = this.#pendingByContext.get(conversationKey) ?? [];
-    pending.push(task.id);
-    this.#pendingByContext.set(conversationKey, pending);
+    if (messageKey !== undefined) {
+      this.#messageTasks.set(messageKey, task);
+      this.#taskMessageKeys.set(task.id, messageKey);
+    }
     return task;
   }
 
@@ -61,33 +66,17 @@ export class A2aTaskStore {
 
   start(taskId: string): A2aTaskRecord | undefined {
     const task = this.#tasks.get(taskId);
-    if (task?.status.state === "TASK_STATE_SUBMITTED") {
-      task.status = { state: "TASK_STATE_WORKING", timestamp: new Date().toISOString() };
+    if (task?.status.state !== "TASK_STATE_SUBMITTED") {
+      return undefined;
     }
+    task.status = { state: "TASK_STATE_WORKING", timestamp: new Date().toISOString() };
     return task;
   }
 
-  completeNext(
-    contextId: string,
-    text: string | undefined,
-    ownerPeer?: string,
-  ): A2aTaskRecord | undefined {
-    const conversationKey = this.#conversationKey(contextId, ownerPeer);
-    const queue = this.#pendingByContext.get(conversationKey);
-    if (!queue?.length) {
-      return undefined;
-    }
-    const nextTaskId = queue.shift();
-    if (queue.length === 0) {
-      this.#pendingByContext.delete(conversationKey);
-    }
-    if (!nextTaskId) {
-      return undefined;
-    }
-
-    const task = this.#tasks.get(nextTaskId);
+  complete(taskId: string, text: string | undefined): A2aTaskRecord | undefined {
+    const task = this.#tasks.get(taskId);
     if (!task || isTerminalTask(task)) {
-      return undefined;
+      return task;
     }
     if (text?.trim()) {
       task.artifacts = [{ artifactId: randomUUID(), parts: [{ text }] }];
@@ -96,7 +85,7 @@ export class A2aTaskStore {
       state: "TASK_STATE_COMPLETED",
       timestamp: new Date().toISOString(),
       ...(!text?.trim()
-        ? { message: createStatusMessage(contextId, "Agent completed without reply text") }
+        ? { message: createStatusMessage(task.contextId, "Agent completed without reply text") }
         : {}),
     };
     return this.#finishTask(task);
@@ -116,35 +105,24 @@ export class A2aTaskStore {
     if (!task || isTerminalTask(task)) {
       return Promise.resolve(task);
     }
-    return new Promise((resolve) => {
-      const waiters = this.#waiters.get(taskId) ?? new Set<A2aTaskWaiter>();
-      const waiter: A2aTaskWaiter = {
-        resolve,
-        timer: setTimeout(() => {
-          waiters.delete(waiter);
-          if (waiters.size === 0) {
-            this.#waiters.delete(taskId);
-          }
-          resolve(task);
-        }, timeoutMs),
-      };
-      waiters.add(waiter);
-      this.#waiters.set(taskId, waiters);
+    const completed = createDeferred<A2aTaskRecord>();
+    const waiters = this.#waiters.get(taskId) ?? new Set<A2aTaskWaiter>();
+    waiters.add(completed.resolve);
+    this.#waiters.set(taskId, waiters);
+    return raceWithTimeout(completed.promise, timeoutMs, () => task).finally(() => {
+      waiters.delete(completed.resolve);
+      if (waiters.size === 0) {
+        this.#waiters.delete(taskId);
+      }
     });
   }
 
   stop(): void {
-    for (const [taskId, waiters] of this.#waiters) {
-      const task = this.#tasks.get(taskId);
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
-        if (task) {
-          waiter.resolve(task);
-        }
-      }
+    for (const task of this.#tasks.values()) {
+      this.fail(task.id, "A2A channel stopped before completing the task");
     }
-    this.#waiters.clear();
-    this.#pendingByContext.clear();
+    this.#messageTasks.clear();
+    this.#taskMessageKeys.clear();
     this.#terminalTasks.clear();
     this.#taskOwners.clear();
     this.#tasks.clear();
@@ -159,17 +137,6 @@ export class A2aTaskStore {
     if (!task || isTerminalTask(task)) {
       return task;
     }
-    const conversationKey = this.#conversationKey(task.contextId, this.#taskOwners.get(task.id));
-    const queue = this.#pendingByContext.get(conversationKey);
-    if (queue) {
-      const position = queue.indexOf(taskId);
-      if (position !== -1) {
-        queue.splice(position, 1);
-      }
-      if (queue.length === 0) {
-        this.#pendingByContext.delete(conversationKey);
-      }
-    }
     task.status = {
       state,
       timestamp: new Date().toISOString(),
@@ -183,9 +150,8 @@ export class A2aTaskStore {
     const waiters = this.#waiters.get(task.id);
     if (waiters) {
       this.#waiters.delete(task.id);
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
-        waiter.resolve(task);
+      for (const resolve of waiters) {
+        resolve(task);
       }
     }
     this.#pruneTerminalTasks();
@@ -198,13 +164,14 @@ export class A2aTaskStore {
       if (finishedAt > expiresBefore && this.#terminalTasks.size <= A2A_TERMINAL_MAX_TASKS) {
         break;
       }
+      const messageKey = this.#taskMessageKeys.get(taskId);
+      if (messageKey !== undefined) {
+        this.#messageTasks.delete(messageKey);
+        this.#taskMessageKeys.delete(taskId);
+      }
       this.#terminalTasks.delete(taskId);
       this.#taskOwners.delete(taskId);
       this.#tasks.delete(taskId);
     }
-  }
-
-  #conversationKey(contextId: string, ownerPeer?: string): string {
-    return ownerPeer === undefined ? contextId : `${ownerPeer}\0${contextId}`;
   }
 }

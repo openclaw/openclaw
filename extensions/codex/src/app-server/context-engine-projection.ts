@@ -1,15 +1,10 @@
 import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
-/**
- * Projects OpenClaw context-engine assemblies into Codex prompt text while
- * preserving safety boundaries and redacting tool payloads.
- */
 import {
   isOpenClawRuntimeContextCustomMessage,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
-import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
@@ -56,19 +51,12 @@ const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 const CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS = 256;
 
-/**
- * This projection has no access to agent-core's private compaction helper, but
- * must keep the same attribution contract: a stable ID is identity; display
- * labels are optional metadata, never provenance on their own.
- */
-function formatCodexContextSenderSuffix(message: AgentMessage): string {
+// Match compaction attribution: stable IDs establish identity; display labels do not.
+export function formatCodexContextSenderSuffix(message: AgentMessage): string {
   if (message.role !== "user") {
     return "";
   }
-  const metadata = Reflect.get(message, "__openclaw");
-  if (!metadata || typeof metadata !== "object") {
-    return "";
-  }
+  const metadata = asOptionalObjectRecord(Reflect.get(message, "__openclaw"));
   const normalize = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
       return undefined;
@@ -78,14 +66,12 @@ function formatCodexContextSenderSuffix(message: AgentMessage): string {
       ? truncateUtf16Safe(normalized, CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS)
       : undefined;
   };
-  // SAFETY: object narrowing above guarantees a record; each sender field is validated below.
-  const record = metadata as Record<string, unknown>;
-  const id = normalize(record.senderId);
+  const id = normalize(metadata?.senderId);
   if (!id) {
     return "";
   }
-  const name = normalize(record.senderName);
-  const username = normalize(record.senderUsername);
+  const name = normalize(metadata?.senderName);
+  const username = normalize(metadata?.senderUsername);
   return ` sender=${JSON.stringify({ id, ...(name ? { name } : {}), ...(username ? { username } : {}) })}`;
 }
 
@@ -118,6 +104,7 @@ export async function projectContextEngineAssemblyForCodex(params: {
   toolPayloadMode?: "elide" | "preserve";
   prepareFileContext?: PrepareContextFile;
   currentUserTurnIdempotencyKey?: string;
+  currentUserMessage?: AgentMessage;
 }): Promise<CodexContextProjection> {
   const prompt = params.prompt.trim();
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
@@ -140,8 +127,18 @@ export async function projectContextEngineAssemblyForCodex(params: {
   const promptPrefix = boundedContext
     ? [CONTEXT_HEADER, CONTEXT_SAFETY_NOTE, "", CONTEXT_OPEN].join("\n") + "\n"
     : undefined;
-  const promptSuffix = boundedContext ? `\n${CONTEXT_CLOSE}\n\n${REQUEST_HEADER}\n${prompt}` : "";
-  const promptText = boundedContext ? `${promptPrefix}${boundedContext}${promptSuffix}` : prompt;
+  const currentUserSenderSuffix = params.currentUserMessage
+    ? formatCodexContextSenderSuffix(params.currentUserMessage)
+    : "";
+  const currentRequest = currentUserSenderSuffix
+    ? `${neutralizeCodexExplicitMentionSigils(`[user${currentUserSenderSuffix}]`)}\n${prompt}`
+    : prompt;
+  const promptSuffix = boundedContext
+    ? `\n${CONTEXT_CLOSE}\n\n${REQUEST_HEADER}\n${currentRequest}`
+    : "";
+  const promptText = boundedContext
+    ? `${promptPrefix}${boundedContext}${promptSuffix}`
+    : currentRequest;
   const promptContextRange =
     promptPrefix && boundedContext
       ? { start: promptPrefix.length, end: promptPrefix.length + boundedContext.length }
@@ -216,8 +213,6 @@ function resolveContinuityCharsPerToken(
 ): number | undefined {
   if (
     !calibration ||
-    !Number.isFinite(calibration.promptChars) ||
-    !Number.isFinite(calibration.inputTokens) ||
     calibration.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
     calibration.inputTokens <= 0
   ) {
@@ -279,19 +274,13 @@ export function fitCodexProjectedContextForTurnStart(params: {
       ...(imageGroups.length ? { imageGroups } : {}),
     };
   };
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
-      ? Math.max(0, Math.floor(params.maxChars))
-      : CODEX_TURN_START_TEXT_INPUT_MAX_CHARS;
+  const maxChars = Math.max(0, params.maxChars ?? CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
   if (params.promptText.length <= maxChars) {
     return finish(slice(0, params.promptText.length));
   }
-  const range = normalizeProjectedContextRange(params.contextRange, params.promptText.length);
+  const range = params.contextRange;
   if (!range) {
-    const preservedRange = normalizeProjectedContextRange(
-      params.preservedRange,
-      params.promptText.length,
-    );
+    const preservedRange = params.preservedRange;
     if (!preservedRange) {
       return finish(slice(0, params.promptText.length));
     }
@@ -310,10 +299,7 @@ export function fitCodexProjectedContextForTurnStart(params: {
 
   const beforeContext = params.promptText.slice(0, range.start);
   const afterContext = params.promptText.slice(range.end);
-  const requestRange = normalizeProjectedContextRange(
-    params.requestRange,
-    params.promptText.length,
-  );
+  const requestRange = params.requestRange;
   if (
     requestRange &&
     requestRange.start >= range.end &&
@@ -357,34 +343,11 @@ export function fitCodexProjectedContextForTurnStart(params: {
   return finish(slice(range.start, range.end, contextBudgetAfterRequest), afterContextText);
 }
 
-function normalizeProjectedContextRange(
-  range: CodexProjectedContextRange | undefined,
-  textLength: number,
-): CodexProjectedContextRange | undefined {
-  if (!range) {
-    return undefined;
-  }
-  const start = Math.floor(range.start);
-  const end = Math.floor(range.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) {
-    return undefined;
-  }
-  if (end > textLength) {
-    return undefined;
-  }
-  return { start, end };
-}
-
 export function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
 }): number {
-  const requestedReserveTokens =
-    typeof params.reserveTokens === "number" &&
-    Number.isFinite(params.reserveTokens) &&
-    params.reserveTokens >= 0
-      ? Math.floor(params.reserveTokens)
-      : DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
+  const requestedReserveTokens = params.reserveTokens ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
   const minPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(params.contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
@@ -498,7 +461,7 @@ type MessageRenderOptions = {
   mediaPrepared?: boolean;
 };
 
-function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
+export function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();
@@ -510,7 +473,7 @@ function renderMessageBody(message: AgentMessage, options: MessageRenderOptions)
   const toolResultLabel =
     toolResult && message.toolCallId ? `tool result: ${message.toolCallId}` : "tool result";
   if (toolResult && options.toolPayloadMode === "elide") {
-    return `${toolResultLabel} [content omitted]`;
+    return "";
   }
   // The history window bounds conversation text; per-part caps apply only to payloads.
   const body =
@@ -524,9 +487,7 @@ function renderMessageBody(message: AgentMessage, options: MessageRenderOptions)
             .trim()
         : "[non-text content omitted]";
   return toolResult
-    ? redactToolPayloadText(
-        `${toolResultLabel}${message.toolName ? ` (${message.toolName})` : ""}\n${body}`,
-      )
+    ? `${toolResultLabel}${message.toolName ? ` (${message.toolName})` : ""}\n${body}`
     : body;
 }
 
@@ -555,7 +516,7 @@ function renderMessagePart(
         ? `tool result: ${record.toolUseId}`
         : "tool result";
     if (options.toolPayloadMode !== "preserve") {
-      return `${label} [${toolCall ? "input" : "content"} omitted]`;
+      return "";
     }
     const renderPayload = toolCall ? renderToolCallPayload : renderToolResultPayload;
     const prefix = !toolCall && toolResultBody ? "" : `${label}\n`;
@@ -579,7 +540,7 @@ function renderToolResultPayload(record: Record<string, unknown>): Record<string
     ...Object.fromEntries(
       Object.entries(record)
         .filter(([key]) => !TOOL_PAYLOAD_METADATA_KEYS.has(key))
-        .map(([key, value]) => [key, projectToolPayloadValue(value, "content", key)]),
+        .map(([key, value]) => [key, projectToolPayloadValue(value, "content")]),
     ),
   };
 }
@@ -598,27 +559,24 @@ function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string
   for (const key of TOOL_PAYLOAD_METADATA_KEYS) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
-      payload[key] = redactSensitiveFieldValue(key, value);
+      payload[key] = value;
     }
   }
   return payload;
 }
 
-// Inputs retain shape only; results retain useful content with log redaction.
+// Inputs retain shape only; results retain useful content.
 // Both projections preserve the same object order and repeated-reference marker.
 function projectToolPayloadValue(
   value: unknown,
   mode: "shape" | "content",
-  key = "",
   seen = new WeakSet<object>(),
 ): unknown {
   if (
     mode === "content" &&
     (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
   ) {
-    const text = String(value);
-    const redacted = redactSensitiveFieldValue(key, redactToolPayloadText(text));
-    return redacted === text ? value : redacted;
+    return value;
   }
   if (value === null || (mode === "content" && value === undefined)) {
     return value;
@@ -629,12 +587,12 @@ function projectToolPayloadValue(
     }
     seen.add(value);
     if (Array.isArray(value)) {
-      return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
+      return value.map((entry) => projectToolPayloadValue(entry, mode, seen));
     }
     return Object.fromEntries(
       Object.entries(value).map(([childKey, child]) => [
         childKey,
-        projectToolPayloadValue(child, mode, childKey, seen),
+        projectToolPayloadValue(child, mode, seen),
       ]),
     );
   }

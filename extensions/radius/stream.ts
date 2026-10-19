@@ -6,6 +6,7 @@ import {
   type AssistantMessageEvent,
   type SimpleStreamOptions,
   type StreamFunction,
+  type ToolCall,
   type Usage,
 } from "openclaw/plugin-sdk/llm";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
@@ -16,6 +17,7 @@ import {
   failTransportStream,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
+  iterateSseFrames,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -69,10 +71,7 @@ function usage(value: unknown): Usage {
 }
 
 function createEventConverter(partial: AssistantMessage) {
-  const toolJson = new Map<
-    number,
-    { json: string; shouldPreview: ReturnType<typeof createToolArgumentPreviewSchedule> }
-  >();
+  const toolJson = new Map<number, ReturnType<typeof createToolArgumentPreviewSchedule>>();
   return (raw: unknown): AssistantMessageEvent => {
     const event = record(raw);
     const type = string(event.type);
@@ -90,6 +89,11 @@ function createEventConverter(partial: AssistantMessage) {
         return { type, reason, message: partial };
       }
       if (type === "error" && (reason === "error" || reason === "aborted")) {
+        for (const block of partial.content) {
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
+        }
         partial.stopReason = reason;
         partial.errorMessage =
           event.errorMessage === undefined ? "Radius request failed" : string(event.errorMessage);
@@ -117,16 +121,15 @@ function createEventConverter(partial: AssistantMessage) {
       } else if (type === "thinking_start") {
         partial.content.push({ type: "thinking", thinking: "" });
       } else {
-        partial.content.push({
+        const toolCall: ToolCall = {
           type: "toolCall",
           id: string(event.id),
           name: string(event.toolName),
           arguments: {},
-        });
-        toolJson.set(contentIndex, {
-          json: "",
-          shouldPreview: createToolArgumentPreviewSchedule(),
-        });
+          partialJson: "",
+        };
+        partial.content.push(toolCall);
+        toolJson.set(contentIndex, createToolArgumentPreviewSchedule());
       }
       return { type, contentIndex, partial };
     }
@@ -178,9 +181,10 @@ function createEventConverter(partial: AssistantMessage) {
           break;
         }
         const delta = string(event.delta);
-        pending.json += delta;
-        if (pending.shouldPreview(pending.json.length)) {
-          block.arguments = parseStreamingJson(pending.json);
+        const partialJson = (block.partialJson ?? "") + delta;
+        block.partialJson = partialJson;
+        if (pending(partialJson.length)) {
+          block.arguments = parseStreamingJson(partialJson);
         }
         return { type, contentIndex, delta, partial };
       }
@@ -193,6 +197,7 @@ function createEventConverter(partial: AssistantMessage) {
           throw new Error("Radius terminal tool call does not match its start");
         }
         block.arguments = parseTerminalToolCallArguments(call.arguments);
+        delete block.partialJson;
         if (call.thoughtSignature !== undefined) {
           block.thoughtSignature = string(call.thoughtSignature);
         }
@@ -206,45 +211,31 @@ function createEventConverter(partial: AssistantMessage) {
 
 async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   const cancel = () => {
     void reader.cancel(signal?.reason).catch(() => undefined);
   };
   signal?.addEventListener("abort", cancel, { once: true });
   try {
-    while (true) {
-      signal?.throwIfAborted();
-      const { done, value } = await reader.read();
-      signal?.throwIfAborted();
-      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-      for (;;) {
-        const boundary = /\r\n\r\n|\n\n|\r\r/u.exec(buffer);
-        if (!boundary && !done) {
-          break;
-        }
-        const frame = boundary ? buffer.slice(0, boundary.index) : buffer;
-        if (Buffer.byteLength(frame, "utf8") > MAX_SSE_EVENT_BYTES) {
+    for await (const { frame } of iterateSseFrames(
+      async () => {
+        signal?.throwIfAborted();
+        const chunk = await reader.read();
+        signal?.throwIfAborted();
+        return chunk;
+      },
+      (pending) => {
+        if (Buffer.byteLength(pending, "utf8") > MAX_SSE_EVENT_BYTES) {
           throw new Error("Radius SSE event exceeds 16 MiB");
         }
-        buffer = boundary ? buffer.slice(boundary.index + boundary[0].length) : "";
-        const data = frame
-          .split(/\r\n|\n|\r/u)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .join("\n");
-        if (data && data !== "[DONE]") {
-          yield JSON.parse(data);
-        }
-        if (!boundary) {
-          break;
-        }
-      }
-      if (Buffer.byteLength(buffer, "utf8") > MAX_SSE_EVENT_BYTES) {
-        throw new Error("Radius SSE event exceeds 16 MiB");
-      }
-      if (done) {
-        return;
+      },
+    )) {
+      const data = frame
+        .split(/\r\n|\n|\r/u)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (data && data !== "[DONE]") {
+        yield JSON.parse(data);
       }
     }
   } finally {
@@ -324,6 +315,11 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
         }
         throw new Error("Radius stream ended without a terminal event");
       } catch (error) {
+        for (const block of partial.content) {
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
+        }
         failTransportStream({ stream, output: partial, signal: options?.signal, error });
       } finally {
         await response?.body?.cancel().catch(() => undefined);

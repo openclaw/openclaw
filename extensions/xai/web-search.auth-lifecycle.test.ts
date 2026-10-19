@@ -15,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => (
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  listUsableProviderAuthProfileIds: () => ({ agentDir: "", profileIds: [] }),
+  listUsableProviderAuthProfileIdsAsync: async () => ({ agentDir: "", profileIds: [] }),
 }));
 
 function createAuthSearchTool(webSearch?: { apiKey: string }) {
@@ -134,7 +134,11 @@ describe("xAI web search auth lifecycle", () => {
       const rejected =
         cancellation === "caller"
           ? expect(searching).rejects.toBe(reason)
-          : expect(searching).rejects.toMatchObject({ code: "ETIMEDOUT" });
+          : expect(searching).rejects.toMatchObject({
+              name: "TimeoutError",
+              code: "ETIMEDOUT",
+              timeoutMs: 60_000,
+            });
       try {
         await started.promise;
         if (cancellation === "caller") {

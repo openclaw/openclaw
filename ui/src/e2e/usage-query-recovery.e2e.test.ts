@@ -2,8 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Usage failed date query attribution",
@@ -122,7 +122,8 @@ suite.define(() => {
         ),
       );
       expect(failedRange).toBeNull();
-      expect(failedValue).toBeNull();
+      // The failed range shows the placeholder, never the earlier range's cost.
+      expect(failedValue).toBe("—");
       expect(await page.locator(".usage-empty-state").count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.usage", sessions("2026-07-01"));

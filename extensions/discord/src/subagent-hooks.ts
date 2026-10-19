@@ -2,12 +2,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
   listThreadBindingsBySessionKey,
+  listThreadBindingsBySessionKeyAsync,
+  type ThreadBindingRecord,
   type ThreadBindingTargetKind,
   unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
-import { ensureBindingsLoadedAsync } from "./monitor/thread-bindings.state.js";
 
 type DiscordSubagentEndedEvent = {
   targetSessionKey: string;
@@ -56,12 +58,26 @@ function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTarget
   );
 }
 
+/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
-  return shouldResolveDiscordDeliveryTarget(event)
-    ? resolveDiscordDeliveryTarget(event)
-    : undefined;
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: "handleDiscordSubagentDeliveryTarget",
+    replacement: "handleDiscordSubagentDeliveryTargetAsync",
+  });
+  if (!shouldResolveDiscordDeliveryTarget(event)) {
+    return undefined;
+  }
+  return resolveDiscordDeliveryTarget(
+    event,
+    listThreadBindingsBySessionKey({
+      targetSessionKey: event.childSessionKey,
+      accountId: event.requesterOrigin?.accountId?.trim() || undefined,
+      targetKind: "subagent",
+    }),
+  );
 }
 
 export async function handleDiscordSubagentDeliveryTargetAsync(
@@ -70,20 +86,20 @@ export async function handleDiscordSubagentDeliveryTargetAsync(
   if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }
-  await ensureBindingsLoadedAsync();
-  return resolveDiscordDeliveryTarget(event);
+  const bindings = await listThreadBindingsBySessionKeyAsync({
+    targetSessionKey: event.childSessionKey,
+    accountId: event.requesterOrigin?.accountId?.trim() || undefined,
+    targetKind: "subagent",
+  });
+  return resolveDiscordDeliveryTarget(event, bindings);
 }
 
 function resolveDiscordDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
+  bindings: ThreadBindingRecord[],
 ): DiscordSubagentDeliveryTargetResult {
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
   const requesterThreadId = normalizeOptionalStringifiedId(event.requesterOrigin?.threadId);
-  const bindings = listThreadBindingsBySessionKey({
-    targetSessionKey: event.childSessionKey,
-    ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
-    targetKind: "subagent",
-  });
   const binding =
     (requesterThreadId
       ? bindings.find(

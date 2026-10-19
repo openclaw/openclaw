@@ -44,7 +44,7 @@ vi.mock("../agents/openclaw-tools.js", () => ({
 
 // mock-isolation: Filter synthetic mediated tools without filesystem or exec initialization.
 vi.mock("../agents/agent-tools.js", () => ({
-  createOpenClawCodingToolsAsync: async (...args: Parameters<typeof codingTools>) =>
+  createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof codingTools>) =>
     codingTools(...args),
 }));
 
@@ -190,6 +190,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "computer",
       "mobile_ui",
       "openclaw",
+      "intent",
       "sessions",
     ];
     expect(args.pluginToolDenylist).toEqual(denied);
@@ -199,7 +200,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   it.each([
     ["loopback", undefined, "missing", false, false],
     ["loopback", false, "live", false, true],
-    ["loopback", false, "retired", false, false],
+    ["loopback", false, "retired", false, true],
     ["loopback", false, "live", true, false],
     ["http", false, "live", false, false],
     ["http", true, "missing", false, true],
@@ -213,7 +214,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         if (authority === "retired") {
           admission.close();
         }
-        createTools.mockReturnValueOnce([makeTool("sessions")]);
+        const sessions = makeTool("sessions");
+        createTools.mockReturnValueOnce([sessions]);
         const result = await resolveTools({
           cfg: {
             gateway: { tools: { allow: ["sessions"] } },
@@ -225,6 +227,17 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
           admittedRunContext,
         });
         expect(result.tools.some((tool) => tool.name === "sessions")).toBe(available);
+        if (authority === "retired") {
+          await expect(result.tools[0]?.execute("retired-assignment", {})).resolves.toMatchObject({
+            content: [
+              {
+                type: "text",
+                text: "sessions needs the owner's authority, and this turn was not started by the owner. Do not retry sessions.",
+              },
+            ],
+          });
+          expect(sessions.execute).not.toHaveBeenCalled();
+        }
         expect(readCreateToolsArgs().senderIsOwner).toBe(senderIsOwner);
       } finally {
         admission.close();
@@ -393,27 +406,68 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
   const wildcardExecDeny = { tools: { toolsBySender: { "*": { deny: ["exec"] } } } };
 
-  it("applies wildcard sender policy to owners on external channels", async () => {
-    const result = await resolveNodeExecTools({
-      cfg: wildcardExecDeny,
-      sessionKey: "agent:main:discord:channel:dev",
-      senderIsOwner: true,
-      messageProvider: "discord",
-    });
-
-    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
-    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
-  });
-
-  it("preserves owner WebChat access from wildcard sender policy", async () => {
+  it.each<{
+    name: string;
+    params: Partial<Parameters<typeof resolveGatewayScopedTools>[0]>;
+    available: boolean;
+  }>([
+    {
+      name: "external-channel owner",
+      params: { sessionKey: "agent:main:discord:channel:dev", messageProvider: "discord" },
+      available: false,
+    },
+    {
+      name: "WebChat owner",
+      params: { messageProvider: "webchat" },
+      available: true,
+    },
+    {
+      name: "preserved provider-less internal owner",
+      params: { requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "owner" } },
+      available: true,
+    },
+    {
+      name: "preserved internal owner with an external destination route",
+      params: {
+        requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "owner" },
+        messageProvider: "discord",
+      },
+      available: true,
+    },
+    {
+      name: "preserved external owner with an internal destination route",
+      params: {
+        requesterOrigin: {
+          sessionKey: "agent:main:discord:channel:dev",
+          operatorProfileId: "owner",
+          messageProvider: "discord",
+        },
+        messageProvider: "webchat",
+      },
+      available: false,
+    },
+    ...[false, undefined].map((senderIsOwner) => ({
+      name: `preserved provider-less requester with current owner=${senderIsOwner}`,
+      params: {
+        requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "requester" },
+        messageProvider: "webchat",
+        senderIsOwner,
+      },
+      available: false,
+    })),
+  ])("applies wildcard sender policy for $name", async ({ params, available }) => {
     const result = await resolveNodeExecTools({
       cfg: wildcardExecDeny,
       sessionKey: "agent:main:main",
-      messageProvider: "webchat",
+      ...params,
     });
 
-    expect(result.tools.map((tool) => tool.name)).toContain("exec");
-    expect(readCreateToolsArgs().pluginToolDenylist).not.toContain("exec");
+    expect(result.tools.some((tool) => tool.name === "exec")).toBe(available);
+    if (available) {
+      expect(readCreateToolsArgs().pluginToolDenylist).not.toContain("exec");
+    } else {
+      expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+    }
   });
 
   it("does not inherit node-only exec as a generic child or cron capability", async () => {

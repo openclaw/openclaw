@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { observeSqliteWalPeriodicWork } from "./sqlite-wal-scheduler.test-support.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
@@ -48,9 +49,13 @@ if (role === "worker") {
   const scheduled = observeSqliteWalPeriodicWork();
   let stale: DatabaseSync;
   try {
-    stale = agent
+    const database = agent
       ? agent.openOpenClawAgentDatabase({ agentId: "main", path: databasePath, env }).db
       : openOpenClawStateDatabase({ path: databasePath, env }).db;
+    if (isPostgresSqlConnection(database)) {
+      throw new Error("WAL replacement fixture requires a SQLite database");
+    }
+    stale = database;
   } finally {
     scheduled.restore();
   }

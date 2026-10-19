@@ -1,5 +1,6 @@
 import { Type, type TProperties } from "typebox";
 import {
+  CronAddJobResultSchema,
   CronAddResultSchema,
   CronDeliveryPreviewSchema,
   CronJobSchema,
@@ -36,6 +37,7 @@ const CompactCronJobSchema = closedObject({
     Type.Literal("cron"),
     Type.Literal("on-exit"),
     Type.Literal("stream"),
+    Type.Literal("event"),
   ]),
   schedule: Type.Optional(
     Type.Union(
@@ -151,7 +153,7 @@ export const CronToolOutputSchema = defineToolOutputSchema({
     get: CronJobSchema,
     // Add can return a direct job or the declarative convergence envelope.
     add: CronAddResultSchema,
-    update: CronJobSchema,
+    update: CronAddJobResultSchema,
     remove: Type.Union([
       closedObject({
         ok: Type.Literal(true),

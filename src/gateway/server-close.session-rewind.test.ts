@@ -11,32 +11,26 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
-import * as lifecycleAdmission from "../sessions/session-lifecycle-admission.js";
+import * as sessionController from "../sessions/session-controller.lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
-type CloseFixture = Awaited<ReturnType<typeof createGatewayMetadataCloseFixture>>;
+type DatabaseExecution = ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution>;
 const scope = {
   agentId: "main",
   sessionKey: "agent:main:dashboard:accepted-close-rewind",
   sessionId: "rewind-close-source",
 };
-let fixture: CloseFixture | undefined;
-let prepared:
-  | {
-      server: Awaited<ReturnType<CloseFixture["start"]>>;
-      kernel: NonNullable<ReturnType<CloseFixture["kernels"]["get"]>>;
-      database: ReturnType<typeof openOpenClawAgentDatabase>;
-    }
-  | undefined;
+let fixture: Awaited<ReturnType<typeof createGatewayMetadataCloseFixture>> | undefined;
+let prepared: Awaited<ReturnType<typeof prepareFixture>> | undefined;
 
-beforeAll(async () => {
+async function prepareFixture() {
   fixture = await createGatewayMetadataCloseFixture("gateway-session-rewind-close");
   const port = await fixture.reservePort();
   const server = await fixture.start(port);
@@ -58,24 +52,22 @@ beforeAll(async () => {
         sessionId: scope.sessionId,
         cwd: fixture.state.workspaceDir,
       }),
-      ...messages.map((message) => ({
+      ...messages.map(({ id, parentId, role, content }) => ({
         type: "message",
-        id: message.id,
-        parentId: message.parentId,
-        message: { role: message.role, content: message.content },
+        id,
+        parentId,
+        message: { role, content },
       })),
     ]),
   );
   await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
-  prepared = {
-    server,
-    kernel,
-    database: openOpenClawAgentDatabase({ agentId: scope.agentId }),
-  };
-});
+  return { server, kernel, database: openOpenClawAgentDatabase({ agentId: scope.agentId }) };
+}
 
+beforeAll(async () => {
+  prepared = await prepareFixture();
+});
 afterAll(async () => {
-  // Also own teardown when startup or seeding prevents the test from running.
   await fixture?.cleanup();
 });
 
@@ -84,6 +76,8 @@ it("persists an accepted fork and queued rewind across the close prelude before 
 }) => {
   assert(prepared && fixture, "Seeded Gateway close fixture");
   const { server, kernel, database } = prepared;
+  const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
   const accepted = createDeferred();
   const releasePersistence = createDeferred();
   const preludeEntered = createDeferred();
@@ -92,37 +86,39 @@ it("persists an accepted fork and queued rewind across the close prelude before 
   let rewinding: Promise<SessionsRewindResult> | undefined;
   let closing: Promise<void> | undefined;
   try {
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
     let executions = 0;
-    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-      (...args): ReturnType<typeof capture> => {
-        const owner = capture(...args);
-        return {
-          ...owner,
-          get fileIdentity() {
-            return owner.fileIdentity;
-          },
-          runExisting: (source, operation, options) =>
-            owner.runExisting(
-              source,
-              (worker) =>
-                operation({
-                  execute: async (command, commandOptions) => {
-                    if (
-                      command.type === "session.messageCut.commit" ||
-                      command.type === "database.domain.publish"
-                    ) {
-                      executions++;
-                      accepted.resolve();
-                      await releasePersistence.promise;
-                    }
-                    return await worker.execute(command, commandOptions);
-                  },
-                }),
-              options,
-            ),
-        };
+    const wrapExecution = (owner: DatabaseExecution): DatabaseExecution => ({
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
       },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                if (
+                  command.type === "session.messageCut.commit" ||
+                  command.type === "database.domain.publish"
+                ) {
+                  executions++;
+                  accepted.resolve();
+                  await releasePersistence.promise;
+                }
+                return await worker.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
+    });
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
+      (...args) => wrapExecution(capture(...args)),
+    );
+    const capturePreparation = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+    vi.spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
+      (...args) => wrapExecution(capturePreparation(...args)),
     );
     const dispatchOptions = {
       client: createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
@@ -135,22 +131,16 @@ it("persists an accepted fork and queued rewind across the close prelude before 
       params,
       dispatchOptions,
     );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        accepted.promise,
-        forking,
-        "Fork settled before its accepted persistence could be held",
-      ),
-      signal,
+    await waitForGate(
+      accepted.promise,
+      forking,
+      "Fork settled before its accepted persistence could be held",
     );
-    const mutate = lifecycleAdmission.runExclusiveSessionLifecycleMutation;
-    vi.spyOn(lifecycleAdmission, "runExclusiveSessionLifecycleMutation").mockImplementation(
-      <T>(...args: Parameters<typeof mutate<T>>): Promise<T> => {
-        const [operation, options] = args;
-        const pending = mutate(operation, options);
-        if (operation === "rewind") {
-          rewindQueued.resolve();
-        }
+    const mutate = sessionController.runSessionMutation;
+    vi.spyOn(sessionController, "runSessionMutation").mockImplementation(
+      <T>(mutationParams: Parameters<typeof mutate<T>>[0]): Promise<T> => {
+        const pending = mutate(mutationParams);
+        rewindQueued.resolve();
         return pending;
       },
     );
@@ -159,13 +149,10 @@ it("persists an accepted fork and queued rewind across the close prelude before 
       params,
       dispatchOptions,
     );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        rewindQueued.promise,
-        rewinding,
-        "Rewind settled before entering the lifecycle queue",
-      ),
-      signal,
+    await waitForGate(
+      rewindQueued.promise,
+      rewinding,
+      "Rewind settled before entering the lifecycle queue",
     );
     kernel.requestEntryLifetime.signal.addEventListener("abort", () => preludeEntered.resolve(), {
       once: true,
@@ -174,13 +161,10 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     closing = server.close({ reason: "session rewind close regression" }).then(() => {
       closed = true;
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        preludeEntered.promise,
-        closing,
-        "Gateway closed before fencing request admission",
-      ),
-      signal,
+    await waitForGate(
+      preludeEntered.promise,
+      closing,
+      "Gateway closed before fencing request admission",
     );
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(closed).toBe(false);
@@ -198,39 +182,27 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     expect(result).toEqual({ editorText: "Edit this question." });
     expect(executions).toBe(2);
     expect(database.db.isOpen).toBe(false);
-    const reopened = new DatabaseSync(database.path, { readOnly: true });
-    try {
-      const row = reopened
-        .prepare(
-          "SELECT current_session_id AS session_id, json_extract(entry_json, '$.previousSessionId') AS previous_session_id FROM session_nodes WHERE session_key = ?",
-        )
-        .get(scope.sessionKey);
-      const child = reopened
-        .prepare("SELECT current_session_id AS session_id FROM session_nodes WHERE session_key = ?")
-        .get(fork.sessionKey);
-      assert(typeof child?.session_id === "string");
-      expect(child.session_id).not.toBe(scope.sessionId);
-      expect(child.session_id).not.toBe(row?.session_id);
-      expect(
-        reopened
-          .prepare(
-            "SELECT identity.event_id FROM session_transcript_active_events active JOIN transcript_event_identities identity ON identity.session_id = active.session_id AND identity.seq = active.event_seq WHERE active.session_id = ? AND active.message_position IS NOT NULL ORDER BY active.message_position",
-          )
-          .all(child.session_id),
-      ).toEqual([{ event_id: "user-1" }, { event_id: "assistant-1" }]);
-      assert(typeof row?.session_id === "string");
-      expect(row.session_id).not.toBe(scope.sessionId);
-      expect(row.previous_session_id).toBe(scope.sessionId);
-      expect(
-        reopened
-          .prepare(
-            "SELECT identity.event_id FROM session_transcript_active_events active JOIN transcript_event_identities identity ON identity.session_id = active.session_id AND identity.seq = active.event_seq WHERE active.session_id = ? AND active.message_position IS NOT NULL ORDER BY active.message_position",
-          )
-          .all(row.session_id),
-      ).toEqual([{ event_id: "user-1" }, { event_id: "assistant-1" }]);
-    } finally {
-      reopened.close();
-    }
+    using reopened = new DatabaseSync(database.path, { readOnly: true });
+    const activeEvents = reopened.prepare(
+      "SELECT identity.event_id FROM session_transcript_active_events active JOIN transcript_event_identities identity ON identity.session_id = active.session_id AND identity.seq = active.event_seq WHERE active.session_id = ? AND active.message_position IS NOT NULL ORDER BY active.message_position",
+    );
+    const retainedEvents = [{ event_id: "user-1" }, { event_id: "assistant-1" }];
+    const row = reopened
+      .prepare(
+        "SELECT current_session_id AS session_id, json_extract(entry_json, '$.previousSessionId') AS previous_session_id FROM session_nodes WHERE session_key = ?",
+      )
+      .get(scope.sessionKey);
+    const child = reopened
+      .prepare("SELECT current_session_id AS session_id FROM session_nodes WHERE session_key = ?")
+      .get(fork.sessionKey);
+    assert(typeof child?.session_id === "string");
+    expect(child.session_id).not.toBe(scope.sessionId);
+    expect(child.session_id).not.toBe(row?.session_id);
+    expect(activeEvents.all(child.session_id)).toEqual(retainedEvents);
+    assert(typeof row?.session_id === "string");
+    expect(row.session_id).not.toBe(scope.sessionId);
+    expect(row.previous_session_id).toBe(scope.sessionId);
+    expect(activeEvents.all(row.session_id)).toEqual(retainedEvents);
   } finally {
     releasePersistence.resolve();
     await Promise.allSettled([forking, rewinding, closing]);

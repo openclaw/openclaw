@@ -25,12 +25,11 @@ export type { RestartTombstoneRecoveryResult } from "./session-accessor.sqlite-r
 
 const log = createSubsystemLogger("sessions/recovery");
 
-/** Clone and publish through the canonical worker while retaining the caller's live authority. */
+/** Publish through the canonical worker while retaining the caller's live authority. */
 export async function recoverSessionEntryFromRestartTombstone(
   params: RestartTombstoneRecoveryParams,
 ): Promise<RestartTombstoneRecoveryResult> {
-  const { commitGuard, storePath, ...values } = params;
-  const input = structuredClone(values);
+  const { commitGuard, storePath, ...input } = params;
   const scope = captureLifecycleDatabaseScope(
     await prepareSqliteScope({
       agentId: input.agentId,
@@ -134,7 +133,20 @@ export async function recoverSessionEntryFromRestartTombstone(
       ) {
         throw new Error("Session recovery commit omitted its publication keys");
       }
-      publication.begin(receipt.changedKeys, []);
+      // SAFETY: The paired recovery kernel supplies this pre-COMMIT publication.
+      const planned = receipt as SessionEntryReplacementPublication;
+      publication.begin(
+        planned.changedKeys,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        new Map(
+          [...planned.current].filter(
+            ([key]) => !planned.unavailableParticipantKeys?.includes(key),
+          ),
+        ),
+      );
     },
   );
 }

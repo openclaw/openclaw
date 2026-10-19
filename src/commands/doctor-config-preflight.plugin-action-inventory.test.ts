@@ -27,6 +27,12 @@ import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-sup
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const withHome = useDoctorConfigPreflightHome();
+const actions = [
+  { pluginId: "acpx", id: "acpx-session-owner-resources" },
+  { pluginId: "codex", id: "codex-app-server-orphaned-session-bindings" },
+];
+const version = "2026.9.6";
+const retainedState = "retained session state";
 
 afterEach(() => {
   clearPluginDoctorContractRegistryCache();
@@ -41,45 +47,38 @@ it.each(["deferred-doctor", "doctor"] as const)(
       const stateDir = path.join(home, ".openclaw");
       const bundledRoot = path.join(home, "bundled");
       const externalRoot = path.join(home, "npm", "lib", "node_modules", "@openclaw");
-      const actions = [
-        { pluginId: "acpx", id: "acpx-session-owner-resources" },
-        { pluginId: "codex", id: "codex-app-server-orphaned-session-bindings" },
-      ];
+      const externalPath = (pluginId: string) => path.join(externalRoot, pluginId);
       for (const root of [bundledRoot, externalRoot]) {
         for (const { pluginId, id } of actions) {
           const pluginRoot = path.join(root, pluginId);
           const source = path.join(pluginRoot, "pending-session-state");
           const target = path.join(pluginRoot, "migrated-session-state");
           const action = { id, doctorOnly: true, phase: "after-session-repair" };
+          const write = (name: string, content: object | string) =>
+            fs.writeFileSync(
+              path.join(pluginRoot, name),
+              typeof content === "string" ? content : JSON.stringify(content),
+            );
           fs.mkdirSync(pluginRoot, { recursive: true });
-          fs.writeFileSync(
-            path.join(pluginRoot, "package.json"),
-            JSON.stringify({
-              name: `@openclaw/${pluginId}`,
-              version: "2026.9.6",
-              type: "commonjs",
-              openclaw: {
-                extensions: ["./index.cjs"],
-                compat: { pluginApi: ">=2026.9.6" },
-                build: { openclawVersion: "2026.9.6" },
-              },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(pluginRoot, "openclaw.plugin.json"),
-            JSON.stringify({
-              id: pluginId,
-              configSchema: {},
-              doctorContract: { stateMigrations: [action] },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(pluginRoot, "index.cjs"),
-            "throw new Error('Doctor must not load plugin runtime');\n",
-          );
-          fs.writeFileSync(source, "retained session state");
-          fs.writeFileSync(
-            path.join(pluginRoot, "doctor-contract-api.cjs"),
+          write("package.json", {
+            name: `@openclaw/${pluginId}`,
+            version,
+            type: "commonjs",
+            openclaw: {
+              extensions: ["./index.cjs"],
+              compat: { pluginApi: `>=${version}` },
+              build: { openclawVersion: version },
+            },
+          });
+          write("openclaw.plugin.json", {
+            id: pluginId,
+            configSchema: {},
+            doctorContract: { stateMigrations: [action] },
+          });
+          write("index.cjs", "throw new Error('Doctor must not load plugin runtime');\n");
+          fs.writeFileSync(source, retainedState);
+          write(
+            "doctor-contract-api.cjs",
             `const fs = require("node:fs");
 module.exports = { stateMigrations: [{
   ...${JSON.stringify(action)}, label: ${JSON.stringify(pluginId)},
@@ -98,7 +97,7 @@ module.exports = { stateMigrations: [{
         plugins: {
           allow: ["acpx", "codex"],
           entries: { acpx: { enabled: true }, codex: { enabled: true } },
-          load: { paths: actions.map(({ pluginId }) => path.join(externalRoot, pluginId)) },
+          load: { paths: actions.map(({ pluginId }) => externalPath(pluginId)) },
         },
       };
       const configPath = await writeOpenClawConfig(home, cfg);
@@ -121,9 +120,9 @@ module.exports = { stateMigrations: [{
                     pluginId,
                     {
                       source: "npm" as const,
-                      spec: `@openclaw/${pluginId}@2026.9.6`,
-                      version: "2026.9.6",
-                      installPath: path.join(externalRoot, pluginId),
+                      spec: `@openclaw/${pluginId}@${version}`,
+                      version,
+                      installPath: externalPath(pluginId),
                     },
                   ]),
                 ),
@@ -148,7 +147,7 @@ module.exports = { stateMigrations: [{
           const admitted = caller === "deferred-doctor" ? actions.slice(0, 1) : actions;
           let receipt;
           if (caller === "doctor") {
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             expect(ctx.cfg.agents?.entries?.main).toMatchObject({
               workspace: path.join(home, "workspace"),
             });
@@ -173,9 +172,7 @@ module.exports = { stateMigrations: [{
               }),
             );
             assert.ok(prepared.postSessionPluginMigration);
-            expect(prepared.postSessionPluginMigration.plannedActions).toEqual([
-              { pluginId: "acpx", id: "acpx-session-owner-resources" },
-            ]);
+            expect(prepared.postSessionPluginMigration.plannedActions).toEqual(admitted);
 
             await assertDoctorPreflightMigrationsComplete({
               cfg,
@@ -201,16 +198,15 @@ module.exports = { stateMigrations: [{
           });
           for (const { pluginId } of admitted) {
             expect(
-              fs.readFileSync(path.join(externalRoot, pluginId, "migrated-session-state"), "utf8"),
-            ).toBe("retained session state");
+              fs.readFileSync(path.join(externalPath(pluginId), "migrated-session-state"), "utf8"),
+            ).toBe(retainedState);
           }
           for (const pluginRoot of [
-            ...(caller === "deferred-doctor" ? [path.join(externalRoot, "codex")] : []),
-            path.join(bundledRoot, "acpx"),
-            path.join(bundledRoot, "codex"),
+            ...(caller === "deferred-doctor" ? [externalPath("codex")] : []),
+            ...actions.map(({ pluginId }) => path.join(bundledRoot, pluginId)),
           ]) {
             expect(fs.readFileSync(path.join(pluginRoot, "pending-session-state"), "utf8")).toBe(
-              "retained session state",
+              retainedState,
             );
             expect(fs.existsSync(path.join(pluginRoot, "migrated-session-state"))).toBe(false);
           }

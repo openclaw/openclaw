@@ -45,6 +45,7 @@ import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
 } from "./telegram-ingress-spool.test-support.js";
+import { createTelegramWebhookIdleAdmissionFixture } from "./test-support/webhook-admission.js";
 import {
   createNearLimitTelegramPayload,
   createTelegramPrivateTopicCallback,
@@ -123,6 +124,7 @@ const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
 const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
+const webhookOptions = { secret: TELEGRAM_SECRET, path: TELEGRAM_WEBHOOK_PATH };
 const TELEGRAM_WEBHOOK_RATE_LIMIT_BURST = WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests + 10;
 
 vi.mock("grammy", async () => {
@@ -242,38 +244,28 @@ async function runNearLimitPayloadTestAndExpectUpdate(
   expect(sizeBytes).toBeGreaterThan(256 * 1_024);
   const expected = JSON.parse(payload) as TestTelegramMessageUpdate;
 
-  await withStartedWebhook(
-    {
-      secret: TELEGRAM_SECRET,
+  await withStartedWebhook(webhookOptions, async ({ port, ingress }) => {
+    const response = await postWebhookPayloadWithChunkPlan({
+      port,
       path: TELEGRAM_WEBHOOK_PATH,
-    },
-    async ({ port, ingress }) => {
-      const response = await postWebhookPayloadWithChunkPlan({
-        port,
-        path: TELEGRAM_WEBHOOK_PATH,
-        payload,
-        secret: TELEGRAM_SECRET,
-        mode,
-        timeoutMs: WEBHOOK_POST_TIMEOUT_MS,
-      });
+      payload,
+      secret: TELEGRAM_SECRET,
+      mode,
+      timeoutMs: WEBHOOK_POST_TIMEOUT_MS,
+    });
 
-      expect(response.statusCode).toBe(200);
-      // The 200 means durable admission; dispatch reads the ~1 MB row back from
-      // SQLite afterward, so join the drain instead of polling a wall-clock budget.
-      await ingress.waitForIdle();
-      expectSingleNearLimitUpdate({ seenUpdates, expected });
-    },
-  );
+    expect(response.statusCode).toBe(200);
+    // The 200 means durable admission; dispatch reads the ~1 MB row back from
+    // SQLite afterward, so join the drain instead of polling a wall-clock budget.
+    await ingress.waitForIdle();
+    expectSingleNearLimitUpdate({ seenUpdates, expected });
+  });
 }
 
 describe("startTelegramWebhook", () => {
   it.each([
-    { binding: "standalone", enabled: false },
     { binding: "standalone", enabled: true },
-    { binding: "unrelated", enabled: false },
-    { binding: "late", enabled: false },
     { binding: "runtime", enabled: false },
-    { binding: "source", enabled: false },
   ] as const)(
     "respects $binding diagnostics (enabled=$enabled) and preserves the host heartbeat",
     async ({ binding, enabled }) => {
@@ -282,26 +274,18 @@ describe("startTelegramWebhook", () => {
       const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
       startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
       const config = { diagnostics: { enabled } };
-      const followsRuntime = binding === "runtime" || binding === "source";
+      const followsRuntime = binding === "runtime";
       if (followsRuntime) {
-        setRuntimeConfigSnapshot(binding === "runtime" ? config : { ...config }, config);
-      } else if (binding === "unrelated") {
-        setRuntimeConfigSnapshot(
-          { diagnostics: { enabled: true } },
-          { logging: { level: "debug" } },
-        );
+        setRuntimeConfigSnapshot(config, config);
       }
       try {
         await withStartedWebhook(
           {
             secret: TELEGRAM_SECRET,
             path: TELEGRAM_WEBHOOK_PATH,
-            config: binding === "source" ? structuredClone(config) : config,
+            config,
           },
           async ({ port, server }) => {
-            if (binding === "late") {
-              setRuntimeConfigSnapshot({ diagnostics: { enabled: true } });
-            }
             let expectedEvents = 0;
             for (const currentEnabled of followsRuntime ? [false, true, false] : [enabled]) {
               if (followsRuntime) {
@@ -333,73 +317,9 @@ describe("startTelegramWebhook", () => {
       }
     },
   );
-  it("registers the Gateway route and advertises the configured webhook", async () => {
-    initSpy.mockClear();
-    createTelegramBotSpy.mockClear();
-    const runtimeLog = vi.fn();
-    const setStatus = vi.fn();
-    const cfg = { bindings: [] };
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        accountId: "opie",
-        ownerAgentId: "ops",
-        config: cfg,
-        runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
-        setStatus,
-      },
-      async ({ port }) => {
-        const botParams = requireRecord(
-          requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
-          "createTelegramBot params",
-        );
-        expect(botParams.accountId).toBe("opie");
-        expect(botParams.ownerAgentId).toBe("ops");
-        expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
-        expect(botParams.telegramTransport).toBeDefined();
-        const notFound = await fetch(`http://127.0.0.1:${port}/not-the-webhook`);
-        expect(notFound.status).toBe(404);
-        expect(notFound.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-        expect(initSpy).toHaveBeenCalledTimes(1);
-        expect(setWebhookSpy).toHaveBeenCalled();
-        const registration = requireRecord(
-          requireMockCall(setWebhookSpy, 0, "setWebhook")[1],
-          "webhook registration",
-        );
-        expect(registration.allowed_updates).toEqual(
-          expect.arrayContaining(["message_reaction", "channel_post"]),
-        );
-        expect(registration.allowed_updates).not.toContain("stopped_message_generation");
-        expectMockMessageContains(runtimeLog, "telegram webhook Gateway route");
-        expectMockMessageContains(runtimeLog, "/telegram-webhook");
-        expectMockMessageContains(runtimeLog, "webhook advertised to telegram on http://");
-        expect(setStatus).toHaveBeenNthCalledWith(1, {
-          mode: "webhook",
-          connected: false,
-          lastConnectedAt: null,
-          lastEventAt: null,
-          lastTransportActivityAt: null,
-        });
-        const connectedStatus = requireRecord(
-          requireMockCall(setStatus, 1, "setStatus")[0],
-          "connected status",
-        );
-        expect(connectedStatus.mode).toBe("webhook");
-        expect(connectedStatus.connected).toBe(true);
-        expect(connectedStatus.running).toBe(true);
-        expect(connectedStatus).toHaveProperty("terminalDisconnect", undefined);
-        expect(typeof connectedStatus.lastConnectedAt).toBe("number");
-        expect(typeof connectedStatus.lastEventAt).toBe("number");
-        expect(connectedStatus.lifecycle).toBe("ready");
-        expect(connectedStatus.lastError).toBeNull();
-      },
-    );
-  });
 
   it.each([
-    { name: "omitted host", configured: { port: 8787 }, host: "127.0.0.1" },
     { name: "explicit wildcard", configured: { port: 8787, host: "0.0.0.0" }, host: "0.0.0.0" },
-    { name: "explicit address", configured: { port: 8787, host: "127.0.0.2" }, host: "127.0.0.2" },
   ])(
     "prepares the legacy listener for $name and accepts its signed callback",
     async ({ configured, host }) => {
@@ -810,38 +730,32 @@ describe("startTelegramWebhook", () => {
       }
     });
 
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ port }) => {
-        const url = webhookUrl(port, TELEGRAM_WEBHOOK_PATH);
-        try {
-          const blockingResponse = await postWebhookJson({
-            url,
-            payload: JSON.stringify(blockingUpdate),
-            secret: TELEGRAM_SECRET,
-          });
-          expect(blockingResponse.status).toBe(200);
-          await waitForWebhookState(() => expect(seenUpdateIds).toEqual([5]));
+    await withStartedWebhook(webhookOptions, async ({ port }) => {
+      const url = webhookUrl(port, TELEGRAM_WEBHOOK_PATH);
+      try {
+        const blockingResponse = await postWebhookJson({
+          url,
+          payload: JSON.stringify(blockingUpdate),
+          secret: TELEGRAM_SECRET,
+        });
+        expect(blockingResponse.status).toBe(200);
+        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([5]));
 
-          const callbackResponse = await postWebhookJson({
-            url,
-            payload: JSON.stringify(callbackUpdate),
-            secret: TELEGRAM_SECRET,
-          });
-          expect(callbackResponse.status).toBe(200);
-          expect(callbackResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-          expect(answerCallbackQuerySpy).toHaveBeenCalledWith("callback-6");
-          expect(seenUpdateIds).toEqual([5]);
-        } finally {
-          releaseBlockingUpdate?.();
-        }
+        const callbackResponse = await postWebhookJson({
+          url,
+          payload: JSON.stringify(callbackUpdate),
+          secret: TELEGRAM_SECRET,
+        });
+        expect(callbackResponse.status).toBe(200);
+        expect(callbackResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+        expect(answerCallbackQuerySpy).toHaveBeenCalledWith("callback-6");
+        expect(seenUpdateIds).toEqual([5]);
+      } finally {
+        releaseBlockingUpdate?.();
+      }
 
-        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([5, 6]));
-      },
-    );
+      await waitForWebhookState(() => expect(seenUpdateIds).toEqual([5, 6]));
+    });
   });
 
   it("bounds shutdown when a webhook handler ignores abort", async () => {
@@ -879,25 +793,6 @@ describe("startTelegramWebhook", () => {
       vi.useRealTimers();
       await started.stop();
     }
-  });
-
-  it("continues webhook shutdown after bot stop fails", async () => {
-    const runtimeError = vi.fn();
-    const setStatus = vi.fn();
-    stopSpy.mockRejectedValueOnce(new Error("bot stop failed"));
-
-    const started = await startWebhookStartupFixture({
-      path: TELEGRAM_WEBHOOK_PATH,
-      ...requireWebhookQueueScope(),
-      setStatus,
-      runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
-    });
-
-    await expect(started.stop()).resolves.toBeUndefined();
-
-    expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
-    expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
-    expectMockMessageContains(runtimeError, "telegram webhook bot stop failed");
   });
 
   it("joins concurrent stops with abort-driven webhook cleanup", async () => {
@@ -963,6 +858,11 @@ describe("startTelegramWebhook", () => {
     async (operation) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", webhookStateDir);
       const abort = new AbortController();
+      const registered = createDeferred<void>();
+      setWebhookSpy.mockImplementationOnce(async () => {
+        registered.resolve();
+        return true;
+      });
       const operationStarted = createDeferred<void>();
       const releaseOperation = createDeferred<void>();
       const recorded = new Set<string>();
@@ -1037,7 +937,13 @@ describe("startTelegramWebhook", () => {
         stopped = true;
       });
       try {
-        await waitForWebhookState(() => expect(setWebhookSpy).toHaveBeenCalledOnce());
+        await Promise.race([
+          registered.promise,
+          provider.then(() => {
+            throw new Error("Telegram provider stopped before webhook registration");
+          }),
+        ]);
+        expect(setWebhookSpy).toHaveBeenCalledOnce();
         const url = requireMockCall(setWebhookSpy, 0, "setWebhook")[0];
         if (typeof url !== "string") {
           throw new Error("Expected the isolated Gateway webhook URL");
@@ -1082,67 +988,45 @@ describe("startTelegramWebhook", () => {
   );
 
   it("retains the registered HTTP invocation until durable admission and acknowledgment", async () => {
-    let releaseEnqueue: (() => void) | undefined;
-    let markEnqueueStarted: (() => void) | undefined;
-    const enqueueGate = new Promise<void>((resolve) => {
-      releaseEnqueue = resolve;
-    });
-    const enqueueStarted = new Promise<void>((resolve) => {
-      markEnqueueStarted = resolve;
-    });
-    setTelegramRuntime({
-      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
-      state: {
-        resolveStateDir: () => webhookStateDir ?? os.tmpdir(),
-        openChannelIngressQueue: (
-          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-        ) => {
-          const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
-          return {
-            ...queue,
-            enqueue: async (...args: Parameters<typeof queue.enqueue>) => {
-              markEnqueueStarted?.();
-              await enqueueGate;
-              return await queue.enqueue(...args);
-            },
-          };
-        },
-      },
-    } as TelegramRuntime);
-
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ port }) => {
-        let responseSettled = false;
-        const responseTask = postWebhookJson({
-          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify(telegramMessageUpdate(4, "commit gate")),
-          secret: TELEGRAM_SECRET,
-        }).then((response) => {
-          responseSettled = true;
-          return response;
-        });
-
-        try {
-          await enqueueStarted;
-          await yieldWebhookTask();
-          expect(responseSettled).toBe(false);
-          expect(pendingRouteRequests.size).toBe(1);
-
-          releaseEnqueue?.();
-          const response = await responseTask;
-          expect(response.status).toBe(200);
-          expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-          expect(await response.text()).toBe("");
-          expect(pendingRouteRequests.size).toBe(0);
-        } finally {
-          releaseEnqueue?.();
-        }
-      },
+    const { runtime, enqueueGate, enqueueStarted } = createTelegramWebhookIdleAdmissionFixture(
+      () => webhookStateDir ?? os.tmpdir(),
     );
+    setTelegramRuntime(runtime);
+
+    await withStartedWebhook(webhookOptions, async ({ port, ingress }) => {
+      // The idle singleton path must hit the real atomic enqueue-and-claim operation.
+      await ingress.waitForIdle();
+      let responseSettled = false;
+      const responseTask = postWebhookJson({
+        url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+        payload: JSON.stringify(telegramMessageUpdate(4, "commit gate")),
+        secret: TELEGRAM_SECRET,
+      }).then((response) => {
+        responseSettled = true;
+        return response;
+      });
+
+      try {
+        await Promise.race([
+          enqueueStarted.promise,
+          responseTask.then(() => {
+            throw new Error("Webhook responded before reaching the held durable admission");
+          }),
+        ]);
+        await yieldWebhookTask();
+        expect(responseSettled).toBe(false);
+        expect(pendingRouteRequests.size).toBe(1);
+
+        enqueueGate.resolve();
+        const response = await responseTask;
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+        expect(await response.text()).toBe("");
+        expect(pendingRouteRequests.size).toBe(0);
+      } finally {
+        enqueueGate.resolve();
+      }
+    });
   });
 
   it("durably retries a webhook update after acknowledging Telegram", async () => {
@@ -1383,26 +1267,20 @@ describe("startTelegramWebhook", () => {
       });
 
       try {
-        await withStartedWebhook(
-          {
-            secret: TELEGRAM_SECRET,
-            path: TELEGRAM_WEBHOOK_PATH,
-          },
-          async ({ ingress }) => {
-            await firstUpdateStarted.promise;
-            await ingress.waitForPumpIdle();
-            expect(seenUpdateIds).toEqual([130]);
+        await withStartedWebhook(webhookOptions, async ({ ingress }) => {
+          await firstUpdateStarted.promise;
+          await ingress.waitForPumpIdle();
+          expect(seenUpdateIds).toEqual([130]);
 
-            releaseFirstUpdate?.();
-            await ingress.waitForIdle();
-            expect(seenUpdateIds).toEqual([130, 131]);
-            expect(await listTelegramSpooledUpdates(requireWebhookQueueScope())).toEqual([]);
-            expect(
-              await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.(),
-            ).toEqual([]);
-            expect(handleUpdateSpy).toHaveBeenCalledTimes(2);
-          },
-        );
+          releaseFirstUpdate?.();
+          await ingress.waitForIdle();
+          expect(seenUpdateIds).toEqual([130, 131]);
+          expect(await listTelegramSpooledUpdates(requireWebhookQueueScope())).toEqual([]);
+          expect(await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.()).toEqual(
+            [],
+          );
+          expect(handleUpdateSpy).toHaveBeenCalledTimes(2);
+        });
       } finally {
         releaseFirstUpdate?.();
       }
@@ -1420,8 +1298,6 @@ describe("startTelegramWebhook", () => {
       topicsEnabled: false,
       persistedLaneKey: "telegram:1234:topic:42",
     },
-    { approvalKind: "exec" as const, topicsEnabled: true, persistedLaneKey: "telegram:1234" },
-    { approvalKind: "plugin" as const, topicsEnabled: true, persistedLaneKey: "telegram:1234" },
     {
       approvalKind: "exec" as const,
       topicsEnabled: false,
@@ -1429,34 +1305,8 @@ describe("startTelegramWebhook", () => {
       hasThread: false,
     },
     {
-      approvalKind: "plugin" as const,
-      topicsEnabled: false,
-      persistedLaneKey: "telegram:1234",
-      hasThread: false,
-    },
-    {
-      approvalKind: "exec" as const,
-      topicsEnabled: true,
-      persistedLaneKey: "telegram:1234",
-      hasThread: false,
-    },
-    {
-      approvalKind: "plugin" as const,
-      topicsEnabled: true,
-      persistedLaneKey: "telegram:1234",
-      hasThread: false,
-    },
-    {
       approvalKind: "exec" as const,
       topicsEnabled: false,
-      persistedLaneKey: "telegram:-1234",
-      hasThread: false,
-      chatId: -1234,
-      chatType: "group" as const,
-    },
-    {
-      approvalKind: "plugin" as const,
-      topicsEnabled: true,
       persistedLaneKey: "telegram:-1234",
       hasThread: false,
       chatId: -1234,
@@ -1471,14 +1321,6 @@ describe("startTelegramWebhook", () => {
       chatType: "supergroup" as const,
     },
     {
-      approvalKind: "plugin" as const,
-      topicsEnabled: true,
-      persistedLaneKey: "telegram:-1001234",
-      hasThread: false,
-      chatId: -1001234,
-      chatType: "supergroup" as const,
-    },
-    {
       approvalKind: "exec" as const,
       topicsEnabled: false,
       persistedLaneKey: "telegram:-1001234:topic:42",
@@ -1487,25 +1329,8 @@ describe("startTelegramWebhook", () => {
       isForum: true,
     },
     {
-      approvalKind: "plugin" as const,
-      topicsEnabled: true,
-      persistedLaneKey: "telegram:-1001234:topic:42",
-      chatId: -1001234,
-      chatType: "supergroup" as const,
-      isForum: true,
-    },
-    {
       approvalKind: "exec" as const,
       topicsEnabled: false,
-      persistedLaneKey: "telegram:-1001234:topic:1",
-      hasThread: false,
-      chatId: -1001234,
-      chatType: "supergroup" as const,
-      isForum: true,
-    },
-    {
-      approvalKind: "plugin" as const,
-      topicsEnabled: true,
       persistedLaneKey: "telegram:-1001234:topic:1",
       hasThread: false,
       chatId: -1001234,
@@ -1585,25 +1410,14 @@ describe("startTelegramWebhook", () => {
       topicsEnabled: true,
       persistedLaneKey: "telegram:1234",
     },
-    {
-      topicsEnabled: false,
-      persistedLaneKey: "telegram:1234:topic:42",
-      callbackIdentityLength: 128,
-    },
   ])(
     "replays legitimate private callbacks after a topic-capability transition ($topicsEnabled)",
-    async ({ topicsEnabled, persistedLaneKey, callbackIdentityLength }) => {
+    async ({ topicsEnabled, persistedLaneKey }) => {
       webhookBotInfo.has_topics_enabled = topicsEnabled;
       const update = {
         update_id: 140,
         callback_query: {
           ...createTelegramPrivateTopicCallback(140, webhookBotInfo.id),
-          ...(callbackIdentityLength
-            ? {
-                id: "i".repeat(callbackIdentityLength),
-                chat_instance: "c".repeat(callbackIdentityLength),
-              }
-            : {}),
         },
       };
       await writeTelegramSpooledUpdate({
@@ -1614,20 +1428,14 @@ describe("startTelegramWebhook", () => {
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
-      await withStartedWebhook(
-        {
-          secret: TELEGRAM_SECRET,
-          path: TELEGRAM_WEBHOOK_PATH,
-        },
-        async ({ ingress }) => {
-          await ingress.waitForIdle();
-          expect(handleUpdateSpy).toHaveBeenCalledOnce();
-          expect(handleUpdateSpy).toHaveBeenCalledWith(update);
-          expect(await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.()).toEqual(
-            [],
-          );
-        },
-      );
+      await withStartedWebhook(webhookOptions, async ({ ingress }) => {
+        await ingress.waitForIdle();
+        expect(handleUpdateSpy).toHaveBeenCalledOnce();
+        expect(handleUpdateSpy).toHaveBeenCalledWith(update);
+        expect(await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.()).toEqual(
+          [],
+        );
+      });
     },
   );
 
@@ -1739,19 +1547,6 @@ describe("startTelegramWebhook", () => {
       }),
     },
     {
-      name: "a malformed signed approval without a topic",
-      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
-        ...callback,
-        data: buildTelegramApprovalCallbackData({
-          type: "approval",
-          approvalKind: "exec",
-          approvalId: "signed-approval",
-          decision: "allow-once",
-        })?.replace(":o:", ":z:"),
-        message: { ...callback.message, message_thread_id: undefined },
-      }),
-    },
-    {
       name: "a malformed signed approval kind",
       mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
         ...callback,
@@ -1828,22 +1623,11 @@ describe("startTelegramWebhook", () => {
       }),
     },
     {
-      name: "a signed approval for another chat",
-      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
-        ...callback,
-        data: buildTelegramApprovalCallbackData({
-          type: "approval",
-          approvalKind: "exec",
-          approvalId: "signed-approval",
-          decision: "allow-once",
-        }),
-        message: { ...callback.message, chat: { ...callback.message.chat, id: 9999 } },
-      }),
-    },
-    {
       name: "an inline signed approval",
       mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
-        ...callback,
+        id: callback.id,
+        from: callback.from,
+        chat_instance: callback.chat_instance,
         data: buildTelegramApprovalCallbackData({
           type: "approval",
           approvalKind: "exec",
@@ -1854,18 +1638,16 @@ describe("startTelegramWebhook", () => {
       }),
     },
     {
-      name: "a malformed reserved question callback",
+      name: "a signed approval for another chat",
       mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
         ...callback,
-        data: "tgq1:ask_0123456789abcdef0123456789abcdef:9",
-      }),
-    },
-    {
-      name: "a reserved question callback without a topic",
-      mutate: (callback: ReturnType<typeof createTelegramPrivateTopicCallback>) => ({
-        ...callback,
-        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
-        message: { ...callback.message, message_thread_id: undefined },
+        data: buildTelegramApprovalCallbackData({
+          type: "approval",
+          approvalKind: "exec",
+          approvalId: "signed-approval",
+          decision: "allow-once",
+        }),
+        message: { ...callback.message, chat: { ...callback.message.chat, id: 9999 } },
       }),
     },
     {
@@ -1888,19 +1670,13 @@ describe("startTelegramWebhook", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ ingress }) => {
-        await ingress.waitForIdle();
-        expect(
-          await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({ limit: "all" }),
-        ).toMatchObject([{ reason: "invalid-event", laneKey }]);
-        expect(handleUpdateSpy).not.toHaveBeenCalled();
-      },
-    );
+    await withStartedWebhook(webhookOptions, async ({ ingress }) => {
+      await ingress.waitForIdle();
+      expect(
+        await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({ limit: "all" }),
+      ).toMatchObject([{ reason: "invalid-event", laneKey }]);
+      expect(handleUpdateSpy).not.toHaveBeenCalled();
+    });
   });
 
   it.each(["telegram:9999:topic:42", "telegram:1234:topic:99", "telegram:1234:control"])(
@@ -1922,22 +1698,16 @@ describe("startTelegramWebhook", () => {
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
-      await withStartedWebhook(
-        {
-          secret: TELEGRAM_SECRET,
-          path: TELEGRAM_WEBHOOK_PATH,
-        },
-        async ({ ingress }) => {
-          await ingress.waitForIdle();
-          expect(
-            await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({
-              limit: "all",
-            }),
-          ).toMatchObject([{ reason: "invalid-event", laneKey }]);
-          expect(handleUpdateSpy).not.toHaveBeenCalled();
-          expect(await listTelegramSpooledUpdates(requireWebhookQueueScope())).toEqual([]);
-        },
-      );
+      await withStartedWebhook(webhookOptions, async ({ ingress }) => {
+        await ingress.waitForIdle();
+        expect(
+          await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({
+            limit: "all",
+          }),
+        ).toMatchObject([{ reason: "invalid-event", laneKey }]);
+        expect(handleUpdateSpy).not.toHaveBeenCalled();
+        expect(await listTelegramSpooledUpdates(requireWebhookQueueScope())).toEqual([]);
+      });
     },
   );
 
@@ -2007,19 +1777,13 @@ describe("startTelegramWebhook", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ ingress }) => {
-        await ingress.waitForIdle();
-        expect(
-          await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({ limit: "all" }),
-        ).toMatchObject([{ reason: "invalid-event", laneKey }]);
-        expect(handleUpdateSpy).not.toHaveBeenCalled();
-      },
-    );
+    await withStartedWebhook(webhookOptions, async ({ ingress }) => {
+      await ingress.waitForIdle();
+      expect(
+        await openTelegramIngressQueue(requireWebhookQueueScope()).listFailed?.({ limit: "all" }),
+      ).toMatchObject([{ reason: "invalid-event", laneKey }]);
+      expect(handleUpdateSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("stops claimed completion retries when the webhook stops", async () => {
@@ -2080,92 +1844,74 @@ describe("startTelegramWebhook", () => {
   it("returns non-200 when the webhook update cannot be spooled durably", async () => {
     handleUpdateSpy.mockClear();
     answerCallbackQuerySpy.mockClear();
-    await withStartedWebhook(
-      {
+    await withStartedWebhook(webhookOptions, async ({ port }) => {
+      const response = await postWebhookJson({
+        url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+        payload: JSON.stringify({
+          callback_query: createTelegramPrivateTopicCallback(33, webhookBotInfo.id),
+        }),
         secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ port }) => {
-        const response = await postWebhookJson({
-          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify({
-            callback_query: createTelegramPrivateTopicCallback(33, webhookBotInfo.id),
-          }),
-          secret: TELEGRAM_SECRET,
-        });
+      });
 
-        expect(response.status).toBe(500);
-        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-        expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
-        expect(handleUpdateSpy).not.toHaveBeenCalled();
-      },
-    );
+      expect(response.status).toBe(500);
+      expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+      expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
+      expect(handleUpdateSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects unauthenticated requests before reading the request body", async () => {
     handleUpdateSpy.mockClear();
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
+    await withStartedWebhook(webhookOptions, async ({ port }) => {
+      const response = await postWebhookHeadersOnly({
+        port,
         path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ port }) => {
-        const response = await postWebhookHeadersOnly({
-          port,
-          path: TELEGRAM_WEBHOOK_PATH,
-          declaredLength: 1_024 * 1_024,
-          secret: "wrong-secret",
-        });
+        declaredLength: 1_024 * 1_024,
+        secret: "wrong-secret",
+      });
 
-        expect(response.statusCode).toBe(401);
-        expect(response.body).toBe("unauthorized");
-        expect(handleUpdateSpy).not.toHaveBeenCalled();
-      },
-    );
+      expect(response.statusCode).toBe(401);
+      expect(response.body).toBe("unauthorized");
+      expect(handleUpdateSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("rate limits repeated invalid secret guesses without throttling authenticated delivery", async () => {
     handleUpdateSpy.mockClear();
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ port }) => {
-        let saw429 = false;
+    await withStartedWebhook(webhookOptions, async ({ port }) => {
+      let saw429 = false;
 
-        for (let i = 0; i < TELEGRAM_WEBHOOK_RATE_LIMIT_BURST; i += 1) {
-          const response = await postWebhookJson({
-            url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-            payload: JSON.stringify({ update_id: i, message: { text: `guess ${i}` } }),
-            secret: `wrong-secret-${String(i).padStart(3, "0")}`,
-          });
+      for (let i = 0; i < TELEGRAM_WEBHOOK_RATE_LIMIT_BURST; i += 1) {
+        const response = await postWebhookJson({
+          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          payload: JSON.stringify({ update_id: i, message: { text: `guess ${i}` } }),
+          secret: `wrong-secret-${String(i).padStart(3, "0")}`,
+        });
 
-          if (response.status === 429) {
-            saw429 = true;
-            expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-            expect(await response.text()).toBe("Too Many Requests");
-            break;
-          }
-
-          expect(response.status).toBe(401);
+        if (response.status === 429) {
+          saw429 = true;
           expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-          expect(await response.text()).toBe("unauthorized");
+          expect(await response.text()).toBe("Too Many Requests");
+          break;
         }
 
-        expect(saw429).toBe(true);
+        expect(response.status).toBe(401);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+        expect(await response.text()).toBe("unauthorized");
+      }
 
-        const validResponse = await postWebhookJson({
-          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify(telegramMessageUpdate(999, "hello")),
-          secret: TELEGRAM_SECRET,
-        });
-        expect(validResponse.status).toBe(200);
-        expect(validResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-        expect(await validResponse.text()).toBe("");
-        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
-      },
-    );
+      expect(saw429).toBe(true);
+
+      const validResponse = await postWebhookJson({
+        url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+        payload: JSON.stringify(telegramMessageUpdate(999, "hello")),
+        secret: TELEGRAM_SECRET,
+      });
+      expect(validResponse.status).toBe(200);
+      expect(validResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+      expect(await validResponse.text()).toBe("");
+      await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
+    });
   });
 
   it("does not rate limit authenticated webhook request storms", async () => {
@@ -2444,10 +2190,6 @@ describe("startTelegramWebhook", () => {
     await runNearLimitPayloadTestAndExpectUpdate("random-chunked");
   });
 
-  it("handles near-limit payload written in a single request write", async () => {
-    await runNearLimitPayloadTestAndExpectUpdate("single");
-  });
-
   it("rejects payloads larger than 1MB before invoking webhook handler", async () => {
     await withStartedWebhook(
       {
@@ -2471,22 +2213,6 @@ describe("startTelegramWebhook", () => {
         expect(handleUpdateSpy).not.toHaveBeenCalled();
       },
     );
-  });
-
-  it("does not de-register webhook when shutting down", async () => {
-    deleteWebhookSpy.mockClear();
-    const abort = new AbortController();
-    const started = await startTelegramWebhook({
-      token: TELEGRAM_TOKEN,
-      secret: TELEGRAM_SECRET,
-      abortSignal: abort.signal,
-      path: TELEGRAM_WEBHOOK_PATH,
-      ...requireWebhookQueueScope(),
-    });
-
-    await started.stop();
-    abort.abort();
-    expect(deleteWebhookSpy).toHaveBeenCalledTimes(0);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

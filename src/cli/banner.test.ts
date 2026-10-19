@@ -1,25 +1,31 @@
 // Banner tests cover CLI banner rendering and suppression behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliBannerLine } from "./banner.js";
 
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const bannerOptions = {
   argv: ["node", "openclaw"],
   commit: "abc1234",
   env: { LANG: "en_US.UTF-8" },
-  isTty: true,
-  platform: "darwin" as const,
   richTty: false,
   mode: "off" as const,
 };
 
-vi.mock("./banner-config-lite.js", () => ({
-  parseTaglineMode: (value: unknown) =>
-    value === "random" || value === "default" || value === "off" ? value : undefined,
-}));
+beforeEach(() => {
+  setStdoutIsTty(true);
+  Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+  for (const key of ["TERM_PROGRAM", "WT_SESSION", "LC_ALL", "LC_CTYPE"]) {
+    vi.stubEnv(key, undefined);
+  }
+  vi.stubEnv("TERM", "xterm-256color");
+  vi.stubEnv("LANG", "en_US.UTF-8");
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  Object.defineProperty(process, "platform", platformDescriptor);
   if (stdoutIsTtyDescriptor) {
     Object.defineProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
   } else {
@@ -50,10 +56,9 @@ describe("formatCliBannerLine", () => {
   });
 
   it("drops decorative emoji for generic Linux terminals", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     const line = formatCliBannerLine("2026.3.7", {
       ...bannerOptions,
-      env: { TERM: "xterm-256color", LANG: "en_US.UTF-8" },
-      platform: "linux",
     });
 
     expect(line).toBe("OpenClaw 2026.3.7 (abc1234)");
@@ -61,32 +66,49 @@ describe("formatCliBannerLine", () => {
 });
 
 describe("emitCliBanner", () => {
-  it("uses injected non-TTY state before writing to stdout", async () => {
+  it("does not write a banner without a TTY", async () => {
     const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(true);
+    setStdoutIsTty(false);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     emitCliBanner("2026.3.7", {
       ...bannerOptions,
-      isTty: false,
     });
 
     expect(writeSpy).not.toHaveBeenCalled();
     expect(hasEmittedCliBanner()).toBe(false);
   });
 
-  it("allows injected TTY state to emit when stdout lacks isTTY", async () => {
-    const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(false);
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  it.each([new Date(2026, 1, 26), new Date(2026, 1, 26, 23, 59)])(
+    "selects the same ASCII lobster throughout %s",
+    async (now) => {
+      const { emitCliBanner } = await importFreshBannerModule();
+      setStdoutIsTty(true);
+      const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
-    emitCliBanner("2026.3.7", bannerOptions);
+      emitCliBanner("2026.3.7", {
+        ...bannerOptions,
+        mode: "random",
+        now: () => now,
+        random: () => 0,
+        richTty: true,
+      });
 
-    expect(writeSpy).toHaveBeenCalledWith("\n🦞 OpenClaw 2026.3.7 (abc1234)\n\n");
-    expect(hasEmittedCliBanner()).toBe(true);
-  });
+      const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(written).toContain(
+        ["  (\\/)  (\\/)", "   \\_\\  /_/", "    ( o.o )", "    /|__|\\"].join("\n"),
+      );
+    },
+  );
 
-  it("adds the ASCII lobster on lobster days for rich random-mode terminals", async () => {
+  it.each([
+    { label: "plain terminals", options: { richTty: false } },
+    { label: "off mode", options: { mode: "off" as const } },
+    { label: "default mode", options: { mode: "default" as const } },
+    { label: "non-lobster days", options: { now: () => new Date(2026, 0, 1) } },
+    { label: "CI", options: { env: { CI: "1" } } },
+    { label: "tests", options: { env: { VITEST: "true" } } },
+  ])("keeps lobster day out of $label", async ({ options }) => {
     const { emitCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(true);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -95,30 +117,14 @@ describe("emitCliBanner", () => {
       ...bannerOptions,
       mode: "random",
       now: () => new Date(2026, 1, 26),
+      random: () => 0,
       richTty: true,
-    });
-
-    const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
-    expect(written).toContain("( o.o )");
-  });
-
-  it.each([
-    { label: "plain terminals", mode: "random" as const, richTty: false },
-    { label: "pinned tagline modes", mode: "off" as const, richTty: true },
-  ])("keeps lobster day out of $label", async ({ mode, richTty }) => {
-    const { emitCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(true);
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-    emitCliBanner("2026.3.7", {
-      ...bannerOptions,
-      mode,
-      now: () => new Date(2026, 1, 26),
-      richTty,
+      ...options,
     });
 
     const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(written).not.toContain("( o.o )");
+    expect(written).not.toContain("~~~~~~~~~~~");
   });
 
   it("emits only once per module instance", async () => {

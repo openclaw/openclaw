@@ -390,9 +390,28 @@ export async function preauthenticateRfb(params: {
   browser: RfbPreauthPeer;
   preauth: RfbPreauthDescriptor;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const server = new StreamRfbPreauthPeer(params.server);
   const controller = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
+  const currentPeer = (peer: RfbPreauthPeer): RfbPreauthPeer => ({
+    async readExactly(length, requestSignal) {
+      params.assertCurrent?.();
+      const bytes = await peer.readExactly(length, requestSignal);
+      params.assertCurrent?.();
+      return bytes;
+    },
+    async write(bytes, requestSignal) {
+      params.assertCurrent?.();
+      await peer.write(bytes, requestSignal);
+      params.assertCurrent?.();
+    },
+  });
+  const browser = currentPeer(params.browser);
   const timeout = setTimeout(
     () => controller.abort(new RfbPreauthTimeoutError()),
     params.timeoutMs ?? DEFAULT_PREAUTH_TIMEOUT_MS,
@@ -400,10 +419,10 @@ export async function preauthenticateRfb(params: {
   timeout.unref?.();
   try {
     await Promise.all([
-      negotiateServer({ peer: server, preauth: params.preauth, signal: controller.signal }),
-      negotiateBrowser(params.browser, controller.signal),
+      negotiateServer({ peer: currentPeer(server), preauth: params.preauth, signal }),
+      negotiateBrowser(browser, signal),
     ]);
-    await params.browser.write(Buffer.alloc(4), controller.signal);
+    await browser.write(Buffer.alloc(4), signal);
   } finally {
     controller.abort();
     clearTimeout(timeout);

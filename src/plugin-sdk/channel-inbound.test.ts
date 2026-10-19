@@ -1,12 +1,11 @@
-/**
- * Tests channel inbound context and dispatch helper behavior.
- */
-import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readChannelContextAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import { recordInboundSession } from "../channels/session.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
@@ -21,15 +20,22 @@ import {
 import {
   buildChannelInboundEventContext,
   buildChannelTurnContext,
+  dispatchChannelInboundReply,
+  runChannelInboundEvent,
+  type AssembledInboundReply,
   type BuildChannelInboundEventContextParams,
-  type PluginHookChannelSenderContext,
+  type ChannelInboundEventRunnerParams,
 } from "./channel-inbound.js";
 import * as channelIngressRuntime from "./channel-ingress-runtime.js";
 
-declare module "./channel-inbound.js" {
-  interface PluginHookChannelSenderContext {
-    testUnionId?: string;
-  }
+function runInbound(
+  resolveTurn: ChannelInboundEventRunnerParams<string>["adapter"]["resolveTurn"],
+) {
+  return runChannelInboundEvent({
+    channel: "test",
+    raw: "hello",
+    adapter: { ingest: () => ({ id: "msg-1", rawText: "hello" }), resolveTurn },
+  });
 }
 
 function createInboundParams(
@@ -40,21 +46,10 @@ function createInboundParams(
     messageId: "msg-1",
     from: "test:user:u1",
     sender: { id: "u1" },
-    conversation: {
-      kind: "group",
-      id: "room-1",
-    },
-    route: {
-      agentId: "main",
-      routeSessionKey: "agent:main:test:group:room-1",
-    },
-    reply: {
-      to: "test:room:room-1",
-    },
-    message: {
-      rawBody: "side chatter",
-      inboundEventKind: "room_event",
-    },
+    conversation: { kind: "group", id: "room-1" },
+    route: { agentId: "main", routeSessionKey: "agent:main:test:group:room-1" },
+    reply: { to: "test:room:room-1" },
+    message: { rawBody: "side chatter", inboundEventKind: "room_event" },
     ...overrides,
   };
 }
@@ -72,51 +67,47 @@ describe("channel-inbound public helpers", () => {
     }),
   );
 
-  it("runs a lifecycle-less prepared turn through the published entry point", async () => {
-    const events: string[] = [];
-    const { runChannelInboundEvent } = await import("openclaw/plugin-sdk/channel-inbound");
-    const result = await runChannelInboundEvent({
-      channel: "test",
-      raw: { id: "msg-1", text: "hello" },
-      adapter: {
-        ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        resolveTurn: () => {
-          const turn = {
-            channel: "test",
-            routeSessionKey: "agent:main:test:peer",
-            storePath: "unused",
-            ctxPayload: {
-              Body: "hello",
-              CommandAuthorized: false,
-              SessionKey: "agent:main:test:peer",
-            },
-            recordInboundSession: async () => {
-              events.push("record");
-            },
-            runDispatch: async () => {
-              events.push("dispatch");
-              return {
-                queuedFinal: true,
-                counts: { tool: 0, block: 0, final: 1 },
-              };
-            },
-            runDispatchLifecycle: {
-              turnAdoptionLifecycle: undefined,
-              onDispatchSkipped: vi.fn(),
-            },
-          };
-          // Model a plugin compiled before the required inbound lifecycle field existed.
-          Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
-          return turn;
+  it.each(["assembled", "adapter"] as const)(
+    "keeps event custody out of %s inbound reply dispatch",
+    async (surface) => {
+      const callback = vi.fn();
+      const replyOptions = {
+        isHeartbeat: true,
+        internalEventExecution: { onStarted: callback },
+        onReplyOperationOwned: callback,
+      };
+      let dispatched = false;
+      const turn = {
+        cfg: {},
+        channel: "test",
+        agentId: "main",
+        routeSessionKey: "agent:main:test:peer",
+        storePath: "unused",
+        ctxPayload: { Body: "hello", CommandAuthorized: false },
+        recordInboundSession: async () => {},
+        delivery: { deliver: async () => {} },
+        replyOptions,
+        dispatchReplyWithBufferedBlockDispatcher: async (params) => {
+          dispatched = true;
+          expect(params.replyOptions).not.toHaveProperty("internalEventExecution");
+          expect(params.replyOptions).not.toHaveProperty("onReplyOperationOwned");
+          expect(params.replyOptions?.isHeartbeat).toBe(true);
+          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
         },
-      },
-    });
+      } satisfies AssembledInboundReply;
+      const result =
+        surface === "assembled"
+          ? await dispatchChannelInboundReply(turn)
+          : await runInbound(async () => turn);
+      expect(result.dispatched).toBe(true);
+      expect(dispatched).toBe(true);
+      expect(replyOptions.onReplyOperationOwned).toBe(callback);
+    },
+  );
 
-    expect(events).toEqual(["record", "dispatch"]);
-    expect(result.dispatched).toBe(true);
-  });
-
-  it("dispatches a published inbound event before automatic session maintenance", async () => {
+  it("dispatches a published inbound event without waiting for automatic session maintenance", async ({
+    signal,
+  }) => {
     const storePath = `${tempDirs.make("openclaw-channel-inbound-maintenance-")}/sessions.json`;
     const staleSessionKey = "agent:main:published-inbound-stale";
     const activeSessionKey = "agent:main:test:peer";
@@ -125,9 +116,19 @@ describe("channel-inbound public helpers", () => {
       { sessionId: "published-inbound-stale", updatedAt: 1 },
     );
     let staleEntryAtDispatch: ReturnType<typeof loadSessionEntry>;
-    const { runChannelInboundEvent } = await import("openclaw/plugin-sdk/channel-inbound");
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
     const maintenanceCommitted = createDeferredCore();
+    const maintenancePrepared = createDeferredCore();
+    const releaseMaintenance = createDeferredCore();
+    // Metadata and last-route writes can yield to maintenance. Hold its real preparation
+    // so this proves dispatch is independent of completion, not event-loop timing.
+    onTestFinished(
+      registerSessionMaintenancePreserveKeysProvider(async () => {
+        maintenancePrepared.resolve();
+        await releaseMaintenance.promise;
+        return { capture: () => [], dispose() {} };
+      }),
+    );
     // Cold Worker startup can exceed a polling deadline; observe its committed row instead.
     onTestFinished(
       sessionChanges.subscribe((change) => {
@@ -141,12 +142,9 @@ describe("channel-inbound public helpers", () => {
       }),
     );
 
-    const result = await runChannelInboundEvent({
-      channel: "test",
-      raw: { id: "msg-1", text: "hello" },
-      adapter: {
-        ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        resolveTurn: () => ({
+    try {
+      const result = await withinTest(
+        runInbound(() => ({
           channel: "test",
           routeSessionKey: activeSessionKey,
           storePath,
@@ -162,6 +160,7 @@ describe("channel-inbound public helpers", () => {
             Surface: "test",
           },
           recordInboundSession,
+          afterRecord: () => withinTest(maintenancePrepared.promise, signal),
           record: {
             updateLastRoute: {
               accountId: "default",
@@ -181,14 +180,17 @@ describe("channel-inbound public helpers", () => {
             turnAdoptionLifecycle: undefined,
             onDispatchSkipped: vi.fn(),
           },
-        }),
-      },
-    });
+        })),
+        signal,
+      );
 
-    expect(result.dispatched).toBe(true);
-    expect(staleEntryAtDispatch).toMatchObject({ sessionId: "published-inbound-stale" });
-    expect(staleEntryAtDispatch?.archivedAt).toBeUndefined();
-    await maintenanceCommitted.promise;
+      expect(result.dispatched).toBe(true);
+      expect(staleEntryAtDispatch).toMatchObject({ sessionId: "published-inbound-stale" });
+      expect(staleEntryAtDispatch?.archivedAt).toBeUndefined();
+    } finally {
+      releaseMaintenance.resolve();
+    }
+    await withinTest(maintenanceCommitted.promise, signal);
     expect(loadSessionEntry({ storePath, sessionKey: staleSessionKey })).toMatchObject({
       sessionId: "published-inbound-stale",
       updatedAt: 1,
@@ -200,30 +202,6 @@ describe("channel-inbound public helpers", () => {
     const ctx = buildChannelInboundEventContext(createInboundParams());
 
     expect(ctx.InboundEventKind).toBe("room_event");
-  });
-
-  it("accepts plugin-augmented hook channel sender fields", () => {
-    expectTypeOf<PluginHookChannelSenderContext["testUnionId"]>().toEqualTypeOf<
-      string | undefined
-    >();
-    const sender = {
-      id: "u1",
-      testUnionId: "union-1",
-    } satisfies PluginHookChannelSenderContext;
-    expect(sender.testUnionId).toBe("union-1");
-    const channelContext = {
-      sender: {
-        id: "u1",
-        testUnionId: "union-1",
-      },
-    } satisfies NonNullable<BuildChannelInboundEventContextParams["channelContext"]>;
-    const ctx = buildChannelInboundEventContext(
-      createInboundParams({
-        channelContext,
-      }),
-    );
-
-    expect(ctx.ChannelContext?.sender?.testUnionId).toBe("union-1");
   });
 
   it("does not expose public participant evidence authority", () => {
@@ -242,10 +220,7 @@ describe("channel-inbound public helpers", () => {
     });
     const ctx = buildChannelTurnContext({
       ...createInboundParams({ channelIngress }),
-      message: {
-        rawBody: "hello",
-        inboundTurnKind: "user_request",
-      },
+      message: { rawBody: "hello", inboundTurnKind: "user_request" },
     });
 
     expect(ctx.InboundTurnKind).toBe("user_request");

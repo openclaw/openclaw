@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { StatementSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -14,13 +16,14 @@ import {
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { persistInternalSourceReply } from "../gateway/internal-source-reply-persistence.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { publishHeartbeatSessionReply } from "./heartbeat-session-publication.js";
 
@@ -52,6 +55,8 @@ async function withTarget(
         sessionId: "original-session",
         storePath: path.join(state.sessionsDir("main"), "sessions.json"),
       };
+      const cfg = { session: { store: scope.storePath } };
+      setRuntimeConfigSnapshot(cfg);
       const lifecycleRevision = "original-generation";
       const entry = {
         sessionId: scope.sessionId,
@@ -62,7 +67,7 @@ async function withTarget(
       await replaceSessionEntry(scope, entry);
       const params: PublicationParams = {
         ...scope,
-        cfg: { session: { store: scope.storePath } },
+        cfg,
         expectedGeneration: { sessionId: scope.sessionId, lifecycleRevision },
         occurrenceIds: ["occurrence-b", "occurrence-a"],
         payload: createHeartbeatToolResponsePayload({
@@ -84,6 +89,39 @@ async function withTarget(
 }
 
 describe("publishHeartbeatSessionReply", () => {
+  it("publishes through worker reads and observes a later committed reset", async () => {
+    await withTarget(async ({ params, scope, entry }) => {
+      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+      const reads: string[] = [];
+      const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+        const original = prototype[method];
+        return vi.spyOn(prototype, method).mockImplementation(
+          new Proxy(original, {
+            apply(read, receiver: StatementSync, args) {
+              if (/\b(?:session_nodes|session_windows)\b/iu.test(receiver.sourceSQL)) {
+                reads.push(receiver.sourceSQL);
+              }
+              return Reflect.apply(read, receiver, args);
+            },
+          }),
+        );
+      });
+      try {
+        expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: true });
+        expect(reads).toEqual([]);
+        await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "reset-generation" });
+        reads.length = 0;
+        expect(
+          await publishHeartbeatSessionReply({ ...params, occurrenceIds: ["after-reset"] }),
+        ).toMatchObject({ ok: false });
+        expect(reads).toEqual([]);
+      } finally {
+        observers.forEach((observer) => observer.mockRestore());
+      }
+    });
+  });
+
   it.each(["abort", "authority"] as const)(
     "accepts the committed occurrence before queued %s and publishes a later occurrence once",
     async (change) => {
@@ -162,7 +200,7 @@ describe("publishHeartbeatSessionReply", () => {
 
   it("commits model-visible notification under its still-active admission and replays once", async () => {
     await withTarget(async ({ params, scope, events }) => {
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
         assertAllowed: () => {},
@@ -248,12 +286,39 @@ describe("publishHeartbeatSessionReply", () => {
   );
 
   it.each([
-    { name: "captioned image", caption: "Attached image", source: "/tmp/reply-image.png" },
-    { name: "media-only image", caption: "", source: "/tmp/reply-image.png" },
-    { name: "silent voice", caption: "NO_REPLY", source: "/tmp/voice.opus" },
+    {
+      name: "captioned image",
+      caption: "Attached image",
+      expectedCaption: "Attached image",
+      source: "/tmp/reply-image.png",
+    },
+    {
+      name: "media-only image",
+      caption: "",
+      expectedCaption: undefined,
+      source: "/tmp/reply-image.png",
+    },
+    {
+      name: "silent voice",
+      caption: "NO_REPLY",
+      expectedCaption: undefined,
+      source: "/tmp/voice.opus",
+    },
+    {
+      name: "literal suffix voice",
+      caption: "NO_REPLY\nNO_REPLY",
+      expectedCaption: "NO_REPLY",
+      source: "/tmp/voice.opus",
+    },
+    {
+      name: "punctuated caption voice",
+      caption: "NO_REPLY.",
+      expectedCaption: "NO_REPLY.",
+      source: "/tmp/voice.opus",
+    },
   ])(
     "reconciles a producer-derived $name receipt without rewriting it",
-    async ({ caption, source }) => {
+    async ({ caption, expectedCaption, source }) => {
       await withTarget(async ({ params, scope, events }) => {
         const assistant = {
           role: "assistant" as const,
@@ -296,7 +361,7 @@ describe("publishHeartbeatSessionReply", () => {
         });
         expect(payloads).toHaveLength(1);
         const payload = payloads[0]!;
-        expect(payload.text).toBe(caption && caption !== "NO_REPLY" ? caption : undefined);
+        expect(payload.text).toBe(expectedCaption);
         expect(payload.mediaUrls).toEqual([source]);
         const before = await events();
         const updates: Array<{ messageId?: string }> = [];

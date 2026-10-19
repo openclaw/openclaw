@@ -39,7 +39,7 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   confirmGatewayReachable,
@@ -57,9 +57,15 @@ import {
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import { updateMaintenanceError } from "./update-maintenance-error.js";
 
-/** Public repair can clear a stale ledger without entering post-core maintenance. */
-export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  return repairUpdate(opts).catch((error: unknown) => {
+    throw updateMaintenanceError(error);
+  });
+}
+
+async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   // Recovery refusal precedes discovery; later mutation checks still revalidate.
   await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();
@@ -80,31 +86,37 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
-  if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
-    const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
-    if (settled) {
-      defaultRuntime.error(
-        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-          settled.retained
-            ? `Recovery evidence retained at ${settled.retained}.`
-            : "The original package and launchers remain unchanged."
-        }${settled.detail ? ` ${settled.detail}` : ""}`,
-      );
-      if (settled.detail) {
-        // The operation UUID identifies this repair receipt, not the original failed run.
-        // Replaying it after interrupted reporting preserves the original update outcome.
-        createUpdateRun(
-          {
-            runId: settled.operationId,
-            trigger: "cli",
-            settlement: {
-              reason: settled.reason,
-              detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
-            },
-          },
-          options,
+  const validChannel = opts.channel === undefined || normalizeUpdateChannel(opts.channel) !== null;
+  if (validChannel) {
+    const settlement = await settlePendingPackageActivation(
+      resolveUpdateInstallRoot(discoveredRoot),
+      (settled) => {
+        defaultRuntime.error(
+          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+            settled.retained
+              ? `Recovery evidence retained at ${settled.retained}.`
+              : "The original package and launchers remain unchanged."
+          }${settled.detail ? ` ${settled.detail}` : ""}`,
         );
-      }
+        if (settled.detail) {
+          // The operation UUID identifies this repair receipt, not the original failed run.
+          // Replaying it after interrupted reporting preserves the original update outcome.
+          createUpdateRun(
+            {
+              runId: settled.operationId,
+              trigger: "cli",
+              settlement: {
+                reason: settled.reason,
+                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+              },
+            },
+            options,
+          );
+        }
+      },
+    );
+    if (settlement?.warning) {
+      defaultRuntime.error(`Warning: ${settlement.warning}`);
     }
   }
   using handoff =
@@ -112,7 +124,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     !inheritedRunId &&
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
-    (opts.channel === undefined || normalizeUpdateChannel(opts.channel))
+    validChannel
       ? await (
           await prepareManagedHandoffLeaseStore()
         ).prepareRepair(await resolveUpdateRoot(), env, timeoutMs)

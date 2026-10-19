@@ -17,6 +17,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   transcriptWriteScopeIsCurrent,
+  type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -36,8 +37,8 @@ type TranscriptMessageAnchorRewriteResult<TMessage> = {
   message: TMessage;
 };
 
-/** Rewrites one exact anchored message without rejecting unrelated later appends. */
-export async function rewriteTranscriptMessageAtAnchor<TMessage>(
+/** Worker and offline-maintenance adapter; runtime callers use the prepared worker operation. */
+export async function rewriteNativeTranscriptMessageAtAnchor<TMessage>(
   anchor: TranscriptEntryAnchor,
   rewriteMessage: (message: unknown) => TMessage | undefined,
 ): Promise<TranscriptMessageAnchorRewriteResult<TMessage> | null> {
@@ -84,20 +85,30 @@ export async function rewriteTranscriptMessageAtAnchor<TMessage>(
   );
 }
 
-/** Updates the terminal assistant owned by one run, preserving unrelated later turns. */
-export async function rewriteAssistantTranscriptMessageForRun(params: {
-  scope: SessionTranscriptAccessScope;
-  runId: string;
-  expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
-  rewriteMessage: (message: Record<string, unknown>) => Record<string, unknown>;
-}): Promise<{ messageId: string } | null> {
+/** Worker and offline-maintenance adapter; process-held incognito retains its native owner. */
+export async function rewriteNativeAssistantTranscriptMessageForRun(
+  params: {
+    scope: SessionTranscriptAccessScope;
+    runId: string;
+    expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
+    rewriteMessage: (message: Record<string, unknown>) => Record<string, unknown>;
+  },
+  preparedScope?: ResolvedTranscriptScope,
+): Promise<{ messageId: string } | null> {
   const scope = withOwnedSessionTranscriptWriterFence({
     ...params.scope,
     expectedLifecycleRevision: params.expectedLifecycleRevision ?? undefined,
   });
-  const resolved = resolveSqliteTranscriptScope(scope);
+  const resolved = preparedScope ?? resolveSqliteTranscriptScope(scope);
   const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
+  await restoreSessionColdTranscript(
+    {
+      ...scope,
+      sessionId: resolved.sessionId,
+      ...(preparedScope ? { storePath: resolved.path } : {}),
+    },
+    preparedScope ? () => assertOwnedTranscriptWriteCommit(scope) : undefined,
+  );
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () =>

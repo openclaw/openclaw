@@ -1,14 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  isPrimarySessionTranscriptFileName,
-  resolveTrajectoryPath,
-  resolveTrajectoryPointerPath,
-} from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   readLegacySessionStoreEntries,
@@ -20,32 +12,32 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { DeferredPluginMigration } from "./deferred-plugin-migrations.js";
 import {
-  databaseIdentity,
-  preservesRecordedIndexValue,
-  sameSourceContent,
-  verifyDeferredSessionDatabase,
-} from "./deferred-plugin-session-verification.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+  collectArchivedSources,
+  existingSessionSourcePaths,
+  type ArchivedSessionSources,
+} from "./deferred-plugin-session-artifacts.js";
+import { databaseIdentity, sameSourceContent } from "./deferred-plugin-session-verification.js";
 import {
-  MigrationArtifactSchema,
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
   statMigrationPath,
   type MigrationArtifactIdentity,
 } from "./session-sqlite-migration-artifact.js";
 import {
-  canonicalMigrationFilePath,
-  filterRestoreManifestTargets,
-  listSessionSqliteMigrationManifestPaths,
-  readSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
+  type SessionSqliteMigrationTargetInput as SessionImportTarget,
 } from "./session-sqlite-migration-manifest.js";
-import type { TranscriptFileFingerprint } from "./session-sqlite-migration-readers.js";
+import type { EngineConnection } from "./sql-connection.js";
+import {
+  DeferredPluginSessionImportSchema,
+  parseSessionImportReceipt,
+  type DeferredPluginSessionImport,
+} from "./state-migrations.deferred-session-import.js";
 import { recordStartupMigrationWarnings } from "./state-migrations.messages.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
@@ -54,17 +46,14 @@ import {
   type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 
-type SessionImportTarget = { agentId: string; storePath: string; sqlitePath: string };
+export type { DeferredPluginSessionImport } from "./state-migrations.deferred-session-import.js";
+
 export type SessionImportSource = {
   cfg: OpenClawConfig;
   target: LegacySessionStoreTarget;
   sqlitePath: string;
   env: NodeJS.ProcessEnv;
 };
-type ArchivedSessionSources = Map<
-  string,
-  Array<{ identity: MigrationArtifactIdentity; path: string }>
->;
 /** Transient reuse within one synchronous receipt verification and counting phase. */
 export type SessionSourceVerification = Map<
   string,
@@ -74,49 +63,13 @@ export type SessionSourceVerification = Map<
   }
 >;
 const RECEIPT_KIND = "deferred-plugin-session-import";
-export const DeferredPluginSessionImportSchema = z.object({
-  databaseIdentity: z.string(),
-  pluginIds: z.array(z.string()),
-  sources: z.array(
-    z.object({ path: z.string(), identity: MigrationArtifactSchema.shape.identity }),
-  ),
-});
-export type DeferredPluginSessionImport = z.infer<typeof DeferredPluginSessionImportSchema>;
 
-/** Capture originals before deferral; settlement may only archive these verified identities. */
-export function captureDeferredPluginSessionSources(params: {
-  storePath: string;
-  indexIdentity?: MigrationArtifactIdentity;
-  records: readonly { transcriptPath?: string; sourceFingerprint?: TranscriptFileFingerprint }[];
-  unreferencedJsonlFiles: readonly string[];
-  referencedPaths?: ReadonlySet<string>;
-}): DeferredPluginSessionImport["sources"] {
-  const sources = new Map<string, MigrationArtifactIdentity>(
-    params.indexIdentity ? [[path.resolve(params.storePath), params.indexIdentity]] : [],
+function sourceKey(target: SessionImportTarget): string {
+  return resolveLegacyMigrationSourceKey(
+    RECEIPT_KIND,
+    target.storePath,
+    `${target.agentId}\0${path.resolve(target.sqlitePath)}`,
   );
-  for (const file of params.unreferencedJsonlFiles) {
-    if (!params.referencedPaths?.has(canonicalMigrationFilePath(file))) {
-      sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
-    }
-  }
-  for (const record of params.records) {
-    if (!record.transcriptPath || !record.sourceFingerprint) {
-      continue;
-    }
-    sources.set(
-      path.resolve(record.transcriptPath),
-      readMigrationArtifactIdentity(record.transcriptPath, 1n, record.sourceFingerprint),
-    );
-    for (const file of [
-      resolveTrajectoryPath(record.transcriptPath),
-      resolveTrajectoryPointerPath(record.transcriptPath),
-    ]) {
-      if (file && fs.existsSync(file)) {
-        sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
-      }
-    }
-  }
-  return [...sources].map(([sourcePath, identity]) => ({ path: sourcePath, identity }));
 }
 
 export function deferredPluginSessionStoreIds(params: {
@@ -151,48 +104,6 @@ export function preserveDeferredPluginSessionSource(params: {
   });
 }
 
-function sourceKey(target: SessionImportTarget): string {
-  return resolveLegacyMigrationSourceKey(
-    RECEIPT_KIND,
-    target.storePath,
-    `${target.agentId}\0${path.resolve(target.sqlitePath)}`,
-  );
-}
-
-function collectArchivedSources(
-  target: SessionImportTarget,
-  env: NodeJS.ProcessEnv,
-): ArchivedSessionSources {
-  const archives: ArchivedSessionSources = new Map();
-  for (const manifestPath of listSessionSqliteMigrationManifestPaths(env)) {
-    const manifest = readSessionSqliteMigrationManifest(manifestPath);
-    const targets = manifest ? filterRestoreManifestTargets(manifest, [target]) : [];
-    for (const candidate of targets) {
-      for (const move of candidate.plannedMoves) {
-        if (move.artifact) {
-          const paths = archives.get(move.sourcePath) ?? [];
-          paths.push({ path: move.archivePath, identity: move.artifact.identity });
-          archives.set(move.sourcePath, paths);
-        }
-      }
-    }
-  }
-  return archives;
-}
-
-function existingSessionSourcePaths(
-  sourcePath: string,
-  target: SessionImportTarget,
-  env: NodeJS.ProcessEnv,
-  archives?: ArchivedSessionSources,
-): string[] {
-  return statMigrationPath(sourcePath)
-    ? [sourcePath]
-    : ((archives ?? collectArchivedSources(target, env)).get(sourcePath) ?? [])
-        .map((source) => source.path)
-        .filter((source) => statMigrationPath(source));
-}
-
 /** Receipt verification and retained counting share one synchronous phase; publication revalidates. */
 export function prepareSessionSourceVerification(params: SessionImportSource) {
   const verification: SessionSourceVerification = new Map();
@@ -214,7 +125,7 @@ export function resolveVerifiedSessionSource(
   source: DeferredPluginSessionImport["sources"][number],
   target: SessionImportTarget,
   env: NodeJS.ProcessEnv,
-  verification: SessionSourceVerification = new Map(),
+  verification: SessionSourceVerification,
 ): string | undefined {
   const targetKey = JSON.stringify([sourceKey(target), resolveSessionSqliteMigrationRunsDir(env)]);
   let cachedTarget = verification.get(targetKey);
@@ -355,7 +266,7 @@ function assertVerifiedSessionSources(
 /** A completed core import remains authoritative after canonical sessions change or are deleted. */
 export function readDeferredPluginSessionImport(
   params: SessionImportSource & {
-    database?: DatabaseSync;
+    database?: EngineConnection;
     verification?: SessionSourceVerification;
     onSourceConflict?: (sourcePath: string, artifactPath?: string) => void;
     allowMissingIndex?: boolean;
@@ -366,12 +277,19 @@ export function readDeferredPluginSessionImport(
   if (!receipt) {
     return undefined;
   }
-  let recorded = parseSessionImportReceipt(params, receipt, params.purpose);
-  // Canonical mutations have their own provenance checks; changed plugin inputs cannot undo
-  // core import completion or authorize replay of file-era metadata.
-  if (params.purpose === "canonical") {
+  const binding = parseSessionImportReceipt(params, receipt);
+  if (binding.stale) {
+    recordStartupMigrationWarnings([
+      "Retained session import receipt belongs to a different database; sources remain protected. Run openclaw doctor --fix to recover retained history against the live database.",
+    ]);
+    return undefined;
+  }
+  let recorded = { ...binding.recorded, databaseIdentity: binding.currentDatabaseIdentity };
+  // Readiness and canonical mutations use the database binding; Doctor verifies source bytes.
+  if (params.purpose) {
     return recorded;
   }
+  const verification = params.verification ?? new Map();
   if (params.allowMissingIndex && !statMigrationPath(params.target.storePath)) {
     recorded = {
       ...recorded,
@@ -382,7 +300,7 @@ export function readDeferredPluginSessionImport(
             source,
             { ...params.target, sqlitePath: params.sqlitePath },
             params.env,
-            params.verification,
+            verification,
           ) ||
           existingSessionSourcePaths(
             source.path,
@@ -392,16 +310,7 @@ export function readDeferredPluginSessionImport(
       ),
     };
   }
-  try {
-    assertVerifiedSessionSources(params, recorded, params.verification, params.onSourceConflict);
-  } catch (error) {
-    if (params.purpose !== "readiness") {
-      throw error;
-    }
-    recordStartupMigrationWarnings([
-      `Retained plugin session source awaits Doctor repair; canonical SQLite sessions remain available: ${String(error)}`,
-    ]);
-  }
+  assertVerifiedSessionSources(params, recorded, verification, params.onSourceConflict);
   return recorded;
 }
 
@@ -411,250 +320,110 @@ export function hasDeferredPluginSessionImport(
   return Boolean(readDeferredPluginSessionImportReceipt(params));
 }
 
+/** Cleanup consumes the same receipt and manifest custody as Doctor, including unresolved sources. */
+export function readDeferredPluginSessionArtifactPaths(
+  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env">,
+): Set<string> {
+  const paths = new Set<string>();
+  const protect = (file: string) => paths.add(resolveRealpathOrAbsolute(file));
+  const receipt = readDeferredPluginSessionImportReceipt(params);
+  if (receipt) {
+    const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
+    for (const source of recorded.sources) {
+      protect(source.path);
+    }
+  }
+  const archives = collectArchivedSources(
+    { ...params.target, sqlitePath: params.sqlitePath },
+    params.env,
+    true,
+  );
+  for (const [source, archived] of archives) {
+    protect(source);
+    for (const artifact of archived) {
+      protect(artifact.path);
+      for (const dependency of artifact.dependencies) {
+        protect(dependency);
+      }
+    }
+  }
+  return paths;
+}
+
+export function readStaleDeferredPluginSessionImport(
+  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & {
+    database?: EngineConnection;
+  },
+): DeferredPluginSessionImport | undefined {
+  const receipt = readDeferredPluginSessionImportReceipt(params);
+  const binding = receipt && parseSessionImportReceipt(params, receipt);
+  return binding?.stale ? binding.recorded : undefined;
+}
+
 export function readDeferredPluginSessionImportReceipt(
-  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & { database?: DatabaseSync },
+  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & {
+    database?: EngineConnection;
+  },
+) {
+  const receipt = readSessionImportReceipt(params);
+  return receipt?.removedSource ? undefined : receipt;
+}
+
+/** Archive retirement ends active source custody, not the canonical import's no-replay evidence. */
+function readSessionImportReceipt(
+  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & {
+    database?: EngineConnection;
+  },
 ) {
   const target = { ...params.target, sqlitePath: params.sqlitePath };
-  const read = (db: DatabaseSync) => {
-    const receipt = tableExists(db, "migration_sources")
+  const read = (db: EngineConnection) =>
+    tableExists(db, "migration_sources")
       ? readLegacyMigrationReceiptFromDatabase(db, sourceKey(target))
       : undefined;
-    return receipt?.removedSource ? undefined : receipt;
-  };
   return params.database
     ? read(params.database)
     : withExistingOpenClawStateDatabaseReadOnly(({ db }) => read(db), { env: params.env });
 }
 
-function parseSessionImportReceipt(
-  params: SessionImportSource,
-  receipt: LegacyMigrationReceipt,
-  purpose?: "readiness" | "canonical",
-) {
-  const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
-  if (recorded.databaseIdentity !== databaseIdentity(params.sqlitePath)) {
-    if (purpose !== "readiness") {
-      throw new Error(
-        `The verified session import database changed for ${path.dirname(params.target.storePath)}; run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents", params.env)} against the same state/config to verify the retained sources against the current database.`,
-      );
-    }
-    recordStartupMigrationWarnings([
-      "Retained session import database identity changed; sources remain protected. Run openclaw doctor --session-sqlite recover to revalidate the receipt.",
-    ]);
-  }
-  return recorded;
-}
-
-/** Rebuild derived evidence from proven original index values or verified canonical transcripts. */
-export async function rebuildDeferredPluginSessionSourceIndex(
-  params: SessionImportSource & {
-    onSourceConflict?: (sourcePath: string, artifactPath?: string, error?: unknown) => void;
-    onEmptySource?: (sourcePath: string, reason: string) => void;
-  },
-): Promise<boolean> {
-  const receipt = readDeferredPluginSessionImportReceipt(params);
-  if (!receipt) {
-    return false;
-  }
-  const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
-  const currentDatabaseIdentity = databaseIdentity(params.sqlitePath);
-  const physicalIdentity = databaseIdentity(params.sqlitePath, "physical");
-  // Shipped receipts lack creation time. An unchanged physical file can upgrade without
-  // resurrecting legitimately deleted sessions; other bindings still require recovery proof.
-  const sameLegacyDatabase = recorded.databaseIdentity === physicalIdentity;
-  const target = { ...params.target, sqlitePath: params.sqlitePath };
-  const index = recorded.sources.find((source) => source.path === path.resolve(target.storePath));
-  let verifiedIndex = index;
-  const archives = collectArchivedSources(target, params.env);
-  const verifiedSourcePaths = new Set(recorded.sources.map((source) => source.path));
-  const missingIndex =
-    index && existingSessionSourcePaths(index.path, target, params.env, archives).length === 0;
-  const assertCurrent = () => {
-    if (
-      !isDeepStrictEqual(readDeferredPluginSessionImportReceipt(params), receipt) ||
-      databaseIdentity(params.sqlitePath, "physical") !== physicalIdentity ||
-      databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity ||
-      (verifiedIndex &&
-        !missingIndex &&
-        !resolveVerifiedSessionSource(verifiedIndex, target, params.env)) ||
-      (missingIndex && existingSessionSourcePaths(index.path, target, params.env).length > 0)
-    ) {
-      throw new Error(
-        "Retained session receipt, index, or database changed during recovery; sources remain protected.",
-      );
-    }
-  };
-  const sources: DeferredPluginSessionImport["sources"] = [];
-  for (const source of recorded.sources.filter((item) => !missingIndex || item !== index)) {
-    sources.push(
-      await (async () => {
-        let failure: unknown;
-        const candidates = statMigrationPath(source.path)
-          ? [source.path]
-          : (archives.get(source.path) ?? []).map((archive) => archive.path);
-        for (const candidate of candidates) {
-          if (!statMigrationPath(candidate)) {
-            continue;
-          }
-          try {
-            const identity = readMigrationArtifactIdentity(candidate);
-            if (
-              candidate !== source.path &&
-              sameSourceContent(identity, source.identity) &&
-              currentDatabaseIdentity === recorded.databaseIdentity
-            ) {
-              return { path: source.path, identity };
-            }
-            const emptyTranscript =
-              identity.size === 0 && isPrimarySessionTranscriptFileName(path.basename(source.path));
-            if (!emptyTranscript && sameSourceContent(identity, source.identity)) {
-              return { path: source.path, identity };
-            }
-            if (
-              (!emptyTranscript && candidate !== source.path) ||
-              (source.path !== path.resolve(target.storePath) &&
-                !isPrimarySessionTranscriptFileName(path.basename(source.path)))
-            ) {
-              continue;
-            }
-            const isIndex = source.path === path.resolve(target.storePath);
-            const indexPath =
-              !isIndex &&
-              verifiedIndex &&
-              resolveVerifiedSessionSource(verifiedIndex, target, params.env);
-            if (isIndex) {
-              const issues: Array<{ code: string; message: string }> = [];
-              const current = readLegacySessionStoreEntries(params.target, issues, {
-                sourcePath: candidate,
-              });
-              if (!current.bytes || !preservesRecordedIndexValue(current.bytes, source.identity)) {
-                throw new Error(
-                  `Cannot prove the retained index preserves its original entries, metadata, and transcript links: ${candidate}. ${issues.map((issue) => issue.message).join("; ")}`,
-                );
-              }
-            } else {
-              if (!emptyTranscript && (!indexPath || !verifiedIndex)) {
-                throw new Error(
-                  "Changed transcript has no verified retained index to establish its session owner.",
-                );
-              }
-              await verifyDeferredSessionDatabase({
-                ...params,
-                sources: [
-                  ...(verifiedIndex && indexPath
-                    ? [{ originalPath: verifiedIndex.path, path: indexPath }]
-                    : []),
-                  { originalPath: source.path, path: candidate },
-                ],
-                requireCompleteTranscript: true,
-                verifiedSourcePaths,
-                assertCurrent,
-              });
-            }
-            if (
-              !sameMigrationArtifact(readMigrationArtifactIdentity(candidate), identity) ||
-              (indexPath &&
-                verifiedIndex &&
-                !sameSourceContent(
-                  readMigrationArtifactIdentity(indexPath),
-                  verifiedIndex.identity,
-                ))
-            ) {
-              continue;
-            }
-            if (isIndex) {
-              verifiedIndex = { path: source.path, identity };
-            }
-            return { path: source.path, identity };
-          } catch (error) {
-            if (
-              statMigrationPath(candidate)?.size === 0 &&
-              isPrimarySessionTranscriptFileName(path.basename(source.path))
-            ) {
-              throw error;
-            }
-            // An unreadable or aliased source remains protected with its recorded identity.
-            failure = error;
-          }
-        }
-        if (failure !== undefined) {
-          params.onSourceConflict?.(source.path, undefined, failure);
-        }
-        // Unverified content retains its old receipt until Doctor protects the current artifact.
-        return source;
-      })(),
-    );
-  }
-  if (currentDatabaseIdentity !== recorded.databaseIdentity && !sameLegacyDatabase) {
-    assertVerifiedSessionSources(params, { ...recorded, sources });
-    await verifyDeferredSessionDatabase({
-      ...params,
-      sources: sources.map((source) => ({
-        originalPath: source.path,
-        path: resolveVerifiedSessionSource(source, target, params.env)!,
-      })),
-      assertCurrent,
-    });
-  }
-  const rebuilt = { ...recorded, databaseIdentity: currentDatabaseIdentity, sources };
-  if (isDeepStrictEqual(rebuilt, recorded)) {
-    return false;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const current = readDeferredPluginSessionImportReceipt({ ...params, database: db });
-      if (
-        !isDeepStrictEqual(current, receipt) ||
-        databaseIdentity(params.sqlitePath, "physical") !== physicalIdentity ||
-        databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity
-      ) {
-        throw new Error(
-          `Deferred session import changed in ${path.dirname(params.target.storePath)} before its source index was rebuilt. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to retry.`,
-        );
-      }
-      const reportJson = JSON.stringify(rebuilt);
-      const rebuiltIndex = sources.find((source) => source.path === path.resolve(target.storePath));
-      const query = getNodeSqliteKysely<DB>(db);
-      executeSqliteQuerySync(
-        db,
-        query
-          .updateTable("migration_sources")
-          .set({
-            report_json: reportJson,
-            ...(rebuiltIndex
-              ? {
-                  source_sha256: rebuiltIndex.identity.sha256,
-                  source_size_bytes: rebuiltIndex.identity.size,
-                }
-              : {}),
-          })
-          .where("source_key", "=", receipt.sourceKey),
-      );
-      executeSqliteQuerySync(
-        db,
-        query
-          .updateTable("migration_runs")
-          .set({ report_json: reportJson })
-          .where("id", "=", receipt.sourceKey),
-      );
-    },
-    { env: params.env },
-    { operationLabel: "state.rebuild-plugin-session-source-index" },
-  );
-  return true;
-}
-
-/** Reuse verified source bytes only within one uninterrupted synchronous migration loop. */
-export function prepareDeferredPluginSessionImportReader(params: {
-  cfg: OpenClawConfig;
+/** Resolve the verified live or archived legacy index whose canonical import is still bound. */
+export function resolveDeferredPluginSessionStoreSource(params: {
   target: LegacySessionStoreTarget;
   env: NodeJS.ProcessEnv;
-}) {
+}): string | undefined {
+  const { path: sqlitePath } = resolveSqliteTargetFromSessionStorePath(params.target.storePath, {
+    agentId: params.target.agentId,
+    env: params.env,
+  });
+  const receipt = readSessionImportReceipt({ ...params, sqlitePath });
+  const binding = receipt && parseSessionImportReceipt({ sqlitePath }, receipt);
+  const index =
+    binding && !binding.stale
+      ? binding.recorded.sources.find(
+          (source) => source.path === path.resolve(params.target.storePath),
+        )
+      : undefined;
+  return index
+    ? resolveVerifiedSessionSource(index, { ...params.target, sqlitePath }, params.env, new Map())
+    : undefined;
+}
+
+type PreparedSessionImport =
+  | { kind: "absent" }
+  | { kind: "stale" }
+  | { kind: "canonical"; target: SessionImportTarget };
+
+/** Reuse verified source bytes only within one uninterrupted synchronous migration loop. */
+export function prepareDeferredPluginSessionImportReader(
+  params: Pick<SessionImportSource, "target" | "env">,
+) {
   const verified = new Map<
     string,
-    { receipt: LegacyMigrationReceipt | null; imported: DeferredPluginSessionImport | undefined }
+    {
+      receipt: LegacyMigrationReceipt | null;
+      binding: ReturnType<typeof parseSessionImportReceipt> | undefined;
+    }
   >();
-  return (database: DatabaseSync, agentId: string): SessionImportTarget | undefined => {
+  return (database: EngineConnection, agentId: string): PreparedSessionImport => {
     const sourceTarget = { ...params.target, agentId };
     const sqlite = resolveSqliteTargetFromSessionStorePath(sourceTarget.storePath, {
       agentId,
@@ -667,26 +436,21 @@ export function prepareDeferredPluginSessionImportReader(params: {
     if (!prepared || !isDeepStrictEqual(prepared.receipt, receipt)) {
       prepared = {
         receipt,
-        imported: readDeferredPluginSessionImport({
-          cfg: params.cfg,
-          target: sourceTarget,
-          sqlitePath: sqlite.path,
-          env: params.env,
-          database,
-          purpose: "canonical",
-        }),
+        // Retired source custody still certifies the canonical import's no-replay binding.
+        binding: receipt ? parseSessionImportReceipt(target, receipt) : undefined,
       };
       verified.set(key, prepared);
     }
-    if (!prepared.imported) {
-      return undefined;
+    const binding = prepared.binding;
+    if (!binding) {
+      return { kind: "absent" };
     }
-    if (prepared.imported.databaseIdentity !== databaseIdentity(target.sqlitePath)) {
+    if (binding.currentDatabaseIdentity !== databaseIdentity(target.sqlitePath)) {
       throw new Error(
         `The verified session import database changed for ${path.dirname(target.storePath)}; retained source was not replayed. Run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents", params.env)} against the same state/config.`,
       );
     }
-    return target;
+    return binding.stale ? { kind: "stale" } : { kind: "canonical", target };
   };
 }
 
@@ -714,7 +478,11 @@ export function recordDeferredPluginSessionImport(
           `Session import database changed for ${path.dirname(params.target.storePath)} before its receipt was recorded. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to retry.`,
         );
       }
-      const key = sourceKey({ ...params.target, sqlitePath: params.sqlitePath });
+      const key = sourceKey({
+        ...params.target,
+        sqlitePath: params.sqlitePath,
+      });
+      const previous = readLegacyMigrationReceiptFromDatabase(db, key);
       recordLegacyMigrationReceipt(db, {
         sourceKey: key,
         migrationKind: RECEIPT_KIND,
@@ -726,7 +494,11 @@ export function recordDeferredPluginSessionImport(
         runId: key,
         reportJson: JSON.stringify(report),
         now: Date.now(),
-        upsert: readLegacyMigrationReceiptFromDatabase(db, key)?.removedSource === true,
+        upsert: Boolean(
+          previous &&
+          (previous.removedSource ||
+            parseSessionImportReceipt(params, previous).recorded.superseded),
+        ),
       });
     },
     { env: params.env },

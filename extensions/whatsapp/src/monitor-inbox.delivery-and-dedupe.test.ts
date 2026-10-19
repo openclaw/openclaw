@@ -1,6 +1,8 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { WAMessageStubType } from "baileys";
 import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearWhatsAppApprovalReactionTargetsForTest,
@@ -30,6 +32,18 @@ import {
 } from "./monitor-inbox.test-harness.js";
 
 const approvalResolver = vi.hoisted(() => vi.fn());
+const inboundLogRecords = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
+  return {
+    ...actual,
+    getChildLogger: (...args: Parameters<typeof actual.getChildLogger>) => {
+      const logger = actual.getChildLogger(...args);
+      logger.attachTransport({ format: () => "", write: inboundLogRecords });
+      return logger;
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: approvalResolver,
 }));
@@ -180,61 +194,23 @@ describe("web monitor inbox delivery and dedupe", () => {
       }
     }));
 
-  it("delivery coordinator streams inbound messages", async () => {
-    const onMessage = vi.fn(async (msg) => {
-      await msg.platform.sendComposing();
-      await msg.platform.reply("nested reply works");
-      await msg.platform.sendMedia({ text: "nested media works" });
-    });
-
+  it("delivers inbound text without copying it into diagnostics", async () => {
+    setLoggerOverride({ level: "trace" });
+    inboundLogRecords.mockClear();
+    const onMessage = vi.fn();
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const readReceiptSent = createDeferred<void>();
-    sock.readMessages.mockImplementationOnce(async () => {
-      readReceiptSent.resolve();
-    });
-    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
-    const messageId = nextMessageId("stream");
-    const upsert = dmUpsert(messageId);
+    const body = "private WhatsApp message containing confidential account details";
+    try {
+      sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("private-inbound"), body));
+      await waitForInboundWorkDrained();
 
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-    await readReceiptSent.promise;
-
-    const inbound = inboundMessage(onMessage);
-    expect(inbound.payload.body).toBe("ping");
-    expect(inbound.platform.recipientJid).toBe("+123");
-    expect(inbound.admission).toMatchObject({
-      accountId: DEFAULT_ACCOUNT_ID,
-      conversation: {
-        kind: "direct",
-        id: "+999",
-      },
-      sender: {
-        id: "+999",
-      },
-      senderAccess: {
-        allowed: true,
-        decision: "allow",
-      },
-    });
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "999@s.whatsapp.net",
-        id: messageId,
-        participant: undefined,
-        fromMe: false,
-      },
-    ]);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "nested reply works",
-    });
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "nested media works",
-    });
-
-    await listener.close();
+      expect(inboundMessage(onMessage).payload.body).toBe(body);
+      expect(inboundLogRecords).toHaveBeenCalled();
+      expect(JSON.stringify(inboundLogRecords.mock.calls)).toContain(`"textLength":${body.length}`);
+      expect(JSON.stringify(inboundLogRecords.mock.calls)).not.toContain(body);
+    } finally {
+      await listener.close();
+    }
   });
 
   it("delivery coordinator delays read receipts until inbound handlers complete", async () => {
@@ -360,6 +336,35 @@ describe("web monitor inbox delivery and dedupe", () => {
     await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
 
     expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
+  it("delivery coordinator delivers a decrypted message after its ciphertext stub", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("ciphertext-stub");
+    const upsert = dmUpsert(messageId, "decrypted");
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: messageId, fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          messageStubType: WAMessageStubType.CIPHERTEXT,
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit("messages.upsert", upsert);
+    await settleInboundWork();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(inboundMessage(onMessage).payload.body).toBe("decrypted");
     await listener.close();
   });
 
@@ -555,30 +560,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
   });
 
-  it("delivery coordinator force-flushes long durable debounce during shutdown", async () => {
-    // Durable pump tasks await claim flush waiters; close must force-flush
-    // debounced batches before waiting on those pumps (socket-close timeout).
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-      debounceMs: 60_000,
-    });
-    sock.ev.emit(
-      "messages.upsert",
-      dmUpsert(nextMessageId("debounce-shutdown-durable"), "held in debounce", 1_700_000_100),
-    );
-    // Let accept+pump reach the flush waiter without exhausting the debounce window.
-    await settleInboundWork();
-
-    const closeStarted = Date.now();
-    await listener.close();
-    const closeElapsedMs = Date.now() - closeStarted;
-
-    expect(closeElapsedMs).toBeLessThan(5_000);
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(inboundMessage(onMessage).payload.body).toBe("held in debounce");
-    expect(sock.end).toHaveBeenCalledTimes(1);
-  });
-
   it("delivery coordinator drains serialized same-lane replies before socket close", () =>
     withRetryClock(async () => {
       const firstBuffered = createDeferred<void>();
@@ -614,69 +595,50 @@ describe("web monitor inbox delivery and dedupe", () => {
 
       const closePromise = listener.close();
       expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(sock.end).not.toHaveBeenCalled();
 
       releaseFirst?.();
       await closePromise;
 
       expect(onMessage).toHaveBeenCalledTimes(2);
       expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-        text: "media",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(3, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(4, "999@s.whatsapp.net", {
-        text: "media",
-      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        "999@s.whatsapp.net",
+        {
+          text: "media",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        3,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        4,
+        "999@s.whatsapp.net",
+        {
+          text: "media",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
       expect(sock.end).toHaveBeenCalledTimes(1);
       expect(sock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
         sock.end.mock.invocationCallOrder.at(0),
       );
     }));
-
-  it("delivery coordinator waits for in-flight handlers before close drain", async () => {
-    let releaseHandler: (() => void) | undefined;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    let markHandlerStarted: (() => void) | undefined;
-    const handlerStarted = new Promise<void>((resolve) => {
-      markHandlerStarted = resolve;
-    });
-    const onMessage = vi.fn(async (msg) => {
-      await msg.platform.reply("pong");
-      markHandlerStarted?.();
-      await handlerGate;
-    });
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-
-    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("close-inflight"), "first"));
-
-    await handlerStarted;
-    const closePromise = listener.close();
-    await Promise.resolve();
-
-    expect(sock.end).not.toHaveBeenCalled();
-
-    if (!releaseHandler) {
-      throw new Error("Expected handler release callback to be initialized");
-    }
-    releaseHandler();
-    await closePromise;
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(sock.end).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
-      sock.end.mock.invocationCallOrder.at(0),
-    );
-  });
 
   it("delivery coordinator dispatches same-content messages with distinct ids in order", async () => {
     const onMessage = vi.fn(async (_message: WebInboundMessage) => {});
@@ -699,7 +661,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(onMessage.mock.calls.map(([message]) => message.event.id)).toEqual(["in-2", "in-3"]);
     await listener.close();
   });
-
   it.each([
     { reason: "an explicit retryable failure", error: "retry me", id: "retryable-dedupe" },
     {

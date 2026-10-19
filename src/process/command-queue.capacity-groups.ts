@@ -1,10 +1,12 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // The queue supplies `drainLane` so capacity policy never imports the queue runtime.
 import {
+  compareQueueEntries,
   getQueueState,
   normalizeLane,
   peekLaneQueue,
   type LaneGroupState,
+  type QueueEntry,
 } from "./command-queue.state.js";
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
 import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
@@ -40,9 +42,8 @@ const DRAINING_GROUPS = resolveGlobalSingleton(
  *
  * Known wait edges at this base: outer `cron` -> `cron-nested`
  * (`server-cron.ts` passes lane "cron"; `agents/lanes.ts` remaps inner work),
- * `main` -> `system-agent` -> `session:<key>` -> `system-agent-inference`
- * (delegated expert inference), and `session:<key>` -> global lane
- * (embedded-agent-runner run + compaction).
+ * `main` -> `system-agent` -> `system-agent-inference` (delegated expert
+ * inference), and setup probes -> their embedded-agent global lane.
  */
 const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
   CommandLane.Cron,
@@ -53,7 +54,7 @@ const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
 ]);
 
 const GROUP_INELIGIBLE_PREFIXES = [
-  "session:",
+  "session:probe-",
   "nested:",
   SUBAGENT_LANE_PREFIX,
   "context-engine-turn-maintenance:",
@@ -85,7 +86,7 @@ export function getLaneGroup(lane: string): LaneGroupState | undefined {
  * here would resurrect lanes that `retireIdleScopedCommandLane` just removed.
  */
 function getMemberActiveCount(lane: string): number {
-  return getQueueState().lanes.get(lane)?.activeTaskIds.size ?? 0;
+  return getQueueState().lanes.get(lane)?.activeTasks.size ?? 0;
 }
 
 type GroupCapacity = { active: number; reserved: number };
@@ -203,21 +204,20 @@ export function installCommandLaneGroup(next: LaneGroupState): void {
 }
 
 /**
- * Select the highest-priority, oldest currently admissible member head.
+ * Select the earliest eligible head under the queue's bounded priority order.
  */
 function resolveNextGroupLane(group: LaneGroupState): string | undefined {
   let selected:
     | {
         lane: string;
-        priority: number;
-        sequence: number;
+        head: QueueEntry;
       }
     | undefined;
   let capacity: GroupCapacity | undefined;
   for (const lane of group.members) {
     const state = getQueueState().lanes.get(lane);
     const head = state ? peekLaneQueue(state.queue) : undefined;
-    if (!state || !head || state.draining || state.activeTaskIds.size >= state.maxConcurrent) {
+    if (!state || !head || state.draining || state.activeTasks.size >= state.maxConcurrent) {
       continue;
     }
     // No callbacks run during selection. Recompute on the next selection after
@@ -226,14 +226,8 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
     if (resolveGroupBlockReason(group, lane, capacity) !== null) {
       continue;
     }
-    if (
-      !selected ||
-      head.priority > selected.priority ||
-      (head.priority === selected.priority &&
-        (head.sequence < selected.sequence ||
-          (head.sequence === selected.sequence && lane < selected.lane)))
-    ) {
-      selected = { lane, priority: head.priority, sequence: head.sequence };
+    if (!selected || compareQueueEntries(head, selected.head) < 0) {
+      selected = { lane, head };
     }
   }
   return selected?.lane;
@@ -242,7 +236,7 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
 /**
  * Drain a capacity group one admission at a time.
  *
- * Per-lane queues already order entries by priority and global sequence. The
+ * Per-lane queues already apply bounded priority and global sequence. The
  * group applies the same order across member queue heads so a completing lane
  * cannot synchronously reclaim shared capacity ahead of an older sibling.
  */

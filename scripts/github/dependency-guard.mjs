@@ -590,9 +590,10 @@ export async function reviewDependencyChanges(
   }
   const { api, owner, repo, pullRequest, issuePath, files } = guard;
   const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
-  if (!["detect", "autoscrub", "enforce"].includes(mode)) {
+  if (!["detect", "autoscrub", "enforce", "prepare"].includes(mode)) {
     throw new Error(`Unknown dependency guard mode: ${mode}`);
   }
+  const enforce = mode === "enforce" || mode === "prepare";
   const dependencyFiles = [
     ...new Set(files.flatMap((file) => [file.filename, file.previous_filename])),
   ]
@@ -640,7 +641,7 @@ export async function reviewDependencyChanges(
     autoscrubCandidate && pullRequest.state === "open" && !approval && !removalOnly
       ? autoscrubTargetRepository({ owner, repo, pullRequest })
       : null;
-  if (mode === "detect") {
+  if (mode === "detect" || mode === "prepare") {
     await setOutput("autoscrub", String(Boolean(autoscrubTarget)));
     if (autoscrubTarget) {
       await setOutput("autoscrub-owner", autoscrubTarget.owner);
@@ -649,11 +650,15 @@ export async function reviewDependencyChanges(
     await writeSummary(
       "## Dependency Guard\n\nDependency analysis complete; the final guard job publishes the review result.",
     );
-    return true;
+    if (mode === "detect" || autoscrubTarget) {
+      if (prepared && mode === "prepare") {
+        prepared.autoscrubPending = Boolean(autoscrubTarget);
+      }
+      return true;
+    }
   }
 
-  const comments = await api.paginate(`${issuePath}/comments`);
-  const labels = await api.paginate(`${issuePath}/labels`);
+  const { comments, labelNames } = await guard.readIssueNotices();
   const trustedCommentAuthors = dependencyGuardCommentAuthors(
     process.env.OPENCLAW_DEPENDENCY_GUARD_COMMENT_BOTS,
   );
@@ -668,7 +673,8 @@ export async function reviewDependencyChanges(
       issuePath,
       owner,
       repo,
-      labelNames: new Set(labels.map((label) => label.name)),
+      labelNames,
+      recoverCommentWrites: enforce,
     });
   // Consolidate the former awareness and enforcement comments into one notice.
   await deleteCommentIfPresent(findComment(dependencyChangeMarker));
@@ -681,7 +687,7 @@ export async function reviewDependencyChanges(
       );
     }
     await writeSummary("## Dependency Guard\n\nNo dependency-related file changes detected.");
-    if (mode === "enforce") {
+    if (enforce) {
       return await finishGuard(guard, securityReviewContracts.dependency.success.clear);
     }
     return true;
@@ -760,7 +766,7 @@ export async function reviewDependencyChanges(
     }
   }
 
-  if (mode === "enforce") {
+  if (enforce) {
     const allowed = await finishGuard(
       guard,
       securityReviewContracts.dependency.success[removalOnly ? "removals" : "approved"],

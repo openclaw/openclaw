@@ -1,20 +1,22 @@
-import type { DatabaseSync } from "node:sqlite";
-import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  getSqliteReadOperationRevision,
-  type SqliteReadOperationRevision,
-} from "../infra/sqlite-schema-facts.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
+import {
+  getStateSchemaVersionAdmission,
+  rememberStateSchemaVersionAdmission,
+  type StateSchemaVersionFacts,
+} from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
@@ -23,10 +25,9 @@ import type { DB } from "./openclaw-state-db.generated.js";
 // Read-only clients need schema admission without loading updater publication policy.
 export const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
-const admittedContentVersions = new WeakMap<
-  DatabaseSync,
-  SqliteReadOperationRevision & { contentVersion: number }
->();
+export type StateSchemaContentVersionRowReader = (
+  db: EngineConnection,
+) => { value_json: string | null } | undefined;
 const contentVersionQuery = createSqliteQueryCache((db) =>
   prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>(db, () =>
     getNodeSqliteKysely<StateSchemaVersionDatabase>(db)
@@ -37,44 +38,48 @@ const contentVersionQuery = createSqliteQueryCache((db) =>
 );
 
 /** Content and its marker commit together, even while older readers retain their version floor. */
-export function readStateSchemaContentVersion(db: DatabaseSync, published?: number): number {
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  const version = published ?? schema?.userVersion ?? readSqliteUserVersion(db);
-  const revision = getSqliteReadOperationRevision(db);
-  const admitted = admittedContentVersions.get(db);
-  if (
-    revision &&
-    admitted?.schema === revision.schema &&
-    admitted.dataVersion === revision.dataVersion &&
-    admitted.mutationRevision === revision.mutationRevision
-  ) {
-    return Math.max(version, admitted.contentVersion);
-  }
-  // A caller-provided version floor belongs to this read, not the retained marker.
-  const contentVersion = readContentVersionMarker(db);
-  if (revision && getSqliteReadOperationRevision(db) === revision) {
-    if (!admitted) {
-      const unregister = registerNodeSqliteDisposeCallback(db, () => {
-        admittedContentVersions.delete(db);
-        unregister();
-      });
+export function readStateSchemaContentVersion(
+  db: EngineConnection,
+  published?: number,
+  readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
+  physicalUserVersion?: number,
+): number {
+  if (isPostgresSqlConnection(db)) {
+    const facts = getStateSchemaVersionAdmission(db);
+    if (!facts) {
+      throw new Error(
+        "Missing PostgreSQL state schema admission; use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.",
+      );
     }
-    admittedContentVersions.set(db, { ...revision, contentVersion });
+    return Math.max(published ?? facts.userVersion, facts.contentVersion);
   }
-  return Math.max(version, contentVersion);
+  const admitted = getStateSchemaVersionAdmission(db);
+  if (admitted) {
+    return Math.max(published ?? admitted.userVersion, admitted.contentVersion);
+  }
+  // A caller's publication floor is not the physical header.
+  const version =
+    physicalUserVersion ??
+    getAdmittedSqliteSchemaFacts(db)?.userVersion ??
+    readSqliteUserVersion(db);
+  const contentVersion = parseContentVersion(
+    tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
+  );
+  rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
+  return Math.max(published ?? version, contentVersion);
 }
 
-function readContentVersionMarker(db: DatabaseSync): number {
-  if (!tableExists(db, "config_machine_state")) {
-    return 0;
-  }
-  const row = contentVersionQuery(db)().rows[0];
-  if (!row) {
+export function readStateSchemaContentVersionRow(db: EngineConnection) {
+  return contentVersionQuery(db)().rows[0];
+}
+
+function parseContentVersion(valueJson: string | null | undefined): number {
+  if (valueJson === undefined) {
     return 0;
   }
   let contentVersion: unknown;
   try {
-    contentVersion = JSON.parse(row.value_json);
+    contentVersion = valueJson === null ? null : JSON.parse(valueJson);
   } catch (cause) {
     throw new SqliteSchemaMismatchError(
       `Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`,
@@ -93,24 +98,63 @@ function readContentVersionMarker(db: DatabaseSync): number {
   return contentVersion;
 }
 
-/** Valid only for the unchanged read snapshot that produced these versions. */
-export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
+export type { StateSchemaVersionFacts } from "./openclaw-state-db-admission.js";
+
+/** Refuse newer headers before catalog inspection, then share one physical schema capture. */
+export function admitStateSchemaFacts(database: EngineConnection, pathname: string): void {
+  if (isPostgresSqlConnection(database)) {
+    if (!getPostgresPhysicalFacts(database)) {
+      throw new Error("Missing PostgreSQL physical schema admission");
+    }
+    return;
+  }
+  try {
+    admitSqliteSchema(database, (userVersion) =>
+      assertSupportedStateSchemaVersion(database, pathname, {
+        userVersion,
+        contentVersion: userVersion,
+      }),
+    );
+  } catch (error) {
+    // An unreadable newer catalog must not be mistaken for a repair this build can perform.
+    let version: number;
+    try {
+      version = readSqliteUserVersion(database);
+    } catch {
+      throw normalizeOpenClawStateSchemaReadError(error, pathname);
+    }
+    if (version > OPENCLAW_STATE_SCHEMA_VERSION) {
+      throw createNewerSqliteSchemaVersionError(
+        "OpenClaw state database",
+        pathname,
+        version,
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    }
+    throw normalizeOpenClawStateSchemaReadError(error, pathname);
+  }
+}
 
 export function assertSupportedStateSchemaVersion(
-  db: DatabaseSync,
+  db: EngineConnection,
   pathname: string,
   prepared?: StateSchemaVersionFacts,
+  readRow?: StateSchemaContentVersionRowReader,
 ): number {
+  if (isPostgresSqlConnection(db)) {
+    return readStateSchemaContentVersion(db);
+  }
   try {
     const userVersion =
       prepared?.userVersion ??
+      getStateSchemaVersionAdmission(db)?.userVersion ??
       getAdmittedSqliteSchemaFacts(db)?.userVersion ??
       readSqliteUserVersion(db);
     const contentVersion =
       prepared?.contentVersion ??
       (userVersion > OPENCLAW_STATE_SCHEMA_VERSION
         ? userVersion
-        : readStateSchemaContentVersion(db, userVersion));
+        : readStateSchemaContentVersion(db, userVersion, readRow, userVersion));
     if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
       throw createNewerSqliteSchemaVersionError(
         "OpenClaw state database",

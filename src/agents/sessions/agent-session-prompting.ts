@@ -4,12 +4,16 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
+import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
-import { mergePreparedUserTurnMessageForRuntime } from "../../sessions/user-turn-transcript.message.js";
+import {
+  mergePreparedUserTurnMessageForRuntime,
+  readModelPromptProjection,
+} from "../../sessions/user-turn-transcript.message.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -35,7 +39,7 @@ import {
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
@@ -373,9 +377,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         });
       const replayPersistedTurn = persistedUserIndex >= 0;
       const persistedUser = this.agent.state.messages[persistedUserIndex];
-      if (!replayPersistedCarrier && persistedUser?.role === "user") {
+      if (
+        !replayPersistedCarrier &&
+        persistedUser?.role === "user" &&
+        readModelPromptProjection(persistedUser) === undefined
+      ) {
         // Transient replay still consumes freshly resolved text/images. Preserve
-        // admission facts in place; a recorded carrier pair must keep its signed prefix.
+        // admission facts; captured prompts and carrier pairs keep their original prefix.
         const runtimeUser = this.createUserMessage(expandedText, currentImages, persistedUser);
         this.agent.state.messages = this.agent.state.messages.with(persistedUserIndex, runtimeUser);
       }
@@ -602,12 +610,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       notifyListeners([() => this.emitQueueUpdate(), () => notifyAgent()], undefined, (error) =>
         errors.push(error),
       );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Steering notifications failed");
-      }
+      throwCollectedErrors(errors, "Steering notifications failed");
     };
   }
 
@@ -662,12 +665,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   private async persistCustomMessage(message: CustomMessage): Promise<void> {
-    await withSessionManagerWrite(this.sessionManager, async () => {
+    await withSessionManagerAppend(this.sessionManager, async () => {
       await this.sessionManager.appendCustomMessageEntryAsync(
         message.customType,
         message.content,
         message.display,
         message.details,
+        message.timestamp,
       );
       this.agent.state.messages.push(message);
     });

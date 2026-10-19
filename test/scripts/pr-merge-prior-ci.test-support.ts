@@ -4,14 +4,32 @@ import { join } from "node:path";
 import type { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 type MergeFixture = ReturnType<ReturnType<typeof createMergeOutcomeFixtureHarness>["fixture"]>;
+const digest = (contents: string | Buffer) => createHash("sha256").update(contents).digest("hex");
+const rawDelta = (f: MergeFixture, from: string) =>
+  f.git(["diff", "--raw", "--abbrev=40", "--no-renames", "-z", from, f.head, "--"]);
+function writePendingGates(f: MergeFixture) {
+  writeFileSync(
+    join(f.worktree, ".local/gates.env"),
+    `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+  );
+}
+const qualification = (reason: string) => ({ reason, evidence: ["qualification"] });
 
 export function createPriorCiFixtureState(head: string) {
+  const annotation = (start_line: number, message: string) => ({
+    annotation_level: "failure",
+    title: "",
+    message,
+    path: ".github",
+    start_line,
+  });
   return {
     enabled: false,
     head,
     runHead: head,
     runConclusion: "success",
     latestAttempt: 2,
+    jobPageFault: "",
     omitPullRequests: false,
     sourceRepository: { id: 1103012935, full_name: "fixture/repo" },
     runRepository: undefined as { id: number; full_name: string } | undefined,
@@ -82,20 +100,8 @@ export function createPriorCiFixtureState(head: string) {
         output: { annotations_count: 2 },
       },
       annotations: [
-        {
-          annotation_level: "failure",
-          title: "",
-          message: "The job has exceeded the maximum execution time of 1h0m0s",
-          path: ".github",
-          start_line: 1,
-        },
-        {
-          annotation_level: "failure",
-          title: "",
-          message: "The operation was canceled.",
-          path: ".github",
-          start_line: 18,
-        },
+        annotation(1, "The job has exceeded the maximum execution time of 1h0m0s"),
+        annotation(18, "The operation was canceled."),
       ],
     },
   };
@@ -127,7 +133,9 @@ const securityResponse=()=>{
   const source=config.sourceSha||main();
   const publisher={id:901,run_attempt:config.fault==="new-publisher-attempt"?2:1,status:"completed",conclusion:"success",
     head_sha:source,head_branch:"main",head_repository:{id:s.repoAuthority.id},repository:{id:s.repoAuthority.id,full_name:s.repo.nameWithOwner},
-    event:"workflow_run",path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
+    event:config.fault==="automation-dispatch"?"workflow_dispatch":"workflow_run",
+    actor:{id:41898282,login:"github-actions[bot]",type:"Bot"},
+    path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
   const reply=(value)=>out(args.includes("--include")?"HTTP/2.0 200 OK\n\n"+JSON.stringify(value):args.includes("--slurp")?[value]:value);
   if(endpoint.includes("/statuses?")) {
     config.statusReads++;save();
@@ -163,14 +171,19 @@ const securityResponse=()=>{
 `;
 
 export function ciWorkflowTree(f: MergeFixture, treeish: string, workflow: string) {
-  const blob = f.git(["hash-object", "-w", "--stdin"], workflow);
-  const workflows = f.git(["mktree"], `100644 blob ${blob}\tci.yml\n`);
-  const github = f.git(["mktree"], `040000 tree ${workflows}\tworkflows\n`);
-  const entries = f
-    .git(["ls-tree", treeish])
-    .split("\n")
-    .filter((entry) => !entry.endsWith("\t.github"));
-  return f.git(["mktree"], [...entries, `040000 tree ${github}\t.github`, ""].join("\n"));
+  let oid = f.git(["hash-object", "-w", "--stdin"], workflow);
+  for (const [directory, name, kind] of [
+    [":.github/workflows", "ci.yml", "100644 blob"],
+    [":.github", "workflows", "040000 tree"],
+    ["", ".github", "040000 tree"],
+  ]) {
+    const entries = f
+      .git(["ls-tree", `${treeish}${directory}`])
+      .split("\n")
+      .filter((entry) => !entry.endsWith(`\t${name}`));
+    oid = f.git(["mktree"], [...entries, `${kind} ${oid}\t${name}`, ""].join("\n"));
+  }
+  return oid;
 }
 
 export function createPriorCiCandidateFactory(
@@ -189,20 +202,7 @@ export function createPriorCiCandidateFactory(
     state.gates = "pending";
     state.pr.mergeStateStatus = "BEHIND";
     f.save(state);
-    writeFileSync(
-      join(f.worktree, ".local/gates.env"),
-      `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
-    );
-    const delta = f.git([
-      "diff",
-      "--raw",
-      "--abbrev=40",
-      "--no-renames",
-      "-z",
-      state.priorCi.head,
-      f.head,
-      "--",
-    ]);
+    writePendingGates(f);
     // The fixture git helper trims output; this raw form terminates with NUL, so
     // no bytes belonging to the delta are removed.
     const evidence = {
@@ -214,12 +214,10 @@ export function createPriorCiCandidateFactory(
       priorHead: state.priorCi.head,
       runId: 501,
       runAttempt: 2,
-      deltaSha256: createHash("sha256").update(delta).digest("hex"),
-      reason: "Explicit operator approval after resolving the source conflict",
+      deltaSha256: digest(rawDelta(f, state.priorCi.head)),
+      reason: "Operator approved the resolved conflict",
       contracts: ["owner output"],
-      checks: [
-        { command: "owner test", result: "passed", evidence: "Observed resolved owner output" },
-      ],
+      checks: [{ command: "owner test", result: "passed", evidence: "Resolved owner output" }],
     };
     writeFileSync(path, JSON.stringify(evidence));
     return { ...f, path, evidence };
@@ -232,10 +230,7 @@ export function createPriorCiCandidateFactory(
       main = f.commit(ciWorkflowTree(f, f.base, workflow), [f.base]);
       f.git(["push", "-q", "origin", `${main}:refs/heads/main`]);
       f.prepare(f.head, main);
-      writeFileSync(
-        join(f.worktree, ".local/gates.env"),
-        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
-      );
+      writePendingGates(f);
     }
     const state = f.state();
     state.gates = "fail";
@@ -245,79 +240,65 @@ export function createPriorCiCandidateFactory(
     state.priorCi.runConclusion = "cancelled";
     state.priorCi.security.enabled = true;
     state.priorCi.security.sourceSha = main;
-    const job = (id: number, name: string, conclusion: string) => ({
-      id,
+    state.priorCi.jobs = (
+      [
+        ["owner-tests", "failure"],
+        ["openclaw/ci-gate", "failure"],
+        ["pr-fail-fast", "success"],
+        ["cancelled-sibling", "cancelled"],
+        ["security-fast", "success"],
+      ] as const
+    ).map(([name, conclusion], index) => ({
+      id: 601 + index,
       name,
       conclusion,
       status: "completed",
       run_id: 501,
       head_sha: f.head,
       steps: [],
-    });
-    state.priorCi.jobs = [
-      job(601, "owner-tests", "failure"),
+    }));
+    state.priorCi.jobs[1]!.check_run_url = "https://api.github.com/repos/fixture/repo/check-runs/1";
+    // Retained receipts still use the retired workflow's cancellation step.
+    state.priorCi.jobs[2]!.steps = [
       {
-        ...job(602, "openclaw/ci-gate", "failure"),
-        check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/1",
+        number: 2,
+        name: "Cancel remaining PR work after a failure",
+        status: "completed",
+        conclusion: "success",
       },
-      {
-        ...job(603, "pr-fail-fast", "success"),
-        steps: [
-          {
-            number: 2,
-            name: "Cancel remaining PR work after a failure",
-            status: "completed",
-            conclusion: "success",
-          },
-        ],
-      },
-      job(604, "cancelled-sibling", "cancelled"),
-      job(605, "security-fast", "success"),
     ];
     f.save(state);
     const artifact = join(f.root, "qualification.txt");
-    writeFileSync(
-      artifact,
-      "Inspected checkout, unchanged sibling input, independent baseline failure, and fail-fast cancellation.\n",
-    );
+    writeFileSync(artifact, "Inspected unchanged input, baseline failure, and cancellation.\n");
     const evidence = {
       ...f.evidence,
       changeKind: "pre-existing-failure",
       priorHead: main,
       testedMerge: f.commit(f.git(["merge-tree", "--write-tree", main, f.head]), [main, f.head]),
-      deltaSha256: createHash("sha256")
-        .update(f.git(["diff", "--raw", "--abbrev=40", "--no-renames", "-z", main, f.head, "--"]))
-        .digest("hex"),
+      deltaSha256: digest(rawDelta(f, main)),
       artifacts: [
-        {
-          name: "qualification",
-          path: artifact,
-          sha256: createHash("sha256").update(readFileSync(artifact)).digest("hex"),
-        },
+        { name: "qualification", path: artifact, sha256: digest(readFileSync(artifact)) },
       ],
-      checkout: { reason: "Inspected the exact preflight checkout", evidence: ["qualification"] },
+      checkout: qualification("Inspected exact preflight checkout"),
       failures: [
         {
           jobId: 601,
-          reason: "The same independent failure predates the PR",
+          ...qualification("Independent failure predates PR"),
           cases: ["sibling assertion"],
           sourcePaths: ["sibling.txt"],
-          evidence: ["qualification"],
         },
       ],
       aggregate: {
         jobId: 602,
         causedBy: [601],
-        reason: "Aggregate reports the admitted root failure",
-        evidence: ["qualification"],
+        ...qualification("Aggregate reports admitted root"),
       },
       cancellation: {
         jobId: 603,
         step: 2,
         jobIds: [604],
         causedBy: [601],
-        reason: "Inspected fail-fast step cancelled the sibling",
-        evidence: ["qualification"],
+        ...qualification("Fail-fast step cancelled sibling"),
       },
     };
     writeFileSync(f.path, JSON.stringify(evidence));
@@ -328,7 +309,7 @@ export function createPriorCiCandidateFactory(
       head: f.head,
       runId: 501,
       runAttempt: 2,
-      reason: "Independently qualified baseline failure; cancelled siblings remain unrun",
+      reason: "Qualified baseline failure; cancelled siblings remain unrun",
     };
     writeFileSync(reviewPath, JSON.stringify(review));
     return { ...f, base: main, evidence, artifact };

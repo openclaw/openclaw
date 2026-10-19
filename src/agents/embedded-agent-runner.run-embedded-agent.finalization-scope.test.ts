@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -27,8 +31,8 @@ let prepareSystemAgentRunAdmission: typeof import("./admitted-run-context.js").p
 let withPreparedEmbeddedRunToolAuthority: typeof import("./harness/tool-authority.runtime.js").withPreparedEmbeddedRunToolAuthority;
 let withOwnedSessionTranscriptWrites: typeof import("../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
 let getGatewayToolCallerIdentity: typeof import("./tools/gateway-caller-context.js").getGatewayToolCallerIdentity;
-let setActiveEmbeddedRun: typeof import("./embedded-agent-runner/runs.js").setActiveEmbeddedRun;
-let clearActiveEmbeddedRun: typeof import("./embedded-agent-runner/runs.js").clearActiveEmbeddedRun;
+let attachActiveEmbeddedRun: typeof import("./embedded-agent-runner/runs.js").attachActiveEmbeddedRun;
+let detachActiveEmbeddedRun: typeof import("./embedded-agent-runner/runs.js").detachActiveEmbeddedRun;
 let createEmbeddedRunHandle: typeof import("./embedded-agent-runner/runs.test-support.js").createEmbeddedRunHandle;
 let replaceSessionEntry: typeof import("../config/sessions/session-accessor.js").replaceSessionEntry;
 let appendMessage: typeof import("../plugin-sdk/session-transcript-runtime.js").appendSessionTranscriptMessageByIdentity;
@@ -52,7 +56,7 @@ beforeAll(async () => {
   ({ withOwnedSessionTranscriptWrites } =
     await import("../config/sessions/transcript-write-context.js"));
   ({ getGatewayToolCallerIdentity } = await import("./tools/gateway-caller-context.js"));
-  ({ setActiveEmbeddedRun, clearActiveEmbeddedRun } =
+  ({ attachActiveEmbeddedRun, detachActiveEmbeddedRun } =
     await import("./embedded-agent-runner/runs.js"));
   ({ createEmbeddedRunHandle } = await import("./embedded-agent-runner/runs.test-support.js"));
   ({ replaceSessionEntry } = await import("../config/sessions/session-accessor.js"));
@@ -62,7 +66,10 @@ beforeAll(async () => {
   } = await import("../plugin-sdk/session-transcript-runtime.js"));
 });
 
-afterEach(() => runAttempt.mockReset());
+afterEach(() => {
+  runAttempt.mockReset();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("nested settled-turn finalization ownership", () => {
   it.each(
@@ -81,6 +88,7 @@ describe("nested settled-turn finalization ownership", () => {
       const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
       await Promise.all([fs.mkdir(agentDir, { recursive: true }), fs.mkdir(workspaceDir)]);
       const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+      setRuntimeConfigSnapshot(config);
       const target = {
         agentId: "test",
         sessionId: "child-session",
@@ -118,18 +126,32 @@ describe("nested settled-turn finalization ownership", () => {
       ];
       let toolRuns = 0;
       let finalizerRuns = 0;
+      // Each attempt, including the tool-free finalizer, must arrive under the child's own turn.
+      const attemptTurns: Array<EmbeddedRunAttemptParams["replyOperation"]> = [];
+      const expectFinalizerBorrowsChildTurn = () => {
+        expect(attemptTurns).toHaveLength(finalization === "empty" ? 3 : 2);
+        expect(attemptTurns[0]).toBeDefined();
+        for (const turn of attemptTurns) {
+          expect(turn).toBe(attemptTurns[0]);
+        }
+      };
       runAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
+        attemptTurns.push(params.replyOperation);
         const handle = createEmbeddedRunHandle({
           runId: params.runId,
           toolAuthorityFingerprint: params.toolAuthorityFingerprint,
         });
-        setActiveEmbeddedRun(
+        const attachment = attachActiveEmbeddedRun(
           params.sessionId,
           handle,
           params.sessionKey,
           params.sessionFile,
           params.agentId,
+          params.replyOperation,
         );
+        if (!attachment) {
+          throw new Error("Finalization proof requires an attached embedded run");
+        }
         try {
           const sessionKey = params.sessionTarget?.sessionKey;
           if (!sessionKey) {
@@ -191,7 +213,14 @@ describe("nested settled-turn finalization ownership", () => {
             settledTurnFinalizationContext: { source: "openclaw-transcript", messages },
           });
         } finally {
-          clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+          detachActiveEmbeddedRun(
+            params.sessionId,
+            handle,
+            params.sessionKey,
+            params.sessionFile,
+            undefined,
+            attachment,
+          );
         }
       });
       let release!: () => void;
@@ -252,23 +281,29 @@ describe("nested settled-turn finalization ownership", () => {
           await expect(child).rejects.toThrow("admitted run authority is no longer active");
           expect(toolRuns).toBe(1);
           expect(finalizerRuns).toBe(1);
+          expectFinalizerBorrowsChildTurn();
           expect(await readMessages(target)).toHaveLength(messages.length);
           return;
         }
         const result = await child;
-        const expected =
-          finalization === "answer"
-            ? "The write completed."
-            : "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
-        expect(result?.payloads).toEqual([expect.objectContaining({ text: expected })]);
         expect(toolRuns).toBe(1);
         expect(finalizerRuns).toBe(finalization === "empty" ? 2 : 1);
+        expectFinalizerBorrowsChildTurn();
         const transcript = await readMessages(target);
-        expect(transcript).toHaveLength(messages.length + 1);
-        expect(transcript.at(-1)?.message).toMatchObject({
-          role: "assistant",
-          content: [{ type: "text", text: expected }],
-        });
+        if (finalization === "answer") {
+          expect(result?.payloads).toEqual([
+            expect.objectContaining({ text: "The write completed." }),
+          ]);
+          expect(transcript).toHaveLength(messages.length + 1);
+          expect(transcript.at(-1)?.message).toMatchObject({
+            role: "assistant",
+            content: [{ type: "text", text: "The write completed." }],
+          });
+        } else {
+          expect(result?.payloads).toBeUndefined();
+          expect(result?.meta.error).toMatchObject({ kind: "incomplete_turn" });
+          expect(transcript).toHaveLength(messages.length);
+        }
       } finally {
         release();
         await child?.catch(() => undefined);

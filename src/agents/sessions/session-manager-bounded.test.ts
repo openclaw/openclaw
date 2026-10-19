@@ -11,11 +11,11 @@ import {
   readSessionTranscriptVisibleMessageDeltaCore,
   readSessionTranscriptWatermark,
   readTranscriptRawDelta,
-  replaceTranscriptEventsSync,
   SessionTranscriptProjectionUnavailableError,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.transcript-target.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
@@ -30,6 +30,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { SessionManager } from "./session-manager.js";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
@@ -198,12 +199,15 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
-  const reads = trackSqliteStatementExecutions(database.db, ["identity"], (sql) =>
-    /^select\b/iu.test(sql) &&
-    /from "transcript_event_identities" where/iu.test(sql) &&
-    /"event_id" = \?/u.test(sql)
-      ? "identity"
-      : null,
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["identity"],
+    (sql) =>
+      /^select\b/iu.test(sql) &&
+      /from "transcript_event_identities" where/iu.test(sql) &&
+      /"event_id" = \?/u.test(sql)
+        ? "identity"
+        : null,
   );
   const reply = buildAssistantMessage("reply");
   let replyId: string;

@@ -35,7 +35,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function fixture(mode: "foreground" | "supervised" = "foreground", published = true) {
+function fixture(published: boolean) {
   const stateDir = dirs.make("doctor-foreground-settlement-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -46,8 +46,8 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
     startedAt: getFileLockProcessStartTime(process.pid),
   };
   expect(owner.startedAt).not.toBeNull();
-  const publish = () =>
-    withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
+  withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
+    if (published) {
       db.prepare(
         `INSERT INTO state_leases
        (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
@@ -58,18 +58,14 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
         JSON.stringify({
           owner,
           port: 19483,
-          mode,
-          supervisor: mode === "supervised" ? { kind: "external", name: "fixture" } : null,
+          mode: "foreground",
+          supervisor: null,
         }),
         Date.now(),
         Date.now(),
       );
-    });
-  if (published) {
-    publish();
-  } else {
-    withOpenClawStateStartupMigrationCheckpointDatabase(() => {});
-  }
+    }
+  });
   closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   const predecessor = acquireGatewayStateOwner({
@@ -82,22 +78,13 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
       stateDir,
     },
   });
-  return { databasePath, predecessor, publish };
+  return { databasePath, predecessor };
 }
 
-it.each([
-  "slow-released",
-  "owner-changed",
-  "authority-lost",
-  "rowless-released",
-  "rowless-replaced",
-] as const)(
+it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
   "settles the foreground state owner before update Doctor admission: %s",
   async (outcome) => {
-    const { databasePath, predecessor, publish } = fixture(
-      "foreground",
-      !outcome.startsWith("rowless-"),
-    );
+    const { databasePath, predecessor } = fixture(outcome !== "rowless-released");
     const before = fs.readFileSync(databasePath);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let monotonicMs = 0;
@@ -105,6 +92,8 @@ it.each([
     let authorized = true;
     const waiting = createDeferredCore();
     let settled = false;
+    let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>> | undefined;
+    let failure: unknown;
     const result = beginDoctorMaintenance({
       options: { repair: true, nonInteractive: true },
       root: null,
@@ -115,17 +104,16 @@ it.each([
         }
       },
     }).then(
-      (maintenance) => {
+      (value) => {
         settled = true;
-        return { maintenance };
+        maintenance = value;
       },
       (error: unknown) => {
         settled = true;
         waiting.resolve();
-        return { error };
+        failure = error;
       },
     );
-    let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
     try {
       await waiting.promise;
       expect(settled).toBe(false);
@@ -146,55 +134,34 @@ it.each([
         expect(settled).toBe(false);
       }
       const released = outcome === "slow-released" || outcome === "rowless-released";
-      if (released) {
-        if (outcome === "slow-released") {
-          withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
-            db.prepare(
-              "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'previous-gateway'",
-            ).run();
-          });
-        }
-        predecessor?.release();
-      } else if (outcome === "rowless-replaced") {
-        publish();
-      } else if (outcome === "owner-changed") {
+      if (outcome === "slow-released") {
         withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
-          db.prepare("UPDATE state_leases SET owner = 'replacement-gateway'").run();
+          db.prepare(
+            "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'previous-gateway'",
+          ).run();
         });
-      } else if (outcome === "authority-lost") {
+      } else if (!released) {
         authorized = false;
-        predecessor?.release();
       }
+      predecessor?.release();
       if (outcome === "rowless-released") {
         monotonicMs = GATEWAY_SHUTDOWN_RESERVE_MS;
-        await vi.advanceTimersByTimeAsync(50);
-      } else {
-        await vi.advanceTimersToNextTimerAsync();
       }
-      // Leave the rowless clock at its deadline: admission may still await I/O,
-      // but it must complete without another ownership-settlement poll.
-      const completed = await result;
-      maintenance = "maintenance" in completed ? completed.maintenance : undefined;
+      await vi.advanceTimersToNextTimerAsync();
+      await result;
       if (released) {
         expect(maintenance).toBeDefined();
         await maintenance?.finish({});
       } else {
-        expect(completed).toMatchObject({
-          error: expect.objectContaining({
-            message: expect.stringContaining(
-              outcome === "authority-lost"
-                ? "update owner was revoked"
-                : "OpenClaw state database is busy at",
-            ),
-          }),
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("update owner was revoked"),
         });
       }
     } finally {
       predecessor?.release();
       if (!settled) {
         await vi.runOnlyPendingTimersAsync();
-        const completed = await result;
-        maintenance = "maintenance" in completed ? completed.maintenance : undefined;
+        await result;
       }
       await maintenance?.release();
       if (outcome === "rowless-released") {
@@ -203,24 +170,6 @@ it.each([
     }
   },
 );
-
-it("does not wait for unrelated supervised Gateway contention", async () => {
-  const { predecessor } = fixture("supervised");
-  const log = vi.fn();
-  try {
-    await expect(
-      beginDoctorMaintenance({
-        options: { repair: true, nonInteractive: true },
-        root: null,
-        runtime: { log, error: vi.fn(), exit: vi.fn() },
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("OpenClaw state database is busy at");
-    expect(log).not.toHaveBeenCalled();
-  } finally {
-    predecessor?.release();
-  }
-});
 
 it("keeps the published legacy startup gate through nested Doctor work and resource drainage", async () => {
   await withOpenClawTestState(

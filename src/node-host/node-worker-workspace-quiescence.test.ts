@@ -79,23 +79,19 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       signal,
     );
   const readLease = () => {
+    const storage = path.join(home, ".openclaw-worker", "quiescence");
+    const key = createHash("sha256").update(workspaceDir).digest("hex");
     if (guestPlatform === "linux") {
-      const lease = path.join(
-        home,
-        ".openclaw-worker",
-        "quiescence",
-        createHash("sha256").update(workspaceDir).digest("hex") + "." + nonce + ".json",
-      );
+      const lease = path.join(storage, key + "." + nonce + ".json");
       return fs.existsSync(lease) ? JSON.parse(fs.readFileSync(lease, "utf8")) : undefined;
     }
-    const database = new DatabaseSync(
-      path.join(home, ".openclaw-worker", "quiescence", "windows-shared-host.sqlite"),
-      { readOnly: true },
-    );
+    const database = new DatabaseSync(path.join(storage, "windows-shared-host.sqlite"), {
+      readOnly: true,
+    });
     try {
       const row = database
         .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
-        .get(createHash("sha256").update(workspaceDir).digest("hex"));
+        .get(key);
       return row ? JSON.parse(String(row.lease_json)) : undefined;
     } finally {
       database.close();
@@ -105,17 +101,16 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
   // Execute the generated program with real lease storage and IPC receipts.
   // Only the OS transport, process identity and expiry clock are simulated.
   const script = (args: readonly string[], child?: ChildProcess) => {
-    let stdout = "";
-    let stderr = "";
-    let exitCode = 0;
+    const result = { stdout: "", stderr: "", exitCode: 0 };
+    const stdin = new PassThrough();
     const exited = new Error("script exited");
     const pid = child?.pid ?? 9000;
     const writeStderr = (text: string) => {
-      stderr += text;
+      result.stderr += text;
       child?.stderr?.emit("data", Buffer.from(text));
     };
     const finish = (code: number) => {
-      exitCode = code;
+      result.exitCode = code;
       if (child && mocks.live.delete(pid)) {
         Object.defineProperties(child, {
           connected: { configurable: true, value: false },
@@ -133,12 +128,23 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       },
       pid,
       execPath: process.execPath,
-      stdout: { write: (text: string) => (stdout += text) },
+      stdin,
+      stdout: { write: (text: string) => (result.stdout += text) },
       stderr: { write: writeStderr },
+      disconnect: () => {
+        expect(stdin.destroyed).toBe(true);
+        finish(result.exitCode);
+      },
       send: (message: unknown) => queueMicrotask(() => child?.emit("message", message)),
       exit: (code: number) => {
         finish(code);
         throw exited;
+      },
+    });
+    Object.defineProperty(guest, "exitCode", {
+      get: () => result.exitCode,
+      set: (code: number) => {
+        result.exitCode = code;
       },
     });
     Object.defineProperty(guest, "connected", {
@@ -191,7 +197,7 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
         finish(1);
       }
     }
-    return { stdout, stderr, exitCode };
+    return result;
   };
   mocks.helper.mockImplementation((_command, args) => {
     if (!Array.isArray(args)) {

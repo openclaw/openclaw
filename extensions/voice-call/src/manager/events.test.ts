@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Voice Call tests cover events plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema } from "../config.js";
+import { normalizeVoiceCallConfig } from "../config.js";
 import { CallManager } from "../manager.js";
 import {
   createEventManagerHarness,
@@ -83,6 +83,93 @@ afterEach(async () => {
 });
 
 describe("processEvent (functional)", () => {
+  it.each([
+    {
+      path: "machine policy",
+      answeredBy: "machine_start",
+      reason: "voicemail",
+      failure: "carrier",
+    },
+    { path: "notify fax", answeredBy: "fax", reason: "failed", failure: "carrier" },
+    {
+      path: "playback recovery",
+      answeredBy: "machine_end_beep",
+      reason: "error",
+      failure: "carrier",
+    },
+    {
+      path: "machine policy",
+      answeredBy: "machine_start",
+      reason: "voicemail",
+      failure: "finalization",
+    },
+  ] as const)(
+    "reports failed $path $failure cleanup without claiming termination",
+    async ({ path, answeredBy, reason, failure }) => {
+      const work: Promise<unknown>[] = [];
+      let failPersistence = false;
+      if (failure === "finalization") {
+        installStateRuntime(() => failPersistence);
+      }
+      const hangupCall = vi.fn(async () => {
+        if (failure === "carrier") {
+          throw new Error("synthetic private carrier response");
+        }
+        failPersistence = true;
+      });
+      const ctx = createContext({
+        provider: createProvider({
+          name: "twilio",
+          hangupCall,
+          playMessageAndHangup: async () => {
+            throw new Error("synthetic playback failure");
+          },
+        }),
+        config: normalizeVoiceCallConfig({
+          voicemail: {
+            detection: "twilio",
+            onMachine: path === "machine policy" ? "hang-up" : "leave-message",
+          },
+        }),
+        trackCallWork: (item) => {
+          work.push(item);
+        },
+      });
+      const call = createCall({
+        callId: "detected-call",
+        providerCallId: "CA-detected",
+        provider: "twilio",
+        metadata: {
+          pendingNotifyAmd: path === "notify fax",
+          brief: { voicemailMessage: "Please call back." },
+        },
+      });
+      ctx.activeCalls.set(call.callId, call);
+
+      await expect(
+        processEvent(ctx, {
+          id: "detection",
+          type: "call.amd",
+          callId: call.callId,
+          timestamp: Date.now(),
+          answeredBy,
+        }),
+      ).resolves.toEqual({ kind: "processed" });
+      await Promise.all(work);
+
+      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
+        callId: call.callId,
+        providerCallId: "CA-detected",
+        reason,
+      });
+      expect(logSpy.logEntries).toEqual([
+        `Detected-call cleanup failed for ${call.callId}; inspect voice-call status and logs.`,
+      ]);
+      expect(ctx.activeCalls.get(call.callId)).toBe(call);
+      expect(call.endedAt).toBeUndefined();
+    },
+  );
+
   it("drains final assistant transcript before a carrier terminal event finalizes", async () => {
     const ctx = createContext();
     const call = createCall({ callId: "carrier-drain", providerCallId: "CA-drain" });
@@ -279,9 +366,9 @@ describe("processEvent (functional)", () => {
       if (!state) {
         throw new Error("expected the fixture state runtime");
       }
-      const openStore = state.openKeyedStore.bind(state);
+      const openStore = state.openKeyedStoreV2.bind(state);
       const fault = vi
-        .spyOn(state, "openKeyedStore")
+        .spyOn(state, "openKeyedStoreV2")
         .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
           store.entries = async () => {
@@ -405,7 +492,7 @@ describe("processEvent (functional)", () => {
       vi.setSystemTime(now);
       const hangupCalls: HangupCallInput[] = [];
       const ctx = createContext({
-        config: VoiceCallConfigSchema.parse({
+        config: normalizeVoiceCallConfig({
           enabled: true,
           provider: "plivo",
           fromNumber: "+15550000000",
@@ -474,7 +561,7 @@ describe("processEvent (functional)", () => {
     }) as VoiceCallProvider & { isConversationStreamConnectEnabled?: () => boolean };
     provider.isConversationStreamConnectEnabled = () => true;
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "twilio",
         fromNumber: "+15550000000",
@@ -765,7 +852,7 @@ describe("processEvent privacy assertions", () => {
     "redacts caller phone numbers in allowlist $label logs",
     async ({ phone, allowFrom, allowed }) => {
       const ctx = createContext({
-        config: VoiceCallConfigSchema.parse({
+        config: normalizeVoiceCallConfig({
           enabled: true,
           provider: "plivo",
           fromNumber: "+15550000000",
@@ -790,7 +877,7 @@ describe("processEvent privacy assertions", () => {
 
   it("redacts caller phone numbers in call record creation logs", async () => {
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
@@ -813,7 +900,7 @@ describe("processEvent privacy assertions", () => {
 
   it("redacts caller phone numbers when rejection cannot reach a provider", async () => {
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",

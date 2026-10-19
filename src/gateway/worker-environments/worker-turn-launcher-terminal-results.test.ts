@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WorkerLiveEventParamsSchema,
   type WorkerLiveEventParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
@@ -22,14 +22,19 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import { createGatewayWorkerDispatchAdmission } from "../server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "../server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
@@ -53,10 +58,13 @@ import {
   WorkerWorkspaceReconciliationError,
 } from "./worker-turn-failure.js";
 import {
+  completedWorkerMessage,
+  environmentForTunnel,
+} from "./worker-turn-launcher-flow.test-support.js";
+import {
   createWorkerTurnTunnel,
   reconcileUnchangedLocalWorkspace,
   acknowledgeCompletedWorkerTurn,
-  abortWorkerTurnClaimWaitOnSignal,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -81,6 +89,8 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { gitInit } from "./workspace-recovery.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -112,13 +122,7 @@ describe("worker finishing admission", () => {
 
 describe("worker turn launcher terminal results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
-
-  const completedWorkerMessage = () =>
-    makeAgentAssistantMessage({
-      content: [{ type: "text", text: "Remote work completed" }],
-      timestamp: 21,
-    });
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each<{
     stopReason: "stop" | "error";
@@ -171,7 +175,6 @@ describe("worker turn launcher terminal results", () => {
         resolveProvider: () => undefined,
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
-        executeInference: vi.fn(),
         inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
@@ -490,7 +493,7 @@ describe("worker turn launcher terminal results", () => {
     const claimWaitCleanup = new AbortController();
     const transferEntered = createDeferredCore();
     const failTransfer = createDeferredCore();
-    const claimWaitEntered = createDeferredCore();
+    const stopStarted = createDeferredCore();
     const targetedAdmission = createDeferredCore();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
@@ -510,27 +513,26 @@ describe("worker turn launcher terminal results", () => {
     }));
     const waitForClaim = placements.waitForTurnClaimRelease;
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
-      const pending = waitForClaim(sessionId, { ...options, signal: claimWaitCleanup.signal });
-      claimWaitEntered.resolve();
-      return pending;
+      return waitForClaim(sessionId, { ...options, signal: claimWaitCleanup.signal });
     });
-    const entry = { sessionId: SESSION_ID, updatedAt: 1 };
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
       loadSessionRuntime: async () => ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetWithStore: () => ({
-          storePath: sessionTarget.storePath,
-          canonicalKey: SESSION_KEY,
-          storeKeys: [SESSION_KEY],
-          agentId: "main",
-          store: { [SESSION_KEY]: entry },
-        }),
-        resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+        resolveGatewaySessionStoreTargetInWorker: (params) =>
+          resolveGatewaySessionStoreTargetInWorker({
+            ...params,
+            cfg: {
+              ...params.cfg,
+              session: { ...params.cfg.session, store: sessionTarget.storePath },
+            },
+          }),
+        resolveCanonicalSessionEntryFromStoreKeys,
       }),
       cancelSessionWork: async ({ assertCurrent }) => {
         assertCurrent();
         stopController.abort(new Error("Stop requested"));
+        stopStarted.resolve();
       },
       revokeSessionAuthority: () => {},
     });
@@ -602,7 +604,7 @@ describe("worker turn launcher terminal results", () => {
       .reclaim({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" })
       .catch((error: unknown) => error);
     try {
-      await claimWaitEntered.promise;
+      await stopStarted.promise;
       expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
       failTransfer.resolve();
       await targetedAdmission.promise;
@@ -611,17 +613,17 @@ describe("worker turn launcher terminal results", () => {
       await dispatch.dispatch({ ...REQUEST, sessionId: "unrelated" });
       expect(targetRecovery).toHaveBeenCalledOnce();
       await expect(running).resolves.toMatchObject({
-        name: "WorkerWorkspaceReconciliationError",
-        message:
-          "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        payloads: [{ text: "Remote work completed" }],
       });
       await expect(stopping).resolves.toMatchObject({ state: "local", sessionId: SESSION_ID });
+      await waitForSessionRunEnd(SESSION_ID, null);
       expect(stopCleanup).toHaveBeenCalledOnce();
     } finally {
       failTransfer.resolve();
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, stopping]);
+      await waitForSessionRunEnd(SESSION_ID, null);
       workerTurn.preparedRunAdmission.close();
     }
 
@@ -631,7 +633,7 @@ describe("worker turn launcher terminal results", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("lends durable reconcile Move retry admission to production result recovery while interrupting its admitted turn", async () => {
+  it("recovers a durable Move result after its caller receives the final reply", async () => {
     await seedActivePlacement();
     await gitInit(root);
     const source = placements.get(SESSION_ID);
@@ -654,8 +656,8 @@ describe("worker turn launcher terminal results", () => {
     const failTransfer = createDeferredCore();
     const barrierEntered = createDeferredCore();
     const startBarrier = createDeferredCore();
-    const interrupted = createDeferredCore();
-    const turnAbort = new AbortController();
+    const claimWaitEntered = createDeferredCore();
+    const interruptionEntered = createDeferredCore();
     const targetedAdmission = createDeferredCore();
     const recoverySettled = createDeferredCore();
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
@@ -665,7 +667,7 @@ describe("worker turn launcher terminal results", () => {
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
     );
     const recoveryEntered = vi.fn((_mode?: "results-only") => {});
-    const harness = createHarness(launcherDatabase, placements, {
+    const harness = await createHarness(launcherDatabase, placements, {
       workspacePath: root,
       workspaceOperations,
     });
@@ -682,7 +684,17 @@ describe("worker turn launcher terminal results", () => {
           return pending;
         }),
     );
-    abortWorkerTurnClaimWaitOnSignal(claimWaitCleanup.signal);
+    const waitForClaim = placements.waitForTurnClaimRelease;
+    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
+      const pending = waitForClaim(sessionId, {
+        ...options,
+        signal: options.signal
+          ? AbortSignal.any([options.signal, claimWaitCleanup.signal])
+          : claimWaitCleanup.signal,
+      });
+      claimWaitEntered.resolve();
+      return pending;
+    });
     const unexpected = async (): Promise<never> => {
       throw new Error("Unexpected destination or abandoned-source work");
     };
@@ -690,12 +702,11 @@ describe("worker turn launcher terminal results", () => {
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
       throw new Error("fixture: Move barrier complete");
     });
-    const loadSessionRuntime = createWorkerTurnSessionRuntimeLoader();
+    const loadSessionRuntime = await createWorkerTurnSessionRuntimeLoader();
     const moveBarrier = createGatewayWorkerPlacementMoveBarrier({
       placements,
       loadSessionRuntime,
-      revokeSessionAuthority: () => {},
-      awaitTurnClaimRelease: (sessionId, wait) => dispatch.awaitTurnClaimRelease(sessionId, wait),
+      revokeSessionAuthority: () => interruptionEntered.resolve(),
     });
     const moveService = createWorkerPlacementMoveService({
       placements,
@@ -760,72 +771,67 @@ describe("worker turn launcher terminal results", () => {
     });
 
     const workerTurn = turn("run-reconcile-tunnel-loss");
-    const admission = await beginSessionWorkAdmission({
-      scope: sessionTarget.storePath,
-      identities: [SESSION_KEY, SESSION_ID],
-      assertAllowed: () => {},
-      onInterrupt: (reason) => {
-        turnAbort.abort(reason);
-        interrupted.resolve();
-      },
-    });
-    const running = admission
-      .run(() =>
-        provider.executeTurn(
+    let admittedOperation: ReplyOperation | undefined;
+    const running = withSessionTurn(
+      { sessionKey: SESSION_KEY, sessionId: SESSION_ID, storePath: sessionTarget.storePath },
+      async (operation, signal) => {
+        if (!operation) {
+          throw new Error("Expected the worker's admitted controller operation");
+        }
+        admittedOperation = operation;
+        return await provider.executeTurn(
           {
             sessionId: SESSION_ID,
             sessionKey: SESSION_KEY,
             agentId: "main",
             runId: "run-reconcile-tunnel-loss",
           },
-          { ...workerTurn, abortSignal: turnAbort.signal },
+          { ...workerTurn, replyOperation: operation, abortSignal: signal },
           async () => ({ meta: { durationMs: 1 } }),
-        ),
-      )
-      .finally(() => admission.release())
-      .catch((error: unknown) => error);
+        );
+      },
+    ).catch((error: unknown) => error);
     await transferEntered.promise;
+    await expect(running).resolves.toMatchObject({
+      payloads: [{ text: "Remote work completed" }],
+    });
     expect(placements.get(SESSION_ID)?.state).toBe("draining");
     expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     const moving = dispatch.move(request).catch((error: unknown) => error);
     try {
       await barrierEntered.promise;
+      startBarrier.resolve();
+      await awaitGateBeforeSettlement(
+        interruptionEntered.promise,
+        moving,
+        "Move settled before entering controller interruption",
+      );
+      expect(admittedOperation?.abortSignal.aborted).toBe(false);
       failTransfer.resolve();
       await targetedAdmission.promise;
-      expect(admission.isActive()).toBe(true);
-      expect(recoveryEntered).not.toHaveBeenCalled();
-      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
-      startBarrier.resolve();
-      await Promise.race([
-        interrupted.promise,
-        moving.then(() => {
-          throw new Error("Move ended before interrupting its admitted turn");
-        }),
-      ]);
-      expect(turnAbort.signal.aborted).toBe(true);
-      // Independent admission settles after targeted recovery could enter this session.
       await dispatch.forceDestroyEnvironment("unrelated");
       expect(recoveryEntered).toHaveBeenCalledOnce();
       expect(recoveryEntered).toHaveBeenCalledWith("results-only");
       await recoverySettled.promise;
+      await awaitGateBeforeSettlement(
+        claimWaitEntered.promise,
+        moving,
+        "Move settled before reaching the durable turn-claim wait",
+      );
       expect(completeResult).toHaveBeenCalledOnce();
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
       await expect(moving).resolves.toMatchObject({
         message: "fixture: Move barrier complete",
       });
       expect(reclaimSource).toHaveBeenCalledOnce();
-      await expect(running).resolves.toMatchObject({
-        name: "WorkerWorkspaceReconciliationError",
-        message:
-          "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
-      });
+      await waitForSessionRunEnd(SESSION_ID, null);
     } finally {
       failTransfer.resolve();
       startBarrier.resolve();
-      admission.release();
       // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
       claimWaitCleanup.abort();
       await Promise.all([running, moving]);
+      await waitForSessionRunEnd(SESSION_ID, null);
       workerTurn.preparedRunAdmission.close();
     }
 
@@ -844,7 +850,7 @@ describe("worker turn launcher terminal results", () => {
     content: Parameters<typeof makeAgentAssistantMessage>[0]["content"];
     visibleText?: string;
     rawText?: string;
-    terminalReply: AgentRunTerminalReplySnapshot;
+    terminalReply?: AgentRunTerminalReplySnapshot;
     costs?: { first: number; last: number; total: number };
   }>([
     {
@@ -868,48 +874,52 @@ describe("worker turn launcher terminal results", () => {
       terminalReply: { disposition: "visible", text: "Usage reply" },
     },
     {
-      name: "sanitized final answer",
-      content: [{ type: "text", text: "<think>Private reasoning</think>Usage reply" }],
-      visibleText: "Usage reply",
-      rawText: "<think>Private reasoning</think>Usage reply",
-      terminalReply: { disposition: "visible", text: "Usage reply" },
-    },
-    {
-      name: "explicit silence",
-      content: [{ type: "text", text: "NO_REPLY" }],
-      visibleText: "NO_REPLY",
-      rawText: "NO_REPLY",
+      name: "mixed-case explicit silence",
+      content: [{ type: "text", text: "No_Reply" }],
+      visibleText: "",
+      rawText: "No_Reply",
       terminalReply: { disposition: "silent" },
     },
+    ...(
+      [
+        ["<think>Private reasoning</think>Usage reply", "Usage reply"],
+        ["NO_REPLY.", "NO_REPLY."],
+        ['"NO_REPLY"', '"NO_REPLY"'],
+        ['{"reply":"NO_REPLY"}', '{"reply":"NO_REPLY"}'],
+
+        ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
+        ["NO_REPLY\n<final></final>", ""],
+        ["[[reply_to_current]]", "", false],
+      ] satisfies Array<[string, string, boolean?]>
+    ).map(([rawText, visibleText, preservesRawText = true]) => ({
+      name: `prepared final ${JSON.stringify(rawText)}`,
+      content: [{ type: "text" as const, text: rawText }],
+      rawText: preservesRawText ? rawText : undefined,
+      visibleText,
+      terminalReply: visibleText
+        ? { disposition: "visible" as const, text: visibleText }
+        : { disposition: "empty" as const },
+    })),
     {
       name: "reasoning-only completion",
       content: [{ type: "thinking", thinking: "Private reasoning" }],
-      terminalReply: { disposition: "empty" },
     },
     {
       name: "tool-only completion",
       content: [{ type: "toolCall", id: "call-final", name: "read", arguments: {} }],
-      terminalReply: { disposition: "empty" },
     },
-    {
-      name: "empty final answer",
-      content: [],
-      terminalReply: { disposition: "empty" },
-    },
+    { name: "empty final answer", content: [] },
   ])(
     "reports canonical usage and $name",
     async ({
       content,
       visibleText,
       rawText,
-      terminalReply,
+      terminalReply = { disposition: "empty" },
       costs = { first: 0, last: 0, total: 0 },
     }) => {
       await seedActivePlacement();
-      const environments: WorkerTurnEnvironmentService = {
-        get: vi.fn(() => attachedEnvironment()),
-        acquireTurnCredential: vi.fn(async () => credential()),
-        acknowledgeCredentialDelivery: vi.fn(async () => true),
+      const environments = environmentForTunnel({
         startTunnel: vi.fn(async () =>
           createWorkerTurnTunnel({
             launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
@@ -961,9 +971,7 @@ describe("worker turn launcher terminal results", () => {
             reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
           }),
         ),
-        stopTunnel: vi.fn(async () => {}),
-        destroy: vi.fn(async () => attachedEnvironment()),
-      };
+      });
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
 
       const result = await provider.executeTurn(
@@ -977,14 +985,11 @@ describe("worker turn launcher terminal results", () => {
         async () => ({ meta: { durationMs: 1 } }),
       );
 
-      expect(result.meta.finalAssistantVisibleText).toBe(visibleText);
+      expect(result.meta.finalAssistantVisibleText ?? "").toBe(visibleText ?? "");
       expect(result.meta.finalAssistantRawText).toBe(rawText);
-      expect(
-        buildAgentRunTerminalReplySnapshot({
-          visibleText: result.meta.finalAssistantVisibleText,
-          rawText: result.meta.finalAssistantRawText,
-        }),
-      ).toEqual(terminalReply);
+      expect(result.meta.terminalReply).toEqual(terminalReply);
+      const payloadTexts = result.payloads?.map((payload) => payload.text) ?? [];
+      expect(payloadTexts).toEqual(visibleText ? [visibleText] : []);
       expect(result.meta.agentMeta).toEqual({
         sessionId: SESSION_ID,
         sessionFile,

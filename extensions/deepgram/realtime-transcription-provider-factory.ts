@@ -98,7 +98,7 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
 }
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
-  const url = new URL(normalizeDeepgramRealtimeBaseUrl(config.baseUrl));
+  const url = new URL(config.baseUrl);
   // Self-hosted Deepgram may explicitly use ws:// without TLS. Translate only
   // matching HTTP schemes so direct WebSocket endpoints keep their contract.
   if (url.protocol === "http:") {
@@ -158,16 +158,12 @@ function createDeepgramRealtimeTranscriptionSession(
   let finalizeFallbackTimer: ReturnType<typeof setTimeout> | undefined;
   let openedOnce = false;
 
-  const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
-
   const joinTranscript = (left: string, right: string) =>
-    collapseWhitespace(left && right ? `${left} ${right}` : left || right);
+    (left && right ? `${left} ${right}` : left || right).replace(/\s+/g, " ").trim();
 
   const clearFinalizeFallback = () => {
-    if (finalizeFallbackTimer) {
-      clearTimeout(finalizeFallbackTimer);
-      finalizeFallbackTimer = undefined;
-    }
+    clearTimeout(finalizeFallbackTimer);
+    finalizeFallbackTimer = undefined;
   };
 
   const clearTurn = () => {
@@ -315,6 +311,9 @@ export function buildDeepgramRealtimeTranscriptionProvider({
   PluginCapabilityCatalogContext,
   "createRealtimeTranscriptionWebSocketSession"
 >): RealtimeTranscriptionProviderPlugin {
+  const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
+    providerConfig,
+  }) => Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.DEEPGRAM_API_KEY);
   return {
     id: "deepgram",
     label: "Deepgram Realtime Transcription",
@@ -322,8 +321,9 @@ export function buildDeepgramRealtimeTranscriptionProvider({
     defaultModel: DEFAULT_DEEPGRAM_AUDIO_MODEL,
     autoSelectOrder: 35,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.DEEPGRAM_API_KEY),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || process.env.DEEPGRAM_API_KEY;

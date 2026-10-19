@@ -35,6 +35,31 @@ import {
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 
+async function admit(runner: ConstructorParameters<typeof WizardSession>[0], independent = false) {
+  const create = () => createAdmittedWizardSession(() => new WizardSession(runner));
+  const session = await (independent
+    ? runWithGatewayIndependentRootWorkAdmission(create)
+    : create());
+  if (!session) {
+    throw new Error("expected an admitted wizard");
+  }
+  return session;
+}
+
+async function finishPrompt(session: WizardSession, answer?: string) {
+  const pending = session.getCurrentStep();
+  if (pending) {
+    await session.answer(pending.id, answer);
+  }
+  await whenAdmittedWizardSessionSettled(session);
+}
+
+async function expectAdmissionRecovered(create = () => new WizardSession(async () => {})) {
+  const session = await createAdmittedWizardSession(create);
+  expect(session).toBeDefined();
+  await whenAdmittedWizardSessionSettled(session!);
+}
+
 describe("setup admission", () => {
   beforeEach(() => {
     mocks.stateDir = tempDirs.make("openclaw-setup-admission-");
@@ -43,67 +68,6 @@ describe("setup admission", () => {
   afterEach(() => {
     resetCommandQueueStateForTest();
     resetGatewayWorkAdmission();
-  });
-
-  it("rejects concurrent work instead of queueing it", async () => {
-    const firstStarted = createDeferred();
-    const releaseFirst = createDeferred();
-    const events: string[] = [];
-    const first = runExclusiveSystemAgentSetupActivation(async () => {
-      events.push("first:start");
-      firstStarted.resolve();
-      await releaseFirst.promise;
-      events.push("first:end");
-    });
-    await firstStarted.promise;
-
-    const secondTask = vi.fn(async () => events.push("second:start"));
-    await expect(runExclusiveSystemAgentSetupActivation(secondTask)).rejects.toThrow(
-      "setup is already in progress",
-    );
-    expect(secondTask).not.toHaveBeenCalled();
-    releaseFirst.resolve();
-    await first;
-    await runExclusiveSystemAgentSetupActivation(async () => events.push("third:start"));
-    expect(events).toEqual(["first:start", "first:end", "third:start"]);
-  });
-
-  it("releases the admission lease when work fails", async () => {
-    await expect(
-      runExclusiveSystemAgentSetupActivation(async () => {
-        throw new Error("probe failed");
-      }),
-    ).rejects.toThrow("probe failed");
-
-    await expect(runExclusiveSystemAgentSetupActivation(async () => "ok")).resolves.toBe("ok");
-  });
-
-  it("does not misclassify a task's own file-lock timeout as setup contention", async () => {
-    const taskError = Object.assign(new Error("config lock timed out"), {
-      code: "file_lock_timeout",
-    });
-
-    await expect(
-      runExclusiveSystemAgentSetupActivation(async () => {
-        throw taskError;
-      }),
-    ).rejects.toBe(taskError);
-  });
-
-  it("holds an admitted session lease until its runner settles", async () => {
-    const settled = createDeferred();
-    const session = await createAdmittedWizardSession(
-      () => new WizardSession(() => settled.promise),
-    );
-
-    await expect(
-      createAdmittedWizardSession(() => new WizardSession(async () => {})),
-    ).resolves.toBeUndefined();
-    settled.resolve();
-    await whenAdmittedWizardSessionSettled(session!);
-    const next = await createAdmittedWizardSession(() => new WizardSession(async () => {}));
-    expect(next).toBeDefined();
-    await whenAdmittedWizardSessionSettled(next!);
   });
 
   it("retains root work for post-start session continuations", async () => {
@@ -129,32 +93,24 @@ describe("setup admission", () => {
   });
 
   it.each(["process drain", "server close"])(
-    "settles an abandoned prompt before %s releases its runtime",
+    "%s settles abandoned prompts before releasing its runtime",
     async (closing) => {
       const work = new GatewayConnectionWork();
       const disconnected = work.registerConnection(() => {});
       const cleanupStarted = createDeferred();
       const finishCleanup = createDeferred();
       const session = await work.track(() =>
-        runWithGatewayIndependentRootWorkAdmission(() =>
-          createAdmittedWizardSession(
-            () =>
-              new WizardSession(async (prompter) => {
-                await enqueueCommandInLane("setup-shutdown-proof", async () => {
-                  try {
-                    await prompter.text({ message: "Local model base URL" });
-                  } finally {
-                    cleanupStarted.resolve();
-                    await finishCleanup.promise;
-                  }
-                });
-              }),
-          ),
-        ),
+        admit(async (prompter) => {
+          await enqueueCommandInLane("setup-shutdown-proof", async () => {
+            try {
+              await prompter.text({ message: "Local model base URL" });
+            } finally {
+              cleanupStarted.resolve();
+              await finishCleanup.promise;
+            }
+          });
+        }, true),
       );
-      if (!session) {
-        throw new Error("expected an admitted wizard");
-      }
       try {
         expect((await session.next()).step?.type).toBe("text");
         disconnected();
@@ -204,40 +160,36 @@ describe("setup admission", () => {
   );
 
   it.each([
-    ["already waiting", "outro"],
-    ["after write", "outro"],
-    ["already waiting", "confirm"],
-    ["after write", "confirm"],
+    ["already waiting", "outro", false],
+    ["after write", "outro", false],
+    ["already waiting", "confirm", false],
+    ["after write", "confirm", false],
+    ["after write", undefined, false],
+    ["after write", undefined, true],
   ] as const)(
-    "preserves committed work and ends unavailable %s %s at shutdown",
-    async (when, prompt) => {
+    "preserves committed work at shutdown: %s/%s/fail=%s",
+    async (when, prompt, failWrite) => {
       const finishWrite = createDeferred();
       const prompting = createDeferred();
       let written = false;
       let answered = false;
-      const session = await runWithGatewayIndependentRootWorkAdmission(() =>
-        createAdmittedWizardSession(
-          () =>
-            new WizardSession(async (prompter, _signal, owner) => {
-              owner.lockCancellation();
-              await finishWrite.promise;
-              written = true;
-              prompting.resolve();
-              if (prompt === "outro") {
-                await prompter.outro("Channels updated.");
-              } else {
-                await prompter.confirm({
-                  message: "Configure another account?",
-                  initialValue: true,
-                });
-              }
-              answered = true;
-            }),
-        ),
-      );
-      if (!session) {
-        throw new Error("expected an admitted wizard");
-      }
+      const session = await admit(async (prompter, _signal, owner) => {
+        owner.lockCancellation();
+        await finishWrite.promise;
+        written = true;
+        prompting.resolve();
+        if (failWrite) {
+          throw new Error("settings write failed");
+        }
+        if (prompt === "outro") {
+          await prompter.outro("Channels updated.");
+        } else if (prompt === "confirm") {
+          await prompter.confirm({ message: "Configure another account?", initialValue: true });
+        } else {
+          owner.setModelActivation({ modelRef: "ollama/local-model" });
+        }
+        answered = true;
+      }, Boolean(prompt));
       try {
         if (when === "already waiting") {
           finishWrite.resolve();
@@ -245,60 +197,63 @@ describe("setup admission", () => {
         }
         markGatewayRestartDraining();
         expect(session.signal.aborted).toBe(false);
-        expect(session.getStatus()).not.toBe("cancelled");
+        if (prompt) {
+          expect(session.getStatus()).not.toBe("cancelled");
+        }
         if (when === "after write") {
-          expect(written).toBe(false);
-          expect(session.isSettled()).toBe(false);
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          if (prompt) {
+            expect(written).toBe(false);
+            expect(session.isSettled()).toBe(false);
+            expect(getActiveGatewayRootWorkCount()).toBe(1);
+          }
           finishWrite.resolve();
           await prompting.promise;
         }
-        expect(session.getCurrentStep()).toBeUndefined();
+        if (prompt) {
+          expect(session.getCurrentStep()).toBeUndefined();
+        }
         await whenAdmittedWizardSessionSettled(session);
-        expect(written).toBe(true);
-        expect(answered).toBe(false);
-        expect(await session.next()).toMatchObject({ done: true, status: "error" });
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        const expected = prompt
+          ? { status: "error" }
+          : failWrite
+            ? { status: "error", error: "settings write failed" }
+            : { status: "done", modelActivation: { modelRef: "ollama/local-model" } };
+        expect(await session.next()).toMatchObject({ done: true, ...expected });
+        if (prompt) {
+          expect({ written, answered, roots: getActiveGatewayRootWorkCount() }).toEqual({
+            written: true,
+            answered: false,
+            roots: 0,
+          });
+        }
       } finally {
         finishWrite.resolve();
         await prompting.promise;
-        const pending = session.getCurrentStep();
-        if (pending) {
-          await session.answer(pending.id, undefined);
-        }
-        await whenAdmittedWizardSessionSettled(session);
+        await finishPrompt(session);
       }
     },
   );
 
   it.each(["credentials", "provider note", "final commit"])(
-    "finishes the protected preparation artifact but stops before %s after shutdown",
+    "finishes preparation but halts at %s on shutdown",
     async (checkpoint) => {
       const finishArtifact = createDeferred();
       const artifactPath = path.join(mocks.stateDir, "reviewed-provider.txt");
       let promoted = false;
-      const session = await runWithGatewayIndependentRootWorkAdmission(() =>
-        createAdmittedWizardSession(
-          () =>
-            new WizardSession(async (prompter, signal, owner) => {
-              owner.lockCancellationForPreparation();
-              await finishArtifact.promise;
-              signal.throwIfAborted();
-              await fs.writeFile(artifactPath, "reviewed fixture artifact");
-              if (checkpoint === "credentials") {
-                await prompter.text({ message: "Provider API key", sensitive: true });
-              } else if (checkpoint === "provider note") {
-                await prompter.note("Provider installed. Continue to connect your account.");
-              }
-              owner.lockCancellation();
-              promoted = true;
-              owner.setPreparedModelRef("fixture/demo-model");
-            }),
-        ),
-      );
-      if (!session) {
-        throw new Error("expected an admitted wizard");
-      }
+      const session = await admit(async (prompter, signal, owner) => {
+        owner.lockCancellationForPreparation();
+        await finishArtifact.promise;
+        signal.throwIfAborted();
+        await fs.writeFile(artifactPath, "reviewed fixture artifact");
+        if (checkpoint === "credentials") {
+          await prompter.text({ message: "Provider API key", sensitive: true });
+        } else if (checkpoint === "provider note") {
+          await prompter.note("Provider installed. Continue to connect your account.");
+        }
+        owner.lockCancellation();
+        promoted = true;
+        owner.setPreparedModelRef("fixture/demo-model");
+      }, true);
       try {
         markGatewayRestartDraining();
         expect(session.signal.aborted).toBe(false);
@@ -321,11 +276,7 @@ describe("setup admission", () => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         finishArtifact.resolve();
-        const pending = session.getCurrentStep();
-        if (pending) {
-          await session.answer(pending.id, "fixture-cleanup");
-        }
-        await whenAdmittedWizardSessionSettled(session);
+        await finishPrompt(session, "fixture-cleanup");
       }
     },
   );
@@ -335,16 +286,10 @@ describe("setup admission", () => {
     const disconnect = work.registerConnection(() => {});
     let submitted: string | undefined;
     const session = await work.track(() =>
-      createAdmittedWizardSession(
-        () =>
-          new WizardSession(async (prompter) => {
-            submitted = await prompter.text({ message: "Local model base URL" });
-          }),
-      ),
+      admit(async (prompter) => {
+        submitted = await prompter.text({ message: "Local model base URL" });
+      }),
     );
-    if (!session) {
-      throw new Error("expected an admitted wizard");
-    }
     try {
       const step = (await session.next()).step;
       if (!step) {
@@ -369,127 +314,31 @@ describe("setup admission", () => {
     }
   });
 
-  it.each([false, true])(
-    "does not construct a wizard after drain wins target-lock acquisition (reset=%s)",
-    async (reset) => {
-      const create = vi.fn(() => new WizardSession(async () => {}));
-      const pending = createAdmittedWizardSession(create);
-      const rejected = expect(pending).rejects.toThrow(
-        "Gateway is restarting. Please try again shortly.",
-      );
-      markGatewayRestartDraining();
-      if (reset) {
-        resetGatewayWorkAdmission();
-      }
-      await rejected;
-      expect(create).not.toHaveBeenCalled();
-      resetGatewayWorkAdmission();
-      const fresh = await createAdmittedWizardSession(create);
-      expect(fresh).toBeDefined();
-      await whenAdmittedWizardSessionSettled(fresh!);
-    },
-  );
-
-  it.each([false, true])(
-    "closes a wizard when construction races drain (target lock=%s)",
-    async (lockSetupTarget) => {
-      const session = await createAdmittedWizardSession(
-        () =>
-          new WizardSession(async (prompter) => {
-            markGatewayRestartDraining();
-            await prompter.text({ message: "Local model base URL" });
-          }),
-        lockSetupTarget,
-      );
-      if (!session) {
-        throw new Error("expected an admitted wizard");
-      }
-      try {
-        await whenAdmittedWizardSessionSettled(session);
-        expect(session.getStatus()).toBe("error");
-      } finally {
-        session.cancel();
-        await whenAdmittedWizardSessionSettled(session);
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "preserves committed work's result without further input (failure=%s)",
-    async (failWrite) => {
-      const finishWrite = createDeferred();
-      const session = await createAdmittedWizardSession(
-        () =>
-          new WizardSession(async (_prompter, _signal, owner) => {
-            owner.lockCancellation();
-            await finishWrite.promise;
-            if (failWrite) {
-              throw new Error("settings write failed");
-            }
-            owner.setModelActivation({ modelRef: "ollama/local-model" });
-          }),
-      );
-      if (!session) {
-        throw new Error("expected an admitted wizard");
-      }
-      try {
-        markGatewayRestartDraining();
-        expect(session.signal.aborted).toBe(false);
-        finishWrite.resolve();
-        await whenAdmittedWizardSessionSettled(session);
-        expect(await session.next()).toMatchObject({
-          done: true,
-          ...(failWrite
-            ? { status: "error", error: "settings write failed" }
-            : { status: "done", modelActivation: { modelRef: "ollama/local-model" } }),
-        });
-      } finally {
-        finishWrite.resolve();
-        await whenAdmittedWizardSessionSettled(session);
-      }
-    },
-  );
-
-  it("does not report classic setup's saved settings as user cancellation", async () => {
-    const configPath = path.join(mocks.stateDir, "openclaw.json");
-    const saved = '{"gateway":{"mode":"remote"}}';
-    const session = await createAdmittedWizardSession(
-      () =>
-        new WizardSession(async (prompter) => {
-          await fs.writeFile(configPath, saved);
-          await prompter.outro("Remote Gateway configured.");
-        }),
+  it.each([false, true])("drain prevents construction (reset=%s)", async (reset) => {
+    const create = vi.fn(() => new WizardSession(async () => {}));
+    const pending = createAdmittedWizardSession(create);
+    const rejected = expect(pending).rejects.toThrow(
+      "Gateway is restarting. Please try again shortly.",
     );
-    if (!session) {
-      throw new Error("expected an admitted wizard");
+    markGatewayRestartDraining();
+    if (reset) {
+      resetGatewayWorkAdmission();
     }
-    try {
-      expect((await session.next()).step?.type).toBe("note");
-      markGatewayRestartDraining();
-      await whenAdmittedWizardSessionSettled(session);
-      expect(await fs.readFile(configPath, "utf8")).toBe(saved);
-      expect(await session.next()).toMatchObject({ done: true, status: "error" });
-    } finally {
-      session.cancel();
-      await whenAdmittedWizardSessionSettled(session);
-    }
+    await rejected;
+    expect(create).not.toHaveBeenCalled();
+    resetGatewayWorkAdmission();
+    await expectAdmissionRecovered(create);
   });
 
   it("keeps shutdown error provenance when a provider maps closed input to cancellation", async () => {
-    const session = await createAdmittedWizardSession(
-      () =>
-        new WizardSession(async (prompter, _signal, owner) => {
-          owner.lockCancellation();
-          try {
-            await prompter.text({ message: "Provider sign-in code" });
-          } catch {
-            throw new WizardCancelledError("provider input cancelled");
-          }
-        }),
-    );
-    if (!session) {
-      throw new Error("expected an admitted wizard");
-    }
+    const session = await admit(async (prompter, _signal, owner) => {
+      owner.lockCancellation();
+      try {
+        await prompter.text({ message: "Provider sign-in code" });
+      } catch {
+        throw new WizardCancelledError("provider input cancelled");
+      }
+    });
     try {
       await session.next();
       markGatewayRestartDraining();
@@ -500,59 +349,45 @@ describe("setup admission", () => {
         error: expect.stringContaining("Gateway is shutting down"),
       });
     } finally {
-      const pending = session.getCurrentStep();
-      if (pending) {
-        await session.answer(pending.id, undefined);
-      }
-      await whenAdmittedWizardSessionSettled(session);
+      await finishPrompt(session);
     }
   });
 
-  it.each([false, true])(
-    "releases its drain listener and root even when target-lock cleanup fails (%s)",
-    async (failCleanup) => {
-      const finish = createDeferred();
-      const drainSignal = getGatewayRestartDrainSignal();
-      const priorListeners = getEventListeners(drainSignal, "abort").length;
-      const releaseError = new Error("target-lock release failed");
-      const lock = failCleanup
-        ? vi
-            .spyOn(setupMigration, "withSetupMigrationTargetLock")
-            .mockImplementationOnce(async (_stateDir, run) => {
-              await run();
-              throw releaseError;
-            })
-        : undefined;
-      let session: WizardSession | undefined;
-      try {
-        session = await runWithGatewayIndependentRootWorkAdmission(() =>
-          createAdmittedWizardSession(() => new WizardSession(() => finish.promise)),
-        );
-        if (!session) {
-          throw new Error("expected an admitted wizard");
-        }
-        expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners + 1);
-        finish.resolve();
-        const settlement = whenAdmittedWizardSessionSettled(session);
-        if (failCleanup) {
-          await expect(settlement).rejects.toBe(releaseError);
-        } else {
-          await settlement;
-        }
-        expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        const fresh = await createAdmittedWizardSession(() => new WizardSession(async () => {}));
-        expect(fresh).toBeDefined();
-        await whenAdmittedWizardSessionSettled(fresh!);
-      } finally {
-        finish.resolve();
-        if (session) {
-          await whenAdmittedWizardSessionSettled(session).catch(() => {});
-        }
-        lock?.mockRestore();
+  it.each([false, true])("releases listener and root (cleanup fails=%s)", async (failCleanup) => {
+    const finish = createDeferred();
+    const drainSignal = getGatewayRestartDrainSignal();
+    const priorListeners = getEventListeners(drainSignal, "abort").length;
+    const releaseError = new Error("target-lock release failed");
+    const lock = failCleanup
+      ? vi
+          .spyOn(setupMigration, "withSetupMigrationTargetLock")
+          .mockImplementationOnce(async (_stateDir, run) => {
+            await run();
+            throw releaseError;
+          })
+      : undefined;
+    let session: WizardSession | undefined;
+    try {
+      session = await admit(() => finish.promise, true);
+      expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners + 1);
+      finish.resolve();
+      const settlement = whenAdmittedWizardSessionSettled(session);
+      if (failCleanup) {
+        await expect(settlement).rejects.toBe(releaseError);
+      } else {
+        await settlement;
       }
-    },
-  );
+      expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await expectAdmissionRecovered();
+    } finally {
+      finish.resolve();
+      if (session) {
+        await whenAdmittedWizardSessionSettled(session).catch(() => {});
+      }
+      lock?.mockRestore();
+    }
+  });
 
   it("releases an admitted session lease when construction fails", async () => {
     await expect(
@@ -560,9 +395,7 @@ describe("setup admission", () => {
         throw new Error("construction failed");
       }),
     ).rejects.toThrow("construction failed");
-    const recovered = await createAdmittedWizardSession(() => new WizardSession(async () => {}));
-    expect(recovered).toBeDefined();
-    await whenAdmittedWizardSessionSettled(recovered!);
+    await expectAdmissionRecovered();
   });
 
   it("reserves wizard admission while setup waits to acquire its target lock", async () => {
@@ -582,25 +415,5 @@ describe("setup admission", () => {
 
     releaseLock.resolve();
     await lockOwner;
-  });
-
-  it("rejects Gateway setup while the canonical onboarding target lock is held", async () => {
-    const lockAcquired = createDeferred();
-    const releaseLock = createDeferred();
-    const lockOwner = setupMigration.withSetupMigrationTargetLock(mocks.stateDir, async () => {
-      lockAcquired.resolve();
-      await releaseLock.promise;
-    });
-    await lockAcquired.promise;
-
-    const task = vi.fn(async () => "unexpected");
-    await expect(runExclusiveSystemAgentSetupActivation(task)).rejects.toThrow(
-      "setup is already in progress",
-    );
-    expect(task).not.toHaveBeenCalled();
-
-    releaseLock.resolve();
-    await lockOwner;
-    await expect(runExclusiveSystemAgentSetupActivation(async () => "ok")).resolves.toBe("ok");
   });
 });

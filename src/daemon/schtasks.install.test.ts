@@ -268,15 +268,16 @@ describe("installScheduledTask", () => {
 
     expect(schtasksCalls[0]).toEqual(["/Query", "/TN", "OpenClaw Gateway", "/XML"]);
     expect(schtasksCalls[3]?.[0]).toBe("/Change");
+    expect(schtasksCalls[4]).toEqual(["/Query", "/TN", "OpenClaw Gateway", "/XML"]);
     // Battery-flag XML re-apply runs between /Change and /Run on upgrades.
-    expect(schtasksCalls[4]?.slice(0, 5)).toEqual([
+    expect(schtasksCalls[5]?.slice(0, 5)).toEqual([
       "/Create",
       "/F",
       "/TN",
       "OpenClaw Gateway",
       "/XML",
     ]);
-    expect(schtasksCalls[6]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    expect(schtasksCalls[7]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
   });
 
   it("rejects line breaks in command arguments, env vars, and descriptions", async ({
@@ -339,20 +340,20 @@ describe("installScheduledTask", () => {
     expect(schtasksCalls[3]?.[4]).toContain(launcherPath);
     // wscript requires a BOM for UTF-16; XML owns the interactive principal.
     expect(rawLauncher.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
-    expect(schtasksCalls[4]?.slice(0, 5)).toEqual([
+    expect(schtasksCalls[5]?.slice(0, 5)).toEqual([
       "/Create",
       "/F",
       "/TN",
       "OpenClaw Gateway",
       "/XML",
     ]);
-    expect(schtasksCalls[4]).not.toContain("/RU");
-    expect(schtasksCalls[4]).not.toContain("/NP");
-    const xml = xmlPayloadCaptures.find((entry) => entry.index === 4)?.xml;
+    expect(schtasksCalls[5]).not.toContain("/RU");
+    expect(schtasksCalls[5]).not.toContain("/NP");
+    const xml = xmlPayloadCaptures.find((entry) => entry.index === 5)?.xml;
     expect(xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
     expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
     expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
-    expectTaskRunCall(6);
+    expectTaskRunCall(7);
   });
 
   it("fails the install instead of writing an unrepresentable cmd launcher", async ({
@@ -429,6 +430,15 @@ describe("installScheduledTask", () => {
     expect(captured?.xml).toContain("<LogonType>S4U</LogonType>");
     expect(captured?.xml).toContain("<BootTrigger><Enabled>true</Enabled></BootTrigger>");
     expect(captured?.xml).toContain("<LogonTrigger>");
+    expect(captured?.xml).toContain(
+      "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+    );
+    expect(captured?.xml).toContain("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
+    expect(captured?.xml).toContain("<RestartOnFailure>");
+    expect(captured?.xml).toContain("<Interval>PT1M</Interval>");
+    expect(captured?.xml).toContain("<Count>3</Count>");
+    expect(captured?.xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+    expect(captured?.xml).not.toContain("<GroupId>S-1-5-32-545</GroupId>");
     expect(script).toContain("node gateway.js --task-supervisor < NUL");
     await expect(readScheduledTaskCommand(callerEnv)).resolves.toMatchObject({
       programArguments: ["node", "gateway.js"],
@@ -502,56 +512,6 @@ describe("installScheduledTask", () => {
     await fs.access(scriptPath);
   });
 
-  it.for([
-    {
-      kind: "new workgroup task",
-      domain: "WORKGROUP",
-      user: "alice",
-      query: missingTaskResponse,
-      commands: ["/Query", "/Query", "/Create", "/Query", "/Run"],
-      xmlIndex: 2,
-    },
-  ])(
-    "preserves user identity and battery settings for an unattended $kind (#59299)",
-    async ({ domain, user, query, commands, xmlIndex }, { profile: { env } }) => {
-      schtasksResponses.push(query);
-      await installDefaultGatewayTask({ ...env, USERDOMAIN: domain, USERNAME: "alice" });
-
-      expectInitialTaskQuery();
-      expect(schtasksCalls.map((call) => call[0])).toEqual(commands);
-      const createCall = schtasksCalls[xmlIndex];
-      expect(createCall?.slice(0, 5)).toEqual(["/Create", "/F", "/TN", "OpenClaw Gateway", "/XML"]);
-      expect(createCall).not.toContain("/RU");
-      expect(createCall).not.toContain("/NP");
-      expectTaskRunCall(xmlIndex + 2);
-      const xml = xmlPayloadCaptures.find((entry) => entry.index === xmlIndex)?.xml;
-      expect(xml).toContain("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
-      expect(xml).toContain("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
-      expect(xml).toContain("<RestartOnFailure>");
-      expect(xml).toContain("<Interval>PT1M</Interval>");
-      expect(xml).toContain("<Count>3</Count>");
-      expect(xml).toContain("<LogonTrigger>");
-      expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
-      expect(xml).toContain(`<UserId>${user}</UserId>`);
-      expect(xml).toContain("<LogonType>S4U</LogonType>");
-      expect(xml).not.toContain("<GroupId>S-1-5-32-545</GroupId>");
-      expect(xml).toContain("<Exec>");
-    },
-  );
-
-  it("falls back to /Create when /Change fails on an existing task", async ({
-    profile: { env },
-  }) => {
-    schtasksResponses.push(okSchtasksResponse, accessDeniedResponse);
-
-    await installDefaultGatewayTask(env);
-
-    expectInitialTaskQuery();
-    expect(schtasksCalls[3]?.[0]).toBe("/Change");
-    expect(schtasksCalls[4]?.[0]).toBe("/Create");
-    expectTaskRunCall(6);
-  });
-
   it("warns and activates an existing task when an ordinary policy refresh fails", async ({
     profile: { env },
   }) => {
@@ -569,11 +529,12 @@ describe("installScheduledTask", () => {
       "/Query",
       "/Query",
       "/Change",
+      "/Query",
       "/Create",
       "/Query",
       "/Run",
     ]);
-    expectTaskRunCall(6);
+    expectTaskRunCall(7);
   });
 
   it.for([

@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   hashWebPushEndpoint,
   setWebPushSubscriptionPreferences,
@@ -41,11 +42,36 @@ function createProfileDatabase() {
   return { stateDir, database };
 }
 
+it("reuses admitted Web Push columns without another schema transaction", () => {
+  const stateDir = tempDirs.make("web-push-schema-admission-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const database = openOpenClawStateDatabase({ env });
+  const statements = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["statement"],
+    () => "statement",
+  );
+  try {
+    const subscriptions = runWithSqliteWorkerStateContext({ environment: env }, () =>
+      webPushOperations["webPush.listWebPushSubscriptions"](undefined, {
+        open: () => database,
+        stateOptions: () => ({ path: database.path, env }),
+      }),
+    );
+    expect(subscriptions).toEqual([]);
+    expect(statements.counts.statement).toBe(1);
+  } finally {
+    statements.restore();
+  }
+});
+
 it("resolves repeated Web Push profile references once per mutation and rereads the next mutation", () => {
   const { stateDir, database } = createProfileDatabase();
 
-  const observe = trackSqliteStatementExecutions(database.db, ["profiles"], (sql) =>
-    /\bfrom\s+"user_profiles"/i.test(sql) ? "profiles" : null,
+  const observe = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["profiles"],
+    (sql) => (/\bfrom\s+"user_profiles"/i.test(sql) ? "profiles" : null),
   );
   admission.request.mockImplementation(() => expect(database.db.isTransaction).toBe(true));
   const execute = (

@@ -54,6 +54,8 @@ export interface MdAst {
   readonly kind: "md";
   readonly raw: string;
   readonly frontmatter: readonly FrontmatterEntry[];
+  /** 1-based line of the closing frontmatter fence, including an empty block. */
+  readonly frontmatterEndLine?: number;
   readonly preamble: string;
   readonly blocks: readonly AstBlock[];
 }

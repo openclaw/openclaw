@@ -34,6 +34,18 @@ const XAccountSchema = z.object({
     .strict()
     .optional(),
   allowFrom: z.array(z.string().regex(/^(?:x:)?\d+$/i)).optional(),
+  verifiedFromGitHub: z
+    .object({
+      repo: z
+        .string()
+        .regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/)
+        .optional(),
+      minPermission: z.enum(["push", "maintain", "admin"]).optional(),
+      refreshMinutes: z.number().int().min(15).optional(),
+      token: buildSecretInputSchema().optional(),
+    })
+    .strict()
+    .optional(),
   groupPolicy: z.enum(["allowlist", "open", "disabled"]).optional(),
   dmPolicy: z.literal("disabled").optional(),
   threadContext: z
@@ -61,6 +73,18 @@ const XAccountSchema = z.object({
     .strict()
     .optional(),
   replySignature: z.string().max(140).optional(),
+  failureRoute: z
+    .object({
+      // Failures must never be routed back to X.
+      channel: z
+        .string()
+        .min(1)
+        .refine((channel) => channel.trim().toLowerCase() !== "x"),
+      to: z.string().min(1),
+      accountId: z.string().min(1).optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 export const XConfigSchema = buildMultiAccountChannelSchema(XAccountSchema, {

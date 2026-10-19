@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { claimAgentSessionWriter } from "../../../src/agents/embedded-agent-runner/run/session-bootstrap.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../../src/agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../../src/agents/embedded-agent-runner/runs.test-support.js";
 import { resolveDefaultSessionStorePath } from "../../../src/config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -16,7 +16,7 @@ import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../../src/infra/agent-run-registry.js";
-import { withTimeout } from "../../../src/utils/with-timeout.js";
+import { withTimeout } from "../../../src/infra/fs-safe.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
 describe("SDK writer takeover through the Gateway", () => {

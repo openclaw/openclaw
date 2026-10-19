@@ -34,7 +34,7 @@ export type ThreadBindingManager = {
     at?: number;
     persist?: boolean;
   }) => Promise<ThreadBindingRecord | null>;
-  /** @deprecated Generic SDK synchronous touch compatibility. */
+  /** @deprecated Use touchThread; compatible through 2026-12-31, removed in the first January 2027 stable. */
   touchThreadSync: (
     params: Parameters<ThreadBindingManager["touchThread"]>[0],
   ) => ThreadBindingRecord | null;

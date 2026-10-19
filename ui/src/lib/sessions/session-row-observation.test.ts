@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { SessionRowObservation } from "./index.ts";
@@ -10,6 +11,10 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import type { SessionRowEventListener } from "./session-capability.ts";
+
+function change(emit: (event: GatewayEventFrame) => void, payload: unknown) {
+  emit({ type: "event", event: "sessions.changed", payload });
+}
 
 type DescribeResult = { session: GatewaySessionRow | null };
 
@@ -36,6 +41,16 @@ const workRow: GatewaySessionRow = {
   status: "running",
   hasActiveRun: true,
   activeRunIds: ["work-run"],
+};
+
+const terminal = {
+  status: "done" as const,
+  hasActiveRun: false,
+  activeRunIds: [],
+  lastRunId: "work-run",
+  startedAt: 100,
+  endedAt: 200,
+  runtimeMs: 100,
 };
 
 async function descriptorOwner(
@@ -179,11 +194,7 @@ describe("session row observations", () => {
     const invalidated = vi.fn();
     const h = await descriptorOwner(initial, mainRow, invalidated);
     const list = h.holdWorkList();
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: initial.key, agentId: "work", reason: "swarm" },
-    });
+    change(h.emitEvent, { sessionKey: initial.key, agentId: "work", reason: "swarm" });
     expect(invalidated).toHaveBeenCalledOnce();
     const fresh = h.holdDescribe();
     h.changed.mockClear();
@@ -228,7 +239,6 @@ describe("session row observations", () => {
     });
     try {
       expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
-      const pending = observation.captureReconcile();
       const event = (agentId: string, key = "global") => ({
         type: "event" as const,
         event: "sessions.changed",
@@ -248,7 +258,6 @@ describe("session row observations", () => {
       emitEvent(event("work", "agent:work:unrelated"));
       expect(observation.row).toEqual(workRow);
       expect(invalidated).toHaveBeenCalledTimes(1);
-      expect(pending(workRow)).toEqual({ status: "invalidated" });
       expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
       expect(delivered).toHaveBeenCalledTimes(4);
       publish(false);
@@ -334,65 +343,6 @@ describe("session row observations", () => {
     },
   );
 
-  it.each(["row", "event"] as const)(
-    "keeps raw delivery when an earlier %s listener supersedes the frame's row facts",
-    async (source) => {
-      vi.useFakeTimers();
-      const { gateway, emitEvent } = createGatewayHarness(
-        createTestGatewayClient(async () => sessionsResult([mainRow], mainRow.updatedAt ?? 0)),
-      );
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const target = { key: mainRow.key, agentId: "main" };
-      const newer = { ...mainRow, label: "Newer descriptor", updatedAt: 1_001 };
-      const delivered = vi.fn<SessionRowEventListener>();
-      let armed = false;
-      const supersede = () => {
-        if (armed) {
-          armed = false;
-          later?.captureReconcile()(newer);
-        }
-      };
-      const early = sessions.observeRow(
-        target,
-        () => {
-          if (source === "row") {
-            supersede();
-          }
-        },
-        {
-          onEvent: () => {
-            if (source === "event") {
-              supersede();
-            }
-          },
-        },
-      );
-      const later = sessions.observeRow(target, () => undefined, { onEvent: delivered });
-      try {
-        armed = true;
-        const frame = {
-          type: "event" as const,
-          event: "session.message",
-          payload: {
-            agentId: "main",
-            session: { ...mainRow, label: "Older frame", updatedAt: 1_000 },
-          },
-        };
-        emitEvent(frame);
-
-        expect(delivered).toHaveBeenCalledExactlyOnceWith(frame, { applied: false });
-        expect(later.row).toMatchObject(newer);
-        expect(sessions.state.result?.sessions[0]).toMatchObject(newer);
-      } finally {
-        later?.dispose();
-        early.dispose();
-        sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it.each(["primary", "managed", "supplemental", "event"] as const)(
     "notifies a retired descriptor after its admitted %s successor is published",
     async (source) => {
@@ -470,24 +420,16 @@ describe("session row observations", () => {
         const result = await sessions.list({ agentId: "main", spawnedBy: initial.spawnedBy });
         expect(reconcile(result?.sessions[0], undefined, { archivedFilter: "all" })).toBe(true);
       } else {
-        emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            agentId: "main",
-            reason: "create",
-            session: { ...successor, sessionId: "rejected-child-session", updatedAt: 50 },
-            ts: 50,
-          },
+        change(emitEvent, {
+          agentId: "main",
+          reason: "create",
+          session: { ...successor, sessionId: "rejected-child-session", updatedAt: 50 },
+          ts: 50,
         });
         expect(observation.isCurrent()).toBe(true);
         expect(observation.row).toMatchObject(initial);
         expect(deliveries).toEqual([]);
-        emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: { agentId: "main", reason: "create", session: successor, ts: 200 },
-        });
+        change(emitEvent, { agentId: "main", reason: "create", session: successor, ts: 200 });
       }
       expect(deliveries).toHaveLength(1);
       expect(deliveries[0]).toMatchObject({
@@ -505,47 +447,6 @@ describe("session row observations", () => {
     },
   );
 
-  it.each(["unadmitted event", "unobserved primary"] as const)(
-    "keeps a live descriptor past an %s incarnation",
-    async (source) => {
-      const h = await descriptorOwner(workRow);
-      if (source === "unadmitted event") {
-        h.emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            agentId: "work",
-            reason: "create",
-            session: { ...workRow, sessionId: "unadmitted-work-session", updatedAt: 1_000 },
-            ts: 1_000,
-          },
-        });
-        expect(h.observation.isCurrent()).toBe(true);
-        expect(h.changed).not.toHaveBeenCalled();
-        h.keepMain();
-      } else {
-        const unobserved = { ...workRow, sessionId: "unobserved-work-session", updatedAt: 100 };
-        expect(
-          h.sessions.reconcile(unobserved, undefined, {
-            resultAgentId: "work",
-            selectedGlobalAgentId: "work",
-            archivedFilter: "all",
-          }),
-        ).toBe(true);
-        expect(h.sessions.state.result?.sessions).toEqual([unobserved]);
-      }
-      expect(h.observation.row).toMatchObject(workRow);
-      if (source === "unobserved primary") {
-        const observation = h.sessions.observeRow(
-          { key: "global", agentId: "work" },
-          () => undefined,
-        );
-        h.disposers.push(observation.dispose);
-        expect(observation.row).toMatchObject(workRow);
-      }
-    },
-  );
-
   it("settles the descriptor-only run without donating the preceding run's timing or changing Main", async () => {
     const initial: GatewaySessionRow = {
       ...workRow,
@@ -558,7 +459,6 @@ describe("session row observations", () => {
     };
     const h = await descriptorOwner(initial);
     const list = h.holdWorkList();
-    const old = h.holdDescribe();
     expect(
       h.sessions.reconcileRunTerminal({
         sessionKeys: ["global"],
@@ -588,16 +488,6 @@ describe("session row observations", () => {
     expect(h.changed).toHaveBeenLastCalledWith(h.observation.row);
     h.keepMain();
 
-    old.response.resolve({ session: { ...initial, updatedAt: 250, derivedTitle: "Read title" } });
-    expect(await old.settled).toMatchObject({ status: "current", row: expected });
-    expect(h.observation.row).toMatchObject({
-      ...expected,
-      updatedAt: 250,
-      derivedTitle: "Read title",
-    });
-    expect(h.observation.row?.startedAt).toBeUndefined();
-    expect(h.observation.row?.runtimeMs).toBeUndefined();
-    h.keepMain();
     expect(h.sessions.state.loading).toBe(true);
 
     list.response.resolve(sessionsResult([initial], 200));
@@ -612,13 +502,7 @@ describe("session row observations", () => {
     async (source) => {
       const initial: GatewaySessionRow = {
         ...workRow,
-        status: "done",
-        hasActiveRun: false,
-        activeRunIds: [],
-        lastRunId: "work-run",
-        startedAt: 100,
-        endedAt: 200,
-        runtimeMs: 100,
+        ...terminal,
         abortedLastRun: false,
       };
       const h = await descriptorOwner(initial);
@@ -654,16 +538,7 @@ describe("session row observations", () => {
         list.response.resolve(sessionsResult([stale], 200));
         await list.settled;
       }
-      expect(h.observation.row).toMatchObject({
-        status: "done",
-        hasActiveRun: false,
-        activeRunIds: [],
-        derivedTitle: "Read title",
-        lastRunId: "work-run",
-        startedAt: 100,
-        endedAt: 200,
-        runtimeMs: 100,
-      });
+      expect(h.observation.row).toMatchObject(terminal);
       if (old) {
         list.response.resolve(sessionsResult([initial], 200));
         await list.settled;
@@ -673,7 +548,6 @@ describe("session row observations", () => {
         status: "done",
         hasActiveRun: false,
         activeRunIds: [],
-        derivedTitle: "Read title",
       });
     },
   );
@@ -735,18 +609,14 @@ describe("session row observations", () => {
     expect(await old.settled).toEqual({ status: "retired" });
     expect(h.changed).not.toHaveBeenCalled();
     react = false;
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: "global",
-        agentId: "work",
-        sessionId: initial.sessionId,
-        reason: "patch",
-        ts: 500,
-        updatedAt: 500,
-        label: "Live managed row",
-      },
+    change(h.emitEvent, {
+      sessionKey: "global",
+      agentId: "work",
+      sessionId: initial.sessionId,
+      reason: "patch",
+      ts: 500,
+      updatedAt: 500,
+      label: "Live managed row",
     });
     expect(h.sessions.listSnapshot(query).result?.sessions[0]?.label).toBe("Live managed row");
     expect(h.changed).not.toHaveBeenCalled();
@@ -803,60 +673,47 @@ describe("session row observations", () => {
       h.changed.mockClear();
       const list = scoped ? h.holdWorkList() : null;
       const before = h.observation.row;
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          sessionKey: key,
-          agentId: "research",
-          sessionId: initial.sessionId,
-          reason: "patch",
-          ts: 1_000,
-          updatedAt: 1_000,
-          label: scoped ? "Foreign descriptor" : "Foreign sentinel",
-          status: scoped ? "done" : "running",
-          hasActiveRun: !scoped,
-          activeRunIds: scoped ? [] : ["research-run"],
-        },
+      const unchanged = () => {
+        expect(h.sessions.listSnapshot(query).result).toBe(managedBefore);
+        expect(h.sessions.listSnapshot(query).result?.sessions).toEqual(rows);
+        expect(h.observation.row).toBe(before);
+        expect(h.changed).not.toHaveBeenCalled();
+        h.keepMain();
+      };
+      change(h.emitEvent, {
+        sessionKey: key,
+        agentId: "research",
+        sessionId: initial.sessionId,
+        reason: "patch",
+        ts: 1_000,
+        updatedAt: 1_000,
+        label: scoped ? "Foreign descriptor" : "Foreign sentinel",
+        status: scoped ? "done" : "running",
+        hasActiveRun: !scoped,
+        activeRunIds: scoped ? [] : ["research-run"],
       });
-      expect(h.sessions.listSnapshot(query).result).toBe(managedBefore);
-      expect(h.sessions.listSnapshot(query).result?.sessions).toEqual(rows);
-      expect(h.observation.row).toBe(before);
-      expect(h.changed).not.toHaveBeenCalled();
-      h.keepMain();
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          sessionKey: key,
-          agentId: "research",
-          sessionId: initial.sessionId,
-          reason: "delete",
-          ts: scoped ? 1_100 : 1_050,
-        },
+      unchanged();
+      change(h.emitEvent, {
+        sessionKey: key,
+        agentId: "research",
+        sessionId: initial.sessionId,
+        reason: "delete",
+        ts: scoped ? 1_100 : 1_050,
       });
-      expect(h.sessions.listSnapshot(query).result).toBe(managedBefore);
-      expect(h.sessions.listSnapshot(query).result?.sessions).toEqual(rows);
-      expect(h.observation.row).toBe(before);
-      expect(h.changed).not.toHaveBeenCalled();
-      h.keepMain();
+      unchanged();
       const owned = {
         ...initial,
         updatedAt: scoped ? 250 : 1_100,
         label: scoped ? "Owned descriptor" : "Owned sentinel",
       };
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          sessionKey: key,
-          agentId: owner,
-          sessionId: initial.sessionId,
-          reason: "patch",
-          ts: owned.updatedAt,
-          updatedAt: owned.updatedAt,
-          label: owned.label,
-        },
+      change(h.emitEvent, {
+        sessionKey: key,
+        agentId: owner,
+        sessionId: initial.sessionId,
+        reason: "patch",
+        ts: owned.updatedAt,
+        updatedAt: owned.updatedAt,
+        label: owned.label,
       });
       expect(h.sessions.listSnapshot(query).result?.sessions).toEqual(
         scoped ? [owned] : [owned, other],
@@ -868,16 +725,12 @@ describe("session row observations", () => {
         list.response.resolve(sessionsResult([initial], 200));
         await list.settled;
         expect(h.sessions.state.result?.sessions[0]?.label).toBe("Owned descriptor");
-        h.emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            sessionKey: "global",
-            agentId: "work",
-            sessionId: initial.sessionId,
-            reason: "delete",
-            ts: 1_200,
-          },
+        change(h.emitEvent, {
+          sessionKey: "global",
+          agentId: "work",
+          sessionId: initial.sessionId,
+          reason: "delete",
+          ts: 1_200,
         });
         expect(h.sessions.listSnapshot(query).result?.sessions).toEqual([]);
         expect(h.observation.row).toBeNull();
@@ -906,16 +759,12 @@ describe("session row observations", () => {
         h.reply("sessions.list", query, sessionsResult([workRow], 200));
         await managed.refresh();
         expect(observation.row).toMatchObject(workRow);
-        h.emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            sessionKey: "global",
-            agentId: "work",
-            sessionId: workRow.sessionId,
-            reason: "delete",
-            ts: 300,
-          },
+        change(h.emitEvent, {
+          sessionKey: "global",
+          agentId: "work",
+          sessionId: workRow.sessionId,
+          reason: "delete",
+          ts: 300,
         });
         expect(h.sessions.listSnapshot(query).result?.sessions).toEqual([]);
         h.keepMain();

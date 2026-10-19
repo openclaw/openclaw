@@ -1,5 +1,4 @@
 /** Canonical operational instance and optional enabled execution-identity evidence. */
-import { randomUUID } from "node:crypto";
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import {
@@ -9,7 +8,12 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceScope,
+  runWithSessionSourceScope,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -25,13 +29,16 @@ import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.typ
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import {
+  createOperationalRunInstanceRef,
+  type OperationalRunInstanceRef,
+} from "./operational-run-instance.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
-/** Operational lifecycle correlation. This is never identity or authorization evidence. */
-export type OperationalRunInstanceRef = Readonly<{
-  instanceId: string;
-  runId: string;
-}>;
+export {
+  createOperationalRunInstanceRef,
+  type OperationalRunInstanceRef,
+} from "./operational-run-instance.js";
 
 /** Exact context carried by one admitted execution and every retry/fallback it owns. */
 export type AdmittedRunContext = Readonly<{
@@ -43,12 +50,17 @@ export type AdmittedRunContext = Readonly<{
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
-  /** Host-captured original authenticated input, consumed only by restart-claim admission. */
-  recoverySnapshot?: import("../gateway/operator-run-recovery-source.js").OperatorRunRecoverySnapshot;
+  /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
+  recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
+  /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
+  channelRecoverySource?: Readonly<{
+    reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
+    modelPolicy?: PreparedOperatorModelPolicy;
+  }>;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
   /** Opaque original source identity used only to compare compatible queued input. */
   source?: object;
@@ -96,18 +108,31 @@ export function createAdmittedRunOperatorAuthority(
       throw error;
     }
   });
-  const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
-  const readCurrentGithubLogin = source.readCurrentGithubLogin;
+  const bindCurrentReader = (read: (() => string | null) | undefined) =>
+    read
+      ? () => {
+          assertCurrent();
+          return read();
+        }
+      : undefined;
+  const readCurrentRoleAssignment = bindCurrentReader(source.readCurrentRoleAssignment);
+  const readCurrentGithubLogin = bindCurrentReader(source.readCurrentGithubLogin);
   const authority = Object.freeze({
     profileId: source.profileId,
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,
+    channelRecoverySource: source.channelRecoverySource
+      ? Object.freeze({
+          reference: Object.freeze({ ...source.channelRecoverySource.reference }),
+          modelPolicy: source.channelRecoverySource.modelPolicy,
+        })
+      : undefined,
     scopes: Object.freeze([...source.scopes]),
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
-    source: source.source ?? Object.freeze({}),
+    source: source.source ?? {},
     signal,
     retain: source.retain,
     onModelPolicyChanged: source.onModelPolicyChanged,
@@ -115,18 +140,8 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
-    readCurrentRoleAssignment: readCurrentRoleAssignment
-      ? () => {
-          assertCurrent();
-          return readCurrentRoleAssignment();
-        }
-      : undefined,
-    readCurrentGithubLogin: readCurrentGithubLogin
-      ? () => {
-          assertCurrent();
-          return readCurrentGithubLogin();
-        }
-      : undefined,
+    readCurrentRoleAssignment,
+    readCurrentGithubLogin,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
@@ -154,17 +169,27 @@ export function assertOperatorModelAllowed(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: ModelRef | undefined,
 ): void {
-  if (!authority) {
-    return;
-  }
-  assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
-  const policy = authority.modelPolicy;
-  if (policy && (!model || !policy.allows(model))) {
-    throw new Error(
-      "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
-    );
-  }
+  createOperatorModelSelectionAssertion(authority, model)();
+}
+
+/** Carry the operator's source checks into writes without rereading its store on the host. */
+export function createOperatorModelSelectionAssertion(
+  authority: AdmittedRunOperatorAuthority | undefined,
+  model: ModelRef | undefined,
+): SessionSourceAssertion {
+  return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+    if (!authority) {
+      return;
+    }
+    assertAdmittedRunOperatorAuthority(authority);
+    assertSource();
+    const policy = authority.modelPolicy;
+    if (policy && (!model || !policy.allows(model))) {
+      throw new Error(
+        "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
+      );
+    }
+  });
 }
 
 /** Keeps one selected model current without revoking other work from the same source. */
@@ -265,6 +290,27 @@ const activeNativeHookRecoveryLeases = new Map<
   { lease: DelegatedAuthorityLease; releaseOperatorAuthority?: () => void }
 >();
 
+/** Reprepare source predicates after the caller establishes an exact transcript fence. */
+export function runWithPreparedRunSourceScope<T>(
+  params: {
+    preparedRunAdmission?: PreparedAgentRunAdmission;
+    admittedRunContext?: AdmittedRunContext;
+  },
+  run: () => Promise<T>,
+): Promise<T> {
+  let assertion = params.preparedRunAdmission?.assertSourceCurrent;
+  if (params.admittedRunContext) {
+    const lease = delegatedAuthorityLeases.get(params.admittedRunContext);
+    const captured =
+      lease && captureAdmittedRunActiveAssertion(params.admittedRunContext, lease.authority);
+    if (!captured) {
+      return Promise.reject(new Error("admitted run authority is no longer active"));
+    }
+    assertion = captured;
+  }
+  return runWithSessionSourceScope(assertion, run, { checkAfter: false });
+}
+
 function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
   assertSourceCurrent?: () => void,
@@ -336,7 +382,7 @@ export function getAdmittedRunSource(
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): (() => void) | undefined {
+): SessionSourceAssertion | undefined {
   const authority = getAdmittedRunDelegatedAuthority(context);
   return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
 }
@@ -359,7 +405,7 @@ export function captureAdmittedRunActiveAssertion(
   if (!lease || lease.foregroundClosed || lease.authority !== authority || !source) {
     return undefined;
   }
-  return composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
+  const assertLocalCurrent = (assertSource: () => void) => {
     if (
       signal?.aborted ||
       context.operationalRunInstance !== operationalRunInstance ||
@@ -369,6 +415,9 @@ export function captureAdmittedRunActiveAssertion(
       refuse();
     }
     assertSource();
+  };
+  return Object.assign(composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent), {
+    assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
   });
 }
 
@@ -417,7 +466,7 @@ export function retainAdmittedRunBeforeToolCallRecovery(
       throw new Error("admitted run native hook recovery is no longer active");
     }
   };
-  return Object.freeze({
+  return {
     assertActive,
     release: () => {
       if (activeNativeHookRecoveryLeases.get(runId) === recovery) {
@@ -425,7 +474,7 @@ export function retainAdmittedRunBeforeToolCallRecovery(
         recovery.releaseOperatorAuthority?.();
       }
     },
-  });
+  };
 }
 
 type ExecutionIdentityRecoveryAdmission = Readonly<{
@@ -448,14 +497,14 @@ export function createExecutionIdentityRecoveryAdmission(params: {
     retryOnly: params.retryOnly,
     consume: (runId: string) => {
       if (consumed) {
-        return Object.freeze({ accepted: false });
+        return { accepted: false };
       }
       consumed = true;
       if (
         params.expectedOperationalRunId !== undefined &&
         params.expectedOperationalRunId !== runId
       ) {
-        return Object.freeze({ accepted: false });
+        return { accepted: false };
       }
       // The trusted recovery resolver binds the current operational owner separately.
       // Without that explicit binding, only the token's original run may redeem it.
@@ -463,13 +512,9 @@ export function createExecutionIdentityRecoveryAdmission(params: {
         params.expectedOperationalRunId !== undefined || params.token?.runId === runId
           ? params.token
           : undefined;
-      return Object.freeze({ accepted: true, ...(token ? { token } : {}) });
+      return { accepted: true, ...(token ? { token } : {}) };
     },
   });
-}
-
-export function createOperationalRunInstanceRef(runId: string): OperationalRunInstanceRef {
-  return Object.freeze({ instanceId: randomUUID(), runId });
 }
 
 /** Prepares a system-owned run without selecting its eventual execution runtime early. */
@@ -540,9 +585,24 @@ export function prepareAgentRunAdmission(params: {
   let admitted: Promise<AdmittedRunContext> | undefined;
   let admittedContext: AdmittedRunContext | undefined;
   let closed = false;
+  const assertPreparationOpen = () => {
+    if (closed) {
+      throw new Error("prepared execution context is already closed");
+    }
+  };
+  const scopedSource = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+    assertPreparationOpen();
+    assertSource();
+  });
   return Object.freeze({
     operationalRunInstance,
-    assertSourceCurrent: composeSessionSourceAssertion([assertSourceCurrent]),
+    assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
+      assertScopeCurrent: assertPreparationOpen,
+      prepareSessionSourceScope: () => {
+        assertPreparationOpen();
+        return prepareSessionSourceScope(scopedSource);
+      },
+    }),
     readOperatorAuthority: () => {
       if (operatorAuthority) {
         if (closed) {
@@ -572,34 +632,38 @@ export function prepareAgentRunAdmission(params: {
       // Later fallback paths reuse this exact admission instead of recapturing identity.
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
-      admitted ??= (async () => {
-        assertSourceCurrent?.();
-        const facts = executionIdentitySpawnAdmission({
-          operation: "attach",
-          value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
-          extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
-        });
-        const context = admitPreparedAgentRun({
-          cfg: params.cfg,
-          admissionSource: params.admissionSource,
-          facts,
-          operationalRunInstance,
-          runtimeInstanceId: admittedRuntimeInstanceId,
-          ...(params.recovery ? { recovery: params.recovery } : {}),
-        });
-        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
-        admittedContext = context;
-        try {
-          await params.onAdmitted?.(context);
-          if (closed || !getAdmittedRunDelegatedAuthority(context)) {
-            throw new Error("prepared execution authority closed during admission");
+      admitted ??= runWithSessionSourceScope(
+        assertSourceCurrent,
+        async () => {
+          assertSourceCurrent?.();
+          const facts = executionIdentitySpawnAdmission({
+            operation: "attach",
+            value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+            extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
+          });
+          const context = admitPreparedAgentRun({
+            cfg: params.cfg,
+            admissionSource: params.admissionSource,
+            facts,
+            operationalRunInstance,
+            runtimeInstanceId: admittedRuntimeInstanceId,
+            ...(params.recovery ? { recovery: params.recovery } : {}),
+          });
+          bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
+          admittedContext = context;
+          try {
+            await params.onAdmitted?.(context);
+            if (closed || !getAdmittedRunDelegatedAuthority(context)) {
+              throw new Error("prepared execution authority closed during admission");
+            }
+            return context;
+          } catch (error) {
+            closeAdmittedRunDelegatedAuthority(context);
+            throw error;
           }
-          return context;
-        } catch (error) {
-          closeAdmittedRunDelegatedAuthority(context);
-          throw error;
-        }
-      })();
+        },
+        { checkAfter: false },
+      );
       return admitted;
     },
   });
@@ -629,27 +693,6 @@ export async function resolvePreparedRunAdmission(params: {
   return admitted;
 }
 
-function consumeRecoveryAdmission(params: {
-  admission: ExecutionIdentityRecoveryAdmission | undefined;
-  runId: string;
-}): Readonly<{ accepted: boolean; token?: ExecutionIdentityAdmissionToken }> {
-  const consumed: Readonly<{
-    accepted: boolean;
-    token?: ExecutionIdentityAdmissionToken;
-  }> =
-    typeof params.admission?.consume === "function"
-      ? params.admission.consume(params.runId)
-      : Object.freeze({ accepted: false });
-  const token = consumed.token;
-  if (!token) {
-    return consumed;
-  }
-  return Object.freeze({
-    accepted: consumed.accepted,
-    token: Object.isFrozen(token) ? token : Object.freeze(token),
-  });
-}
-
 /**
  * Owns the single post-prepare allocation/adoption/capture decision for an execution.
  * Queue loss remains audit loss only; the admitted execution keeps its exact token object.
@@ -672,16 +715,16 @@ function admitPreparedAgentRun(params: {
   };
   // Consume the one-shot recovery lease even while collection is disabled so a
   // later operational instance cannot adopt evidence that belonged to this run.
-  const recovery = consumeRecoveryAdmission({
-    admission: params.recovery,
-    runId: params.facts.runId,
-  });
+  const recovery =
+    typeof params.recovery?.consume === "function"
+      ? params.recovery.consume(params.facts.runId)
+      : undefined;
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
     return Object.freeze(prepareGatewayContextBindingOwner(admitted));
   }
   const executionIdentityToken =
-    recovery.token ??
-    (!params.recovery || (recovery.accepted && !params.recovery.retryOnly)
+    recovery?.token ??
+    (!params.recovery || (recovery?.accepted && !params.recovery.retryOnly)
       ? createExecutionIdentityAdmissionToken(params.facts.runId)
       : undefined);
   if (!executionIdentityToken) {

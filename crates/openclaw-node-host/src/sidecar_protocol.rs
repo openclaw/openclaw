@@ -32,13 +32,25 @@ pub const SIDECAR_MAX_FEATURE_BITS: u64 = (1 << 53) - 1;
 const SIDECAR_BOOTSTRAP_MINOR: u16 = 0;
 static NEXT_CHANNEL_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
+fn next_channel_instance_id(counter: &AtomicU64) -> Result<u64, SidecarProtocolError> {
+    // try_update requires Rust 1.95, newer than this crate's declared MSRV.
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current
+            .checked_add(1)
+            .ok_or(SidecarProtocolError::ChannelInstanceIdExhausted)?;
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(previous) => return Ok(previous),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 const FRAME_MAGIC: [u8; 4] = *b"OCSC";
 const AUTH_TAG_BYTES: usize = 32;
 const FIXED_HEADER_BYTES: usize = 4 + 2 + 2 + 1 + 8 + 8 + 2 + 4;
 const PAYLOAD_LENGTH_OFFSET: usize = 4 + 2 + 2 + 1 + 8 + 8 + 2;
 const MIN_FRAME_BYTES: u32 = 65;
-#[cfg(test)]
-const LENGTH_PREFIX_BYTES: usize = 4;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -290,11 +302,7 @@ impl AuthenticatedSidecarChannel {
         if (max_frame_bytes as usize) < minimum_frame_bytes(session_id.len()) {
             return Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"));
         }
-        let instance_id = NEXT_CHANNEL_INSTANCE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| SidecarProtocolError::ChannelInstanceIdExhausted)?;
+        let instance_id = next_channel_instance_id(&NEXT_CHANNEL_INSTANCE_ID)?;
 
         Ok(Self {
             instance_id,
@@ -868,6 +876,19 @@ mod tests {
     }
 
     #[test]
+    fn channel_instance_id_exhaustion_never_wraps_or_reuses_an_id() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(next_channel_instance_id(&counter).unwrap(), u64::MAX - 1);
+        for _ in 0..2 {
+            assert!(matches!(
+                next_channel_instance_id(&counter),
+                Err(SidecarProtocolError::ChannelInstanceIdExhausted)
+            ));
+            assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        }
+    }
+
+    #[test]
     fn frame_limit_must_fit_the_specific_session_identifier() {
         let session_id = "longer-session-id";
         assert!(matches!(
@@ -1210,13 +1231,9 @@ mod tests {
         let mut another_supervisor = channel(SidecarPeerRole::Supervisor, 7);
         let outgoing = another_supervisor.seal(&json!({"type":"probe"})).unwrap();
         assert!(matches!(
-            supervisor_open(&outgoing),
+            channel(SidecarPeerRole::Supervisor, 7).open::<Value>(&outgoing),
             Err(SidecarFrameError::WrongDirection)
         ));
-    }
-
-    fn supervisor_open(frame: &[u8]) -> Result<Value, SidecarFrameError> {
-        channel(SidecarPeerRole::Supervisor, 7).open(frame)
     }
 
     #[tokio::test]
@@ -1266,8 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_prefix_constant_matches_wire_contract() {
-        assert_eq!(LENGTH_PREFIX_BYTES, std::mem::size_of::<u32>());
+    fn minimum_frame_size_matches_wire_contract() {
         assert_eq!(
             MIN_FRAME_BYTES as usize,
             FIXED_HEADER_BYTES + AUTH_TAG_BYTES + 2

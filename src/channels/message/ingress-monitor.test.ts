@@ -140,7 +140,7 @@ describe("channel ingress monitor", () => {
   it("prunes zero-interval retention once before a multi-event batch", async () => {
     await withQueue(async (queue) => {
       const prune = vi.spyOn(queue, "prune");
-      const enqueue = vi.spyOn(queue, "enqueue");
+      const enqueue = vi.spyOn(queue, "enqueueBatch");
       const monitor = createMonitor(queue, vi.fn(), {
         inspect: (raw) =>
           raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
@@ -155,11 +155,43 @@ describe("channel ingress monitor", () => {
       ]);
 
       expect(prune).toHaveBeenCalledOnce();
-      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect((await queue.listPending()).map((row) => row.id)).toEqual([
+        "event-batch-1",
+        "event-batch-2",
+        "event-batch-3",
+      ]);
       expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
         Math.min(...enqueue.mock.invocationCallOrder),
       );
       await monitor.stop();
+    });
+  });
+
+  it("recovers the entire committed batch after an acknowledgment fails", async () => {
+    await withQueue(async (queue) => {
+      const monitor = createMonitor(queue, vi.fn(), {
+        onDurableAdmission: () => {
+          throw new Error("lost acknowledgment");
+        },
+      });
+      await expect(
+        monitor.admitBatch([
+          { id: "first", lane: "a", text: "one" },
+          { id: "second", lane: "a", text: "two" },
+        ]),
+      ).rejects.toThrow("lost acknowledgment");
+      await monitor.stop();
+
+      const delivered: string[] = [];
+      const restarted = createMonitor(queue, (raw) => {
+        delivered.push(raw.id);
+      });
+      restarted.start();
+      await restarted.waitForIdle();
+      await restarted.stop();
+      expect(delivered).toEqual(["first", "second"]);
+      expect(await queue.listPending()).toEqual([]);
     });
   });
 
@@ -185,41 +217,51 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
     });
   });
-  it("rechecks identity against a derived lane for legacy rows", async () => {
-    await withQueue(async (queue) => {
-      await queue.enqueue("event-derived", {
-        version: 1,
-        rawEvent: JSON.stringify({ id: "event-derived", lane: "a", text: "hello" }),
-      });
-      const deliver = vi.fn();
-      const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
-        queue,
-        inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
-        payload: {
-          storage: "raw-event",
-          version: 1,
-          serialize: (raw) => JSON.stringify(raw),
-          deserialize: (body) => JSON.parse(body) as RawEvent,
-          createClaimError: (kind) => new PermanentIngressError(kind),
-        },
-        deliver,
-        pollIntervalMs: 10,
-        retention: { pruneIntervalMs: 60_000 },
-        drain: {
-          deriveLaneKey: () => "lane:a",
-          resolveNonRetryableFailure: (error) =>
-            error instanceof PermanentIngressError
-              ? { reason: "invalid-event", message: error.message }
-              : null,
-        },
-      });
-      monitor.start();
-      await monitor.waitForIdle();
+  it.each([
+    { kind: "legacy", storedLaneKey: undefined, schedulingLaneKey: "lane:a" },
+    { kind: "per-event", storedLaneKey: "lane:a", schedulingLaneKey: "lane:a:event-derived" },
+  ])(
+    "preserves transport identity with a $kind scheduling lane",
+    async ({ storedLaneKey, schedulingLaneKey }) => {
+      await withQueue(async (queue) => {
+        await queue.enqueue(
+          "event-derived",
+          {
+            version: 1,
+            rawEvent: JSON.stringify({ id: "event-derived", lane: "a", text: "hello" }),
+          },
+          { laneKey: storedLaneKey },
+        );
+        const deliver = vi.fn();
+        const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+          queue,
+          inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
+          payload: {
+            storage: "raw-event",
+            version: 1,
+            serialize: (raw) => JSON.stringify(raw),
+            deserialize: (body) => JSON.parse(body) as RawEvent,
+            createClaimError: (kind) => new PermanentIngressError(kind),
+          },
+          deliver,
+          pollIntervalMs: 10,
+          retention: { pruneIntervalMs: 60_000 },
+          drain: {
+            deriveLaneKey: () => schedulingLaneKey,
+            resolveNonRetryableFailure: (error) =>
+              error instanceof PermanentIngressError
+                ? { reason: "invalid-event", message: error.message }
+                : null,
+          },
+        });
+        monitor.start();
+        await monitor.waitForIdle();
 
-      expect(deliver).toHaveBeenCalledOnce();
-      await monitor.stop();
-    });
-  });
+        expect(deliver).toHaveBeenCalledOnce();
+        await monitor.stop();
+      });
+    },
+  );
 
   it("drains the next same-lane event after adoption while delivery remains active", async () => {
     await withQueue(async (queue) => {
@@ -351,8 +393,12 @@ describe("channel ingress monitor", () => {
         rawEvent: JSON.stringify(event),
       } satisfies StoredEvent;
       const drainErrors: unknown[] = [];
+      const { promise: deliveryStarted, resolve: markDeliveryStarted } = createDeferred();
+      const { promise: deliveryGate, resolve: releaseDelivery } = createDeferred();
       const oldDeliver = vi.fn(
         async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+          markDeliveryStarted();
+          await deliveryGate;
           try {
             await runWithGatewayIndependentRootWorkAdmission(async () => {
               await lifecycle.onAdopted();
@@ -384,24 +430,11 @@ describe("channel ingress monitor", () => {
       try {
         await oldMonitor.waitForIdle();
 
-        const { promise: pendingScanStarted, resolve: markPendingScanStarted } = createDeferred();
-        const { promise: pendingScanGate, resolve: releasePendingScan } = createDeferred();
-        const listUnsettled = queue.listUnsettled!.bind(queue);
-        let gateNextPendingScan = true;
-        queue.listUnsettled = async (...args) => {
-          if (gateNextPendingScan) {
-            gateNextPendingScan = false;
-            markPendingScanStarted();
-            await pendingScanGate;
-          }
-          return await listUnsettled(...args);
-        };
-
-        oldMonitor.requestDrain();
-        await pendingScanStarted;
-        markGatewayRestartDraining();
         await queue.enqueue(event.id, storedEvent, { laneKey: "lane:a" });
-        releasePendingScan();
+        oldMonitor.requestDrain();
+        await deliveryStarted;
+        markGatewayRestartDraining();
+        releaseDelivery();
         await vi.waitFor(() => expect(drainErrors.length).toBeGreaterThan(0));
 
         for (let cycle = 0; cycle < 8; cycle += 1) {
@@ -444,6 +477,7 @@ describe("channel ingress monitor", () => {
           queue.enqueue(event.id, { version: 1, rawEvent: "duplicate" }),
         ).resolves.toMatchObject({ kind: "completed" });
       } finally {
+        releaseDelivery();
         await successorMonitor?.stop();
         await oldMonitor.stop();
         resetGatewayWorkAdmission();

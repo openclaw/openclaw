@@ -53,13 +53,6 @@ export function createCodexQuestionInputHandlers(sessionKey: string, assertActiv
       text,
       authority: questionAuthority(authorityKind, assertCurrent, toolAuthorityPreparation),
       sourceRecorder: optionsLocal.userTurnTranscriptRecorder,
-      // Older supported hosts use the ordinary-question callback. Current hosts
-      // prefer the recorder owner so staged secret inputs commit before consumption.
-      persist: optionsLocal.userTurnTranscriptRecorder
-        ? async () => {
-            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
     });
   };
   const cancelPendingUserInput = (
@@ -85,6 +78,7 @@ export class CodexSteeringAcceptedUnconfirmedError extends Error {
 
 export type CodexSteeringQueueOptions = Pick<
   AgentHarnessQueueMessageOptions,
+  | "currentInboundContext"
   | "debounceMs"
   | "images"
   | "imageOrder"

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { NativeSessionBindingStateStoreV2 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -45,6 +46,18 @@ export {
   type CodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding-record-codec.js";
+
+export type CodexBindingStateStore = Omit<
+  NativeSessionBindingStateStoreV2<StoredCodexAppServerBinding>,
+  "lookup" | "assertLeaseCurrent"
+> &
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
+    prepareRead: Parameters<typeof prepareCurrentCodexAppServerBindingRead>[0]["prepareRead"];
+    asyncReads: Pick<
+      PluginStateKeyedStore<StoredCodexAppServerBinding>,
+      "lookup" | "lookupMany" | "entries"
+    >;
+  };
 
 /** Stable owner of one Codex thread binding. */
 export type CodexAppServerBindingIdentity =
@@ -103,13 +116,48 @@ export function ownsStoredSessionGeneration(
   );
 }
 
-/** The same physical-generation check serves execution and read-only projections. */
+/** Legacy effect guards; prepared readers also observe raw SDK binding writes. */
 export function readCurrentCodexAppServerBinding(
   state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
 ): CodexAppServerThreadBinding | undefined {
   const key = bindingStoreKey(identity);
   return decodeCurrentCodexAppServerBinding(key, state.lookup(key), identity);
+}
+
+export async function readCurrentCodexAppServerBindingAsync(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+  identity: CodexAppServerBindingIdentity,
+): Promise<CodexAppServerThreadBinding | undefined> {
+  const key = bindingStoreKey(identity);
+  return decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
+}
+
+export async function prepareCurrentCodexAppServerBindingRead(
+  state: {
+    prepareRead(key: string): Promise<
+      | {
+          read(): StoredCodexAppServerBinding | undefined;
+          release(): void;
+        }
+      | undefined
+    >;
+  },
+  identity: CodexAppServerBindingIdentity,
+) {
+  const key = bindingStoreKey(identity);
+  const current = await state.prepareRead(key);
+  let released = false;
+  return current
+    ? {
+        read: () =>
+          released ? undefined : decodeCurrentCodexAppServerBinding(key, current.read(), identity),
+        release: () => {
+          released = true;
+          current.release();
+        },
+      }
+    : undefined;
 }
 
 function decodeCurrentCodexAppServerBinding(
@@ -183,12 +231,12 @@ export function preserveCodexNativeSubagentSubmissions(
     : undefined;
 }
 
-export function readCurrentCodexNativeSubagentSubmissions(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+export async function readCurrentCodexNativeSubagentSubmissions(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
-): readonly CodexNativeSubagentSubmission[] {
-  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+): Promise<readonly CodexNativeSubagentSubmission[]> {
+  const stored = await readCurrentNativeSubagentBinding(state, identity, owner);
   if (!stored) {
     return [];
   }
@@ -198,24 +246,24 @@ export function readCurrentCodexNativeSubagentSubmissions(
     : [];
 }
 
-export function readCurrentNativePendingAssignments(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+export async function readCurrentNativePendingAssignments(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
-): readonly CodexNativeSubagentPendingAssignment[] {
-  const stored = readCurrentNativeSubagentBinding(state, identity, owner);
+): Promise<readonly CodexNativeSubagentPendingAssignment[]> {
+  const stored = await readCurrentNativeSubagentBinding(state, identity, owner);
   return (
     readNativePendingAssignments(stored?.nativeSubagentAssignments)?.assignments ?? []
   ).filter((entry) => matchesNativeAssignmentLifecycle(entry.owner, owner));
 }
 
-function readCurrentNativeSubagentBinding(
-  state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
+async function readCurrentNativeSubagentBinding(
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
   owner: CodexNativeSubagentHistoryOwner,
-): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
+): Promise<Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined> {
   const key = bindingStoreKey(identity);
-  const raw = state.lookup(key);
+  const raw = await state.lookup(key);
   const stored = readStoredCodexAppServerBinding(raw);
   if (raw !== undefined && !stored) {
     throw new Error(`Invalid Codex app-server binding row: ${key}`);
@@ -333,4 +381,24 @@ export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyConte
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
   };
+}
+
+export function storedSessionGeneration(
+  identity: CodexAppServerBindingIdentity,
+  current: StoredCodexAppServerBinding | undefined,
+): { sessionId?: string } {
+  if (identity.kind === "session") {
+    return { sessionId: identity.sessionId };
+  }
+  return current?.sessionId ? { sessionId: current.sessionId } : {};
+}
+
+export function preservedSessionGeneration(
+  identity: CodexAppServerBindingIdentity,
+  current: StoredCodexAppServerBinding | undefined,
+): { sessionId?: string } {
+  if (current?.sessionId) {
+    return { sessionId: current.sessionId };
+  }
+  return storedSessionGeneration(identity, current);
 }

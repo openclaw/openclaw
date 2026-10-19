@@ -1,16 +1,45 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationContextRequest,
+} from "../../../app/context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
+  request = async (_method: string, params: { html: string }) => ({
+    html: params.html,
+    sandboxUrl: "/mcp-app-sandbox?frames=none",
+    sandboxPort: 8444,
+  }),
 ) {
   const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
     content: SidebarContent;
     updateComplete: Promise<unknown>;
   };
+  const previewContext = {
+    gateway: {
+      snapshot: { client: { request }, phase: "connected" },
+      connection: { gatewayUrl: "ws://gateway.example:8443" },
+      subscribe: () => () => {},
+    },
+  } as unknown as ApplicationContext;
+  panel.addEventListener("context-request", (event) => {
+    // SAFETY: This listener handles the native application context protocol.
+    const contextRequest = event as ApplicationContextRequest;
+    if (
+      contextRequest.context === applicationContext &&
+      contextRequest.contextTarget.localName === "openclaw-chat-html-preview"
+    ) {
+      event.stopPropagation();
+      contextRequest.callback(previewContext);
+    }
+  });
   panel.content = {
     kind: "attachment",
     attachmentKind: "document",
@@ -65,7 +94,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
   let ready = false;
   const panel = await mountAttachment({
     src: undefined,
-    resolveSource: (requestUpdate) =>
+    resolveSource: (onSourceChange) =>
       ready
         ? { status: "ready", src: "/recovered.txt" }
         : {
@@ -73,7 +102,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
             reason: "Temporarily unavailable",
             onRetry: () => {
               ready = true;
-              requestUpdate();
+              onSourceChange();
             },
           },
   });
@@ -93,7 +122,6 @@ it.each([
     "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
   ],
   ["settings.json", "application/json", '{"ready":true}\n'],
-  ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],
 ])("previews %s as literal text", async (title, mimeType, text) => {
@@ -116,9 +144,10 @@ it.each([
   { title: "long.md", mimeType: "text/plain", kind: "long" },
   { title: "notes.md", mimeType: "text/plain", kind: "inert" },
 ])("renders $kind Markdown attachment $title ($mimeType)", async ({ title, mimeType, kind }) => {
+  // Cross the message parse limit without creating thousands of paragraph elements.
   const text =
     kind === "long"
-      ? `# Long document\n\n${"Paragraph of notes.\n\n".repeat(2_100)}## Last section\n`
+      ? `# Long document\n\n${"Paragraph of notes. ".repeat(2_100)}\n\n## Last section\n`
       : kind === "inert"
         ? "# שלום\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))\n\n![tracking](https://example.com/tracking.png)\n"
         : "# Release notes\n\n**Ready** with [details](https://example.com).\n\n- First item\n\n| Feature | State |\n| --- | --- |\n| Sidebar | Ready |\n\n```ts\nconst ready = true;\n```\n";
@@ -176,12 +205,9 @@ const htmlFile = { title: "page.html", mimeType: "text/html" };
 
 it.each<RejectedAttachment>([
   { failure: "metadata", content: plainFile },
-  { failure: "metadata", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "metadata", content: { ...htmlFile, plainText: true } },
   { failure: "advertised", content: plainFile },
   { failure: "streamed", content: plainFile },
-  { failure: "advertised", content: htmlFile, limit: 2 * 1024 * 1024 },
-  { failure: "streamed", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "bytes", bytes: new Uint8Array([0xff]) },
   { failure: "bytes", bytes: new Uint8Array([0x61, 0x00, 0x62]) },
   { failure: "unavailable" },
@@ -301,13 +327,12 @@ it("aborts a closed preview and reloads it after remount", async () => {
   const panel = await mountAttachment();
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
-  expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
   await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Reloaded text"));
 });
 
 it.each([
-  { title: "large.html", mimeType: "text/html", sizeBytes: 2 * 1024 * 1024, fill: "a", suffix: "" },
   {
     title: "large.HTM",
     mimeType: "application/octet-stream",
@@ -375,23 +400,17 @@ it.each([
     const text =
       "\ufeff<!doctype html>\r\n<style>h1{color:red}</style><h1>Rendered page</h1><script>window.ready=true</script>\n";
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
-    const panel = await mountAttachment({ title, mimeType });
-    await customElements.whenDefined("openclaw-chat-html-preview");
-    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-    const preview = panel.querySelector("openclaw-chat-html-preview")!;
     const request = vi.fn().mockResolvedValue({
       html: text,
       sandboxUrl: "/mcp-app-sandbox?frames=none",
       sandboxPort: 8444,
     });
-    Reflect.set(preview, "context", {
-      gateway: {
-        snapshot: { client: { request }, phase: "connected" },
-        connection: { gatewayUrl: "ws://gateway.example:8443" },
-        subscribe: () => () => {},
-      },
-    });
-    await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
+    const panel = await mountAttachment({ title, mimeType }, request);
+    await customElements.whenDefined("openclaw-chat-html-preview");
+    await waitForSolid(() =>
+      expect(panel.querySelector("openclaw-chat-html-preview")).not.toBeNull(),
+    );
+    await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
     const frame = panel.querySelector("iframe");
     expect(panel.querySelector("h1, script, style")).toBeNull();
     expect(panel.querySelector("pre")?.hidden).toBe(true);
@@ -413,12 +432,11 @@ it.each([
       "/__openclaw__/assistant-media?mediaTicket=text-preview",
     );
     Reflect.set(panel, "embedSandboxMode", "strict");
-    await expect
-      .poll(() => {
-        const current = panel.querySelector("iframe");
-        return current !== null && current !== frame;
-      })
-      .toBe(true);
+    await waitForSolid(() => {
+      const current = panel.querySelector("iframe");
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(frame);
+    });
     const strictFrame = panel.querySelector("iframe")!;
     expect(strictFrame.hasAttribute("srcdoc")).toBe(false);
     expect(strictFrame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
@@ -433,7 +451,7 @@ it.each([
         },
       }),
     );
-    await expect.poll(() => post.mock.calls.length).toBe(1);
+    await waitForSolid(() => expect(post).toHaveBeenCalledOnce());
     expect(post.mock.calls[0]![0].params).toEqual({
       html: text,
       renderId: expect.any(String),

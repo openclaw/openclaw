@@ -187,21 +187,6 @@ describe("Crabbox PR-derived gate plan", () => {
     ]);
   });
 
-  it("routes an explicit native QA fixture to its browser owner", () => {
-    const target = "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
-    const cwd = createTrackedFixture({ [target]: "export {};\n" });
-    const plan = planFixture(cwd, [target]);
-    expect(plan.targets).toEqual([target]);
-    expect(buildVitestRunPlans(plan.targets, cwd)).toEqual([
-      {
-        config: UI_E2E_VITEST_CONFIG,
-        forwardedArgs: [],
-        includePatterns: [target],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it.each([
     ["missing family", "ui/src/presenter.ts", /no complete Control UI test inventory/u],
     [

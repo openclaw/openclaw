@@ -36,6 +36,7 @@ import {
 import {
   findCachedShortSession,
   findLocalSessionReference,
+  findSnapshotSessionReference,
   sessionKeyUuid,
 } from "./route-loader-short-cache.ts";
 import {
@@ -221,22 +222,24 @@ function resolvedSessionRouteData(params: {
   preferenceDerived: boolean;
   isResolutionSourceCurrent: () => boolean;
   shortId?: string;
+  mainTarget?: Extract<SessionPathTarget, { kind: "main" }>;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
   // The loader owns face resolution: a preference-derived open adopts the row's stored
   // face, so the page renders that board directly and replaces the URL with the matching
   // namespace instead of re-deriving a face from the path it was handed.
   const face = params.preferenceDerived ? resolveSessionPreferredFace(params.row) : params.face;
+  const mainTarget = isUiGlobalSessionKey(params.row.key) ? params.mainTarget : undefined;
   const canonicalLocation = canonicalSessionLocation({
     context: params.context,
     location: params.location,
     face,
-    row: params.row,
+    row: mainTarget ? { key: mainSessionKey(params.context, mainTarget) } : params.row,
     ...(params.shortId ? { shortIdLength: params.shortId.length } : {}),
   });
   if (canonicalLocation === undefined) {
     return null;
   }
-  if (canonicalLocation && params.isResolutionSourceCurrent()) {
+  if (!mainTarget && canonicalLocation && params.isResolutionSourceCurrent()) {
     // A delayed response cannot transfer its key into a replacement connection.
     prepareSessionNavigationHandoff(
       params.context.gateway,
@@ -247,48 +250,14 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
-    ...(params.row.agentId ? { agentId: params.row.agentId } : {}),
+    ...(mainTarget
+      ? { agentId: mainTarget.agentId }
+      : params.row.agentId
+        ? { agentId: params.row.agentId }
+        : {}),
     ...sessionRouteHints(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
-    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
-  };
-}
-
-function resolvedMainSessionRouteData(params: {
-  context: ApplicationContext;
-  location: RouteLocation;
-  face: BoardFace;
-  row: SessionRoutePresentation;
-  target: Extract<SessionPathTarget, { kind: "main" }>;
-  preferenceDerived: boolean;
-  isResolutionSourceCurrent: () => boolean;
-}): Extract<ChatRouteData, { kind: "session" }> | null {
-  if (!isUiGlobalSessionKey(params.row.key)) {
-    return resolvedSessionRouteData(params);
-  }
-  const face = params.preferenceDerived ? resolveSessionPreferredFace(params.row) : params.face;
-  const pathname = pathForSession(
-    face,
-    params.target.agentId,
-    mainSessionKey(params.context, params.target),
-    params.context.basePath,
-    { mainKey: configuredMainKey(params.context) },
-  );
-  if (!pathname) {
-    return null;
-  }
-  const location = locationWithoutNavigationHints(params.location);
-  const canonicalLocation =
-    pathname !== params.location.pathname || location.search !== params.location.search
-      ? { ...location, pathname }
-      : undefined;
-  return {
-    kind: "session",
-    sessionKey: params.row.key,
-    agentId: params.target.agentId,
-    ...sessionRouteHints(params.location),
-    face,
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
 }
@@ -315,6 +284,15 @@ export async function loadChatRoute(
     return notFound({ routeId: face });
   }
   const { target } = resolvedTarget;
+  if (
+    target.kind === "literal" &&
+    context.sessions.cachedRoutingDefaults &&
+    (!target.slugCandidate || context.sessions.cachedRoutingDefaults.scope === "per-sender")
+  ) {
+    // Literal keys and display-name links share the scoped roster used by short links.
+    await context.sessions.whenCachedRosterSettled();
+    signal.throwIfAborted();
+  }
   const routeLocation = resolvedTarget.location;
   const preferenceDerived = isPreferenceDerivedFace(routeLocation);
   const presentation = {
@@ -324,14 +302,16 @@ export async function loadChatRoute(
     face,
     preferenceDerived,
   };
+  const resolveReference = (key: string, slug?: string) =>
+    querySessionReference(
+      context,
+      { key, agentId: target.agentId, ...(slug ? { slug } : {}) },
+      signal,
+    );
   const revalidatedResolution =
     revalidation?.sessionKey &&
     (target.kind === "short" || (target.kind === "literal" && target.slugCandidate))
-      ? await querySessionReference(
-          context,
-          { key: revalidation.sessionKey, agentId: target.agentId },
-          signal,
-        )
+      ? await resolveReference(revalidation.sessionKey)
       : undefined;
   if (revalidatedResolution === null) {
     // A retired connection is retryable discovery, not authoritative absence.
@@ -348,11 +328,7 @@ export async function loadChatRoute(
       : null;
     let resolvedFace = face;
     if (preferenceDerived) {
-      const resolution = await querySessionReference(
-        context,
-        { key: sessionKey, agentId: target.agentId },
-        signal,
-      );
+      const resolution = await resolveReference(sessionKey);
       if (resolution?.kind === "unique") {
         resolvedFace = resolveSessionPreferredFace(resolution.session);
         const pathname = pathForSession(
@@ -384,16 +360,12 @@ export async function loadChatRoute(
     }
     const sessionKey = mainSessionKey(context, target);
     if (preferenceDerived) {
-      const resolution = await querySessionReference(
-        context,
-        { key: sessionKey, agentId: target.agentId },
-        signal,
-      );
+      const resolution = await resolveReference(sessionKey);
       if (resolution?.kind === "unique") {
-        const resolved = resolvedMainSessionRouteData({
+        const resolved = resolvedSessionRouteData({
           ...presentation,
           row: resolution.session,
-          target,
+          mainTarget: target,
         });
         return resolved ?? notFound({ routeId: face });
       }
@@ -414,6 +386,7 @@ export async function loadChatRoute(
   if (target.kind === "literal") {
     let defaultsKnown =
       defaultsUsable ||
+      context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
       (context.gateway.snapshot.phase === "connected" && hasConfiguredMainKey(context));
     const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
     if (!defaultsKnown && needsGatewayResolution) {
@@ -424,34 +397,30 @@ export async function loadChatRoute(
       }
     }
     if (needsGatewayResolution) {
-      // Any single non-short-id segment is a slug candidate, so a plain literal route
-      // would otherwise pay a resolution round-trip on every open. A cached row is
-      // already proof the segment is a real key, which settles the exact lookup for
-      // free; only genuinely unknown references reach the gateway.
+      // Exact keys win over names; warm names use the same scoped lookup as short links.
       const cachedRow =
         defaultsKnown && !revalidation
-          ? findUiSessionRow(context, target.sessionKey, target.agentId)
+          ? (findUiSessionRow(context, target.sessionKey, target.agentId) ??
+            (context.sessions.state.resultCached && !preferenceDerived
+              ? findLocalSessionReference(
+                  context.sessions.state.result?.sessions ?? [],
+                  target,
+                  configuredMainKey(context),
+                )
+              : undefined))
           : undefined;
       const resolution =
         revalidatedResolution ??
         (cachedRow
           ? ({ kind: "unique", session: cachedRow } as const)
-          : await querySessionReference(
-              context,
-              {
-                key: target.sessionKey,
-                agentId: target.agentId,
-                ...(target.slugCandidate ? { slug: target.slugCandidate } : {}),
-              },
-              signal,
-            ));
+          : await resolveReference(target.sessionKey, target.slugCandidate));
       if (resolution?.kind === "unique") {
         const resolved = resolvedSessionRouteData({
           ...presentation,
           row: resolution.session,
         });
         return resolved
-          ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: true as const } : {}) }
+          ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: "roster" as const } : {}) }
           : notFound({ routeId: face });
       }
       if (target.slugCandidate) {
@@ -480,9 +449,7 @@ export async function loadChatRoute(
             .then(() => canonicalMainLocation(context, routeLocation, face, target.sessionKey))
             .catch(() => null)
         : undefined;
-    const preferenceLocation = preferenceDerived
-      ? locationWithoutNavigationHints(routeLocation)
-      : null;
+    const navigationLocation = locationWithoutNavigationHints(routeLocation);
     return {
       kind: "session",
       sessionKey: target.sessionKey,
@@ -490,8 +457,8 @@ export async function loadChatRoute(
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
-        : preferenceLocation && preferenceLocation.search !== routeLocation.search
-          ? { canonicalLocation: preferenceLocation, canonicalLocationSource: routeLocation }
+        : navigationLocation.search !== routeLocation.search
+          ? { canonicalLocation: navigationLocation, canonicalLocationSource: routeLocation }
           : {}),
       ...(canonicalLocationReady
         ? { canonicalLocationReady, canonicalLocationSource: routeLocation }
@@ -514,6 +481,21 @@ export async function loadChatRoute(
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
         : {}),
     };
+  }
+  if (!cached && !preferenceDerived && !revalidation) {
+    const snapshot = await findSnapshotSessionReference(context, target);
+    signal.throwIfAborted();
+    if (snapshot) {
+      // Only authority canonicalizes; shortening a dashed UUID here can restart discovery.
+      return {
+        kind: "session",
+        sessionKey: snapshot.key,
+        agentId: snapshot.agentId,
+        ...sessionRouteHints(routeLocation),
+        face,
+        sessionResolutionFromCache: "snapshot",
+      };
+    }
   }
   let localRow = cached?.row;
   if (!cached && !preferenceDerived && !revalidation) {
@@ -578,11 +560,7 @@ export async function loadChatRoute(
     }
     // A mechanically composed literal, notably a full UUID, can match the short grammar.
     // Only after the authoritative short lookup misses may its exact decoded key win.
-    const literalResolution = await querySessionReference(
-      context,
-      { key: target.literalSessionKey, agentId: target.agentId },
-      signal,
-    );
+    const literalResolution = await resolveReference(target.literalSessionKey);
     if (literalResolution?.kind === "unique") {
       const literal = resolvedSessionRouteData({
         ...presentation,
@@ -615,7 +593,7 @@ export async function loadChatRoute(
     ? {
         ...resolved,
         ...(localRow
-          ? { sessionResolutionFromCache: true as const }
+          ? { sessionResolutionFromCache: "roster" as const }
           : { routeLoadingSkeleton: true as const }),
       }
     : notFound({ routeId: face });
@@ -652,7 +630,7 @@ export async function loadSessionPage(
     }
     if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
       // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
-      await import("./pending-session-create.ts");
+      await import("./pending-session-create.tsx");
       signal.throwIfAborted();
     }
   }

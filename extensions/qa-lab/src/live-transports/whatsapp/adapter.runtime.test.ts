@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
   WhatsAppQaDriverObservedMessage,
@@ -16,6 +14,7 @@ import { createQaTransportAdapter } from "../../qa-transport-registry.js";
 import { runQaFlowSuiteCleanupPlan } from "../../suite.js";
 import { createTempDirHarness } from "../../temp-dir.test-helper.js";
 import { whatsappQaCliRegistration } from "./cli.js";
+import { createArchive, createDriver, phones } from "./runtime.test-support.js";
 import type { WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -57,7 +56,6 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   return { ...actual, runExec: vi.fn(actual.runExec) };
 });
 
-const execFileAsync = promisify(execFile);
 const tempDirs = createTempDirHarness();
 const fakeAuth = '{"fixture":"not-a-whatsapp-session"}\n';
 let fixtureRoot: string;
@@ -93,13 +91,9 @@ beforeEach(async () => {
   created = undefined;
   observed = [];
   fixtureRoot = await fs.realpath(await tempDirs.makeTempDir("whatsapp-qa-cleanup-"));
-  await fs.writeFile(path.join(fixtureRoot, "creds.json"), fakeAuth);
-  const archive = path.join(fixtureRoot, "auth.tgz");
-  await execFileAsync("tar", ["-czf", archive, "-C", fixtureRoot, "creds.json"]);
-  const archiveBase64 = await fs.readFile(archive, "base64");
+  const archiveBase64 = await createArchive(fixtureRoot, { "creds.json": fakeAuth });
   credentialPayload = {
-    driverPhoneE164: "+15550000001",
-    sutPhoneE164: "+15550000002",
+    ...phones,
     driverAuthArchiveBase64: archiveBase64,
     sutAuthArchiveBase64: archiveBase64,
   };
@@ -113,20 +107,13 @@ beforeEach(async () => {
   });
   mocks.startDriver.mockImplementation(async ({ authDir }) => {
     authRoot = await fs.realpath(path.dirname(authDir));
-    return {
+    return createDriver({
       close: mocks.closeDriver,
       getObservedMessages: () => observed,
-      sendContact: async () => ({}),
-      sendLocation: async () => ({}),
-      sendMedia: async () => ({}),
-      sendPoll: async () => ({}),
-      sendReaction: async () => ({}),
-      sendSticker: async () => ({}),
-      sendText: async () => ({}),
       waitForMessage: async () => {
         throw new Error("unexpected driver message wait");
       },
-    };
+    });
   });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
@@ -151,15 +138,15 @@ afterEach(async () => {
 
 describe("WhatsApp QA adapter cleanup through the suite", () => {
   it.each([
-    "none",
-    "gateway stop",
-    "driver close",
-    "heartbeat request",
-    "heartbeat stop",
-    "lease release",
+    ["none", undefined, undefined],
+    ["gateway stop", undefined, "gateway stop"],
+    ["driver close", mocks.closeDriver, "transport before gateway stop"],
+    ["heartbeat request", undefined, undefined],
+    ["heartbeat stop", mocks.heartbeatStop, "transport after gateway stop"],
+    ["lease release", mocks.release, "transport after gateway stop"],
   ] as const)(
     "keeps lease and auth until terminal Gateway teardown (failure: %s)",
-    async (failureAt) => {
+    async (failureAt, fail, phase) => {
       const transport = await createAdapter();
       const cfg = transport.adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
       const sutAuthDir = await fs.realpath(
@@ -187,13 +174,7 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
       }
 
       const failure = new Error(`${failureAt} failed`);
-      if (failureAt === "driver close") {
-        mocks.closeDriver.mockRejectedValueOnce(failure);
-      } else if (failureAt === "heartbeat stop") {
-        mocks.heartbeatStop.mockRejectedValueOnce(failure);
-      } else if (failureAt === "lease release") {
-        mocks.release.mockRejectedValueOnce(failure);
-      }
+      fail?.mockRejectedValueOnce(failure);
       const gatewayStopped = createDeferred<void>();
       const stopStarted = createDeferred<void>();
       const stopGateway = vi.fn(async (): Promise<QaGatewayStopResult> => {
@@ -234,17 +215,7 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
         await cleanup;
       }
       const failures = await cleanup;
-      const phase =
-        failureAt === "gateway stop"
-          ? "gateway stop"
-          : failureAt === "driver close"
-            ? "transport before gateway stop"
-            : "transport after gateway stop";
-      expect(failures).toEqual(
-        failureAt === "none" || failureAt === "heartbeat request"
-          ? []
-          : [{ phase, error: failure }],
-      );
+      expect(failures).toEqual(phase ? [{ phase, error: failure }] : []);
       if (failureAt === "gateway stop") {
         await expectResourcesRetained(sutAuthDir);
         mocks.heartbeat.mockClear();
@@ -261,6 +232,13 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
         mocks.heartbeat.mockClear();
         await vi.advanceTimersByTimeAsync(100);
         expect(mocks.heartbeat).not.toHaveBeenCalled();
+      }
+      if (fail) {
+        await expect(transport.cleanupWithoutGateway()).rejects.toBe(failure);
+        expect(mocks.closeDriver).toHaveBeenCalledOnce();
+        expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
+        expect(mocks.release).toHaveBeenCalledOnce();
+        created = undefined;
       }
     },
   );
@@ -337,19 +315,19 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
     });
   });
 
-  it.each(["none", "heartbeat stop", "lease release"] as const)(
+  it.each([
+    ["none", undefined],
+    ["heartbeat stop", mocks.heartbeatStop],
+    ["lease release", mocks.release],
+  ] as const)(
     "immediately removes auth and releases the lease after initialization fails (cleanup failure: %s)",
-    async (failureAt) => {
+    async (failureAt, fail) => {
       mocks.startDriver.mockImplementation(async ({ authDir }) => {
         authRoot = await fs.realpath(path.dirname(authDir));
         await expectResourcesRetained(path.join(authRoot, "sut-auth"));
         throw new Error("driver initialization failed");
       });
-      if (failureAt === "heartbeat stop") {
-        mocks.heartbeatStop.mockRejectedValueOnce(new Error("heartbeat stop failed"));
-      } else if (failureAt === "lease release") {
-        mocks.release.mockRejectedValueOnce(new Error("lease release failed"));
-      }
+      fail?.mockRejectedValueOnce(new Error(`${failureAt} failed`));
       await expect(createAdapter()).rejects.toThrow(
         failureAt === "none" ? "driver initialization failed" : `${failureAt} failed`,
       );

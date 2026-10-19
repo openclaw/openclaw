@@ -1,12 +1,13 @@
 import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { mapAssistantMessageStream } from "../../../llm/utils/stream-wrapper.js";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
-import { mapAssistantMessageStream, wrapStreamObjectEvents } from "./stream-wrapper.js";
+import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
@@ -191,10 +192,7 @@ function readObjectMemberKeyAfterComma(raw: string, commaIndex: number): string 
 
 function normalizeToolCallRepairToolName(value: string): string | undefined {
   const trimmed = value.trim();
-  if (!/^[a-z0-9_-]{1,128}$/i.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed.toLowerCase();
+  return /^[a-z0-9_-]{1,128}$/i.test(trimmed) ? trimmed.toLowerCase() : undefined;
 }
 
 function extractToolNameFromLeadingPrefix(prefix: string): string | undefined {

@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { ToolResultMessage } from "../../llm/types.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -18,6 +20,7 @@ type RecoveryKind = "overflow" | "timeout";
 type AuthorityLoss = "closed" | "replaced" | "writer-replaced";
 type FixtureOptions = {
   oversized?: boolean;
+  replyAdmission?: boolean;
   inMemory?: boolean;
   detached?: boolean;
   historicalTurns?: number;
@@ -29,10 +32,9 @@ export type RecoveryFixture = Awaited<ReturnType<typeof createRecoveryFixture>>;
 // The engine is synthetic; admission, writer claims, safety timeout, recovery,
 // hooks, session state, transcript writes, and reopen reads are composed for real.
 async function createRecoveryFixture(state: OpenClawTestState, options: FixtureOptions) {
+  const { workspaceDir } = state;
   const { appendTranscriptMessage, loadTranscriptEvents, loadSessionEntry, replaceSessionEntry } =
     await import("../../config/sessions/session-accessor.js");
-  const { resolveSessionTranscriptDatabasePath, resolveSessionTranscriptRuntimeTarget } =
-    await import("../../config/sessions/session-accessor.transcript-target.js");
   const { waitForSessionTranscriptIndexReconcile } =
     await import("../../config/sessions/session-transcript-reconcile.js");
   const { closeOpenClawAgentDatabaseByPathAsync } =
@@ -60,29 +62,30 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
   const { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } =
     await import("../../context-engine/host-compat.js");
 
-  const memoryManager = options.inMemory ? SessionManager.inMemory(state.workspaceDir) : undefined;
+  const { admitReplyTurn } = await import("../../auto-reply/reply/reply-turn-admission.js");
+  const { waitForReplyRunSuccessorAdmission } =
+    await import("../../sessions/session-controller.wait.js");
+  let replyOperation: PreparedEmbeddedRunInput["runParams"]["replyOperation"];
+
+  const memoryManager = options.inMemory ? SessionManager.inMemory(workspaceDir) : undefined;
   const sessionId = memoryManager?.getSessionId() ?? randomUUID();
-  const target = {
+  const identity = {
     agentId: "main",
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
+  };
+  const target = {
+    ...identity,
     storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
   };
-  const toolResult: ToolResultMessage = {
-    role: "toolResult",
-    toolCallId: "fixture-call",
-    toolName: "read",
-    content: [
-      {
-        type: "text",
-        text:
-          options.toolResultText ??
-          (options.oversized === false ? "small output" : "fixture output ".repeat(1_800)),
-      },
-    ],
-    isError: false,
-    timestamp: 5,
-  };
+  const toolResult = makeTextToolResult(
+    "fixture-call",
+    "read",
+    options.toolResultText ??
+      (options.oversized === false ? "small output" : "fixture output ".repeat(1_800)),
+    false,
+    5,
+  );
   const recentUser = makeAgentUserMessage({ content: "Read the fixture output", timestamp: 3 });
   const messages = [
     makeAgentUserMessage({ content: "Earlier topic", timestamp: 1 }),
@@ -104,7 +107,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
   }
   if (options.historicalTurns) {
-    const history = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
+    const history = memoryManager ?? (await SessionManager.openAsync(target, workspaceDir));
     for (let index = 0; index < options.historicalTurns; index += 1) {
       await history.appendMessageAsync(
         makeAgentUserMessage({ content: `Archived request ${index}` }),
@@ -127,24 +130,15 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
   for (const message of messages) {
     const messageId = memoryManager
       ? await memoryManager.appendMessageAsync(message)
-      : (await appendTranscriptMessage(target, { cwd: state.workspaceDir, message })).messageId;
+      : (await appendTranscriptMessage(target, { cwd: workspaceDir, message })).messageId;
     if (message === recentUser) {
       recentUserId = messageId;
     }
   }
-  if (!recentUserId) {
-    throw new Error("Fixture must persist the recent user before compaction");
-  }
-  const firstKeptEntryId = recentUserId;
-  if (!memoryManager) {
-    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
-      ...target,
-      sessionFile: target.sessionKey,
-    });
-    expect(resolveSessionTranscriptDatabasePath(runtimeTarget)).toBe(target.storePath);
-    expect(runtimeTarget).toMatchObject({ sessionId, sessionKey: target.sessionKey });
-  }
-
+  const firstKeptEntryId = expectDefined(
+    recentUserId,
+    "Fixture must persist the recent user before compaction",
+  );
   const controller = new AbortController();
   const callerError = new Error("caller stopped the admitted recovery");
   const runId = randomUUID();
@@ -165,6 +159,10 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     }
     controller.abort(callerError);
     await Promise.allSettled(work);
+    if (replyOperation) {
+      replyOperation.complete();
+      await waitForReplyRunSuccessorAdmission(target.sessionKey, null);
+    }
     try {
       await drain();
     } finally {
@@ -176,21 +174,18 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
   };
   try {
     const admittedRunContext = await admission.admit("embedded");
-    const assertActive = resolveAdmittedRunActiveAssertion(admittedRunContext, controller.signal);
-    if (!assertActive) {
-      throw new Error("Fixture must capture a real live admission");
-    }
+    const assertActive = expectDefined(
+      resolveAdmittedRunActiveAssertion(admittedRunContext, controller.signal),
+      "Fixture must capture a real live admission",
+    );
     assertActive();
     const runParams: PreparedEmbeddedRunInput["runParams"] = {
+      ...identity,
       runId,
-      sessionId,
-      sessionKey: target.sessionKey,
       sessionFile: target.sessionKey,
-      agentId: "main",
-      workspaceDir: state.workspaceDir,
+      workspaceDir,
       prompt: "continue",
       timeoutMs: 30_000,
-      // Ordinary lifecycle proofs use the production window, not a disk-speed deadline.
       config: {},
       abortSignal: controller.signal,
       admittedRunContext,
@@ -204,7 +199,24 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       expect(writerFence).toBeUndefined();
     } else {
       expect(writerFence?.expectedWriterRunId).toBe(runId);
-      runParams.sessionTarget = { ...target, ...writerFence };
+      runParams.sessionTarget = {
+        ...target,
+        expectedLifecycleRevision: writerFence?.expectedLifecycleRevision,
+        expectedWriterRunId: writerFence?.expectedWriterRunId,
+      };
+    }
+    if (options.replyAdmission) {
+      const reply = await admitReplyTurn({
+        ...target,
+        kind: "visible",
+        resetTriggered: false,
+        upstreamAbortSignal: controller.signal,
+      });
+      if (reply.status !== "owned") {
+        throw new Error("Fixture requires retained reply admission");
+      }
+      replyOperation = reply.operation;
+      runParams.replyOperation = replyOperation;
     }
     const sessionPromptState = await createEmbeddedRunSessionPromptState({
       runParams,
@@ -220,30 +232,26 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         forgetActiveSessionForShutdown(accepted.sessionId);
       }
     };
-    const openWriter = async () =>
-      memoryManager ??
-      (await SessionManager.openAsync({ ...target, ...writerFence }, state.workspaceDir));
-    const commitCompaction = async () => {
-      await (
-        await openWriter()
-      ).appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
-      return {
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "Summary of earlier topic",
-          firstKeptEntryId,
-          tokensBefore: 4_097,
-          tokensAfter: 3_000,
-        },
-      };
+    // The worker accepts only the exact fence fields carried by an admitted run target.
+    const fencedTarget = {
+      ...target,
+      expectedLifecycleRevision: writerFence?.expectedLifecycleRevision,
+      expectedWriterRunId: writerFence?.expectedWriterRunId,
     };
-    const compact = vi.fn<ContextEngine["compact"]>(async () => commitCompaction());
-    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
-      changed: false,
-      rewrittenEntries: 0,
-      bytesFreed: 0,
-    }));
+    const openWriter = async () =>
+      memoryManager ?? (await SessionManager.openAsync(fencedTarget, workspaceDir));
+    const compact = vi.fn<ContextEngine["compact"]>(async () => {
+      const writer = await openWriter();
+      await writer.appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
+      return recoveryCompaction({ summary: "Summary of earlier topic", firstKeptEntryId });
+    });
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+      unchangedMaintenance(),
+    );
+    const track = <T>(pending: Promise<T>) => {
+      work.push(pending);
+      return pending;
+    };
     const contextEngine: ContextEngine = {
       info: { id: "fixture-engine", name: "Fixture engine", ownsCompaction: true },
       ingest: async () => {
@@ -252,16 +260,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       assemble: async () => {
         throw new Error("Unexpected assemble in recovery");
       },
-      compact: (params) => {
-        const pending = compact(params);
-        work.push(pending);
-        return pending;
-      },
-      maintain: (params) => {
-        const pending = maintain(params);
-        work.push(pending);
-        return pending;
-      },
+      compact: (params) => track(compact(params)),
+      maintain: (params) => track(maintain(params)),
     };
     const beforeHook = vi.fn(async () => {});
     const afterHook = vi.fn(async () => {});
@@ -275,12 +275,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       runParams,
       contextEngine,
       hookRunner,
-      hookContext: {
-        agentId: "main",
-        sessionId,
-        sessionKey: target.sessionKey,
-        workspaceDir: state.workspaceDir,
-      },
+      hookContext: { ...identity, workspaceDir },
       sessionPromptState,
     });
     const recoveryState = createEmbeddedRunContextRecoveryState();
@@ -318,7 +313,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         resolvedSessionKey: target.sessionKey,
         sessionAgentId: "main",
         agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
+        workspaceDir,
         modelSelection: {
           provider: "fixture-provider",
           model: "fixture-model",
@@ -367,30 +362,29 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       await drain();
       // Reopen independently: a cached manager can hide a durable append or leaf change.
       await closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
-      const manager = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
+      const manager = memoryManager ?? (await SessionManager.openAsync(target, workspaceDir));
       const events = memoryManager
         ? memoryManager.getEntries()
         : await loadTranscriptEvents(target);
+      const entries = manager.getEntries();
       return {
-        resetCount: manager.getEntries().filter((entry) => entry.type === "reset").length,
+        resetCount: entries.filter((entry) => entry.type === "reset").length,
         eventDigests: events.map((entry) =>
           createHash("sha256").update(JSON.stringify(entry)).digest("hex"),
         ),
         leafId: manager.getLeafId(),
-        compactionIds: manager
-          .getEntries()
+        compactionIds: entries
           .filter((entry) => entry.type === "compaction")
           .map((entry) => entry.id),
-        toolResultChars: manager
-          .buildSessionContext()
-          .messages.flatMap((message) =>
-            message.role === "toolResult"
-              ? message.content.flatMap((block) =>
-                  block.type === "text" ? [block.text.length] : [],
-                )
-              : [],
-          )
-          .reduce((sum, chars) => sum + chars, 0),
+        toolResultChars: manager.buildSessionContext().messages.reduce((sum, message) => {
+          if (message.role !== "toolResult") {
+            return sum;
+          }
+          return message.content.reduce(
+            (chars, block) => chars + (block.type === "text" ? block.text.length : 0),
+            sum,
+          );
+        }, 0),
       };
     };
     const invalidate = async (loss: AuthorityLoss) => {
@@ -423,15 +417,15 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       }
     };
     const expectNoContinuation = () => {
-      for (const retry of retries) {
+      for (const retry of [...retries, armPostCompactionGuard, onAgentEvent]) {
         expect(retry).not.toHaveBeenCalled();
       }
-      expect(armPostCompactionGuard).not.toHaveBeenCalled();
-      expect(onAgentEvent).not.toHaveBeenCalled();
     };
     return {
       compact,
       maintain,
+      target,
+      replyOperation,
       beforeHook,
       afterHook,
       updates,
@@ -464,6 +458,20 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
   }
 }
 
+export function recoveryCompaction(
+  result: Partial<NonNullable<Awaited<ReturnType<ContextEngine["compact"]>>["result"]>> = {},
+) {
+  return {
+    ok: true,
+    compacted: true,
+    result: { summary: "successor context", tokensBefore: 4_097, tokensAfter: 3_000, ...result },
+  };
+}
+
+export function unchangedMaintenance() {
+  return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+}
+
 export async function withRecoveryFixture(
   options: FixtureOptions,
   body: (fixture: RecoveryFixture) => Promise<void>,
@@ -491,14 +499,12 @@ export async function waitForCompactionAbort(
   if (signal.aborted) {
     throw toErrorObject(signal.reason, "Compaction aborted");
   }
-  let onAbort = () => {};
-  const pending = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(toErrorObject(signal.reason, "Compaction aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
+  const pending = createDeferred<never>();
+  const onAbort = () => pending.reject(toErrorObject(signal.reason, "Compaction aborted"));
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
     onStarted?.();
-    return await pending;
+    return await pending.promise;
   } finally {
     signal.removeEventListener("abort", onAbort);
   }

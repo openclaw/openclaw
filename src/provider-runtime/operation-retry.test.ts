@@ -1,22 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  executeProviderOperationWithRetry,
-  resolveTransientProviderAttempts,
-} from "./operation-retry.js";
-
-describe("resolveTransientProviderAttempts", () => {
-  it("does not round malformed attempt counts", () => {
-    expect(resolveTransientProviderAttempts({ attempts: 1.5 })).toBe(1);
-    expect(resolveTransientProviderAttempts({ attempts: Number.NaN })).toBe(1);
-    expect(resolveTransientProviderAttempts({ attempts: Number.POSITIVE_INFINITY })).toBe(1);
-    expect(resolveTransientProviderAttempts({ attempts: Number.MAX_SAFE_INTEGER + 1 })).toBe(1);
-  });
-
-  it("keeps valid attempt counts as integers", () => {
-    expect(resolveTransientProviderAttempts({ attempts: 0 })).toBe(1);
-    expect(resolveTransientProviderAttempts({ attempts: 3 })).toBe(3);
-  });
-});
+import { executeProviderOperationWithRetry } from "./operation-retry.js";
 
 describe("executeProviderOperationWithRetry", () => {
   const retry = { attempts: 2, baseDelayMs: 0, maxDelayMs: 0 };

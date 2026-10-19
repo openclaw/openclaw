@@ -50,12 +50,13 @@ describe("doctor session transcript health", () => {
 
     const filePath = await writeTranscript([{ type: "session", id: "uninspected" }]);
     const readSpy = vi
-      .spyOn(fs, "readFile")
+      .spyOn(fsPromises, "readFile")
       .mockRejectedValueOnce(Object.assign(new Error("unavailable transcript"), { code }));
     try {
       await expect(
         detectSessionTranscriptHealthIssues({ sessionDirs: [path.dirname(filePath)] }),
       ).resolves.toEqual([]);
+      expect(readSpy).toHaveBeenCalledExactlyOnceWith(filePath, "utf-8");
     } finally {
       readSpy.mockRestore();
     }
@@ -115,13 +116,16 @@ describe("doctor session transcript health", () => {
       { type: "message", message: { content: "x".repeat(1024 * 1024) } },
     ]);
     const readSpy = vi.spyOn(fs, "readFile");
+    const promiseReadSpy = vi.spyOn(fsPromises, "readFile");
     try {
       const [issue] = await detectSessionTranscriptHealthIssues({
         sessionDirs: [path.dirname(filePath)],
       });
       expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
       expect(readSpy).not.toHaveBeenCalled();
+      expect(promiseReadSpy).not.toHaveBeenCalled();
     } finally {
+      promiseReadSpy.mockRestore();
       readSpy.mockRestore();
     }
   });
@@ -248,12 +252,12 @@ it.each([true, false])(
           .map(([text]) => String(text))
           .join("\n");
         if (complete) {
-          expect(message).toContain("Canonical SQLite transcripts are complete");
+          expect(message).toContain("Stored SQLite transcripts are complete");
           expect(message).toContain("legacy index entries are informational");
           expect(message).not.toContain('Run "openclaw doctor --fix" to migrate');
           expect(message).not.toContain("Inspect with");
         } else {
-          expect(message).not.toContain("Canonical SQLite transcripts are complete");
+          expect(message).not.toContain("Stored SQLite transcripts are complete");
           expect(message).toContain('Run "openclaw doctor --fix" to migrate');
         }
         expect(fs.readFileSync(transcriptPath)).toEqual(before);

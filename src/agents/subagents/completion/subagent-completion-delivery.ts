@@ -8,6 +8,7 @@ import {
   type QueuedSessionDeliveryPayload,
   type SessionDeliverySettledOutcome,
 } from "../../../infra/session-delivery-queue.records.js";
+import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   RUNTIME_EVENT_USER_PROMPT,
@@ -17,7 +18,7 @@ import {
   ensureDeliveryState,
   loadPendingFinalDeliveryPayload,
 } from "../registry/subagent-delivery-state.js";
-import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../registry/subagent-registry-helpers.js";
+import { SESSION_DELIVERY_DEADLINE_MS } from "../registry/subagent-registry-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "../registry/subagent-registry-persistence.js";
 import {
@@ -35,7 +36,7 @@ import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-i
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
-const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The result follows.`;
 
 /** Atomically admits a queue generation and publishes process mirrors only after commit. */
 export async function admitCorrelatedSubagentSessionDelivery(params: {
@@ -43,7 +44,7 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
   payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }>;
   queueContext: OpenClawStateWorkerContext;
 }): Promise<{ id: string; claimed: boolean; status: DeliveryQueueStoredStatus }> {
-  const payload = structuredClone(params.payload);
+  const payload = params.payload;
   const runId = params.runId;
   const context = params.queueContext;
   const expected = subagentRuns.get(runId);
@@ -65,8 +66,7 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
         const delivery = ensureDeliveryState(subagent);
         const generation = delivery.generation ?? 1;
         const windowStartedAt = delivery.windowStartedAt ?? subagent.execution.endedAt ?? now;
-        const deadlineAt =
-          delivery.deadlineAt ?? windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+        const deadlineAt = delivery.deadlineAt ?? windowStartedAt + SESSION_DELIVERY_DEADLINE_MS;
         const generationSuffix = generation > 1 ? `:generation:${generation}` : "";
         const queueEntry = prepareClaimedSessionDelivery(
           {
@@ -93,7 +93,6 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
           queueId: queueEntry.id,
           windowStartedAt,
           deadlineAt,
-          nextAttemptAt: queueEntry.availableAt,
           enqueuedAt: now,
         });
         delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
@@ -132,6 +131,43 @@ export function resolveCorrelatedSubagentDelivery(
       { kind: "conversation-data", text: result },
     ],
   };
+}
+
+/** Retire an old blocked notice only when the durable completion proves recovery. */
+export async function isResolvedSubagentCompletionBlockedNotice(
+  queued: QueuedSessionDelivery,
+  context: OpenClawStateWorkerContext,
+): Promise<boolean> {
+  if (queued.kind !== "systemEvent") {
+    return false;
+  }
+  // Reuse the shipped producer identity so already-pending notices reconcile too.
+  const owner = /^subagent-completion-blocked:(.+):generation:([1-9]\d*)$/.exec(
+    queued.idempotencyKey ?? "",
+  );
+  if (!owner) {
+    return false;
+  }
+  const [, runId, generationText] = owner;
+  const generation = Number(generationText);
+  if (!runId || !Number.isSafeInteger(generation)) {
+    return false;
+  }
+  assertSubagentReadContext(context);
+  const runs = await readFullSubagentRuns(
+    context,
+    { kind: "ids", runIds: [runId] },
+    { current: true },
+  );
+  assertSubagentReadContext(context);
+  const subagent = runs.get(runId);
+  return (
+    subagent !== undefined &&
+    resolveEventSessionKey(subagent.requesterSessionKey) === queued.sessionKey &&
+    subagent.requesterAgentId === queued.agentId &&
+    (subagent.delivery?.generation ?? 1) >= generation &&
+    subagent.delivery?.status === "delivered"
+  );
 }
 
 export async function settleCorrelatedSubagentDelivery(
@@ -182,11 +218,18 @@ export async function settleCorrelatedSubagentDelivery(
     return latest;
   };
   if (outcome !== "recovered") {
+    const { getUnrestorableSubagentCompletionSourceReason } =
+      await import("../registry/subagent-registry-gateway-owner.js");
+    const unavailableSource = current.requesterSettleWake
+      ? undefined
+      : getUnrestorableSubagentCompletionSourceReason(current);
     await blockSubagentCompletionDelivery({
       context: queueContext,
       subagent: current,
-      reason: queued.lastError ?? "completion delivery failed",
-      suspendedReason: "permanent_failure",
+      reason: unavailableSource ?? queued.lastError ?? "completion delivery failed",
+      suspendedReason: unavailableSource ? undefined : "permanent_failure",
+      disposition: unavailableSource ? "permanent_failure" : undefined,
+      operatorAuthorityUnavailable: unavailableSource ? true : undefined,
     });
     return;
   }

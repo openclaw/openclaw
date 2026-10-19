@@ -1,4 +1,3 @@
-// IRC plugin module owns raw PRIVMSG durable admission and replay draining.
 import { randomUUID } from "node:crypto";
 import {
   createChannelIngressError,
@@ -185,9 +184,7 @@ export function createIrcIngressMonitor(options: {
     },
     drain: {
       resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`irc ${message}`),
     },
     createStoppedError: () => new Error("IRC ingress is stopped."),

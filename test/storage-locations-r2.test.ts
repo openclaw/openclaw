@@ -35,13 +35,19 @@ describe("R2 storage publication", () => {
         createdAt: 0,
         encryption: "none",
       });
+      const markerBytes = Buffer.byteLength(marker);
       const commands: string[] = [];
       const activeUploads = new Set<string>();
       send.mockImplementation(async (command) => {
         const name = command.constructor.name;
         commands.push(name);
+        if (name === "HeadObjectCommand") {
+          return { ETag: '"marker"', ContentLength: markerBytes };
+        }
         if (name === "GetObjectCommand") {
           return {
+            ETag: '"marker"',
+            ContentRange: `bytes 0-${markerBytes - 1}/${markerBytes}`,
             Body: {
               transformToWebStream: () =>
                 new ReadableStream<Uint8Array>({

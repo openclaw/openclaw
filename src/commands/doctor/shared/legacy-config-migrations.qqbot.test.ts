@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRecord } from "../../../config/legacy.shared.js";
 import { widenOfficialExternalChannelSecretSchema } from "../../../config/official-external-channel-secret-schema.js";
 import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
@@ -6,6 +6,8 @@ import { LEGACY_CONFIG_MIGRATIONS_QQBOT } from "./legacy-config-migrations.qqbot
 import { maybeRepairOpenPolicyAllowFrom } from "./open-policy-allowfrom.js";
 
 const locked = ["openclaw:approval-disabled"];
+
+afterEach(() => vi.unstubAllEnvs());
 
 function migrate(raw: Record<string, unknown>) {
   const config = structuredClone(raw);
@@ -24,30 +26,30 @@ describe("Tencent QQBot 2.0 config migrations", () => {
   it("keeps environment credentials private and approvals locked through later repairs", () => {
     vi.stubEnv("QQBOT_APP_ID", "environment-app");
     vi.stubEnv("QQBOT_CLIENT_SECRET", "placeholder");
-    try {
-      const { config, qqbot } = migrate({});
-      expect(qqbot).toEqual({ enabled: true, dmPolicy: "open", allowFrom: locked });
-      expect(JSON.stringify(config)).not.toContain("placeholder");
-      const repaired = maybeRepairOpenPolicyAllowFrom(config);
-      expect(repaired).toEqual({ config, changes: [] });
-      expect(maybeRepairOpenPolicyAllowFrom(repaired.config)).toEqual(repaired);
-      const schema = widenOfficialExternalChannelSecretSchema({
-        channelId: "qqbot",
-        schema: { type: "object", additionalProperties: true },
-      });
-      expect(
-        validateJsonSchemaValue({
-          cacheKey: "qqbot-doctor-order-regression",
-          schema: schema ?? {},
-          value: qqbot,
-        }).ok,
-      ).toBe(true);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    const { config, qqbot } = migrate({});
+    expect(qqbot).toEqual({ enabled: true, dmPolicy: "open", allowFrom: locked });
+    expect(JSON.stringify(config)).not.toContain("placeholder");
+    const repaired = maybeRepairOpenPolicyAllowFrom(config);
+    expect(repaired).toEqual({ config, changes: [] });
+    expect(maybeRepairOpenPolicyAllowFrom(repaired.config)).toEqual(repaired);
+    const schema = widenOfficialExternalChannelSecretSchema({
+      channelId: "qqbot",
+      schema: { type: "object", additionalProperties: true },
+    });
+    const validation = validateJsonSchemaValue({
+      cacheKey: "qqbot-doctor-order-regression",
+      schema: schema ?? {},
+      value: qqbot,
+    });
+    expect(validation.ok).toBe(true);
   });
 
   it("allocates distinct file SecretRefs for root and colliding account aliases", () => {
+    const secrets = [
+      ["clientSecret", "qqbot-client-secret", "root"],
+      ["accounts.ops.clientSecret", "qqbot-ops-client-secret", "ops"],
+      ["accounts.Ops.clientSecret", "qqbot-ops-client-secret-2", "other"],
+    ] as const;
     const { config, qqbot } = migrateChannel({
       clientSecretFile: "/run/secrets/root",
       accounts: {
@@ -55,24 +57,16 @@ describe("Tencent QQBot 2.0 config migrations", () => {
         Ops: { clientSecretFile: "/run/secrets/other" },
       },
     });
-    expect(qqbot).toMatchObject({
-      clientSecret: { source: "file", provider: "qqbot-client-secret", id: "value" },
-      accounts: {
-        ops: { clientSecret: { source: "file", provider: "qqbot-ops-client-secret", id: "value" } },
-        Ops: {
-          clientSecret: { source: "file", provider: "qqbot-ops-client-secret-2", id: "value" },
-        },
-      },
-    });
-    expect(config).toHaveProperty("secrets.providers", {
-      "qqbot-client-secret": { source: "file", path: "/run/secrets/root", mode: "singleValue" },
-      "qqbot-ops-client-secret": { source: "file", path: "/run/secrets/ops", mode: "singleValue" },
-      "qqbot-ops-client-secret-2": {
-        source: "file",
-        path: "/run/secrets/other",
-        mode: "singleValue",
-      },
-    });
+    for (const [key, provider] of secrets) {
+      expect(qqbot).toHaveProperty(key, { source: "file", provider, id: "value" });
+    }
+    const providers = Object.fromEntries(
+      secrets.map(([, provider, name]) => [
+        provider,
+        { source: "file", path: `/run/secrets/${name}`, mode: "singleValue" },
+      ]),
+    );
+    expect(config).toHaveProperty("secrets.providers", providers);
     expect(JSON.stringify(config)).not.toContain("clientSecretFile");
   });
 
@@ -95,15 +89,34 @@ describe("Tencent QQBot 2.0 config migrations", () => {
     expect(JSON.stringify(config)).not.toContain("execApprovals");
   });
 
+  it("locks unrepresentable approvals while preserving a representable account fallback", () => {
+    const { config, qqbot } = migrateChannel({
+      allowFrom: ["*"],
+      execApprovals: { enabled: false, approvers: ["admin"] },
+      accounts: {
+        filtered: { execApprovals: { approvers: ["admin"], agentFilter: ["ops"] } },
+        fallback: { allowFrom: ["admin"], execApprovals: { enabled: "auto" } },
+      },
+    });
+    expect(qqbot).toMatchObject({
+      allowFrom: locked,
+      dmPolicy: "open",
+      accounts: {
+        filtered: { allowFrom: locked, dmPolicy: "open" },
+        fallback: { allowFrom: ["ADMIN"] },
+      },
+    });
+    expect(JSON.stringify(config)).not.toContain("execApprovals");
+  });
+
   it("reconciles command operators with each account without promoting chat-only users", () => {
+    const channel = {
+      allowFrom: ["operator", "chat-only"],
+      accounts: { denied: { dmPolicy: "allowlist", allowFrom: ["chat-only"] } },
+    };
     const raw = {
       commands: { allowFrom: { qqbot: ["operator"] } },
-      channels: {
-        qqbot: {
-          allowFrom: ["operator", "chat-only"],
-          accounts: { denied: { dmPolicy: "allowlist", allowFrom: ["chat-only"] } },
-        },
-      },
+      channels: { qqbot: channel },
     };
     const operatorRule = LEGACY_CONFIG_MIGRATIONS_QQBOT[0]?.legacyRules?.find((rule) =>
       rule.message.includes("commands.allowFrom approval operators"),
@@ -147,32 +160,10 @@ describe("Tencent QQBot 2.0 config migrations", () => {
   it("fails closed when integer keys prevent preserving the named default", () => {
     const { qqbot } = migrateChannel({
       defaultAccount: "ops",
-      accounts: {
-        "123": { appId: "numeric-app", allowFrom: ["NUMERIC"] },
-        ops: { appId: "ops-app", allowFrom: ["OPS"] },
-      },
+      accounts: { "123": {}, ops: {} },
     });
     expect(qqbot?.defaultAccount).toBe("ops");
     expect(Object.keys(getRecord(qqbot?.accounts) ?? {})).toEqual(["123", "ops"]);
-  });
-
-  it("locks unrepresentable approvals while preserving a representable account fallback", () => {
-    const { qqbot } = migrateChannel({
-      allowFrom: ["*"],
-      execApprovals: { enabled: false, approvers: ["admin"] },
-      accounts: {
-        filtered: { execApprovals: { approvers: ["admin"], agentFilter: ["ops"] } },
-        fallback: { allowFrom: ["admin"], execApprovals: { enabled: "auto" } },
-      },
-    });
-    expect(qqbot).toMatchObject({
-      allowFrom: locked,
-      dmPolicy: "open",
-      accounts: {
-        filtered: { allowFrom: locked, dmPolicy: "open" },
-        fallback: { allowFrom: ["ADMIN"] },
-      },
-    });
   });
 
   it("maps native streaming switches to their effective wire behavior", () => {
@@ -185,30 +176,23 @@ describe("Tencent QQBot 2.0 config migrations", () => {
   });
 
   it("maps group tool policies without broadening existing restrictions", () => {
+    const groups = [
+      ["full", { tools: { allow: [] } }, "full"],
+      ["wildcard", { tools: { allow: ["*"] } }, "full"],
+      ["empty", { tools: {} }, "full"],
+      ["emptyDeny", { tools: { deny: [] } }, "full"],
+      ["restricted", { tools: { deny: ["write", "exec", "read"] } }, "restricted"],
+      ["none", { tools: { deny: ["*"] } }, "none"],
+      ["custom", { tools: { allow: ["read"] } }, "none"],
+      ["senderSpecific", { toolsBySender: { admin: { allow: [] } } }, "none"],
+      ["coexist", { toolPolicy: "full", tools: { deny: ["*"] } }, "none"],
+    ] as const;
     const { qqbot } = migrateChannel({
-      groups: {
-        full: { tools: { allow: [] } },
-        wildcard: { tools: { allow: ["*"] } },
-        empty: { tools: {} },
-        emptyDeny: { tools: { deny: [] } },
-        restricted: { tools: { deny: ["write", "exec", "read"] } },
-        none: { tools: { deny: ["*"] } },
-        custom: { tools: { allow: ["read"] } },
-        senderSpecific: { toolsBySender: { admin: { allow: [] } } },
-        coexist: { toolPolicy: "full", tools: { deny: ["*"] } },
-      },
+      groups: Object.fromEntries(groups.map(([id, input]) => [id, input])),
     });
-    expect(qqbot?.groups).toEqual({
-      full: { toolPolicy: "full" },
-      wildcard: { toolPolicy: "full" },
-      empty: { toolPolicy: "full" },
-      emptyDeny: { toolPolicy: "full" },
-      restricted: { toolPolicy: "restricted" },
-      none: { toolPolicy: "none" },
-      custom: { toolPolicy: "none" },
-      senderSpecific: { toolPolicy: "none" },
-      coexist: { toolPolicy: "none" },
-    });
+    expect(qqbot?.groups).toEqual(
+      Object.fromEntries(groups.map(([id, , toolPolicy]) => [id, { toolPolicy }])),
+    );
   });
 
   it("removes command levels and locks only accounts with restrictive group commands", () => {

@@ -43,6 +43,12 @@ export function createDiagnosticsEventHandler(params: {
     "diagnostic.gc": recorders.recordGcDuration.bind(recorders),
     "gateway.event_loop.sample": recorders.recordGatewayEventLoopSample.bind(recorders),
     "gateway.rpc": recorders.recordGatewayRpc.bind(recorders),
+    "sessions.list.baseline.retired": recorders.recordSessionsListBaselineRetired.bind(recorders),
+    "sessions.list.retention": recorders.recordSessionsListRetention.bind(recorders),
+    "sessions.event.retention": recorders.recordSessionEventRetention.bind(recorders),
+    "sessions.event.rows.reset": recorders.recordSessionEventRowsReset.bind(recorders),
+    "gateway.ws.event": recorders.recordGatewayWsEvent.bind(recorders),
+    "gateway.ws.connections": recorders.recordGatewayWsConnections.bind(recorders),
     "model.usage": (evt, metadata, privateData) =>
       recorders.recordModelUsage(evt, metadata, privateData.hostPluginId),
     "webhook.received": recorders.recordWebhookReceived.bind(recorders),
@@ -80,6 +86,7 @@ export function createDiagnosticsEventHandler(params: {
       recorders.recordModelCallFinished(evt, metadata, privateData.modelContent),
     "model.call.error": (evt, metadata, privateData) =>
       recorders.recordModelCallFinished(evt, metadata, privateData.modelContent),
+    "model.response.observed": recorders.recordModelResponseObserved.bind(recorders),
     "tool.execution.started": recorders.recordToolExecutionStarted.bind(recorders),
     "tool.execution.completed": (evt, metadata, privateData) =>
       recorders.recordToolExecutionFinished(evt, metadata, privateData.toolContent),

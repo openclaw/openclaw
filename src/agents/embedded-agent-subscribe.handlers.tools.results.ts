@@ -142,10 +142,6 @@ export function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
 }
 
-export function isCronAddAction(args: unknown): boolean {
-  return normalizeOptionalLowercaseString(asOptionalObjectRecord(args)?.action) === "add";
-}
-
 export function applyCurrentMessageProvider(
   toolName: string,
   args: Record<string, unknown>,
@@ -198,7 +194,7 @@ export function extractExecOutput(result: unknown): string | undefined {
 
 export function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
-  return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+  return output !== undefined ? truncateLiveExecOutput(output) : undefined;
 }
 
 function isOpenClawExecutable(token: string | undefined): boolean {
@@ -475,20 +471,6 @@ export async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
-  const recordApprovalPromptDeliveryFailure = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
-    const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
-    const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
-      toolName,
-      meta: approvalMeta,
-      executionStarted: false,
-      outcome: "failure",
-      failure: { error: `Approval prompt delivery failed: ${message}` },
-    });
-    ctx.state.lastToolError = terminal.lastToolError;
-    // A later delivery failure does not undo an already delivered pending prompt.
-  };
   const details = readRecordField(asOptionalObjectRecord(result)?.details);
   const hasStructuredMedia = readRecordField(details?.media) !== undefined;
   const approvalPending = readExecApprovalPendingDetails(result);
@@ -515,7 +497,20 @@ export async function emitToolResultOutput(params: {
         );
       }
     } catch (error) {
-      recordApprovalPromptDeliveryFailure(error);
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+      const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+      const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))(
+        {
+          toolName,
+          meta: approvalMeta,
+          executionStarted: false,
+          outcome: "failure",
+          failure: { error: `Approval prompt delivery failed: ${message}` },
+        },
+      );
+      ctx.state.lastToolError = terminal.lastToolError;
+      // A later delivery failure does not undo an already delivered pending prompt.
     } finally {
       if (approvalPending) {
         ctx.state.deterministicApprovalPromptPending = false;

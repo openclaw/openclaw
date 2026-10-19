@@ -10,15 +10,25 @@ This reference covers supported Node.js lines, why the minimum versions exist, a
 
 ## Supported versions
 
-| Line    | Status      | Minimum         | Notes                                                     |
-| ------- | ----------- | --------------- | --------------------------------------------------------- |
-| Node 26 | Recommended | `>=26.1.0`      | Faster Gateway startup and lower memory use than Node 24. |
-| Node 24 | Supported   | `>=24.16.0 <25` | LTS line used by CI and the Linux installer.              |
-| Node 25 | Unsupported | —               | Excluded by the current TEXT decoder floor.               |
-| Node 23 | Unsupported | —               | Excluded earlier for incompatible `node:sqlite` behavior. |
-| Node 22 | Unsupported | —               | Unsupported since the 24.16.0/26.1.0 floor.               |
+| Line    | Status      | Minimum         | Notes                                                                                                              |
+| ------- | ----------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Node 27 | Development | `>=27.0.0`      | Releases and well-formed HEAD, nightly, and other prerelease labels are accepted, subject to SQLite safety checks. |
+| Node 26 | Recommended | `>=26.1.0`      | Faster Gateway startup and lower memory use than Node 24.                                                          |
+| Node 24 | Supported   | `>=24.16.0 <25` | LTS line used by CI and the Linux installer.                                                                       |
+| Node 25 | Unsupported | —               | Excluded by the current TEXT decoder floor.                                                                        |
+| Node 23 | Unsupported | —               | Excluded earlier for incompatible `node:sqlite` behavior.                                                          |
+| Node 22 | Unsupported | —               | Unsupported since the 24.16.0/26.1.0 floor.                                                                        |
 
 The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the documented support policy and the `package.json` engine range used by package managers.
+
+For majors newer than the highest supported floor (currently Node 26), OpenClaw
+checks well-formed prerelease labels using their numeric core: `27.0.0-head`
+and `27.0.0-nightly20261018f88a1d25e9` are checked as `27.0.0`. Prereleases on
+Node 24 and 26 remain rejected, including `24.16.0-rc.1` and `26.1.0-rc.1`.
+Node 27 development builds are accepted without changing the installer or Docker
+defaults; Node 26 remains recommended and Node 24 remains the CI runtime.
+
+The Bun opt-in runtime requires **Bun 1.4.3+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
 
 ## How the gate decides
 
@@ -45,7 +55,9 @@ Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0,
 
 ## V8 compiler settings
 
-On Node 24 and 26, `process.exit()` can hang forever after a command has printed its output: Node joins V8's background threads while a Maglev or concurrent Sparkplug compile job waits for a garbage collection the exiting main thread never runs ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). OpenClaw's CLI, Gateway, hook relay, and macOS node worker therefore start with Maglev and concurrent Sparkplug turned off, the tiering Node 22 used; TurboFan still optimizes hot code. Passing `--maglev` or `--concurrent-sparkplug` to `node` keeps that compiler enabled.
+OpenClaw keeps Node's default V8 compiler settings, including Maglev and concurrent Sparkplug. Its executable entrypoints close their owned resources, await accepted work, and record `process.exitCode` before returning. They do not force normal termination with `process.exit()`.
+
+On affected Node 24 and 26 releases, forced exit can join a compiler worker that is waiting for main-thread garbage collection, deadlocking after output has already appeared ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). Natural shutdown lets Node tear down the isolate before joining the platform workers. The runtime boundary linter rejects `process.exit()` and `process.reallyExit()` so new entrypoints retain this lifecycle. This does not fix unrelated native shutdown stalls, including macOS system-certificate enumeration; system certificate trust remains enabled.
 
 ## Platform consequences
 
@@ -83,23 +95,23 @@ Use a supported Node release for the recommended installation path. A broken TEX
 
 Rows identify the first effective release, including a beta when applicable. Recommendation and installer changes are listed even when the numeric requirement stayed the same.
 
-| Release                              | Node requirement                                 | What changed and why                                                                                                                                                                                          |
-| ------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unreleased (main)                    | Unchanged support policy                         | Replaces decoder version-only admission with an in-memory NUL round-trip check; capable vendor builds on Node 24+ may run with an unsupported-version note. Node 22/23 remain excluded.                       |
-| v2026.9.3                            | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672 |
-| v2026.8.2                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Preserves supported RPM-owned Node packages with unsafe system SQLite and provisions a separate user-space runtime. The numeric range and loaded-library safety requirement stay unchanged. #134166           |
-| v2026.8.1                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Rootless defaults advance to 24.19.0, or 22.23.2 on ARMv7. Linux package provisioning returns to Node 24 LTS to avoid prerelease repository builds. #130369                                                   |
-| v2026.8.1-beta.3; stable v2026.8.1   | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Centralizes release classification in `node-version.mjs`, rejecting prerelease, nightly, and malformed version labels. #124812                                                                                |
-| v2026.7.2-beta.5; stable v2026.8.1   | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Recommends Node 26 for faster Gateway startup and lower memory use than Node 24. CI and release workflows retain Node 24. #114399                                                                             |
-| v2026.7.1; main v2026.7.2-beta.1     | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Requires builds carrying the SQLite WAL-reset fix, validates the actual loaded SQLite library, and excludes all Node 23. Shipped through a release cherry-pick. #106065                                       |
-| v2026.7.1-beta.2                     | `>=22.19.0 <23 \|\| >=23.11.0`                   | Excludes Node 23.0–23.10 for incompatible SQLite behavior in the dialect's `StatementSync.columns()` path. Superseded before stable v2026.7.1. #99832                                                         |
-| v2026.5.16-beta.7; stable v2026.5.18 | `>=22.19.0`                                      | Raises the floor with the Pi dependencies' update to 0.75.1. Node 24 remains recommended.                                                                                                                     |
-| v2026.5.9-beta.1; stable v2026.5.12  | `>=22.16.0`                                      | Raises the floor for the native SQLite Kysely dialect's use of `StatementSync.columns()` to identify result-producing statements. #78921                                                                      |
-| v2026.3.24-beta.2; stable v2026.3.24 | `>=22.14.0`                                      | Lowers the floor from 22.16 so npm installs and self-updates do not strand existing Node 22.14 users.                                                                                                         |
-| v2026.3.12                           | `>=22.16.0`                                      | Raises the floor from 22.12 and makes Node 24 the default/recommended line for installs, CI, and releases. The recorded change does not identify a specific missing API.                                      |
-| v2026.2.6                            | `>=22.12.0`                                      | Aligns the startup guard with the package requirement because Matrix's SDK requires 22.12 and older runtimes produce misleading module-not-found errors. #5370                                                |
-| v2026.1.5 (earlier v2.0.0-beta3)     | Package `>=22.12.0`; startup `>=22.0.0`          | Raises the package floor from 22.0 to 22.12 without a recorded API-specific reason. Startup validation temporarily retains the older minimum.                                                                 |
-| Before 2026                          | `>=22.0.0`                                       | The earliest package engine declaration requires Node 22; no narrower runtime-feature justification is recorded.                                                                                              |
+| Release                              | Node requirement                                 | What changed and why                                                                                                                                                                                                                                                                     |
+| ------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                    | Unchanged numeric engine range                   | Accepts well-formed Node 27 and future-major prereleases for installation and updates (#136429). Replaces decoder version-only admission with an in-memory NUL round-trip check; capable vendor builds on Node 24+ may run with an unsupported-version note. Node 22/23 remain excluded. |
+| v2026.9.3                            | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672                                                                            |
+| v2026.8.2                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Preserves supported RPM-owned Node packages with unsafe system SQLite and provisions a separate user-space runtime. The numeric range and loaded-library safety requirement stay unchanged. #134166                                                                                      |
+| v2026.8.1                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Rootless defaults advance to 24.19.0, or 22.23.2 on ARMv7. Linux package provisioning returns to Node 24 LTS to avoid prerelease repository builds. #130369                                                                                                                              |
+| v2026.8.1-beta.3; stable v2026.8.1   | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Centralizes release classification in `node-version.mjs`, rejecting prerelease, nightly, and malformed version labels. #124812                                                                                                                                                           |
+| v2026.7.2-beta.5; stable v2026.8.1   | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Recommends Node 26 for faster Gateway startup and lower memory use than Node 24. CI and release workflows retain Node 24. #114399                                                                                                                                                        |
+| v2026.7.1; main v2026.7.2-beta.1     | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Requires builds carrying the SQLite WAL-reset fix, validates the actual loaded SQLite library, and excludes all Node 23. Shipped through a release cherry-pick. #106065                                                                                                                  |
+| v2026.7.1-beta.2                     | `>=22.19.0 <23 \|\| >=23.11.0`                   | Excludes Node 23.0–23.10 for incompatible SQLite behavior in the dialect's `StatementSync.columns()` path. Superseded before stable v2026.7.1. #99832                                                                                                                                    |
+| v2026.5.16-beta.7; stable v2026.5.18 | `>=22.19.0`                                      | Raises the floor with the Pi dependencies' update to 0.75.1. Node 24 remains recommended.                                                                                                                                                                                                |
+| v2026.5.9-beta.1; stable v2026.5.12  | `>=22.16.0`                                      | Raises the floor for the native SQLite Kysely dialect's use of `StatementSync.columns()` to identify result-producing statements. #78921                                                                                                                                                 |
+| v2026.3.24-beta.2; stable v2026.3.24 | `>=22.14.0`                                      | Lowers the floor from 22.16 so npm installs and self-updates do not strand existing Node 22.14 users.                                                                                                                                                                                    |
+| v2026.3.12                           | `>=22.16.0`                                      | Raises the floor from 22.12 and makes Node 24 the default/recommended line for installs, CI, and releases. The recorded change does not identify a specific missing API.                                                                                                                 |
+| v2026.2.6                            | `>=22.12.0`                                      | Aligns the startup guard with the package requirement because Matrix's SDK requires 22.12 and older runtimes produce misleading module-not-found errors. #5370                                                                                                                           |
+| v2026.1.5 (earlier v2.0.0-beta3)     | Package `>=22.12.0`; startup `>=22.0.0`          | Raises the package floor from 22.0 to 22.12 without a recorded API-specific reason. Startup validation temporarily retains the older minimum.                                                                                                                                            |
+| Before 2026                          | `>=22.0.0`                                       | The earliest package engine declaration requires Node 22; no narrower runtime-feature justification is recorded.                                                                                                                                                                         |
 
 ## Related
 

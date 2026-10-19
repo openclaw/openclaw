@@ -1,7 +1,10 @@
 import OpenAI from "openai";
 import { getAiTransportHost } from "../host.js";
-import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
-import type { Model } from "../types.js";
+import {
+  resolveOpenAIClientBaseUrl,
+  withOpenAIErrorResponseHook,
+} from "../transports/openai-transport-shared.js";
+import type { Model, StreamOptions } from "../types.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 
 export function createOpenAIProviderClient(
@@ -9,6 +12,7 @@ export function createOpenAIProviderClient(
   apiKey: string,
   headers: Record<string, string>,
   optionsHeaders?: Record<string, string>,
+  onResponse?: StreamOptions["onResponse"],
 ): OpenAI {
   // Merge options headers last so they can override defaults
   if (optionsHeaders) {
@@ -34,6 +38,10 @@ export function createOpenAIProviderClient(
     defaultHeaders,
     maxRetries: 0,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
-    fetch: getAiTransportHost().buildModelFetch(model),
+    fetch: withOpenAIErrorResponseHook(
+      getAiTransportHost().buildModelFetch(model) ?? globalThis.fetch,
+      onResponse,
+      model,
+    ),
   });
 }

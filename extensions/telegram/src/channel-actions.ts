@@ -75,8 +75,7 @@ async function prepareTelegramSendPayload({
   if (!quoteText) {
     return payload;
   }
-  const rawTelegramData = payload.channelData?.telegram;
-  const telegramData = asNonArrayRecord(rawTelegramData);
+  const telegramData = asNonArrayRecord(payload.channelData?.telegram);
   return {
     ...payload,
     channelData: {
@@ -209,9 +208,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
     };
   },
-  extractToolSend: ({ args }) => {
-    return extractToolSend(args, "sendMessage");
-  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   isToolDeliveryAction: ({ args }) =>
     typeof args.action === "string" && TELEGRAM_TOOL_DELIVERY_ACTIONS.has(args.action),
   handleAction: async (ctx) => {

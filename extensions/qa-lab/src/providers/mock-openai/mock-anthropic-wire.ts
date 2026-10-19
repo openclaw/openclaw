@@ -37,18 +37,10 @@ export function convertAnthropicMessagesToResponsesInput(
 ): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
   for (const message of messages) {
-    const content = message.content;
-    if (typeof content === "string") {
-      items.push({
-        role: message.role,
-        content: [
-          message.role === "assistant"
-            ? { type: "output_text", text: content }
-            : { type: "input_text", text: content },
-        ],
-      });
-      continue;
-    }
+    const content =
+      typeof message.content === "string"
+        ? [{ type: "text" as const, text: message.content }]
+        : message.content;
     if (!Array.isArray(content)) {
       continue;
     }

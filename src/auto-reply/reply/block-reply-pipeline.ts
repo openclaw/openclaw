@@ -11,9 +11,10 @@ import {
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   readReplyPayloadSourceOccurrence,
+  setReplyPayloadMetadata,
+  type ReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { deliverBlockReply, hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplySource } from "./block-reply-source.types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
@@ -37,6 +38,190 @@ export type BlockReplyPipeline = {
   hasRetryBlockedTerminalDelivery?: (minimumAssistantMessageIndex?: number) => boolean;
   hasRetryBlockedDelivery: () => boolean;
 };
+
+function createBlockReplyCoalescer(params: {
+  config: BlockStreamingCoalescing;
+  shouldAbort: () => boolean;
+  onFlush: (payload: ReplyPayload) => Promise<void> | void;
+}) {
+  const { config, shouldAbort, onFlush } = params;
+  const { minChars, maxChars, idleMs, joiner } = config;
+
+  let bufferText = "";
+  let bufferSource: Pick<ReplyPayloadMetadata, "blockSourceText" | "blockSourceRange"> = {};
+  let bufferedPayload: ReplyPayload | undefined;
+  let idleTimer: NodeJS.Timeout | undefined;
+
+  const clearIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
+
+  const resetBuffer = () => {
+    bufferText = "";
+    bufferSource = {};
+    bufferedPayload = undefined;
+  };
+
+  const scheduleIdleFlush = () => {
+    if (idleMs <= 0) {
+      return;
+    }
+    clearIdleTimer();
+    idleTimer = setTimeout(() => {
+      void flush({ force: false });
+    }, idleMs);
+  };
+
+  const flush = async (options?: { force?: boolean }) => {
+    clearIdleTimer();
+    if (shouldAbort()) {
+      resetBuffer();
+      return;
+    }
+    if (!bufferText || !bufferedPayload) {
+      return;
+    }
+    if (!options?.force && bufferText.length < minChars) {
+      scheduleIdleFlush();
+      return;
+    }
+    const payload = setReplyPayloadMetadata(
+      copyReplyPayloadMetadata(bufferedPayload, {
+        ...bufferedPayload,
+        text: bufferText,
+      }),
+      bufferSource,
+    );
+    resetBuffer();
+    await onFlush(payload);
+  };
+
+  const canMergeBufferedTextWithMedia = (payload: ReplyPayload, text: string) =>
+    Boolean(bufferText) &&
+    (!text || bufferText.length + joiner.length + text.length <= maxChars) &&
+    bufferedPayload !== undefined &&
+    [bufferedPayload, payload].every(
+      (part) =>
+        !part.audioAsVoice &&
+        !part.isReasoning &&
+        !part.isCommentary &&
+        !isReplyPayloadStatusNotice(part),
+    ) &&
+    (!payload.replyToId || bufferedPayload.replyToId === payload.replyToId);
+
+  const mergeSource = (text: string, source: typeof bufferSource): typeof bufferSource => ({
+    // Source coverage excludes the transport joiner.
+    blockSourceText:
+      bufferSource.blockSourceText !== undefined || source.blockSourceText !== undefined
+        ? (bufferSource.blockSourceText ?? bufferText) + (source.blockSourceText ?? text)
+        : undefined,
+    blockSourceRange:
+      bufferSource.blockSourceRange && source.blockSourceRange
+        ? [bufferSource.blockSourceRange[0], source.blockSourceRange[1]]
+        : (bufferSource.blockSourceRange ?? source.blockSourceRange),
+  });
+
+  const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
+    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const mergedSource = mergeSource(text, text ? (getReplyPayloadMetadata(payload) ?? {}) : {});
+    const mergedPayload: ReplyPayload = {
+      ...bufferedPayload,
+      ...payload,
+      text: mergedText,
+      replyToId: payload.replyToId ?? bufferedPayload?.replyToId,
+      replyToCurrent: payload.replyToCurrent || bufferedPayload?.replyToCurrent,
+      replyToTag: payload.replyToTag || bufferedPayload?.replyToTag,
+    };
+    const metadataMergedPayload = copyReplyPayloadMetadata(
+      bufferedPayload ?? mergedPayload,
+      mergedPayload,
+    );
+    resetBuffer();
+    return setReplyPayloadMetadata(
+      copyReplyPayloadMetadata(payload, metadataMergedPayload),
+      mergedSource,
+    );
+  };
+
+  const enqueue = (payload: ReplyPayload) => {
+    if (shouldAbort()) {
+      return;
+    }
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const text = reply.text;
+    const source = {
+      blockSourceText: getReplyPayloadMetadata(payload)?.blockSourceText,
+      blockSourceRange: getReplyPayloadMetadata(payload)?.blockSourceRange,
+    };
+    if (reply.hasMedia) {
+      if (canMergeBufferedTextWithMedia(payload, text)) {
+        void onFlush(mergeBufferedTextWithMedia(payload, text));
+        return;
+      }
+      void flush({ force: true });
+      void onFlush(payload);
+      return;
+    }
+    if (!reply.hasText) {
+      return;
+    }
+
+    const replyToConflict = Boolean(
+      payload.replyToId && bufferedPayload?.replyToId !== payload.replyToId,
+    );
+    const visibilityConflict =
+      bufferedPayload &&
+      (bufferedPayload.isReasoning !== payload.isReasoning ||
+        bufferedPayload.isCommentary !== payload.isCommentary ||
+        bufferedPayload.isCompactionNotice !== payload.isCompactionNotice ||
+        bufferedPayload.isFallbackNotice !== payload.isFallbackNotice ||
+        isReplyPayloadStatusNotice(bufferedPayload) !== isReplyPayloadStatusNotice(payload));
+    // Flush before changing reply target, audio mode, or visibility class.
+    if (
+      bufferText &&
+      (replyToConflict ||
+        bufferedPayload?.audioAsVoice !== payload.audioAsVoice ||
+        visibilityConflict)
+    ) {
+      void flush({ force: true });
+    }
+
+    if (!bufferText) {
+      bufferedPayload = payload;
+    }
+
+    let nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
+    const replaceSource = nextText.length > maxChars;
+    if (replaceSource) {
+      if (bufferText) {
+        void flush({ force: true });
+        bufferedPayload = payload;
+      }
+      if (text.length >= maxChars) {
+        void onFlush(payload);
+        return;
+      }
+      nextText = text;
+    }
+
+    // Overflow replaces even a buffer populated by synchronous onFlush reentry.
+    bufferSource = replaceSource ? source : mergeSource(text, source);
+    bufferText = nextText;
+    if (bufferText.length >= maxChars) {
+      void flush({ force: true });
+      return;
+    }
+    scheduleIdleFlush();
+  };
+
+  return {
+    enqueue,
+    flush,
+    hasBuffered: () => Boolean(bufferText),
+    stop: clearIdleTimer,
+  };
+}
 
 function createBlockReplyContentIdentity(payload: ReplyPayload) {
   const reply = resolveSendableOutboundReplyParts(payload);
@@ -110,21 +295,13 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
-  let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
     seenKeys.has(payloadKey) || sentKeys.has(payloadKey) || pendingKeys.has(payloadKey);
   const resolveDedupeIdentity = (payload: ReplyPayload, payloadKey: string) => {
     const sourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
     const occurrence = readReplyPayloadSourceOccurrence(payload);
-    const occurrenceKey = occurrence
-      ? JSON.stringify([
-          occurrence.assistantMessageIndex,
-          occurrence.sourceRange[0],
-          occurrence.sourceRange[1],
-          occurrence.sourceText,
-        ])
-      : undefined;
+    const occurrenceKey = occurrence ? JSON.stringify(occurrence) : undefined;
     return {
       sourceText,
       occurrenceKey,
@@ -138,7 +315,7 @@ export function createBlockReplyPipeline(params: {
     void coalescer?.flush({ force: true });
   };
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false) => {
+  const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean) => {
     if (aborted) {
       return;
     }
@@ -227,12 +404,9 @@ export function createBlockReplyPipeline(params: {
       .catch((err: unknown) => {
         if (timeoutSignal?.aborted) {
           aborted = true;
-          if (!didLogTimeout) {
-            didLogTimeout = true;
-            logVerbose(
-              `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
-            );
-          }
+          logVerbose(
+            `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
+          );
           return;
         }
         attempt.outcome = resolveReplyDispatchErrorOutcome(err);
@@ -342,21 +516,22 @@ export function createBlockReplyPipeline(params: {
   // A final payload joins every text item of its physical assistant message, and each item
   // streamed under its own index (hidden commentary items take indexes without blocks), so
   // also match item runs back to the message start.
-  const matchingAttempts = (payload: ReplyPayload) => {
+  const matchingTerminalAttempts = function* (payload: ReplyPayload) {
     const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     if (index === undefined) {
-      return blockAttemptsByMessage.values();
+      for (const attempts of blockAttemptsByMessage.values()) {
+        yield attempts.filter((attempt) => attempt.terminal);
+      }
+      return;
     }
     const start = blockAttemptsByMessage.get(index)?.[0]?.messageStart ?? index;
-    const runs: BlockAttempt[][] = [];
     for (let item = index, run: BlockAttempt[] = []; item >= start; item--) {
       const attempts = blockAttemptsByMessage.get(item);
       if (attempts?.length) {
-        run = [...attempts, ...run];
-        runs.push(run);
+        run = [...attempts.filter((attempt) => attempt.terminal), ...run];
+        yield run;
       }
     }
-    return runs;
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
   const combinedSource = (attempts: BlockAttempt[]) =>
@@ -393,8 +568,7 @@ export function createBlockReplyPipeline(params: {
       sentContentKeys.has(createIndexedBlockReplyContentKey(payload)),
     getSourceRecovery: (payload) => {
       const text = normalizeSource(resolveSendableOutboundReplyParts(payload).trimmedText);
-      for (const group of matchingAttempts(payload)) {
-        const attempts = group.filter((attempt) => attempt.terminal);
+      for (const attempts of matchingTerminalAttempts(payload)) {
         if (
           text &&
           combinedSource(attempts) === text &&
@@ -410,8 +584,7 @@ export function createBlockReplyPipeline(params: {
       const reply = resolveSendableOutboundReplyParts(payload);
       const text = normalizeSource(reply.trimmedText);
       const textOnly = !hasOutboundReplyContent({ ...payload, text: undefined });
-      for (const group of matchingAttempts(payload)) {
-        const attempts = group.filter((attempt) => attempt.terminal);
+      for (const attempts of matchingTerminalAttempts(payload)) {
         const blocked = attempts.filter(hasBlockReplyDeliveryCustody);
         const sourcePrefix = combinedSource(attempts);
         if (
@@ -439,10 +612,9 @@ export function createBlockReplyPipeline(params: {
         return false;
       }
       const sourceText = normalizeSource(reply.trimmedText);
-      for (const group of matchingAttempts(payload)) {
+      for (const group of matchingTerminalAttempts(payload)) {
         const attempts = group.filter(
           (attempt) =>
-            attempt.terminal &&
             attempt.outcome === "delivered" &&
             !attempt.pending &&
             attempt.source?.complete !== false,

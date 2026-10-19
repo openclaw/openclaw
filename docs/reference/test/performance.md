@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Import profiling, CPU and heap profiles, shard timings, and benchmark scripts"
 title: "Test performance and benchmarks"
 read_when:
@@ -143,7 +144,7 @@ profiling results to this inventory.
 Source-checkout campaign tools can import `resolveResourceGatewayRuntime` and
 `runResourceGatewayCase` from `scripts/e2e/kitchen-sink-rpc-walk.mts`. Kitchen Sink
 uses this same host lifecycle. Run from one frozen, built OpenClaw package root
-per process; this is a testing seam, not a published plugin SDK API.
+per process; this is a testing interface, not a published plugin SDK API.
 
 The preparation callback receives an isolated config path, loopback port, test
 token and a local-archive installer that verifies the supplied SHA-256. Enable
@@ -194,6 +195,55 @@ compilation preserves runtime fallback for unsupported schemas; async parsing
 and encoding keep their existing runtime behavior.
 
 ## Benchmarks
+
+<Accordion title="Decision transport (scripts/bench-decision-transport.mts)">
+
+This instrumented component benchmark calls the registered TypeSafe Decision
+provider against a deterministic loopback HTTP server. It checks normalized
+answers, completed request counts, accepted TCP connections, and explicit
+transport-pool teardown. No credentials or billed inference are used.
+
+Prepare separate, clean source checkouts with their own frozen dependencies for
+the baseline and candidate. Overlay the same benchmark builder, worker, and
+`scripts/lib/{benchmark-harness,arg-utils}.mts` on both checkouts. Build once in
+each checkout, outside the measured interval:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/build-decision-transport-bench.mts <source-sha>
+```
+
+Each build prints its manifest path after a two-request correctness smoke test.
+Run both manifests on the same otherwise idle host and Node version:
+
+```bash
+node scripts/bench-decision-transport.mts \
+  --baseline <baseline-manifest.json> --candidate <candidate-manifest.json> \
+  --runs 20 --requests 50 --json --output .artifacts/decision-transport.json
+```
+
+The driver alternates baseline and candidate in serial ABAB order. It verifies
+output hashes before and after the run and rejects unequal worker/helper bytes.
+The report includes per-sample first-evaluation and warm-request latency, process
+CPU, sampled RSS, and heap/external memory before work, after work, and after
+teardown. Warm latency summaries compare each sample's median, not pooled
+requests. Tail percentiles require at least 20 samples per revision.
+
+For a connection-reuse comparison, require identical completed work and zero
+sockets after teardown. Fewer accepted connections establish reuse, not a latency
+win. Before measuring, use a 10% median latency reduction as the improvement
+threshold and a 20% regression in p95 latency, CPU, or sampled peak RSS as a
+reason to withhold a performance-win claim. Report raw samples and inconclusive
+results. Record runner CPU quotas separately; affinity and memory capacity are
+included, but the driver does not resolve CPU quotas.
+
+Builds and eager imports are outside this workload. The first evaluation and
+total CPU include lazy client loading and validator compilation; warm timings
+exclude that initialization. CPU also includes the loopback server and answer
+checks. Model inference, TLS handshakes, and Gateway startup are not measured.
+RSS is sampled between requests and may miss short peaks. These results are not
+packaged Gateway or end-to-end agent performance evidence.
+
+</Accordion>
 
 <Accordion title="Session history (scripts/bench-session-history.ts)">
 
@@ -316,7 +366,21 @@ cache is warm.
 
 </Accordion>
 
+<a id="workspace-computation" />
+
 <Accordion title="Workspace computation (scripts/bench-workspace-computation.ts)">
+
+Workspace inventory inspection, raw manifest parsing and comparison, and bulk file
+hashing use a bounded computation pool on the Gateway and node. Decoded manifests
+are compared synchronously against typed entries without another inventory copy.
+Independent workspaces can progress while the main thread serves requests. The
+host owns session authority, workspace mutations, Git subprocesses, and durable
+acceptance; cancellation joins outstanding work before cleanup.
+
+Node capture reuses this pool and its compiled manifest program rather than
+starting a process per verification. Each capture has a private workspace, hash
+memo, and limits; the node host owns Git inventory commands. For acceptance and
+recovery ordering, see [session lifecycle](/gateway/cloud-workers/session-lifecycle#accept-a-completed-turn).
 
 Compare workspace inventory, manifest capture, and result preparation against a
 frozen source checkout with its own installed dependencies:
@@ -420,6 +484,8 @@ count model/global controlled responses and automatic tool/text branches, not co
 responses. Auxiliary model requests remain included; neither total is a count
 of agent turns. Missing, regressing, or replaced-server checkpoints fail instead
 of becoming zero. Reports retain counters, not raw prompts or request bodies.
+The mock request journal lives in a separate telemetry directory so its writes
+do not feed the Gateway's config and skill ancestor watchers during measurement.
 
 `--agent-count N` distributes the same session inventory round-robin across
 1–128 configured agents. It defaults to one agent and cannot exceed the larger

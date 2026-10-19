@@ -1,7 +1,10 @@
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { isProxyReasoningUnsupportedModelHint } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOpenAICompatibleReasoningPayload } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  normalizeOpenAICompatibleReasoningPayload,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   asOptionalRecord,
   normalizeOptionalLowercaseString,
@@ -30,11 +33,10 @@ export function wrapKilocodeProviderStream(
       ? undefined
       : ctx.thinkingLevel;
   return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
     const headers = resolveProviderRequestHeaders({
-      provider: typeof model.provider === "string" ? model.provider : "kilocode",
+      provider: model.provider,
       api: model.api,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      baseUrl: model.baseUrl,
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,
@@ -44,21 +46,17 @@ export function wrapKilocodeProviderStream(
     return underlying(model, context, {
       ...options,
       headers,
-      onPayload(payload, payloadModel) {
-        const payloadObj = asOptionalRecord(payload);
-        if (payloadObj) {
-          // Keep Kilo thinking defaults overrideable by later caller/config payload hooks.
-          normalizeOpenAICompatibleReasoningPayload(payloadObj, thinkingLevel);
-        }
-
-        const result = originalOnPayload?.(payload, payloadModel);
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          return Promise.resolve(result).then((resolved) =>
-            normalizeKilocodeStopAfterCaller(resolved, payloadObj),
-          );
-        }
-        return normalizeKilocodeStopAfterCaller(result, payloadObj);
-      },
+      onPayload: wrapProviderPayloadHook(
+        options?.onPayload,
+        (payload, result) => normalizeKilocodeStopAfterCaller(result, asOptionalRecord(payload)),
+        (payload) => {
+          const payloadObj = asOptionalRecord(payload);
+          if (payloadObj) {
+            // Caller hooks can override thinking defaults; stop normalization runs afterward.
+            normalizeOpenAICompatibleReasoningPayload(payloadObj, thinkingLevel);
+          }
+        },
+      ),
     });
   };
 }

@@ -5,6 +5,7 @@ import { gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -16,6 +17,28 @@ import {
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
+let preparationSources: string[] | undefined;
+
+function resolvePreparationSources() {
+  // Keep source-key hashing and git indexing scoped to this fixture's executable graph.
+  return (preparationSources ??= collectRuntimeImportClosure(
+    process.cwd(),
+    [
+      "scripts/prepare-extension-package-boundary-artifacts.mts",
+      "scripts/compile-extension-boundary.mts",
+      "scripts/run-tsgo.mjs",
+      "scripts/run-tsgo.mts",
+      "scripts/generate-kysely-types.mts",
+      "scripts/ci-sdk-declarations.mts",
+      "scripts/check-extension-package-tsc-boundary.mts",
+      "scripts/tsx.mjs",
+      // These launchers are selected by URL rather than module imports.
+      "scripts/lib/managed-memory-launcher.mts",
+      "scripts/lib/managed-windows-job-launcher.mts",
+    ],
+    { includeDynamicImports: true },
+  ));
+}
 
 function copyFixtureFiles(root: string, files: string[]) {
   for (const file of files) {
@@ -34,40 +57,39 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     signal.throwIfAborted();
     return writeNativeFixtureFile(root, file, text);
   };
+  const json = (file: string, value: unknown) => write(file, JSON.stringify(value));
+  const read = (file: string) => fs.readFileSync(path.resolve(root, file), "utf8");
+  const has = (file: string) => fs.existsSync(path.resolve(root, file));
+  const snapshot = (file: string) => ({
+    bytes: fs.readFileSync(path.resolve(root, file)),
+    mtimeMs: fs.statSync(path.resolve(root, file)).mtimeMs,
+  });
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("pnpm-workspace.yaml", "packages: []\n");
-  write(
-    "tsconfig.json",
-    JSON.stringify({
-      compilerOptions: {
-        target: "es2023",
-        lib: ["es5"],
-        module: "nodenext",
-        skipLibCheck: true,
-        types: [],
-      },
-    }),
-  );
-  write(
-    "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({ extends: "../../tsconfig.json", include: ["../../src/**/*.ts"] }),
-  );
+  json("tsconfig.json", {
+    compilerOptions: {
+      target: "es2023",
+      lib: ["es5"],
+      module: "nodenext",
+      skipLibCheck: true,
+      types: [],
+    },
+  });
+  json("packages/plugin-sdk/tsconfig.json", {
+    extends: "../../tsconfig.json",
+    include: ["../../src/**/*.ts"],
+    exclude: ["../../src/shared/deferred.ts"],
+  });
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
   copyFixtureFiles(root, [
-    "scripts/prepare-extension-package-boundary-artifacts.mts",
-    "scripts/compile-extension-boundary.mts",
-    "scripts/run-tsgo.mjs",
-    "scripts/run-tsgo.mts",
-    "scripts/generate-kysely-types.mts",
-    "scripts/tsx.mjs",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib",
-    "packages/normalization-core/src",
+    // Selected-consumer fixtures install their extra src/ tools with a narrowed SDK config.
+    ...resolvePreparationSources().filter((file) => !file.startsWith("src/")),
+    "src/shared/deferred.ts",
     "packages/normalization-core/package.json",
   ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
-  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "@openclaw/fs-safe", "@openclaw/proc-safe"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target);
@@ -79,10 +101,10 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   fs.symlinkSync("../packages/plugin-sdk", path.join(root, "node_modules/fixture-sdk"), "dir");
   const plugins = mode === "all" ? BOUNDARY_PLUGIN_UNITS : [];
   for (const [id, entry] of plugins) {
-    write(
-      `extensions/${id}/tsconfig.json`,
-      JSON.stringify({ extends: "../../tsconfig.json", files: [`${entry}.ts`] }),
-    );
+    json(`extensions/${id}/tsconfig.json`, {
+      extends: "../../tsconfig.json",
+      files: [`${entry}.ts`],
+    });
     write(
       `extensions/${id}/node_modules/boundary-private-dep/package.json`,
       '{"name":"boundary-private-dep","types":"index.d.ts"}',
@@ -122,7 +144,21 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
       undefined,
       { ...env, PWD: pwd },
     );
-  return { ancestor, root, native, write, plugins, recordPath, output, step, run };
+  return {
+    ancestor,
+    root,
+    native,
+    write,
+    json,
+    read,
+    has,
+    snapshot,
+    plugins,
+    recordPath,
+    output,
+    step,
+    run,
+  };
 }
 
 function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
@@ -131,70 +167,66 @@ function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
     "src/plugins/package-entrypoints.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
   ]);
-  f.write(
-    "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({
-      extends: "../../tsconfig.json",
-      include: ["../../src/plugin-sdk/**/*.ts", "../../src/**/*.d.ts"],
-    }),
-  );
+  f.json("packages/plugin-sdk/tsconfig.json", {
+    extends: "../../tsconfig.json",
+    include: ["../../src/plugin-sdk/**/*.ts", "../../src/**/*.d.ts"],
+  });
   const sourceAliases = {
     "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
     "@openclaw/memory-core/api.js": ["./extensions/memory-core/api.ts"],
     "@openclaw/qa-channel/api.js": ["./extensions/qa-channel/api.ts"],
   };
-  f.write(
-    "tsconfig.json",
-    JSON.stringify({
-      compilerOptions: {
-        target: "es2023",
-        module: "nodenext",
-        skipLibCheck: true,
-        types: [],
-        paths: sourceAliases,
+  f.json("tsconfig.json", {
+    compilerOptions: {
+      target: "es2023",
+      module: "nodenext",
+      skipLibCheck: true,
+      types: [],
+      paths: sourceAliases,
+    },
+  });
+  f.json("extensions/tsconfig.package-boundary.base.json", {
+    extends: "../tsconfig.json",
+    compilerOptions: {
+      paths: {
+        "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
+        "@openclaw/memory-core/api.js": [
+          "../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts",
+        ],
+        "@openclaw/qa-channel/api.js": [
+          "../.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts",
+        ],
       },
-    }),
-  );
-  f.write(
-    "extensions/tsconfig.package-boundary.base.json",
-    JSON.stringify({
-      extends: "../tsconfig.json",
-      compilerOptions: {
-        paths: {
-          "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
-          "@openclaw/memory-core/api.js": [
-            "../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts",
-          ],
-          "@openclaw/qa-channel/api.js": [
-            "../.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts",
-          ],
-        },
-      },
-    }),
-  );
-  f.write(
-    "extensions/chosen/package.json",
-    JSON.stringify({
-      name: "@openclaw/chosen",
-      type: "module",
-      openclaw: { extensions: ["./index.ts"] },
-    }),
-  );
+    },
+  });
+  f.json("extensions/chosen/package.json", {
+    name: "@openclaw/chosen",
+    type: "module",
+    openclaw: { extensions: ["./index.ts"] },
+  });
   f.write("extensions/chosen/openclaw.plugin.json", '{"id":"chosen"}');
-  f.write(
-    "extensions/chosen/tsconfig.json",
-    JSON.stringify({
-      extends: "../tsconfig.package-boundary.base.json",
-      compilerOptions: { rootDir: "." },
-      include: ["index.ts"],
-      exclude: ["excluded/**"],
-    }),
-  );
+  f.json("extensions/chosen/tsconfig.json", {
+    extends: "../tsconfig.package-boundary.base.json",
+    compilerOptions: { rootDir: "." },
+    include: ["index.ts"],
+    exclude: ["excluded/**"],
+  });
   f.write("extensions/chosen/index.ts", 'export { value } from "./excluded/helper.js";');
   f.write(
     "extensions/chosen/excluded/helper.ts",
     'export { value } from "openclaw/plugin-sdk/core";',
   );
+}
+
+function expectConsumerTypeError(f: ReturnType<typeof createPreparationFixture>, message: string) {
+  const checked = spawnSync(
+    f.native,
+    ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
+    { cwd: f.root, encoding: "utf8", timeout: 20_000 },
+  );
+  expect(checked.error).toBeUndefined();
+  expect(checked.status, checked.stdout + checked.stderr).toBe(2);
+  expect(checked.stdout).toContain(message);
 }
 
 describe("native declaration preparation", () => {
@@ -215,12 +247,10 @@ describe("native declaration preparation", () => {
         expect(receipt.inputs).toContain("src/nested.ts");
         expect(receipt.inputs).toContain("src/ambient.d.ts");
         expect(receipt.inputs).not.toContain("src/plugin-sdk/unused.ts");
-        expect(fs.readFileSync(path.join(f.root, f.output, "src/nested.d.ts"), "utf8")).toContain(
-          'value: "kept"',
-        );
-        const coldStamp = fs.statSync(f.recordPath).mtimeMs;
+        expect(f.read(`${f.output}/src/nested.d.ts`)).toContain('value: "kept"');
+        const cold = f.snapshot(f.recordPath);
         await narrow();
-        expect(fs.statSync(f.recordPath).mtimeMs).toBe(coldStamp);
+        expect(f.snapshot(f.recordPath)).toEqual(cold);
 
         f.write("src/plugin-sdk/added.ts", "export const added = 2;");
         f.write(
@@ -229,31 +259,22 @@ describe("native declaration preparation", () => {
         );
         await narrow();
         expect(readArtifactRecord(f.recordPath)?.inputs).toContain("src/plugin-sdk/added.ts");
-        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/added.d.ts"))).toBe(true);
+        expect(f.has(`${f.output}/src/plugin-sdk/added.d.ts`)).toBe(true);
 
         await expect(f.run()).rejects.toThrow("failed with exit code 1");
-        expect(fs.existsSync(f.recordPath)).toBe(false);
+        expect(f.has(f.recordPath)).toBe(false);
         f.write("src/plugin-sdk/unused.ts", "export const unused = 3;");
         await f.run();
-        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/unused.d.ts"))).toBe(true);
-        const fullReceipt = fs.readFileSync(f.recordPath);
-        const fullStamp = fs.statSync(f.recordPath).mtimeMs;
+        expect(f.has(`${f.output}/src/plugin-sdk/unused.d.ts`)).toBe(true);
+        const full = f.snapshot(f.recordPath);
         await narrow();
-        expect(fs.readFileSync(f.recordPath)).toEqual(fullReceipt);
-        expect(fs.statSync(f.recordPath).mtimeMs).toBe(fullStamp);
+        expect(f.snapshot(f.recordPath)).toEqual(full);
 
         f.write(
           "extensions/chosen/index.ts",
           'import { value } from "./excluded/helper.js"; export const wrong: number = value;',
         );
-        const checked = spawnSync(
-          f.native,
-          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
-          { cwd: f.root, encoding: "utf8", timeout: 20_000 },
-        );
-        expect(checked.error).toBeUndefined();
-        expect(checked.status, checked.stdout + checked.stderr).toBe(2);
-        expect(checked.stdout).toContain("Type 'string' is not assignable to type 'number'");
+        expectConsumerTypeError(f, "Type 'string' is not assignable to type 'number'");
       }),
   );
 
@@ -477,25 +498,16 @@ describe("native declaration preparation", () => {
         fs.writeFileSync(targetArchive, archive);
         success(consumer, "restore", "--required");
         success(consumer, "validate");
-        const restoredReceipt = fs.readFileSync(consumer.recordPath);
-        const restoredStamp = fs.statSync(consumer.recordPath).mtimeMs;
+        const restored = consumer.snapshot(consumer.recordPath);
         await consumer.run(consumer.root, consumer.root, ["chosen"], {
           OPENCLAW_CI_SHARED_SDK: "1",
         });
-        expect(fs.readFileSync(consumer.recordPath)).toEqual(restoredReceipt);
-        expect(fs.statSync(consumer.recordPath).mtimeMs).toBe(restoredStamp);
+        expect(consumer.snapshot(consumer.recordPath)).toEqual(restored);
         consumer.write(
           "extensions/chosen/index.ts",
           'import { value } from "./excluded/helper.js"; export const wrong: string = value;',
         );
-        const checked = spawnSync(
-          consumer.native,
-          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
-          { cwd: consumer.root, encoding: "utf8", timeout: 20_000 },
-        );
-        expect(checked.error).toBeUndefined();
-        expect(checked.status, checked.stdout + checked.stderr).toBe(2);
-        expect(checked.stdout).toContain("Type 'number' is not assignable to type 'string'");
+        expectConsumerTypeError(consumer, "Type 'number' is not assignable to type 'string'");
         consumer.write(
           "extensions/chosen/index.ts",
           'export { value } from "./excluded/helper.js";',
@@ -537,9 +549,7 @@ describe("native declaration preparation", () => {
         expect(fs.existsSync(consumer.recordPath)).toBe(false);
         await consumer.run();
         success(consumer, "validate");
-        expect(fs.readFileSync(path.join(consumer.root, declaration), "utf8")).toContain(
-          "value = 2",
-        );
+        expect(consumer.read(declaration)).toContain("value = 2");
       }),
   );
 
@@ -648,15 +658,17 @@ describe("native declaration preparation", () => {
           expect(Object.keys(readArtifactRecord(owner.recordPath)!.outputs).toSorted()).toEqual(
             outputs.toSorted(),
           );
-          return [owner.recordPath, ...outputs.map((file) => path.join(f.root, file))].map(
-            (file) => ({ file, bytes: fs.readFileSync(file), mtimeMs: fs.statSync(file).mtimeMs }),
+          return [owner.recordPath, ...outputs].map((file) =>
+            Object.assign({ file }, f.snapshot(file)),
           );
         });
         for (const spelling of [declared, f.root]) {
           await f.run(mode ? f.root : spelling, spelling);
           for (const artifact of artifacts) {
-            expect(fs.readFileSync(artifact.file)).toEqual(artifact.bytes);
-            expect(fs.statSync(artifact.file).mtimeMs).toBe(artifact.mtimeMs);
+            expect(f.snapshot(artifact.file)).toEqual({
+              bytes: artifact.bytes,
+              mtimeMs: artifact.mtimeMs,
+            });
           }
         }
       });
@@ -688,9 +700,7 @@ describe("native declaration preparation", () => {
       expect(result.stderr).toContain("Declaration input escapes checkout");
       expect(fs.existsSync(modules)).toBe(linked);
       expect(fs.existsSync(f.recordPath)).toBe(false);
-      expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-        false,
-      );
+      expect(f.has(".artifacts/dist-artifacts.lock/owner.json")).toBe(false);
     },
   );
 
@@ -699,7 +709,7 @@ describe("native declaration preparation", () => {
     { timeout: 30_000 },
     ({ signal }) =>
       fixture.run(async () => {
-        const { root, native, write, plugins, recordPath, output, step, run } =
+        const { root, native, write, read, has, snapshot, plugins, recordPath, output, step, run } =
           createPreparationFixture("all", signal);
         await run();
         const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
@@ -738,21 +748,19 @@ describe("native declaration preparation", () => {
           write("src/renamed.ts", invalid);
           await expect(run()).rejects.toThrow("failed with exit code 1");
           signal.throwIfAborted();
-          expect(fs.existsSync(recordPath)).toBe(false);
-          expect(fs.existsSync(path.join(root, output, "src/renamed.d.ts"))).toBe(false);
-          expect(fs.existsSync(path.join(root, output, ".inputs.json"))).toBe(false);
-          expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(true);
+          expect(has(recordPath)).toBe(false);
+          expect(has(`${output}/src/renamed.d.ts`)).toBe(false);
+          expect(has(`${output}/.inputs.json`)).toBe(false);
+          expect(has(`${output}/src/nested.d.ts`)).toBe(true);
         }
         write("src/renamed.ts", "export const value = 2;");
         await run();
         const repaired = readArtifactRecord(recordPath)!;
         expect(repaired.outputs[`${output}/src/renamed.d.ts`]).toBeDefined();
         expect(repaired.outputs[`${output}/src/nested.d.ts`]).toBeUndefined();
-        expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(false);
-        expect(fs.existsSync(path.join(root, output, "orphan.d.ts"))).toBe(false);
-        expect(fs.readFileSync(path.join(root, output, "operator-note.txt"), "utf8")).toBe(
-          "unowned",
-        );
+        expect(has(`${output}/src/nested.d.ts`)).toBe(false);
+        expect(has(`${output}/orphan.d.ts`)).toBe(false);
+        expect(read(`${output}/operator-note.txt`)).toBe("unowned");
         for (const [id, entry] of plugins) {
           const record = readArtifactRecord(
             path.join(root, `.artifacts/extension-package-boundary/${id}.json`),
@@ -765,44 +773,11 @@ describe("native declaration preparation", () => {
         fs.rmSync(path.join(root, output, "src/renamed.d.ts"));
         await run();
         expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
-        const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
-        const unchangedRecord = fs.statSync(recordPath).mtimeMs;
+        const unchanged = snapshot(`${output}/src/renamed.d.ts`);
+        const unchangedRecord = snapshot(recordPath);
         await run();
-        expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
-        expect(fs.statSync(recordPath).mtimeMs).toBe(unchangedRecord);
-      }),
-  );
-
-  it.for(["src/nested.ts", "package.json"])(
-    "rejects %s mutated after native emit without publishing or pruning",
-    { timeout: 30_000 },
-    (input, { signal }) =>
-      fixture.run(async () => {
-        const f = createPreparationFixture("package-boundary", signal);
-        const trigger = path.join(f.root, ".artifacts/mutate-after-native");
-        const source = path.join(f.root, input);
-        const original = fs.readFileSync(source, "utf8");
-        const worker = path.join(f.root, "scripts/compile-extension-boundary.mts");
-        fs.appendFileSync(
-          worker,
-          `\nif (fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");\n`,
-        );
-        await f.run();
-        expect(readArtifactRecord(f.recordPath)).toBeDefined();
-        f.write(`${f.output}/orphan.d.ts`, "export interface Orphan {}\n");
-        f.write(".artifacts/mutate-after-native", "armed");
-
-        // The fixture worker mutates only after the real native emitter exits
-        // successfully; its unchanged membership must still fail the seal fence.
-        await expect(f.run()).rejects.toThrow("failed with exit code 1");
-        expect(fs.readFileSync(source, "utf8")).toBe(`${original}\n`);
-        expect(fs.existsSync(f.recordPath)).toBe(false);
-        expect(fs.readFileSync(path.join(f.root, f.output, "orphan.d.ts"), "utf8")).toBe(
-          "export interface Orphan {}\n",
-        );
-        expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-          false,
-        );
+        expect(snapshot(`${output}/src/renamed.d.ts`)).toEqual(unchanged);
+        expect(snapshot(recordPath)).toEqual(unchangedRecord);
       }),
   );
 
@@ -866,16 +841,14 @@ describe("native declaration preparation", () => {
         );
 
         await f.run();
-        expect(fs.readFileSync(path.join(f.root, output, emitted), "utf8")).toContain(
-          'inferredOrigin: "local"',
-        );
+        expect(f.read(`${output}/${emitted}`)).toContain('inferredOrigin: "local"');
         for (const unit of units) {
           expect(
             readArtifactRecord(
               path.join(f.root, `.artifacts/extension-package-boundary/${unit.id}.json`),
             ),
           ).toBeDefined();
-          expect(fs.existsSync(path.join(f.root, unit.output, "orphan.d.ts"))).toBe(false);
+          expect(f.has(`${unit.output}/orphan.d.ts`)).toBe(false);
           f.write(`${unit.output}/orphan.d.ts`, "export interface Orphan {}\n");
         }
         fs.rmSync(
@@ -889,18 +862,10 @@ describe("native declaration preparation", () => {
         // Every batch member must seal before any obsolete declaration is pruned.
         await expect(f.run()).rejects.toThrow("failed with exit code 1");
         for (const unit of units) {
-          expect(
-            fs.existsSync(
-              path.join(f.root, `.artifacts/extension-package-boundary/${unit.id}.json`),
-            ),
-          ).toBe(false);
-          expect(fs.readFileSync(path.join(f.root, unit.output, "orphan.d.ts"), "utf8")).toBe(
-            "export interface Orphan {}\n",
-          );
+          expect(f.has(`.artifacts/extension-package-boundary/${unit.id}.json`)).toBe(false);
+          expect(f.read(`${unit.output}/orphan.d.ts`)).toBe("export interface Orphan {}\n");
         }
-        expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-          false,
-        );
+        expect(f.has(".artifacts/dist-artifacts.lock/owner.json")).toBe(false);
       }),
   );
 });

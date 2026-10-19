@@ -5,6 +5,7 @@ import {
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
+  CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
 } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -19,7 +20,7 @@ import {
   readStoredChatOutbox,
   type StoredChatOutbox,
 } from "../../lib/chat/outbox-store-projection.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentListParamsForRefreshTarget,
   visibleSessionMatches,
@@ -38,6 +39,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { CHAT_OUTBOX_RETRY_DEFAULT_MS, retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
+  anyChatOutboxPaneMatches,
   clearPendingQueueItemsForRun,
   confirmQueuedMessageCustody,
   removeDeliveredQueuedChatSendForRun,
@@ -52,7 +54,7 @@ import {
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { reconcileChatRunFromSessionRow } from "./run-lifecycle.ts";
+import { isChatBusy, reconcileChatRunFromSessionRow } from "./run-lifecycle.ts";
 
 // Legacy recovery previously searched a 1,000-message, 6 MiB display window.
 const LEGACY_RECOVERY_HISTORY_BYTES = 6 * 1024 * 1024;
@@ -143,15 +145,6 @@ async function findChatOutboxSubmission(
   return { submission };
 }
 
-export function isInterruptedChatInput(history: ChatHistoryResult, item: ChatQueueItem): boolean {
-  return (
-    readChatInputReceipt(history, item) === "pending" &&
-    history.pendingInputs?.items.some(
-      (input) => input.runId === item.sendRunId && input.state === "interrupted",
-    ) === true
-  );
-}
-
 /** Reconcile exact pending custody before considering transcript consumption. */
 function reconcilePendingChatOutboxInput(
   host: ChatHost,
@@ -159,7 +152,7 @@ function reconcilePendingChatOutboxInput(
   item: ChatQueueItem,
   history: ChatHistoryResult,
   pendingBefore: number | undefined,
-): ChatHistoryResult | "blocked" | "continue" | undefined {
+): "blocked" | "continue" | "accepted" | undefined {
   const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
   if (item.sessionId && item.sessionId !== historySessionId) {
     // Request ids are scoped to their physical session. A replacement's matching
@@ -202,36 +195,101 @@ function reconcilePendingChatOutboxInput(
         ? "continue"
         : "blocked";
     }
-    if (confirmsLocal) {
-      return "continue";
-    }
-    // Only positive unconsumed custody can cross a restart. The new request
-    // acquires current authority; an absent receipt is still an uncertain send.
-    return pending?.state === "interrupted" &&
-      item.sendState !== "sending" &&
-      history.sessionInfo &&
-      (item.queueMode === "steer" ||
-        item.queueMode === "interrupt" ||
-        // Recovery can own the session while its runner waits for capacity.
-        // Queued input must not enter that interrupted turn's model context.
-        (history.sessionInfo.hasActiveRun !== true &&
-          history.sessionInfo.status !== "running" &&
-          history.sessionInfo.status !== "queued"))
-      ? history
-      : "blocked";
+    // The server owns accepted-input recovery and ordering.
+    return "accepted";
   }
   return undefined;
 }
 
-function sessionRunProvesQueuedDelivery(
-  sessionInfo: ChatHistoryResult["sessionInfo"],
+export async function reconcileStoredChatOutboxHead(
+  host: ChatHost,
+  outbox: StoredChatOutbox,
   item: ChatQueueItem,
-): boolean {
-  return Boolean(
-    item.sendRunId &&
-    (sessionInfo?.activeRunIds?.includes(item.sendRunId) ||
-      sessionInfo?.lastRunId === item.sendRunId),
-  );
+  client: NonNullable<ChatHost["client"]>,
+  connectionEpoch: number | undefined,
+  scheduleRetry: (delayMs: number) => void,
+  accepted: Set<string>,
+  retryUnconfirmed = false,
+): Promise<"blocked" | "continue" | "send"> {
+  // Never-attempted input needs only the session row. Attempted input still needs
+  // history to retire delivered messages, even while a run streams.
+  const neverAttempted =
+    (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
+  if (neverAttempted && item.queueMode && item.sendState !== "unconfirmed") {
+    return "send";
+  }
+  if (neverAttempted) {
+    const row =
+      !isUiGlobalSessionKey(outbox.sessionKey) || host.sessions.state.agentId === outbox.agentId
+        ? host.sessions.state.result?.sessions.find((session) =>
+            areUiSessionKeysEquivalent(session.key, outbox.sessionKey),
+          )
+        : undefined;
+    if (row && isSessionRunStateActive(row)) {
+      return "blocked";
+    }
+  }
+  const historyArgs = [host, outbox, item, client, connectionEpoch, scheduleRetry] as const;
+  const history = await readCurrentStoredChatHistory(...historyArgs);
+  const reconcileReceipt = (receipt: "blocked" | "continue" | "accepted") => {
+    if (receipt === "accepted") {
+      // Keep the retry payload, but don't let server custody block later browser
+      // inputs. Revalidate custody on the next drain instead of caching it.
+      accepted.add(item.id);
+      return "continue";
+    }
+    return receipt;
+  };
+  // Passive unknown sends need positive delivery proof; only an explicit retry
+  // may continue through idle reconciliation to the same idempotency key.
+  if (typeof history === "string") {
+    return reconcileReceipt(history);
+  }
+  if (item.sendState === "unconfirmed" && !retryUnconfirmed) {
+    return "blocked";
+  }
+  if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
+    return "blocked";
+  }
+  if ((item.sendAttempts ?? 0) > 0) {
+    // History and run metadata are non-atomic; verify idle before parking unknown.
+    const verifiedHistory = await readCurrentStoredChatHistory(...historyArgs);
+    if (typeof verifiedHistory === "string") {
+      return reconcileReceipt(verifiedHistory);
+    }
+    const liveSendCurrent = anyChatOutboxPaneMatches(host, (pane) => {
+      const liveItem = pane.chatQueue.find((entry) => entry.id === item.id);
+      return (
+        liveItem?.sendState === "sending" &&
+        sameQueuedDeliveryVersion(liveItem, { ...item, sendState: "sending" })
+      );
+    });
+    if (liveSendCurrent) {
+      // Elapsed time cannot turn a current-connection send into reconnect uncertainty.
+      return "blocked";
+    }
+    if (retryUnconfirmed) {
+      return "send";
+    }
+    const parked = updateQueuedMessage(host, item.id, (entry) => ({
+      ...entry,
+      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
+      sendState: "unconfirmed",
+    }));
+    if (parked) {
+      surfaceChatDeliveryFailure(
+        host,
+        outbox.sessionKey,
+        outbox.agentId,
+        UNCONFIRMED_CHAT_SEND_ERROR,
+        // The parked bubble's inline footer is the visible outcome; hidden
+        // panes still get the named toast. Command chips never park here.
+        { inline: !item.localCommandName },
+      );
+    }
+    return "blocked";
+  }
+  return "send";
 }
 
 export async function readCurrentStoredChatHistory(
@@ -241,7 +299,7 @@ export async function readCurrentStoredChatHistory(
   client: NonNullable<ChatHost["client"]>,
   connectionEpoch: number | undefined,
   scheduleRetry: (delayMs: number) => void,
-): Promise<ChatHistoryResult | "blocked" | "continue"> {
+): Promise<ChatHistoryResult | "blocked" | "continue" | "accepted"> {
   const runId = host.chatRunId;
   const runGeneration = host.chatRunLifecycleGeneration;
   const sessionId = host.currentSessionId;
@@ -291,14 +349,20 @@ export async function readCurrentStoredChatHistory(
     let history: ChatHistoryResult | undefined;
     let proof: Awaited<ReturnType<typeof findChatOutboxSubmission>>;
     let pendingBefore: number | undefined;
+    // Sending stays FIFO, but an uncertain head must not hide consumption of
+    // later submissions (for example a steer accepted while that head waited).
+    const inputRunIds = [
+      ...new Set([item.sendRunId, ...outbox.queue.map((entry) => entry.sendRunId)]),
+    ]
+      .filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS))
+      .slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS);
     const request = {
       sessionKey: outbox.sessionKey,
+      toolResultMaxChars: 2_000,
       ...(isUiGlobalSessionKey(outbox.sessionKey) && outbox.agentId
         ? { agentId: outbox.agentId }
         : {}),
-      ...(item.sendRunId && item.sendRunId.length <= CHAT_INPUT_RUN_ID_MAX_CHARS
-        ? { inputRunIds: [item.sendRunId] }
-        : {}),
+      ...(inputRunIds.length ? { inputRunIds } : {}),
     };
     const readHistory = async (limit: number, before?: number) => {
       const read = (requestCursor?: string) =>
@@ -437,6 +501,62 @@ export async function readCurrentStoredChatHistory(
         !item.sessionId || item.sessionId === historySessionId ? history.deltaCursor : undefined,
       );
     }
+    // Reuse this scoped history receipt for every captured ordinary submission,
+    // without replaying messages or treating run completion as delivery proof.
+    let siblingRetirementFailed = false;
+    for (const sibling of outbox.queue) {
+      if (sibling.id === item.id || !requiresChatInputConsumption(sibling)) {
+        continue;
+      }
+      const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
+      if (sibling.sessionId && sibling.sessionId !== historySessionId) {
+        continue;
+      }
+      const receipt = readChatInputReceipt(history, sibling);
+      if (receipt === "pending") {
+        confirmQueuedMessageCustody(host, sibling, historySessionId);
+        continue;
+      }
+      const canonical = findChatSubmissionMessage(history.messages, sibling.sendRunId, true);
+      if (
+        receipt !== "consumed" &&
+        receipt !== "cancelled" &&
+        !(canonical && (canonical.id !== null || canonical.sequence !== null))
+      ) {
+        continue;
+      }
+      const current = readStoredChatOutbox(host, outbox)?.queue.find(
+        (entry) => entry.id === sibling.id,
+      );
+      if (
+        !current ||
+        current.sessionId !== sibling.sessionId ||
+        !sameQueuedDeliveryVersion(current, sibling)
+      ) {
+        continue;
+      }
+      const retired = await retireDeliveredQueuedUserTurn(host, sibling.sendRunId, outbox, {
+        inputConsumed: true,
+      });
+      if (!isCurrent()) {
+        return "blocked";
+      }
+      siblingRetirementFailed ||= retired !== "retired";
+    }
+    if (siblingRetirementFailed) {
+      // A failed storage write must not advance past the only legacy proof.
+      historyRead.accept(undefined);
+    }
+    const retainedHead = readStoredChatOutbox(host, outbox)?.queue.find(
+      (entry) => entry.id === item.id,
+    );
+    if (
+      !retainedHead ||
+      retainedHead.sessionId !== item.sessionId ||
+      !sameQueuedDeliveryVersion(retainedHead, item)
+    ) {
+      return "continue";
+    }
     chatOutboxOwner(host).syncHost(host);
     const pendingInput = reconcilePendingChatOutboxInput(
       host,
@@ -455,7 +575,9 @@ export async function readCurrentStoredChatHistory(
       inputReceipt ||
       submission ||
       (!requiresChatInputConsumption(item) &&
-        sessionRunProvesQueuedDelivery(history.sessionInfo, item))
+        item.sendRunId &&
+        (history.sessionInfo?.activeRunIds?.includes(item.sendRunId) ||
+          history.sessionInfo?.lastRunId === item.sendRunId))
     ) {
       const retired =
         (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox, {
@@ -474,7 +596,7 @@ export async function readCurrentStoredChatHistory(
     if (
       !history.sessionInfo ||
       history.sessionInfo.hasActiveRun === true ||
-      isSessionRunActive(history.sessionInfo)
+      isSessionRunStateActive(history.sessionInfo)
     ) {
       return "blocked";
     }
@@ -496,7 +618,7 @@ export async function readCurrentStoredChatHistory(
         current.row.sessionId !== sessionId ||
         current.row.lastRunId !== runId ||
         current.row.hasActiveRun === true ||
-        isSessionRunActive(current.row)
+        isSessionRunStateActive(current.row)
       ) {
         return "blocked";
       }

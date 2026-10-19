@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { withSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
+import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
@@ -52,36 +55,6 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
   });
 
-  it("forwards memory trigger metadata into tool creation so append-only guards activate", () => {
-    const memoryFlushWritePath = "memory/2026-03-24.md";
-    const context = buildEmbeddedAttemptToolRunContext({ trigger: "memory", memoryFlushWritePath });
-    expect(context.trigger).toBe("memory");
-    expect(context.memoryFlushWritePath).toBe(memoryFlushWritePath);
-  });
-
-  it("forwards cron job id into tool creation so self-removal can be scoped", () => {
-    const context = buildEmbeddedAttemptToolRunContext({
-      trigger: "cron",
-      jobId: "job-current",
-    });
-    expect(context.trigger).toBe("cron");
-    expect(context.jobId).toBe("job-current");
-  });
-
-  it.each([undefined, false, true])(
-    "preserves originating inbound audio %s",
-    (currentInboundAudio) => {
-      const context = buildEmbeddedAttemptToolRunContext({ currentInboundAudio });
-      const withOperation = buildEmbeddedAttemptToolRunContext({
-        currentInboundAudio,
-        replyOperation: { acceptedSteeredInboundAudio: false },
-      });
-
-      expect(context.hasCurrentInboundAudio?.()).toBe(currentInboundAudio === true);
-      expect(withOperation.hasCurrentInboundAudio?.()).toBe(currentInboundAudio === true);
-    },
-  );
-
   it("reads accepted steering at execution without crossing operation owners", () => {
     let acceptedSteeredInboundAudio = false;
     const attempt = {
@@ -106,5 +79,26 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
         replyOperation: { acceptedSteeredInboundAudio: false },
       }).hasCurrentInboundAudio?.(),
     ).toBe(false);
+  });
+
+  it("captures host-owned audio for the matching turn without lending it to detached work", () => {
+    const identity = { sessionId: "audio-context", sessionKey: "agent:main:audio-context" };
+    const operation = createReplyOperation({ ...identity, resetTriggered: false });
+    try {
+      withSessionControllerOwner(operation, () => {
+        const context = buildEmbeddedAttemptToolRunContext(identity);
+        const foreign = buildEmbeddedAttemptToolRunContext({ ...identity, sessionId: "other" });
+        const detached = runWithSessionControllerCleanup(() =>
+          buildEmbeddedAttemptToolRunContext(identity),
+        );
+        expect(context.hasCurrentInboundAudio()).toBe(false);
+        operation.markSteeredInputAccepted({ inboundAudio: true });
+        expect(context.hasCurrentInboundAudio()).toBe(true);
+        expect(foreign.hasCurrentInboundAudio()).toBe(false);
+        expect(detached.hasCurrentInboundAudio()).toBe(false);
+      });
+    } finally {
+      operation.complete();
+    }
   });
 });

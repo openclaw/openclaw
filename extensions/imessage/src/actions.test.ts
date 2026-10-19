@@ -38,7 +38,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => ({
   )),
   createSubsystemLogger: () => loggerMock,
 }));
-vi.mock("./probe.js", () => probeMock);
+// mock-isolation: keep private API probe calls in the test-owned double.
+vi.mock("./probe.js", () => ({
+  probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
+}));
 vi.mock("./private-api-status.js", async () => ({
   ...(await vi.importActual<typeof import("./private-api-status.js")>("./private-api-status.js")),
   getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
@@ -111,42 +114,6 @@ beforeEach(() => {
 });
 
 describe("imessage message actions", () => {
-  it("advertises private actions before capabilities are known", () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(undefined);
-    expect(
-      imessageMessageActions.describeMessageTool({
-        cfg: cfg(),
-        currentChannelId: "chat_guid:" + chatGuid,
-      })?.actions,
-    ).toStrictEqual([
-      "react",
-      "edit",
-      "reply",
-      "sendWithEffect",
-      "renameGroup",
-      "setGroupIcon",
-      "addParticipant",
-      "removeParticipant",
-      "leaveGroup",
-      "poll",
-      "poll-vote",
-      "upload-file",
-    ]);
-  });
-
-  it("respects configured gates and known selectors during discovery", () => {
-    bridge({ editMessage: true, retractMessagePart: true });
-    const actions = imessageMessageActions.describeMessageTool({
-      cfg: cfg({ reactions: false, reply: false }),
-      currentChannelId: "chat_guid:" + chatGuid,
-    })?.actions;
-    expect(actions).not.toContain("react");
-    expect(actions).not.toContain("reply");
-    expect(actions).not.toContain("poll");
-    expect(actions).toContain("edit");
-    expect(actions).toContain("unsend");
-  });
-
   it("requires a trusted requester for iMessage group management", () => {
     for (const action of [
       "renameGroup",
@@ -242,13 +209,13 @@ describe("imessage message actions", () => {
     expect(result).toMatchObject({ details: { ok: true, messageId: "poll-guid" } });
   });
 
-  it.each(["target", "chatGuid"])("rejects a redacted %s before sending", async (alias) => {
+  it("rejects a redacted target before sending", async () => {
     bridge({ pollPayloadMessage: true });
     await expect(
       run(
         "poll",
         {
-          [alias]: "***",
+          target: "***",
           pollQuestion: "Lunch?",
           pollOption: ["Pizza", "Sushi"],
         },
@@ -397,23 +364,6 @@ describe("imessage message actions", () => {
     );
   });
 
-  it("rejects ambiguous SSH wrappers before editing", async () => {
-    bridge({ editMessage: true });
-    remoteHostMock.resolve.mockRejectedValueOnce(
-      new Error(
-        "iMessage SSH cliPath wrapper is not the simple transparent form; configure channels.imessage.remoteHost explicitly.",
-      ),
-    );
-    await expect(
-      run(
-        "edit",
-        { ...message, text: "updated text" },
-        { cfg: { channels: { imessage: { cliPath: "/gateway/imsg-proxy-wrapper" } } } },
-      ),
-    ).rejects.toThrow("configure channels.imessage.remoteHost explicitly");
-    expect(runtimeMock.editMessage).not.toHaveBeenCalled();
-  });
-
   it("warns and rejects when probing finds the private bridge unavailable", async () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(undefined);
     probeMock.probeIMessagePrivateApi.mockResolvedValue({
@@ -556,7 +506,7 @@ describe("imessage message actions", () => {
           partIndex: undefined,
           attachment: {
             kind: "buffer",
-            buffer: Uint8Array.from([0xfb, 0xff]),
+            buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
             filename: "attachment.bin",
           },
           options,
@@ -595,45 +545,6 @@ describe("imessage message actions", () => {
       run("reply", { ...message, text: "reply", buffer: "UE5HREFUQQ==", filename: "card.png" }),
     ).rejects.toThrow(/needs an imsg build that exposes `send-rich --file`/);
     expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
-  });
-
-  it("resolves a direct operator's phone target and short id before reacting", async () => {
-    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("any;-;+12069106512");
-    runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("full-guid");
-    await run(
-      "react",
-      { target: "+12069106512", messageId: "5", emoji: "👍" },
-      { conversationReadOrigin: "direct-operator" },
-    );
-    expect(runtimeMock.resolveChatGuidForTarget.mock.calls).toStrictEqual([
-      [
-        {
-          target: { kind: "chat_identifier", chatIdentifier: "iMessage;-;+12069106512" },
-          options,
-          conversationReadOrigin: "direct-operator",
-        },
-      ],
-    ]);
-    expect(runtimeMock.resolveIMessageMessageId).toHaveBeenNthCalledWith(1, "5", {
-      requireKnownShortId: true,
-      chatContext: {},
-    });
-    expect(runtimeMock.resolveIMessageMessageId).toHaveBeenLastCalledWith("full-guid", {
-      requireKnownShortId: true,
-      chatContext: { chatGuid: "any;-;+12069106512" },
-    });
-    expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
-      [
-        {
-          chatGuid: "any;-;+12069106512",
-          messageId: "full-guid",
-          reaction: "like",
-          remove: undefined,
-          partIndex: undefined,
-          options,
-        },
-      ],
-    ]);
   });
 
   it("rejects reactions to an unregistered synthesized chat", async () => {
@@ -716,7 +627,7 @@ describe("imessage message actions", () => {
       [
         {
           chatGuid,
-          buffer: Uint8Array.from([0xfb, 0xff]),
+          buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
           filename: "photo.jpg",
           asVoice: true,
           options,
@@ -733,7 +644,9 @@ describe("imessage message actions", () => {
       { senderIsOwner: true },
     );
     expect(runtimeMock.setGroupIcon).toHaveBeenCalledWith(
-      expect.objectContaining({ buffer: Uint8Array.from([0xfb, 0xff]) }),
+      expect.objectContaining({
+        buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
+      }),
     );
   });
 

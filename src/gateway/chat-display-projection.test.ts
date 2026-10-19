@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createSessionProjection,
+  projectLiveSessionMessage,
+} from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
+import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
 import {
@@ -56,6 +61,33 @@ it("strips attachment capabilities even after another field changed", () => {
   ).toEqual([{ role: "assistant", content: [{ type: "attachment", attachment }] }]);
 });
 
+it("normalizes context markers independently from assistant billing", () => {
+  // Whole-turn counters; the marker keeps the latest call that clients size context from.
+  const usage = { input: 6, output: 77, cacheRead: 54_631, totalTokens: 54_714 };
+  const marker = { state: "available", promptTokens: 27_378, totalTokens: 27_379 };
+  const message = (contextUsage: unknown) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    usage: { ...usage, contextUsage },
+  });
+  const projected = sanitizeChatHistoryMessages([
+    message({ ...marker, source: "private" }),
+    message({ state: "unavailable", source: "private", promptTokens: 100 }),
+    message({ state: "available", promptTokens: 27_378 }),
+    message({ state: "available", promptTokens: 27_378, totalTokens: 27_000 }),
+    message({ state: "available", promptTokens: Number.POSITIVE_INFINITY, totalTokens: 30_000 }),
+    message({ state: "available", promptTokens: 0, totalTokens: 0 }),
+  ]) as Array<{ usage?: unknown }>;
+  expect(projected.map((entry) => entry.usage)).toEqual([
+    { ...usage, contextUsage: marker },
+    { ...usage, contextUsage: { state: "unavailable" } },
+    usage,
+    usage,
+    usage,
+    { ...usage, contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 } },
+  ]);
+});
+
 describe("transcript display metadata", () => {
   it("keeps display identity while omitting upstream prompt metadata", () => {
     const metadata = { id: "message-1", mirrorIdentity: "turn-1:prompt", replyToId: "message-0" };
@@ -64,7 +96,12 @@ describe("transcript display metadata", () => {
         {
           role: "user",
           content: "Visible",
-          __openclaw: { ...metadata, upstreamUserText: "private decorated prompt ".repeat(12_000) },
+          __openclaw: {
+            ...metadata,
+            upstreamUserText: "private decorated prompt ".repeat(12_000),
+            sessionSendDelivery: Object.freeze({ source: "private-session" }),
+            chatInputRecovery: Object.freeze({ source: "private-operator-snapshot" }),
+          },
           providerReplay: {
             type: "openai-responses-compaction",
             data: "opaque-display-compaction",
@@ -421,44 +458,72 @@ it.each([
   ]);
 });
 
-it("caps nested output once, preserves literal text, and removes private media", () => {
-  const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
-  const metadata = {
-    id: "nested-output",
-    toolOutput: { source: "execution", modelInput: "unverified" },
-  };
-  const result = { type: "toolResult", toolCallId: "nested-call", toolName: "exec", isError: true };
-  const message = {
-    role: "assistant",
-    __openclaw: metadata,
-    content: [
-      {
-        ...result,
-        text,
-        content: [
-          { type: "text", text },
-          { type: "image", data: "aW1hZ2U=", path: "/private/image.png" },
-        ],
-      },
-    ],
-  };
-  const original = structuredClone(message);
-  expect(sanitizeChatHistoryMessages([message], 32)).toEqual([
-    {
+it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
+  "caps nested output once, preserves literal text, and removes private media (%j)",
+  (options) => {
+    const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
+    const metadata = {
+      id: "nested-output",
+      toolOutput: { source: "execution", modelInput: "unverified" },
+    };
+    const result = {
+      type: "toolResult",
+      toolCallId: "nested-call",
+      toolName: "exec",
+      isError: true,
+    };
+    const message = {
       role: "assistant",
-      __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+      __openclaw: metadata,
       content: [
         {
           ...result,
+          text,
           content: [
-            { type: "text", text: text.slice(0, 32) },
-            { type: "image", omitted: true, bytes: 5 },
+            { type: "text", text },
+            { type: "image", data: "aW1hZ2U=", path: "/private/image.png" },
           ],
         },
       ],
-    },
-  ]);
-  expect(message).toEqual(original);
+    };
+    const original = structuredClone(message);
+    expect(sanitizeChatHistoryMessages([message], options.maxChars, options)).toEqual([
+      {
+        role: "assistant",
+        __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+        content: [
+          {
+            ...result,
+            content: [
+              { type: "text", text: text.slice(0, 32) },
+              { type: "image", omitted: true, bytes: 5 },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(message).toEqual(original);
+  },
+);
+
+it("retains complete structured tool previews and tool arguments under a smaller text cap", () => {
+  const text = JSON.stringify({
+    kind: "canvas",
+    view: { id: "preview", title: "x".repeat(3_000) },
+  });
+  const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: text } };
+  const result = {
+    type: "toolResult",
+    toolCallId: "structured",
+    content: [{ type: "text", text }],
+  };
+  const messages = [
+    { role: "toolResult", content: result.content },
+    { role: "assistant", content: [call, result] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
+    messages,
+  );
 });
 
 const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
@@ -477,6 +542,13 @@ const answer = {
   stopReason: "stop",
   __openclaw: { id: "answer", seq: 3, runId: "run-a" },
 };
+const terminal = (runId = "run-a") => ({
+  role: "custom",
+  customType: "run-failed-before-reply",
+  content: "Recovery exhausted.",
+  details: { runId },
+  __openclaw: { id: "terminal-" + runId, seq: 10, runId },
+});
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
@@ -503,6 +575,7 @@ it.each([
     for (const content of [[], [text("Partial reply")]]) {
       const message = {
         ...failed,
+        __openclaw: { id: "legacy", seq: 2 },
         ...error,
         content,
         errorMessage: "PRIVATE_PROVIDER_DETAIL",
@@ -547,6 +620,7 @@ it.each([
   const message = {
     ...failed,
     ...partial,
+    __openclaw: { id: "legacy", seq: 2 },
     errorCode: "incomplete_tool_call",
     errorMessage: "PRIVATE_PROVIDER_DETAIL",
   };
@@ -577,6 +651,48 @@ it.each([
   expect(message).toEqual(original);
 });
 
+it("shows one settled notice while preserving each attempt's partial output", () => {
+  const partial = { ...failed, text: "", content: [text("The first step completed.")] };
+  const empty = { ...failed, __openclaw: { id: "failed-again", seq: 3, runId: "run-a" } };
+  const receipt = {
+    role: "custom",
+    customType: "run-failed-before-reply",
+    content: "The request failed after retries.",
+    details: { runId: "run-a", error: "PRIVATE_PROVIDER_ERROR" },
+    __openclaw: { id: "receipt", seq: 4 },
+  };
+  const raw = [user, partial, empty, receipt];
+  const original = structuredClone(raw);
+  const projected = projectChatDisplayMessages(raw);
+  expect(projected.map(readRunFailureNotice).filter(Boolean)).toEqual([
+    { runId: "run-a", summary: "The request failed after retries." },
+  ]);
+  expect(projected.filter((message) => message.role === "assistant")).toEqual([
+    { ...partial, stopReason: undefined, errorMessage: undefined },
+  ]);
+  expect(projected.at(-1)).toMatchObject({ role: "custom", content: receipt.content });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROVIDER_ERROR");
+  expect(projectChatDisplayMessages(projected)).toEqual(projected);
+  expect(raw).toEqual(original);
+});
+
+it.each([
+  { content: [{ type: "image", url: "/media/proof.png", mimeType: "image/png" }] },
+  { content: [tool] },
+])("keeps structured partial output separate from its final notice: %j", ({ content }) => {
+  const projected = projectChatDisplayMessages([{ ...failed, content }, terminal()]);
+  expect(projected).toHaveLength(2);
+  expect(projected[0]).toMatchObject({ role: "assistant", content });
+  expect(projected[0]).not.toHaveProperty("openclawRunError");
+  expect(projected[0]).not.toHaveProperty("stopReason");
+  expect(readRunFailureNotice(projected[1])?.runId).toBe("run-a");
+  let state = createSessionProjection({ sessionKey: "agent:main:split" }, projected);
+  for (const message of projected) {
+    state = projectLiveSessionMessage(state, message);
+  }
+  expect(state.messages).toEqual(projected);
+});
+
 it("retires repeated non-visible failed attempts after their run answers", () => {
   const failures = Array.from({ length: 4 }, (_, attempt) => ({
     ...failed,
@@ -590,31 +706,42 @@ it("retires repeated non-visible failed attempts after their run answers", () =>
   expect(raw).toEqual(original);
 });
 
-it.each([
-  { ...answer, provider: "openclaw", model: "gateway-injected" },
-  { ...answer, stopReason: "toolUse" },
-])("keeps the failure without a successful runtime answer: %j", (later) => {
-  expect(projectedIds([user, failed, later])).toContainEqual(failed["__openclaw"]);
-});
-
-it("keeps unattributed failures and failures separated by a new user turn", () => {
-  const unattributed = { ...failed, __openclaw: { id: "failed", seq: 2 } };
-  expect(projectedIds([user, unattributed, answer])).toContainEqual(unattributed["__openclaw"]);
-  expect(projectedIds([user, failed, { ...user, content: "next turn" }, answer])).toContainEqual(
-    failed["__openclaw"],
-  );
-  expect(projectedIds([user, failed])).toContainEqual(failed["__openclaw"]);
-});
-
-it("preserves partial content even when the redundant text field is empty", () => {
-  const partial = { ...failed, text: "", content: [text("Partial reply")] };
-  expect(projectChatDisplayMessages([user, partial, answer])[1]).toMatchObject({
-    content: [text("Partial reply")],
-  });
-});
+it.each([false, true])(
+  "keeps same-run recovery across hidden internal continuations (overflow=%s)",
+  (overflow) => {
+    const failure = overflow
+      ? {
+          ...failed,
+          content: [
+            text(
+              "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+            ),
+          ],
+        }
+      : failed;
+    const continuation = {
+      role: "user",
+      content: "Continue from the current transcript.",
+      provenance: { kind: "internal_system" },
+      display: false,
+    };
+    const raw = [user, failure, continuation, answer];
+    const original = structuredClone(raw);
+    expect(projectChatDisplayMessages(raw)).toEqual([user, answer]);
+    expect(
+      projectedIds([
+        user,
+        failure,
+        continuation,
+        { ...answer, __openclaw: { ...answer["__openclaw"], runId: "other" } },
+      ]),
+    ).not.toContainEqual(failed["__openclaw"]);
+    expect(raw).toEqual(original);
+  },
+);
 
 it("repairs only matching attempts when run identities interleave", () => {
-  const other = { ...failed, __openclaw: { id: "other", seq: 3, runId: "run-b" } };
+  const other = terminal("run-b");
   expect(projectedIds([user, failed, other, answer])).toEqual([
     user["__openclaw"],
     other["__openclaw"],
@@ -634,9 +761,7 @@ it("refreshes SSE history after an appended failure recovers", async () => {
   });
   expect(
     (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
-  ).toMatchObject({
-    stopReason: "error",
-  });
+  ).toBeUndefined();
   expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
     shouldRefresh: true,
   });

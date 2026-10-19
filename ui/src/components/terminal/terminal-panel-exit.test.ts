@@ -7,11 +7,11 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 type Exit = { reason?: string; exitCode: number | null; signal?: number | null; error?: string };
 const normalExit: Exit = { reason: "process_exit", exitCode: 0, signal: null };
@@ -40,9 +40,9 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
       }
       return terminalOpenResult(sessionId);
     }
-    return method === "terminal.list" ? { sessions: [] } : {};
+    return method === "terminal.list" ? { sessions: [] } : { ok: true };
   });
-  const panel = document.createElement(tag) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(tag);
   panel.client = {
     forceReconnect: vi.fn(),
     request: request as TerminalGatewayClient["request"],
@@ -60,7 +60,7 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("terminal.open", expect.anything(), expect.anything()),
   );
-  await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+  await waitForFast(() => expect(panel.querySelector(".tp-connecting")).toBeNull());
   await panel.updateComplete;
   return { panel, controllers, request, emit };
 }
@@ -74,8 +74,9 @@ describe("terminal process exit", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     await i18n.setLocale("en");
   });
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     createTerminal.mockReset();
     vi.unstubAllGlobals();
   });
@@ -112,6 +113,21 @@ describe("terminal process exit", () => {
     expect(panel.terminalPanelOpen).toBe(true);
   });
 
+  it("allows removing an exited diagnostic tab while offline", async () => {
+    const { panel, request, emit } = await mount();
+    emit("terminal.exit", { sessionId: "session-1", reason: "error", exitCode: 7 });
+    await panel.updateComplete;
+    panel.gatewayConnected = false;
+    await panel.updateComplete;
+    expect(panel.hostedTabs[0]?.closeDisabled).toBe(false);
+    const close = panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!;
+    expect(close.disabled).toBe(false);
+    close.click();
+    await panel.updateComplete;
+    expect(panel.hostedTabs).toEqual([]);
+    expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
+  });
+
   it.each([
     { reason: "process_exit", exitCode: 7 },
     { reason: "process_exit", exitCode: 0, signal: 15 },
@@ -143,7 +159,7 @@ describe("terminal process exit", () => {
     await panel.updateComplete;
     expect(panel.hostedTabs).toEqual([]);
     expect(panel.terminalPanelOpen).toBe(true);
-    expect(panel.renderRoot.querySelector(".tabstrip-new")).not.toBeNull();
+    expect(panel.querySelector(".tabstrip-new")).not.toBeNull();
   });
 
   it("does not resurrect an early normal exit or open a replacement shell", async () => {

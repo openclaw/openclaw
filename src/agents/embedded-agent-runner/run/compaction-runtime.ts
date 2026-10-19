@@ -1,4 +1,10 @@
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../../config/sessions/session-actor-storage-binding.js";
+import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { sameSessionTranscriptStorePath } from "../../../config/sessions/transcript-store-identity.js";
 import {
   withOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
@@ -9,10 +15,12 @@ import {
   type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { acknowledgeReplySessionTransition } from "../../../sessions/session-controller.session-reader.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
@@ -101,6 +109,7 @@ export async function compactEmbeddedRunForRecovery(
     ...buildEmbeddedCompactionRuntimeContext(
       {
         ...runParams,
+        modelCallUrgency: resolveModelCallUrgency(runParams),
         authProfileId: input.modelSelection.authProfileId,
         authProfileIdSource: input.modelSelection.authProfileIdSource,
         runtimeAuthPlan: input.runtimeAuthPlan,
@@ -150,7 +159,7 @@ export async function compactEmbeddedRunForRecovery(
     sessionId: activeSession.id,
     sessionKey: input.resolvedSessionKey,
     agentId: input.sessionAgentId,
-    sessionTarget: buildContextEngineCompactionSessionTarget({
+    sessionTarget: await buildContextEngineCompactionSessionTarget({
       agentId: input.sessionAgentId,
       config: runParams.config,
       sessionFile: activeSession.file,
@@ -225,7 +234,8 @@ export async function compactEmbeddedRunForRecovery(
     (!successor.sessionFile || successor.sessionFile === activeSession.file) &&
     (!target?.agentId || target.agentId === activeSession.target?.agentId) &&
     (!target?.sessionKey || target.sessionKey === activeSession.target?.sessionKey) &&
-    (!target?.storePath || target.storePath === activeSession.target?.storePath);
+    (!target?.storePath ||
+      sameSessionTranscriptStorePath(target.storePath, activeSession.target?.storePath));
   const reportedTokens = result.result?.tokensAfter;
   const tokensAfter =
     typeof reportedTokens === "number" && Number.isFinite(reportedTokens) && reportedTokens >= 0
@@ -280,14 +290,28 @@ export function createEmbeddedRunCompactionRuntime(input: {
       ? params.sessionManager
       : undefined;
   const detached = params.sessionPersistence === "detached";
-  const assertAdmittedActive = () => {
-    // Preserve the caller's reason before a closed admission can replace it.
-    abortSignal?.throwIfAborted();
-    if (!admittedAssertion) {
-      throw new Error("compaction recovery requires an active admitted run");
-    }
-    admittedAssertion();
-  };
+  const initialTarget = sessionPromptState.sessionTarget;
+  const incognito =
+    !memoryManager && !detached && initialTarget
+      ? captureSessionActorStorageOwner(initialTarget, {
+          assertCurrent() {
+            abortSignal?.throwIfAborted();
+            admittedAssertion?.();
+          },
+          authorize() {},
+        })
+      : undefined;
+  const assertAdmittedActive = composeSessionSourceAssertion(
+    [admittedAssertion],
+    (assertSource) => {
+      // Preserve the caller's reason before a closed admission can replace it.
+      abortSignal?.throwIfAborted();
+      if (!admittedAssertion) {
+        throw new Error("compaction recovery requires an active admitted run");
+      }
+      assertSource();
+    },
+  );
   const assertRecoveryTarget = (
     target: ContextEngineSessionTarget | undefined,
     sessionId = sessionPromptState.sessionId,
@@ -297,23 +321,28 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (memoryManager || detached) {
       return;
     }
-    const entry =
-      target?.sessionKey && target.storePath
-        ? loadSessionEntry({
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            storePath: target.storePath,
-            readConsistency: "latest",
-          })
-        : undefined;
     if (
-      !writerFence ||
-      writerFence.expectedWriterRunId !== runId ||
-      entry?.sessionId !== sessionId ||
-      entry.lifecycleRevision !== writerFence.expectedLifecycleRevision ||
-      entry.activeWriterRunId !== writerFence.expectedWriterRunId
+      incognito &&
+      (target?.agentId !== initialTarget?.agentId ||
+        !sameSessionTranscriptStorePath(target?.storePath, initialTarget?.storePath))
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
+    }
+    if (!writerFence || writerFence.expectedWriterRunId !== runId) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+    if (incognito) {
+      const entry =
+        target?.sessionKey && target.storePath
+          ? readCapturedSessionActorEntry(incognito, target.sessionKey)
+          : undefined;
+      if (
+        entry?.sessionId !== sessionId ||
+        entry.lifecycleRevision !== writerFence.expectedLifecycleRevision ||
+        entry.activeWriterRunId !== writerFence.expectedWriterRunId
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
     }
   };
   const assertRecoveryActive = () => assertRecoveryTarget(sessionPromptState.sessionTarget);
@@ -336,34 +365,64 @@ export function createEmbeddedRunCompactionRuntime(input: {
     const sessionFile = sessionPromptState.sessionFile;
     const writerFence = sessionPromptState.sessionWriterFence;
     const target = { ...getPreparedTarget(), ...writerFence };
-    const assertActive = () => {
-      assertRecoveryTarget(target, sessionId, writerFence);
-      const current = sessionPromptState.sessionTarget;
-      if (
-        sessionPromptState.sessionId !== sessionId ||
-        sessionPromptState.sessionFile !== sessionFile ||
-        current?.agentId !== target.agentId ||
-        current?.sessionKey !== target.sessionKey ||
-        current?.storePath !== target.storePath
-      ) {
-        throw new Error("active session changed after recovery transcript preparation");
-      }
-    };
+    const source =
+      !memoryManager && !detached
+        ? captureSessionEntrySourceAssertion({
+            scope: target,
+            expected: {
+              sessionId,
+              lifecycleRevision: writerFence?.expectedLifecycleRevision,
+              activeWriterRunId: writerFence?.expectedWriterRunId,
+            },
+            fields: ["sessionId", "lifecycleRevision", "activeWriterRunId"],
+            assertCurrent: () => assertRecoveryTarget(target, sessionId, writerFence),
+            assertHostCurrent: () => {
+              if (!writerFence || writerFence.expectedWriterRunId !== runId) {
+                throw new SessionTranscriptWriterClaimReboundError();
+              }
+            },
+            refuse: () => {
+              throw new SessionTranscriptWriterClaimReboundError();
+            },
+          })
+        : undefined;
+    const assertActive = composeSessionSourceAssertion(
+      [assertAdmittedActive, source],
+      (assertSources) => {
+        assertSources();
+        const current = sessionPromptState.sessionTarget;
+        if (
+          sessionPromptState.sessionId !== sessionId ||
+          sessionPromptState.sessionFile !== sessionFile ||
+          current?.agentId !== target.agentId ||
+          current?.sessionKey !== target.sessionKey ||
+          !sameSessionTranscriptStorePath(current?.storePath, target.storePath)
+        ) {
+          throw new Error("active session changed after recovery transcript preparation");
+        }
+      },
+    );
     return {
       session: { id: sessionId, file: sessionFile, target },
       ...(memoryManager ? { sessionManager: memoryManager } : {}),
       assertActive,
       withTranscriptWrites: <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
-        const assertInvocationActive = () => {
-          signal?.throwIfAborted();
-          assertActive();
-        };
-        const assertCommitAllowed = () => {
-          assertInvocationActive();
-          if (detached || memoryManager) {
-            throw new Error("detached recovery cannot persist a session transcript");
-          }
-        };
+        const assertInvocationActive = composeSessionSourceAssertion(
+          [assertActive],
+          (assertSource) => {
+            signal?.throwIfAborted();
+            assertSource();
+          },
+        );
+        const assertCommitAllowed = composeSessionSourceAssertion(
+          [assertInvocationActive],
+          (assertSource) => {
+            assertSource();
+            if (detached || memoryManager) {
+              throw new Error("detached recovery cannot persist a session transcript");
+            }
+          },
+        );
         // Bind the original owner and the safety wrapper's child signal to every
         // nested write, including callbacks retained beyond the backend result.
         return withOwnedSessionTranscriptWrites(
@@ -465,6 +524,10 @@ export function createEmbeddedRunCompactionRuntime(input: {
     // row still identifies the already-recorded compaction for accounting.
     if (!accepted.previousSessionId) {
       recordAccepted(accepted);
+    }
+    if (params.replyOperation && accepted.admissionTransition) {
+      assertAdmittedActive();
+      await acknowledgeReplySessionTransition(params.replyOperation, accepted.admissionTransition);
     }
     assertRecoveryActive();
     sessionPromptState.notifyCompactionSessionAdopted(accepted.previousSessionId);

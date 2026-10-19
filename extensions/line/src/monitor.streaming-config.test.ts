@@ -17,11 +17,6 @@ const { createLineBotMock, registerWebhookTargetWithPluginRouteMock } = vi.hoist
 
 vi.mock("./bot.js", () => ({ createLineBot: createLineBotMock }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  chunkMarkdownText: vi.fn(),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-}));
-
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
     "openclaw/plugin-sdk/runtime-env",
@@ -48,17 +43,6 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
 });
 
 vi.mock("./auto-reply-delivery.js", () => ({ deliverLineAutoReply: vi.fn() }));
-vi.mock("./markdown-to-line.js", () => ({ processLineMessage: vi.fn() }));
-vi.mock("./send.js", () => ({
-  createFlexMessage: vi.fn(),
-  createImageMessage: vi.fn(),
-  createLocationMessage: vi.fn(),
-  getUserDisplayName: vi.fn(),
-  pushMessagesLine: vi.fn(),
-  replyMessageLine: vi.fn(),
-  showLoadingAnimation: vi.fn(),
-}));
-vi.mock("./template-messages.js", () => ({ buildTemplateMessageFromPayload: vi.fn() }));
 
 const { monitorLineProvider } = await import("./monitor.js");
 const { setLineRuntime } = await import("./runtime.js");
@@ -67,14 +51,10 @@ type ResolvedTurn = { replyOptions?: { disableBlockStreaming?: boolean } };
 
 afterAll(() => {
   vi.doUnmock("./bot.js");
-  vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");
   vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
   vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
   vi.doUnmock("./auto-reply-delivery.js");
-  vi.doUnmock("./markdown-to-line.js");
-  vi.doUnmock("./send.js");
-  vi.doUnmock("./template-messages.js");
   vi.resetModules();
 });
 

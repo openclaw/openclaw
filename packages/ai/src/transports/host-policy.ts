@@ -8,7 +8,7 @@ import {
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
-  options?: { sanitizeSse?: boolean },
+  options?: { sanitizeSse?: boolean; onSseComment?: () => void },
 ): typeof fetch {
   const host = getAiTransportHost();
   if (options !== undefined) {
@@ -25,7 +25,7 @@ export function buildManagedModelFetch(
   model: Model,
   host: AiTransportHost = getAiTransportHost(),
 ): typeof fetch | undefined {
-  if (!host.requiresManagedTransport(model)) {
+  if (!host.requiresManagedTransport(model, "fetch")) {
     return undefined;
   }
   const fetcher = host.buildModelFetch(model);

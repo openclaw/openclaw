@@ -3,7 +3,7 @@ import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import {
   resolveSessionCleanupAction,
   isSessionsCleanupPartialResult,
@@ -252,6 +252,8 @@ async function maybeRunGatewayCleanup(
       config: cfg,
       expectUrl: url,
       method: "sessions.cleanup",
+      // Maintenance can outlive passive reads; keep the connection's startup deadline.
+      timeoutMs: null,
       params: {
         agent: opts.agent,
         allAgents: opts.allAgents,
@@ -278,7 +280,7 @@ async function maybeRunGatewayCleanup(
 
 /** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const gatewayCleanup = await maybeRunGatewayCleanup(opts, cfg);
   if (gatewayCleanup.delegated) {
     // The Gateway owns this path. Preserve its syntax because resolving a remote

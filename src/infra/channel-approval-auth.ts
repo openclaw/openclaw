@@ -1,4 +1,3 @@
-// Authorizes chat approval commands against channel approval policy.
 import { getChannelPlugin, resolveChannelApprovalCapability } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isImplicitSameChatApprovalAuthorization } from "../plugin-sdk/approval-auth-helpers.js";
@@ -13,13 +12,13 @@ export type ApprovalCommandAuthorization = {
 };
 
 /** Resolves whether a chat `/approve` command is authorized by channel-specific approval policy. */
-export function resolveApprovalCommandAuthorization(params: {
+export async function resolveApprovalCommandAuthorization(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
   senderId?: string | null;
   kind: ChannelApprovalKind;
-}): ApprovalCommandAuthorization {
+}): Promise<ApprovalCommandAuthorization> {
   const channel = normalizeMessageChannel(params.channel);
   if (!channel) {
     // Non-channel command paths keep legacy behavior: allow, but do not count as explicit chat auth.
@@ -36,7 +35,9 @@ export function resolveApprovalCommandAuthorization(params: {
       reason: `Plugin approvals on ${channel} require an updated channel plugin for the configured reviewer policy.`,
     };
   }
-  const resolved = approvalCapability?.authorizeActorAction?.({
+  const authorize =
+    approvalCapability?.authorizeActorActionAsync ?? approvalCapability?.authorizeActorAction;
+  const resolved = await authorize?.({
     cfg: params.cfg,
     accountId: params.accountId,
     senderId: params.senderId,
@@ -49,7 +50,10 @@ export function resolveApprovalCommandAuthorization(params: {
   // Keep `resolved` by reference; cloning before this check would drop the
   // non-enumerable implicit-fallback marker.
   const implicitSameChatAuthorization = isImplicitSameChatApprovalAuthorization(resolved);
-  const availability = approvalCapability?.getActionAvailabilityState?.({
+  const availability = await (
+    approvalCapability?.getActionAvailabilityStateAsync ??
+    approvalCapability?.getActionAvailabilityState
+  )?.({
     cfg: params.cfg,
     accountId: params.accountId,
     action: "approve",

@@ -19,6 +19,7 @@ import {
   normalizeStringifiedOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { startCrablineDiscordReplies } from "./crabline-discord-replies.js";
 import {
@@ -28,6 +29,7 @@ import {
   resolveCrablineStateConversation,
   resolveDiscordQaId,
 } from "./crabline-provider-targets.js";
+import { cleanupCrablineResources } from "./crabline-resource-cleanup.js";
 import { createCrablineSlackIngress } from "./crabline-slack-ingress.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
 import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
@@ -122,11 +124,8 @@ function readTelegramLifecycleEvent(params: {
   let previous = providerKey ? params.messageByProviderId.get(providerKey) : undefined;
   if (!previous && providerKey && providerMessageId) {
     const pending = params.pendingByChat.get(chatId) ?? [];
-    if (pending.length === 1) {
-      const pendingMessage = pending[0];
-      if (!pendingMessage) {
-        return null;
-      }
+    const pendingMessage = pending.length === 1 ? pending[0] : undefined;
+    if (pendingMessage) {
       previous = pendingMessage;
       pendingMessage.id = providerMessageId;
       params.messageByProviderId.set(providerKey, pendingMessage);
@@ -374,6 +373,7 @@ function createQaCrablineTransport(params: {
   transportPolicy?: QaTransportPolicy;
   selection: OpenClawCrablineChannelDriverSelection;
   state: QaCrablineTransportState;
+  whatsappAuthDir?: string;
 }) {
   const { adapter, readiness, selection, transportPolicy, state } = params;
   const stateMethods = createQaTransportStateMethods({ state, accountId: adapter.accountId });
@@ -457,57 +457,66 @@ function createQaCrablineTransport(params: {
         selection.channel === "signal"
           ? normalizeCrablineSignalGatewayConfig(rawConfig)
           : rawConfig;
+      if (params.whatsappAuthDir) {
+        const whatsapp = config.channels?.whatsapp;
+        const accounts = { ...whatsapp?.accounts };
+        accounts[adapter.accountId] = {
+          ...accounts[adapter.accountId],
+          authDir: params.whatsappAuthDir,
+        };
+        return {
+          ...config,
+          channels: {
+            ...config.channels,
+            whatsapp: { ...whatsapp, accounts },
+          },
+        };
+      }
+      let channels: OpenClawConfig["channels"];
       if (selection.channel === "discord") {
         const discord = config.channels?.discord;
         const senderAllowlist = transportPolicy?.senderAllowlist?.map(resolveDiscordQaId);
         const dmAllowlist = senderAllowlist ?? discord?.allowFrom ?? ["*"];
         const wildcardGuild = discord?.guilds?.["*"];
         const wildcardChannel = wildcardGuild?.channels?.["*"];
-        return {
-          ...config,
-          channels: {
-            ...config.channels,
-            discord: {
-              ...discord,
-              ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
-              allowFrom: [...dmAllowlist],
-              ...(dmAllowlist.includes("*") ? {} : { dmPolicy: "allowlist" as const }),
-              ...(senderAllowlist ? { groupPolicy: "allowlist" as const } : {}),
-              guilds: {
-                ...discord?.guilds,
-                "*": {
-                  ...wildcardGuild,
-                  ...(senderAllowlist ? { users: [...senderAllowlist] } : {}),
-                  channels: {
-                    ...wildcardGuild?.channels,
-                    "*": {
-                      ...wildcardChannel,
-                      ...(transportPolicy?.requireGroupMention ? { requireMention: true } : {}),
-                    },
+        channels = {
+          discord: {
+            ...discord,
+            ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
+            allowFrom: [...dmAllowlist],
+            ...(dmAllowlist.includes("*") ? {} : { dmPolicy: "allowlist" as const }),
+            ...(senderAllowlist ? { groupPolicy: "allowlist" as const } : {}),
+            guilds: {
+              ...discord?.guilds,
+              "*": {
+                ...wildcardGuild,
+                ...(senderAllowlist ? { users: [...senderAllowlist] } : {}),
+                channels: {
+                  ...wildcardGuild?.channels,
+                  "*": {
+                    ...wildcardChannel,
+                    ...(transportPolicy?.requireGroupMention ? { requireMention: true } : {}),
                   },
                 },
               },
             },
           },
-        } satisfies QaTransportGatewayConfig;
-      }
-      if (selection.channel !== "telegram") {
-        return config as QaTransportGatewayConfig;
-      }
-      const senderAllowlist = transportPolicy?.senderAllowlist?.map(
-        (senderId) => adapter.createAgentDelivery({ target: `dm:${senderId}` }).providerTargetKey,
-      );
-      if (
-        !transportPolicy?.requireGroupMention &&
-        !senderAllowlist &&
-        !transportPolicy?.topLevelReplies
-      ) {
-        return config as QaTransportGatewayConfig;
-      }
-      return {
-        ...config,
-        channels: {
-          ...config.channels,
+        };
+      } else {
+        if (selection.channel !== "telegram") {
+          return config as QaTransportGatewayConfig;
+        }
+        const senderAllowlist = transportPolicy?.senderAllowlist?.map(
+          (senderId) => adapter.createAgentDelivery({ target: `dm:${senderId}` }).providerTargetKey,
+        );
+        if (
+          !transportPolicy?.requireGroupMention &&
+          !senderAllowlist &&
+          !transportPolicy?.topLevelReplies
+        ) {
+          return config as QaTransportGatewayConfig;
+        }
+        channels = {
           telegram: {
             ...config.channels?.telegram,
             ...(transportPolicy?.topLevelReplies ? { replyToMode: "off" as const } : {}),
@@ -526,8 +535,9 @@ function createQaCrablineTransport(params: {
               },
             },
           },
-        },
-      } as QaTransportGatewayConfig;
+        };
+      }
+      return { ...config, channels: { ...config.channels, ...channels } };
     },
 
     waitReady: (input: Parameters<QaTransportAdapter["waitReady"]>[0]) =>
@@ -627,7 +637,8 @@ function createQaCrablineTransport(params: {
 
     async cleanupAfterGatewayStop() {
       releaseDiscordQaApiBase?.();
-      await state.cleanup();
+      // The same auth state must survive Gateway restarts and its final credential flush.
+      await cleanupCrablineResources(() => state.cleanup(), params.whatsappAuthDir);
     },
   } satisfies QaTransportAdapter & { resetTransport: () => void };
 }
@@ -664,6 +675,7 @@ export async function createQaCrablineTransportAdapter(params: {
     openclawConfig: {},
     recorderPath,
   });
+  let whatsappAuthDir: string | undefined;
   // Readiness owns the startup probe; runtime transcripts may contain provider-specific API records.
   try {
     const readiness = await runOpenClawCrablineProviderReadiness({
@@ -671,10 +683,15 @@ export async function createQaCrablineTransportAdapter(params: {
       outputDir: params.outputDir,
       selection: params.selection,
     });
-    const state = await createCrablineState({
-      adapter,
-      state: params.state ?? createQaBusState(),
-    });
+    if (adapter.manifest.provider === "whatsapp") {
+      const { createWhatsAppQaAuthState } = await import("@openclaw/whatsapp/api.js");
+      whatsappAuthDir = await createWhatsAppQaAuthState({
+        parentDir: resolvePreferredOpenClawTmpDir(),
+        selfJid: adapter.manifest.selfJid,
+        name: "OpenClaw QA",
+      });
+    }
+    const state = await createCrablineState({ adapter, state: params.state ?? createQaBusState() });
     observeEvent = state.observeEvent;
     return createQaCrablineTransport({
       adapter,
@@ -682,10 +699,11 @@ export async function createQaCrablineTransportAdapter(params: {
       transportPolicy: params.transportPolicy,
       selection: params.selection,
       state,
+      whatsappAuthDir,
     });
   } catch (error) {
     try {
-      await adapter.close();
+      await cleanupCrablineResources(() => adapter.close(), whatsappAuthDir);
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], "Crabline startup and cleanup failed", {
         cause: cleanupError,

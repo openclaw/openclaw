@@ -1,6 +1,6 @@
 import {
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -13,7 +13,7 @@ import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 
-export type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
+type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
 
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
@@ -25,14 +25,8 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   voiceEnabled: boolean;
-  maxDiscordCommands?: number;
-  listSkillCommandsForAgents?: typeof listSkillCommandsForAgents;
-  listNativeCommandSpecsForConfig?: typeof listNativeCommandSpecsForConfig;
 }) {
-  const listSkillCommands = params.listSkillCommandsForAgents ?? listSkillCommandsForAgents;
-  const listNativeCommandSpecs =
-    params.listNativeCommandSpecsForConfig ?? listNativeCommandSpecsForConfig;
-  const maxDiscordCommands = params.maxDiscordCommands ?? 100;
+  const maxDiscordCommands = 100;
   const pluginCommandSpecs = params.nativeEnabled
     ? (await loadPluginCommandRuntime())
         .createPluginCommandRuntime()
@@ -55,9 +49,9 @@ export async function resolveDiscordProviderCommandSpecs(params: {
       onCollision: collisionHandler,
     });
   const listPrimaryCommandSpecs = (
-    skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+    skillCommands: Awaited<ReturnType<typeof prepareSkillCommandsForAgents>>,
   ): NativeCommandSpec[] => {
-    const standardSpecs = listNativeCommandSpecs(params.cfg, {
+    const standardSpecs = listNativeCommandSpecsForConfig(params.cfg, {
       skillCommands,
       provider: "discord",
     });
@@ -77,7 +71,7 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   const provisionalCollisions: string[] = [];
   let skillCommands =
     params.nativeEnabled && params.nativeSkillsEnabled
-      ? listSkillCommands({ cfg: params.cfg })
+      ? await prepareSkillCommandsForAgents({ cfg: params.cfg })
       : [];
   let commandSpecs: DiscordProviderCommandSpec[] = params.nativeEnabled
     ? mergePluginCommandSpecs(listPrimaryCommandSpecs(skillCommands), (normalizedName) =>

@@ -1,21 +1,12 @@
 import path from "node:path";
 import type { InternalSessionEntry } from "../config/sessions.js";
-import {
-  createSessionWorkStartChangedError,
-  SessionWorkStartChangedError,
-} from "../config/sessions/lifecycle.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import { hasRestartRecoveryTerminalRun } from "../config/sessions/restart-recovery-state.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  beginSessionWorkAdmission,
-  getSessionWorkAdmissionOwnerRelease,
-  type SessionWorkAdmissionLease,
-} from "../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import type { AgentCommandOpts } from "./command/types.js";
-import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery/main-session-recovery-admission.js";
 import { repairMainSessionRecoveryMutation } from "./main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -28,7 +19,6 @@ import {
 } from "./main-session-recovery/main-session-recovery-store.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-const COMMAND_ADMISSION_OWNER = Symbol.for("openclaw.agentCommand");
 
 type PreparedRecoveryOwnerTarget = {
   sessionAgentId: string;
@@ -40,10 +30,11 @@ type PreparedRecoveryOwnerTarget = {
   sessionStore?: Record<string, InternalSessionEntry>;
   storePath: string;
   runLease?: { release: () => Promise<void> };
+  opts?: AgentCommandOpts;
 };
 
 type AcquiredRecoveryOwner = {
-  lease: MainSessionRecoveryOwnerLease;
+  lease?: MainSessionRecoveryOwnerLease;
   entry: InternalSessionEntry;
   sessionKey: string;
 };
@@ -55,16 +46,7 @@ function refreshPreparedRecoveryOwnerTarget(
   if (!acquired || acquired.entry.sessionId !== prepared.sessionId) {
     return;
   }
-  const current = acquired.entry;
-  const entry = {
-    ...current,
-    ...(current.restartRecoveryRuns
-      ? { restartRecoveryRuns: current.restartRecoveryRuns.map((run) => ({ ...run })) }
-      : {}),
-    ...(current.mainRestartRecovery
-      ? { mainRestartRecovery: structuredClone(current.mainRestartRecovery) }
-      : {}),
-  };
+  const entry = acquired.entry;
   prepared.sessionEntry = entry;
   if (prepared.sessionStore && prepared.sessionKey) {
     prepared.sessionStore[prepared.sessionKey] = entry;
@@ -158,7 +140,9 @@ async function claimAgentCommandRecoveryOwner(params: {
     ) {
       throw createSessionWorkStartChangedError(sessionKey);
     }
-    return undefined;
+    return claim.entry && claim.sessionKey
+      ? { entry: claim.entry, sessionKey: claim.sessionKey }
+      : undefined;
   }
   // Explicit replacements keep this token through successor persistence so
   // recovery cannot race the replacement; Gateway claims follow the same lease path.
@@ -176,21 +160,35 @@ export async function runWithAgentCommandRecoveryOwner<
   restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   run: (prepared: TPrepared) => Promise<TResult>;
 }): Promise<TResult> {
-  const interrupted = new AbortController();
-  const params = {
-    ...options,
-    opts: {
-      ...options.opts,
-      abortSignal: options.opts.abortSignal
-        ? AbortSignal.any([options.opts.abortSignal, interrupted.signal])
-        : interrupted.signal,
-    },
+  const params = { ...options, opts: { ...options.opts } };
+  const assertCurrent = () => {
+    params.opts.abortSignal?.throwIfAborted();
+    assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+    params.opts.assertSourceCurrent?.();
+    params.opts.operatorAuthority?.assertCurrent();
   };
   // Gateway may preclaim before dispatch, so every preparation outcome must release ownership.
   let lease = params.opts.mainRestartRecoveryOwnerLease;
-  let commandAdmission: SessionWorkAdmissionLease | undefined;
   let pendingRecovery: Awaited<ReturnType<typeof releaseMainSessionRecoveryOwner>> = undefined;
   let prepared: TPrepared | undefined;
+  let cleanupStarted = false;
+  const cleanup = async () => {
+    if (cleanupStarted) {
+      return;
+    }
+    cleanupStarted = true;
+    try {
+      const releasedRecovery = await releaseMainSessionRecoveryOwner(lease);
+      pendingRecovery ??= releasedRecovery;
+    } catch (error) {
+      log.warn(`failed to release main-session recovery owner: ${formatErrorMessage(error)}`);
+    }
+    try {
+      await prepared?.runLease?.release();
+    } finally {
+      scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+    }
+  };
   try {
     try {
       prepared = await params.prepare(params.opts);
@@ -201,7 +199,6 @@ export async function runWithAgentCommandRecoveryOwner<
       if (restoreAdmittedRecovery) {
         pendingRecovery = await repairMainSessionRecoveryMutation({
           mutation: restoreAdmittedRecovery,
-          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
           onError: (restoreError) =>
             log.warn(
               `failed to restore admitted recovery after command preparation: ${formatErrorMessage(restoreError)}`,
@@ -211,111 +208,34 @@ export async function runWithAgentCommandRecoveryOwner<
       throw error;
     }
     const target = prepared;
-    const sourceTool = params.opts.inputProvenance?.sourceTool;
-    const mayWaitForRecovery =
-      params.mode === "claim" &&
-      (sourceTool === "subagent_settle" || sourceTool === "subagent_announce") &&
-      params.opts.sessionEffects !== "internal" &&
-      !params.opts.mainRestartRecoveryAdmitted &&
-      !params.opts.mainRestartRecoveryOwnerLease;
-    const recoveryOwnerRelease = () =>
-      mayWaitForRecovery
-        ? getSessionWorkAdmissionOwnerRelease({
-            scope: target.storePath,
-            identities: [target.sessionKey, target.previousSessionId ?? target.sessionId],
-            owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-          })
-        : undefined;
-    let pendingOwner = recoveryOwnerRelease();
-    let acquired: AcquiredRecoveryOwner | undefined;
-    for (;;) {
-      if (pendingOwner) {
-        // Keep the accepted settle/announce turn (and its idempotency key) alive rather
-        // than returning a cached no-turn rejection to the durable delivery owner.
-        await racePromiseWithAbortSignal(pendingOwner, params.opts.abortSignal);
-        params.opts.abortSignal?.throwIfAborted();
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-        await prepared.runLease?.release();
-        prepared = undefined;
-        prepared = await params.prepare(params.opts);
-        if (
-          prepared.sessionId !== target.sessionId ||
-          prepared.previousSessionId !== target.previousSessionId ||
-          prepared.sessionKey !== target.sessionKey ||
-          path.resolve(prepared.storePath) !== path.resolve(target.storePath)
-        ) {
-          throw createSessionWorkStartChangedError(target.sessionKey ?? target.sessionId);
+    return await withSessionTurn(
+      {
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId,
+        agentId: target.sessionAgentId,
+        storePath: target.storePath,
+        abortSignal: params.opts.abortSignal,
+        detached: params.opts.sessionEffects === "internal",
+      },
+      async (_operation, abortSignal) => {
+        params.opts = { ...params.opts, abortSignal };
+        if (target.opts) {
+          target.opts = { ...target.opts, abortSignal };
         }
-      }
-      if (mayWaitForRecovery) {
-        params.opts.abortSignal?.throwIfAborted();
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-      }
-      if (params.opts.sessionEffects !== "internal") {
-        commandAdmission = await beginSessionWorkAdmission({
-          scope: prepared.storePath ?? `agent:${prepared.sessionAgentId}`,
-          identities: [prepared.sessionKey, prepared.previousSessionId ?? prepared.sessionId],
-          owner: COMMAND_ADMISSION_OWNER,
-          serializeOwner: true,
-          signal: params.opts.abortSignal,
-          onInterrupt: (reason) => interrupted.abort(reason),
-          assertAllowed: () => {
-            params.opts.abortSignal?.throwIfAborted();
-            assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-            params.opts.assertSourceCurrent?.();
-            params.opts.operatorAuthority?.assertCurrent();
-          },
-        });
-      }
-      try {
-        pendingOwner = recoveryOwnerRelease();
-        if (pendingOwner) {
-          commandAdmission?.release();
-          continue;
+        try {
+          assertCurrent();
+          const acquired = await claimAgentCommandRecoveryOwner({ ...params, prepared: target });
+          lease = acquired?.lease;
+          assertCurrent();
+          // Carry the owner transaction's exact row into the admitted command.
+          refreshPreparedRecoveryOwnerTarget(target, acquired);
+          return await params.run(target);
+        } finally {
+          await cleanup();
         }
-        acquired = await claimAgentCommandRecoveryOwner({ ...params, prepared });
-      } catch (error) {
-        // A recovery owner can start during the writer-ordered claim. Only a
-        // proven live owner makes this rejection waitable; stale/deleted rows
-        // and tombstones still fail through the unchanged durable guard.
-        pendingOwner =
-          error instanceof SessionWorkStartChangedError ? recoveryOwnerRelease() : undefined;
-        if (!pendingOwner) {
-          throw error;
-        }
-        commandAdmission?.release();
-        continue;
-      }
-      pendingOwner = acquired ? undefined : recoveryOwnerRelease();
-      if (!pendingOwner) {
-        break;
-      }
-      commandAdmission?.release();
-    }
-    lease = acquired?.lease;
-    if (mayWaitForRecovery) {
-      params.opts.abortSignal?.throwIfAborted();
-      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-    }
-    // Preparation uses a detached working copy. Carry the owner transaction's
-    // exact row forward so successful settlement can consume the same recovery cycle.
-    refreshPreparedRecoveryOwnerTarget(prepared, acquired);
-    const admitted = prepared;
-    return await (commandAdmission
-      ? commandAdmission.run(() => params.run(admitted))
-      : params.run(admitted));
+      },
+    );
   } finally {
-    try {
-      const releasedRecovery = await releaseMainSessionRecoveryOwner(lease);
-      pendingRecovery ??= releasedRecovery;
-    } catch (error) {
-      log.warn(`failed to release main-session recovery owner: ${formatErrorMessage(error)}`);
-    }
-    try {
-      await prepared?.runLease?.release();
-    } finally {
-      commandAdmission?.release();
-      scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
-    }
+    await cleanup();
   }
 }

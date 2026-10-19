@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { FileChooser, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -14,14 +14,124 @@ const suite = createControlUiE2eSuite({
 
 async function choose(page: Page, kind: string) {
   await page.getByRole("button", { name: "Add attachment", exact: true }).press("Enter");
-  const item = page.locator(`.agent-chat__attach-menu-option[value="${kind}"]`);
+  const item = page.locator(`.agent-chat__attach-menu-option[data-value="${kind}"]`);
   await item.waitFor({ state: "visible" });
   const pending = page.waitForEvent("filechooser");
   await item.press("Enter");
   return pending;
 }
 
+async function capturePickerGeometry(page: Page) {
+  await page.addInitScript(() => {
+    document.addEventListener(
+      "click",
+      (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || input.type !== "file") {
+          return;
+        }
+        const trigger = input
+          .closest(".agent-chat__composer-shell")!
+          .querySelector(".agent-chat__input-btn--attach")!;
+        input.dataset.pickerGeometry = JSON.stringify({
+          input: input.getBoundingClientRect().toJSON(),
+          trigger: trigger.getBoundingClientRect().toJSON(),
+        });
+      },
+      true,
+    );
+  });
+}
+
+async function expectPickerAtPlusButton(chooser: FileChooser) {
+  const geometry = await chooser.element().evaluate((input) => {
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("Expected the file chooser to belong to an HTML input");
+    }
+    // SAFETY: The capture listener above writes both DOMRect snapshots before click activation.
+    return JSON.parse(input.dataset.pickerGeometry!) as {
+      input: { left: number; top: number; width: number; height: number };
+      trigger: { left: number; top: number; width: number; height: number };
+    };
+  });
+  expect(geometry.trigger.width).toBeGreaterThan(0);
+  expect(geometry.trigger.height).toBeGreaterThan(0);
+  for (const axis of ["left", "top", "width", "height"] as const) {
+    expect(geometry.input[axis]).toBeCloseTo(geometry.trigger[axis], 1);
+  }
+}
+
 suite.define(() => {
+  it.each(["chat", "new"])("positions the upload input at the plus button in %s", async (route) => {
+    const fixture = attachmentBrowserFixtures.find(
+      (candidate) => candidate.name === "iPhone Safari",
+    )!;
+    await suite.withPage(
+      { userAgent: fixture.userAgent, hasTouch: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installAttachmentBrowserIdentity(page, fixture);
+        await capturePickerGeometry(page);
+        await installMockGateway(page, { historyMessages: [] });
+        await page.goto(suite.server.baseUrl + route);
+        for (const viewport of [
+          { width: 390, height: 844 },
+          { width: 320, height: 568 },
+        ]) {
+          await page.setViewportSize(viewport);
+          const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
+          await trigger.click();
+          const pending = page.waitForEvent("filechooser");
+          await page.locator('.agent-chat__attach-menu-option[data-value="file"]').click();
+          const chooser = await pending;
+          await expectPickerAtPlusButton(chooser);
+          expect(await chooser.element().getAttribute("tabindex")).toBe("-1");
+          await chooser.setFiles([]);
+        }
+      },
+    );
+  });
+
+  it.each(["chat", "new"])("refreshes camera fallback picker geometry in %s", async (route) => {
+    const fixture = attachmentBrowserFixtures.find((candidate) => candidate.name === "iOS Chrome")!;
+    await suite.withPage(
+      { userAgent: fixture.userAgent, hasTouch: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installAttachmentBrowserIdentity(page, fixture);
+        await capturePickerGeometry(page);
+        await page.addInitScript(() => {
+          Object.defineProperty(navigator, "mediaDevices", {
+            configurable: true,
+            value: undefined,
+          });
+        });
+        await installMockGateway(page, { historyMessages: [] });
+        await page.goto(suite.server.baseUrl + route);
+        const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
+        const camera = page.locator("openclaw-chat-camera-capture");
+        for (const [width, height, action] of [
+          [390, 844, "Upload photo"],
+          [320, 568, "Upload photo"],
+          [932, 430, "Use device camera"],
+        ] as const) {
+          // First-use upload, then a prior Photo selection followed by composer re-layout.
+          if (width === 320) {
+            const chooser = await choose(page, "photo");
+            await expectPickerAtPlusButton(chooser);
+            await chooser.setFiles([]);
+          }
+          await page.setViewportSize({ width, height });
+          await trigger.click();
+          await page.getByRole("menuitem", { name: "Take photo", exact: true }).click();
+          const pending = page.waitForEvent("filechooser");
+          await camera.getByRole("button", { name: action, exact: true }).click();
+          const chooser = await pending;
+          await expectPickerAtPlusButton(chooser);
+          await chooser.setFiles([]);
+        }
+      },
+    );
+  });
+
   it.each([
     { route: "chat", availability: "insecure" },
     { route: "new", availability: "unsupported" },
@@ -123,6 +233,14 @@ suite.define(() => {
       ["iPhone Safari", "chat"],
       ["iPad desktop Safari", "new"],
       ["Android Chrome", "chat"],
+      ["Android Firefox", "new"],
+      ["Android Edge", "new"],
+      ["Android Samsung", "chat"],
+      ["Android WebView", "new"],
+      ["Android unknown app", "chat"],
+      ["Android native", "chat"],
+      ["Android web chrome", "new"],
+      ["unknown", "new"],
       ["macOS Safari", "new"],
       ["iOS unknown engine", "chat"],
       ["iOS in-app", "new"],
@@ -144,6 +262,12 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installAttachmentBrowserIdentity(page, fixture);
+        await page.addInitScript(() => {
+          navigator.mediaDevices.getUserMedia = async () => {
+            document.documentElement.dataset.cameraRequested = "true";
+            throw new DOMException("Preview permission denied", "NotAllowedError");
+          };
+        });
         await installMockGateway(page, { historyMessages: [] });
         await page.goto(suite.server.baseUrl + fixture.route);
         const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
@@ -157,17 +281,19 @@ suite.define(() => {
           await page.setViewportSize({ width, height });
           await trigger.press("Enter");
           await page
-            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .locator('.agent-chat__attach-menu-option[data-value="file"]')
             .waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Take photo", "Attach…"] : ["Take photo", "Photo", "File"],
+            fixture.single ? ["Attach…"] : ["Take photo", "Photo", "File"],
           );
           for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
-            expect(await page.locator(`wa-dropdown-item[value="${value}"]`).isVisible()).toBe(true);
+            expect(await page.locator(`.oc-menu-item[data-value="${value}"]`).isVisible()).toBe(
+              true,
+            );
           }
           await page.keyboard.press("Escape");
           await page
-            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .locator('.agent-chat__attach-menu-option[data-value="file"]')
             .waitFor({ state: "hidden" });
         }
         for (const kind of fixture.single ? ["file"] : ["file", "photo"]) {
@@ -177,22 +303,55 @@ suite.define(() => {
           expect(await chooser.element().getAttribute("capture")).toBeNull();
           const accept = await chooser.element().getAttribute("accept");
           if (kind === "file") {
-            for (const type of [
-              "image/*",
-              "video/*",
-              "audio/*",
-              "application/pdf",
-              ".docx",
-              ".zip",
-            ]) {
-              expect(accept).toContain(type);
-            }
+            expect(accept).toBeNull();
           } else {
             expect(accept).toBe("image/*");
           }
           // Boundary-only cancellation: Playwright does not exercise OS dialogs.
           await chooser.setFiles([]);
           expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
+        }
+        if (fixture.nativeCapture) {
+          const draft = page
+            .locator(".agent-chat__composer-shell textarea, .new-session-page__composer textarea")
+            .first();
+          await draft.fill("Keep this draft while taking a photo");
+          const chooser = await choose(page, "camera");
+          expect(chooser.isMultiple()).toBe(false);
+          expect(await chooser.element().getAttribute("accept")).toBe("image/*");
+          expect(await chooser.element().getAttribute("capture")).toBe("environment");
+          expect(await page.getByRole("dialog", { name: "Take photo", exact: true }).count()).toBe(
+            0,
+          );
+          expect(await page.locator("html").getAttribute("data-camera-requested")).toBeNull();
+          await chooser.setFiles([]);
+          expect(await draft.inputValue()).toBe("Keep this draft while taking a photo");
+          const photo = {
+            name: "camera.png",
+            mimeType: "image/png",
+            buffer: Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+              "base64",
+            ),
+          };
+          await (await choose(page, "camera")).setFiles(photo);
+          const ready = page.locator('.chat-attachment-thumb[aria-busy="false"]');
+          await expect.poll(() => ready.count()).toBe(1);
+          expect(await page.locator(".agent-chat__camera-input").inputValue()).toBe("");
+          await page.getByRole("button", { name: "Remove camera.png", exact: true }).click();
+          await (await choose(page, "camera")).setFiles(photo);
+          await expect.poll(() => ready.count()).toBe(1);
+          expect(await draft.inputValue()).toBe("Keep this draft while taking a photo");
+        } else if (!fixture.single) {
+          await trigger.press("Enter");
+          await page.getByRole("menuitem", { name: "Take photo", exact: true }).press("Enter");
+          const dialog = page.getByRole("dialog", { name: "Take photo", exact: true });
+          await dialog.waitFor();
+          expect(await page.locator("html").getAttribute("data-camera-requested")).toBe("true");
+          await page
+            .locator("openclaw-chat-camera-capture")
+            .getByRole("button", { name: "Cancel", exact: true })
+            .click();
         }
         if (fixture.single) {
           await page.setViewportSize({ width: 390, height: 844 });

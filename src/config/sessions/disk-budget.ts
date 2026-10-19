@@ -280,7 +280,7 @@ async function removePromptBlobFileForBudget(params: {
 }
 
 export async function pruneUnreferencedSessionArtifacts(params: {
-  store: Record<string, SessionEntry>;
+  store: Record<string, SessionEntry> | (() => Promise<Record<string, SessionEntry>>);
   storePath: string;
   olderThanMs: number;
   dryRun?: boolean;
@@ -291,6 +291,10 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
+  if (files.length === 0 && promptBlobFiles.length === 0) {
+    return { scannedFiles: 0, removedFiles: 0, freedBytes: 0, olderThanMs };
+  }
+  const store = typeof params.store === "function" ? await params.store() : params.store;
   const fileSizesByPath = new Map(
     [...files, ...promptBlobFiles].map((file) => [file.canonicalPath, file.size]),
   );
@@ -304,7 +308,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
       (file) => file.mtimeMs <= cutoffMs && !params.excludeCanonicalPaths?.has(file.canonicalPath),
     ),
     sessionsDir,
-    store: params.store,
+    store,
   });
   // Prompt refs are projected through the persistence layer so inline snapshots and externalized
   // prompt blobs are judged against the bytes that would actually hit disk.
@@ -313,7 +317,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
       ? buildSessionEntryRefCounts(
           projectSessionStoreForPersistence({
             storePath: params.storePath,
-            store: params.store,
+            store,
           }).store,
           resolveProjectedPromptBlobHash,
         )

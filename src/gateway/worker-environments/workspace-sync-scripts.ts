@@ -203,13 +203,17 @@ function addWithParents(relative) {
 function walk(relativeDirectory) {
   const absoluteDirectory = relativeDirectory ? path.join(root, relativeDirectory) : root;
   const names = [];
+  let hasDerivedEntry = false;
+  let hasIncludedEntry = false;
   const directory = fs.opendirSync(absoluteDirectory);
   try {
     for (;;) {
       const entry = directory.readSync();
       if (!entry) break;
       const relative = relativeDirectory ? relativeDirectory + "/" + entry.name : entry.name;
-      if ((!relativeDirectory && entry.name === ".git") || isDerivedWorkspacePath(relative, isStagedInput(relative))) {
+      if (!relativeDirectory && entry.name === ".git") continue;
+      if (isDerivedWorkspacePath(relative, isStagedInput(relative))) {
+        hasDerivedEntry = true;
         continue;
       }
       names.push(entry.name);
@@ -224,11 +228,16 @@ function walk(relativeDirectory) {
     const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
     const absolute = path.join(root, relative);
     const stats = fs.lstatSync(absolute);
-    recordNode(relative, absolute, stats);
     if (stats.isDirectory()) {
-      walk(relative);
+      if (!walk(relative)) {
+        hasDerivedEntry = true;
+        continue;
+      }
     }
+    recordNode(relative, absolute, stats);
+    hasIncludedEntry = true;
   }
+  return hasIncludedEntry || !hasDerivedEntry;
 }
 async function nulPaths(args) {
   const value = await readManifestGit(root, ["ls-files", "-z", ...args], MAX_WORKSPACE_INVENTORY_PATH_BYTES);
@@ -294,11 +303,12 @@ async function eligiblePaths() {
   }
   for (const priorManifestDigest of priorManifestDigests) {
     const manifestRoot = path.join(process.env.HOME, ".openclaw-worker", "manifests");
-    for (const entry of readPriorManifestEntries(manifestRoot, priorManifestDigest)) {
+    const priorEntries = readPriorManifestEntries(manifestRoot, priorManifestDigest);
+    for (const entry of priorEntries) {
       if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
-      if (!isDerivedWorkspacePath(entry.path, isStagedInput(entry.path))) {
-        addSelected(entry.path);
-      }
+    }
+    for (const entry of projectWorkspaceEntries(priorEntries.toSorted(compareManifestPaths), isStagedInput)) {
+      addSelected(entry.path);
     }
   }
   return [...selected].filter((relative) => !isDerivedWorkspacePath(relative, isStagedInput(relative))).sort();
@@ -501,7 +511,9 @@ ${WORKSPACE_MANIFEST_PROGRAM}
 function readManifestInput() { return fs.readFileSync(0, "utf8"); }
 function assertManifestCurrent() {}
 function readManifestGit(root, args, maxBuffer) {
-  return childProcess.execFileSync("git", ["-C", root, ...args], { encoding: "buffer", maxBuffer });
+  return childProcess.execFileSync("git", ["-C", root, ...args], {
+    encoding: "buffer", maxBuffer, env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+  });
 }
 main().catch((error) => {
   process.stderr.write(String(error && error.stack ? error.stack : error) + "\n");

@@ -1,9 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { validateUiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createGatewayToolCallerWrapper } from "../../../src/agents/tools/gateway-caller-context.js";
+import * as gatewayTransport from "../../../src/agents/tools/in-process-gateway.js";
 import { createScreenTool } from "../../../src/agents/tools/screen-tool.js";
 import type {
   GatewayClient,
@@ -23,6 +25,10 @@ import {
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const callGateway = vi.spyOn(gatewayTransport, "callInProcessGatewayTool");
+
+// The nested suite owns browser teardown before this transport is restored.
+afterAll(() => callGateway.mockRestore());
 
 suite.define(() => {
   it("opens the selected session and its app views only in the browser that asked the agent", async () => {
@@ -39,6 +45,7 @@ suite.define(() => {
             "desktop.observe",
             "environments.status",
             "portal.list",
+            "ui.command.result",
           ],
           methodResponses: {
             "sessions.list": chatSessionListResponse(),
@@ -107,26 +114,66 @@ suite.define(() => {
       broadcastToConnIds: (event, payload, connIds) => {
         for (const browser of browsers) {
           if (connIds.has(browser.connId)) {
-            deliveries.push(browser.gateway.emitGatewayEvent(event, payload));
+            deliveries.push(
+              (async () => {
+                await browser.gateway.emitGatewayEvent(event, payload);
+                if (
+                  event === "ui.command" &&
+                  validateUiCommandParams(payload) &&
+                  payload.requestId
+                ) {
+                  const report = await browser.gateway.waitForRequest("ui.command.result", {
+                    match: { requestId: payload.requestId },
+                  });
+                  const respond = vi.fn();
+                  await expectDefined(
+                    uiCommandHandlers["ui.command.result"],
+                    "ui.command.result",
+                  )({ params: report.params, client: browser.client, respond, context } as never);
+                  expect(respond).toHaveBeenCalledWith(true, { ok: true });
+                }
+              })(),
+            );
           }
         }
       },
     } satisfies Partial<GatewayRequestContext>;
+    callGateway.mockImplementation(
+      async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
+        const respond = vi.fn();
+        await expectDefined(
+          uiCommandHandlers["ui.command"],
+          "ui.command",
+        )({ params, respond, context } as never);
+        if (!validateUiCommandParams(params)) {
+          throw new Error("Screen tool emitted an invalid UI command");
+        }
+        const command = params.command;
+        if (command.kind === "panel" && command.panel === "portal" && command.open) {
+          expect(respond).toHaveBeenCalledWith(true, {
+            ok: true,
+            delivery: "dispatched",
+            presentation:
+              "portalId" in command && command.portalId
+                ? {
+                    portalId: command.portalId,
+                    status: "unverified",
+                    reason: "network-reachable",
+                  }
+                : { status: "unverified", reason: "waiting-for-app" },
+          });
+        } else {
+          expect(respond).toHaveBeenCalledWith(true, { ok: true });
+        }
+        return expectDefined(respond.mock.calls[0], "Gateway response")[1] as T;
+      },
+    );
     const screen = createGatewayToolCallerWrapper("main", {
       agentSessionKey: source,
       gatewayUiCommandTarget: { connId: "requester" },
     })(
       createScreenTool({
         agentSessionKey: source,
-        callGateway: async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
-          const respond = vi.fn();
-          await expectDefined(
-            uiCommandHandlers["ui.command"],
-            "ui.command",
-          )({ params, respond, context } as never);
-          expect(respond).toHaveBeenCalledWith(true, { ok: true });
-          return { ok: true } as T;
-        },
       }),
     );
 

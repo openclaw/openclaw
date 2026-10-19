@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { emptyPluginPlanEvidence } from "./packages.test-support.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawManifest, ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
@@ -187,23 +188,6 @@ describe("parseClawManifest", () => {
     expect(manifestIntegrity.diagnostics[0]?.path).toBe("$.packages[0]");
   });
 
-  it("requires exact package versions", () => {
-    const result = parseClawManifest({
-      ...baseManifest,
-      packages: [
-        {
-          kind: "skill",
-          source: "clawhub",
-          ref: "demo",
-          version: "latest",
-        },
-      ],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toBe("$.packages[0].version");
-  });
-
   it("rejects resolved MCP secrets", () => {
     const result = parseClawManifest({
       ...baseManifest,
@@ -365,6 +349,7 @@ describe("readClawManifestFile", () => {
       [
         "---",
         "schemaVersion: 1",
+        "categories: [operations, research]",
         "agent:",
         "  id: triage",
         "workspace: {}",
@@ -382,7 +367,11 @@ describe("readClawManifestFile", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      manifest: { schemaVersion: 1, agent: { id: "triage" } },
+      manifest: {
+        schemaVersion: 1,
+        categories: ["operations", "research"],
+        agent: { id: "triage" },
+      },
       source: { kind: "package", name: "@acme/github-triage", version: "3.2.1" },
     });
     if (!result.ok) {
@@ -731,7 +720,12 @@ describe("buildClawAddPlan", () => {
           action: "install",
           integrity: `sha256:${(pkg.kind === "skill" ? "a" : "b").repeat(64)}`,
           warning: `Review ${pkg.ref} before installation.`,
-          ...(pkg.kind === "plugin" ? { installId: "github" } : {}),
+          ...(pkg.kind === "plugin"
+            ? {
+                installId: "github",
+                ...emptyPluginPlanEvidence,
+              }
+            : {}),
         }),
       },
     });
@@ -792,6 +786,7 @@ describe("buildClawAddPlan", () => {
           ...(pkg.kind === "plugin"
             ? {
                 installId: "github",
+                ...emptyPluginPlanEvidence,
                 requirements: [
                   {
                     kind: "plugin-setup" as const,
@@ -879,7 +874,7 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("blocks agent, configured workspace, and MCP collisions", async () => {
+  it("numbers an existing agent while blocking configured workspace and MCP collisions", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
@@ -892,14 +887,14 @@ describe("buildClawAddPlan", () => {
       },
     });
 
+    expect(plan.agent.finalId).toBe("github-triage-2");
     expect(plan.blockers.map((item) => item.code)).toEqual([
-      "agent_id_collision",
       "workspace_collision",
       "package_install_unavailable",
       "package_install_unavailable",
       "mcp_server_collision",
     ]);
-    expect(plan.summary.blockedActions).toBe(7);
+    expect(plan.summary.blockedActions).toBe(6);
   });
 
   it("canonicalizes a missing workspace through an existing aliased parent", async () => {

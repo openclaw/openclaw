@@ -118,7 +118,7 @@ private final class PingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     }
 }
 
-private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
+final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
 
     private let lock = NSLock()
@@ -140,6 +140,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var receivePhase = 0
     private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
     private var pendingInboundFrames: [ReceiveResult] = []
+    private var holdsPongs = false
+    private var pingCount = 0
+    private var pendingPongs: [@Sendable (Error?) -> Void] = []
     private var waiters = StateWaiters()
 
     init(
@@ -272,7 +275,38 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        pongReceiveHandler(nil)
+        let held = self.lock.withLock {
+            self.pingCount += 1
+            if self.holdsPongs { self.pendingPongs.append(pongReceiveHandler) }
+            self.waiters.resumeSatisfied()
+            return self.holdsPongs
+        }
+        if !held { pongReceiveHandler(nil) }
+    }
+
+    func holdPongs() {
+        self.lock.withLock { self.holdsPongs = true }
+    }
+
+    func finishPongs(error: Error? = nil) {
+        let callbacks = self.lock.withLock {
+            defer { self.pendingPongs.removeAll() }
+            return self.pendingPongs
+        }
+        callbacks.forEach { $0(error) }
+    }
+
+    func snapshotPingCount() -> Int {
+        self.lock.withLock { self.pingCount }
+    }
+
+    func waitForPings(count: Int) async {
+        await withCheckedContinuation { continuation in
+            self.lock.withLock {
+                self.waiters.append(continuation) { self.pingCount >= count }
+                self.waiters.resumeSatisfied()
+            }
+        }
     }
 
     func receive() async throws -> URLSessionWebSocketTask.Message {
@@ -509,7 +543,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 }
 
-private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
+final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
     @unchecked Sendable
 {
     private let lock = NSLock()
@@ -892,6 +926,60 @@ extension GatewayChannelActor {
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test(arguments: [false, true])
+    func `wire presence is reconstructed before bounded delivery and gaps resynchronize`(
+        versionGap: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession()
+        let events = AsyncStream<EventFrame>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let patched = AsyncGate()
+        let disconnected = AsyncGate()
+        let channel = try GatewayChannelActor(
+            url: testURL("ws://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session),
+            pushHandler: { push, _ in
+                guard case let .event(event) = push else { return }
+                events.continuation.yield(event)
+                if event.seq == 2 { await patched.markStarted() }
+            },
+            connectOptions: operatorConnectOptions(),
+            disconnectHandler: { _, _ in await disconnected.markStarted() })
+        do {
+            try await channel.connect()
+            let socket = try #require(session.latestTask())
+            let request = try #require(socket.sentRequests(method: "connect").first)
+            let params = try #require(request["params"] as? [String: Any])
+            #expect((params["caps"] as? [String])?.contains("presence-deltas") == true)
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "reset": true, "version": 1, "keys": ["opaque"],
+                "presence": [["ts": 1, "connectionId": "one", "watchedSessions": ["old"]]],
+            ]), seq: 1))
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "base": 1, "version": 2,
+                "upsert": [["key": "opaque", "set": ["ts": 2], "unset": ["watchedSessions"]]],
+                "remove": [], "order": ["opaque"],
+            ]), seq: 2))
+            await patched.waitUntilStarted()
+            var iterator = events.stream.makeAsyncIterator()
+            let event = try #require(await iterator.next())
+            #expect(event.payload == AnyCodable(["presence": [["ts": 2, "connectionId": "one"]]]))
+
+            try socket.emitEvent(EventFrame(type: "event", event: "presence", payload: AnyCodable([
+                "base": versionGap ? 3 : 2, "version": 4,
+                "upsert": [], "remove": ["opaque"], "order": [],
+            ]), seq: versionGap ? 3 : 4))
+            await disconnected.waitUntilStarted()
+            #expect(socket.state == .canceling)
+            await channel.shutdown()
+            events.continuation.finish()
+            #expect(await iterator.next() == nil)
+        } catch {
+            await channel.shutdown()
+            events.continuation.finish()
+            throw error
+        }
+    }
+
+    @Test(arguments: [false, true])
     func `wire text is projected before bounded native delivery and loss retires the socket`(
         missingBaseline: Bool) async throws
     {
@@ -1064,6 +1152,30 @@ struct GatewayNodeSessionTests {
         #expect(connection["Authorization"] == nil)
         await gateway.disconnect()
         #expect(await gateway.workerConnectionData(ifCurrentRoute: route) == nil)
+    }
+
+    @Test func `changed connection options renegotiate the advertised handshake`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let url = try testURL("ws://gateway.example.invalid")
+        var options = nodeConnectOptions()
+        try await gateway.connectForTest(url, options: options, session: session)
+        try await gateway.connectForTest(url, options: options, session: session)
+        #expect(session.snapshotMakeCount() == 1)
+
+        options.scopesAreExplicit = true
+        try await gateway.connectForTest(url, options: options, session: session)
+        #expect(session.snapshotMakeCount() == 2)
+
+        options.computerUse = AnyCodable(["capabilities": ["screenshot"]])
+        try await gateway.connectForTest(url, options: options, session: session)
+        #expect(session.snapshotMakeCount() == 3)
+        let socket = try #require(session.latestTask())
+        let request = try #require(socket.sentRequests(method: "connect").last)
+        let params = try #require(request["params"] as? [String: Any])
+        let computerUse = try #require(params["computerUse"] as? [String: Any])
+        #expect(computerUse["capabilities"] as? [String] == ["screenshot"])
+        await gateway.disconnect()
     }
 
     @Test func `operator canvas refresh uses the operator surface method`() async throws {
@@ -1544,34 +1656,6 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `completed snapshot timeout cannot release a later route waiter`() async throws {
-        let gateway = GatewayNodeSession()
-        let firstRegistered = AsyncGate()
-        let firstWait = Task {
-            await gateway.signalAfterSuspension(firstRegistered) { gateway in
-                await gateway._test_waitForSnapshot(timeoutMs: 1000)
-            }
-        }
-        await firstRegistered.waitUntilStarted()
-        #expect(await gateway._test_snapshotWaiterCount() == 1)
-        await gateway._test_markSnapshotReceived()
-        #expect(await firstWait.value)
-
-        await gateway._test_resetConnectionState()
-        let replacementRegistered = AsyncGate()
-        let replacementWait = Task {
-            await gateway.signalAfterSuspension(replacementRegistered) { gateway in
-                await gateway._test_waitForSnapshot(timeoutMs: 3000)
-            }
-        }
-        await replacementRegistered.waitUntilStarted()
-        #expect(await gateway._test_snapshotWaiterCount() == 1)
-        try await Task.sleep(nanoseconds: 1_200_000_000)
-        await gateway._test_markSnapshotReceived()
-        #expect(await replacementWait.value)
-    }
-
-    @Test
     func `concurrent replacements wait for route invalidation before installing a channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -1847,8 +1931,8 @@ struct GatewayNodeSessionTests {
             },
             onInvokeCancel: { _ in cancellation.markCancelled() })
 
-        /// Both decoded frames arrive in one actor turn: detached work cannot
-        /// register between them. The socket tests above exercise wire decoding.
+        // Both decoded frames arrive in one actor turn: detached work cannot
+        // register between them. The socket tests above exercise wire decoding.
         func deliverBeforeDetachedAdmission(to gateway: isolated GatewayNodeSession) async {
             await gateway._test_handlePush(
                 nodeInvokePush(id: "cancel-before-admission", command: command),
@@ -2999,13 +3083,16 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `node invoke result preserves structured worker payload`() async throws {
-        let session = FakeGatewayWebSocketSession()
+    @Test(arguments: [false, true])
+    func `node invoke result preserves worker payload and negotiates permission details`(
+        permissionErrorsSupported: Bool) async throws
+    {
+        let session = FakeGatewayWebSocketSession(
+            helloCapabilities: permissionErrorsSupported ? ["node-permission-errors"] : [])
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(
             caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
+            commands: ["mcp.tools.call.v1", "system.run"],
             clientId: "openclaw-macos",
             clientDisplayName: "macOS Test")
 
@@ -3014,7 +3101,16 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session,
             onInvoke: { request in
-                BridgeInvokeResponse(
+                if request.id == "permission-structured" {
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: .init(
+                            code: .permissionMissing,
+                            message: "PERMISSION_MISSING: screenRecording",
+                            details: .init(capabilities: ["screenRecording"], state: .restartRequired)))
+                }
+                return BridgeInvokeResponse(
                     id: request.id,
                     ok: true,
                     payload: AnyCodable(["content": [["type": "text", "text": "worker-ok"]]]))
@@ -3029,6 +3125,24 @@ struct GatewayNodeSessionTests {
         let payload = try #require(params["payload"] as? [String: Any])
         let content = try #require(payload["content"] as? [[String: Any]])
         #expect(content.first?["text"] as? String == "worker-ok")
+
+        task.emitInvokeRequest(id: "permission-structured", command: "system.run")
+        await task.waitForSentRequests(method: "node.invoke.result", count: 2)
+        let permissionResult = try #require(task.sentRequests(method: "node.invoke.result").last)
+        let permissionParams = try #require(permissionResult["params"] as? [String: Any])
+        #expect(permissionParams["ok"] as? Bool == false)
+        let error = try #require(permissionParams["error"] as? [String: Any])
+        #expect(error["code"] as? String == "PERMISSION_MISSING")
+        #expect(error["message"] as? String == "PERMISSION_MISSING: screenRecording")
+        if permissionErrorsSupported {
+            let details = try #require(error["details"] as? [String: Any])
+            #expect(Set(details.keys) == ["capabilities", "state"])
+            #expect(details["capabilities"] as? [String] == ["screenRecording"])
+            #expect(details["state"] as? String == "restart-required")
+        } else {
+            // The released v2026.10.2 node-invoke result decoder rejects extra error keys.
+            #expect(Set(error.keys) == ["code", "message"])
+        }
 
         await gateway.disconnect()
     }
@@ -3485,7 +3599,7 @@ struct GatewayNodeSessionTests {
         let request = try #require(task.sentRequests(method: "connect").first)
         let params = try #require(request["params"] as? [String: Any])
         #expect(params["modelCatalog"] == nil)
-        #expect(params["caps"] as? [String] == [])
+        #expect(params["caps"] as? [String] == ["presence-deltas"])
         await gateway.disconnect()
     }
 

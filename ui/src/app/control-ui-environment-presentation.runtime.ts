@@ -1,11 +1,15 @@
+import type { AgentTabIconShape } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   type ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { getOrCreatePromise } from "../../../src/shared/lazy-promise.js";
 import { neutralMarkSvg } from "../components/neutral-mark-svg.ts";
+import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
 import { currentThemeBranding } from "./theme-branding.ts";
+
+let environmentStripe: HTMLElement | undefined;
 
 export function applyControlUiPresentation(params: {
   environment: ControlUiEnvironment | null;
@@ -27,7 +31,8 @@ export function applyControlUiPresentation(params: {
     root.removeAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE);
     root.style.removeProperty("--control-ui-environment-color");
     root.style.removeProperty("--control-ui-environment-ink");
-    document.querySelector(".control-ui-environment-stripe")?.remove();
+    environmentStripe?.remove();
+    environmentStripe = undefined;
     syncControlUiFavicon();
     return;
   }
@@ -40,11 +45,11 @@ export function applyControlUiPresentation(params: {
     "--control-ui-environment-ink",
     `var(--control-ui-environment-${environment.color}-ink)`,
   );
-  if (!document.querySelector(".control-ui-environment-stripe")) {
-    const stripe = document.createElement("div");
-    stripe.className = "control-ui-environment-stripe";
-    stripe.setAttribute("aria-hidden", "true");
-    document.body.prepend(stripe);
+  if (!environmentStripe?.isConnected) {
+    environmentStripe = document.createElement("div");
+    environmentStripe.className = "control-ui-environment-stripe";
+    environmentStripe.setAttribute("aria-hidden", "true");
+    document.body.prepend(environmentStripe);
   }
   if (!document.title.endsWith(` · ${environment.label}`)) {
     document.title = `${document.title} · ${environment.label}`;
@@ -57,13 +62,18 @@ type ControlUiFaviconStatus = "attention" | "working" | "done" | "disconnected" 
 
 let faviconStatus: ControlUiFaviconStatus = "idle";
 let faviconImage: HTMLImageElement | null = null;
+let faviconShape: AgentTabIconShape = "square";
 
 /** Decoded personal artwork is always rasterized here, including when idle. */
-export function applyControlUiFaviconImage(image: HTMLImageElement | null): void {
-  if (faviconImage === image) {
+export function applyControlUiFaviconImage(
+  image: HTMLImageElement | null,
+  shape: AgentTabIconShape = "square",
+): void {
+  if (faviconImage === image && faviconShape === shape) {
     return;
   }
   faviconImage = image;
+  faviconShape = shape;
   // Decoded personal images never enter the cached default-source loader.
   syncControlUiFavicon();
 }
@@ -110,7 +120,7 @@ function resolveFaviconPalette() {
     ? style.getPropertyValue(`--control-ui-environment-${environment.color}`).trim()
     : "";
   const artwork =
-    currentThemeBranding().mascot === "none"
+    currentThemeBranding().brandIcon !== "claw"
       ? neutralMarkSvg({
           fill: style.getPropertyValue("--primary").trim(),
           glyph: style.getPropertyValue("--primary-foreground").trim(),
@@ -141,7 +151,7 @@ export function syncControlUiFavicon(): void {
   if (!color) {
     faviconSources.clear();
   }
-  for (const icon of document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')) {
+  for (const icon of controlUiDocumentHead().favicons) {
     if (!faviconImage && !baseSvg && !color) {
       faviconRequests.delete(icon);
       if (icon.dataset.openclawOriginalFavicon) {
@@ -160,8 +170,9 @@ export function syncControlUiFavicon(): void {
     );
     const image = faviconImage;
     const href = image?.src ?? baseSvg ?? original[0];
-    const type = image ? "image/png" : baseSvg ? "image/svg+xml" : original[1];
-    const signature = JSON.stringify([href, type, color, ring]);
+    const type = image || baseSvg ? "image/svg+xml" : original[1];
+    const shape = image ? faviconShape : "square";
+    const signature = JSON.stringify([href, type, color, ring, shape]);
     const previous = faviconRequests.get(icon);
     if (previous?.signature === signature && previous.image === image) {
       continue;
@@ -172,7 +183,7 @@ export function syncControlUiFavicon(): void {
       restoreFavicon(icon, [href, type]);
       continue;
     }
-    void composeFavicon(href, type, color, ring, image).then(
+    void composeFavicon(href, type, color, ring, image, shape).then(
       (result) => {
         // Asset decoding may finish after idle, a palette change, or a context teardown.
         if (icon.isConnected && faviconRequests.get(icon) === request) {
@@ -205,6 +216,7 @@ async function loadSource(href: string, type: string | null): Promise<FaviconSou
     if (!response.ok) {
       throw new Error(`Favicon loading failed (${response.status})`);
     }
+    // Validate the fetched SVG's parser document, which is separate from the application's DOM.
     const parsed = new DOMParser().parseFromString(await response.text(), "image/svg+xml");
     const svg = parsed.documentElement;
     if (
@@ -228,6 +240,7 @@ async function composeFavicon(
   color: string,
   ring: string,
   image: HTMLImageElement | null,
+  shape: AgentTabIconShape,
 ) {
   const source: FaviconSource = image
     ? { image }
@@ -264,10 +277,18 @@ async function composeFavicon(
   if (!context) {
     throw new Error("Favicon canvas unavailable");
   }
-  const scale = Math.min(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
+  context.save();
+  if (shape !== "square") {
+    context.beginPath();
+    context.roundRect(0, 0, 32, 32, shape === "circle" ? 16 : 8);
+    context.clip();
+  }
+  const fit = shape === "square" ? Math.min : Math.max;
+  const scale = fit(32 / source.image.naturalWidth, 32 / source.image.naturalHeight);
   const width = source.image.naturalWidth * scale;
   const height = source.image.naturalHeight * scale;
   context.drawImage(source.image, (32 - width) / 2, (32 - height) / 2, width, height);
+  context.restore();
   if (color) {
     context.beginPath();
     context.arc(25.5, 25.5, 5, 0, Math.PI * 2);
@@ -277,5 +298,13 @@ async function composeFavicon(
     context.lineWidth = 2;
     context.stroke();
   }
-  return { href: canvas.toDataURL("image/png"), type: "image/png" };
+  const png = canvas.toDataURL("image/png");
+  if (!image) {
+    return { href: png, type: "image/png" };
+  }
+  // Firefox batches icon candidates and prefers SVG over PNG, even when that
+  // SVG was a default briefly restored before the personal image decoded. Keep
+  // personal artwork SVG-preferred too; only our rasterized bytes are embedded.
+  const svg = `<svg xmlns="${SVG_NAMESPACE}" viewBox="0 0 32 32" width="32" height="32"><image width="32" height="32" href="${png}"/></svg>`;
+  return { href: `data:image/svg+xml,${encodeURIComponent(svg)}`, type: "image/svg+xml" };
 }

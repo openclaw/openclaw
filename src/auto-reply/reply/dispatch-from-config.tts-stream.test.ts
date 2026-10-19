@@ -1,3 +1,6 @@
+// Register dispatch mocks before modules that consume them.
+// oxfmt-ignore
+import { emptyConfig, ttsMocks } from "./dispatch-from-config.shared.test-harness.js";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -11,14 +14,13 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import { emptyConfig, ttsMocks } from "./dispatch-from-config.shared.test-harness.js";
 import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
   installCaptionedVoiceTestPlugin,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -85,27 +87,30 @@ it.each([
   );
 });
 
-it("dispatchReplyFromConfig keeps a deferred literal in its complete-text fallback", async () => {
-  installCaptionedVoiceTestPlugin("telegram");
-  const delivered: Array<{ text?: string; kind: string }> = [];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload, { kind }) => {
-      delivered.push({ text: payload.text, kind });
-    },
-  });
-  await dispatchReplyFromConfig({
-    ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-    cfg: emptyConfig,
-    dispatcher,
-    replyResolver: async (_ctx, opts) => {
-      await opts?.onBlockReply?.({ text: "See [" });
-      return undefined;
-    },
-  });
-  dispatcher.markComplete();
-  await dispatcher.waitForIdle();
-  expect(delivered).toEqual([{ text: "See [", kind: "final" }]);
-});
+it.each(["See [", "Example:\n```text\nkeep two spaces  \nkeep a tab\t\n```"])(
+  "dispatchReplyFromConfig keeps deferred literal %j in its complete-text fallback",
+  async (text) => {
+    installCaptionedVoiceTestPlugin("telegram");
+    const delivered: Array<{ text?: string; kind: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, { kind }) => {
+        delivered.push({ text: payload.text, kind });
+      },
+    });
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text });
+        return undefined;
+      },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(delivered).toEqual([{ text, kind: "final" }]);
+  },
+);
 
 it("settles retained followup streams before external cleanup", async () => {
   let retained: GetReplyOptions | undefined;
@@ -208,17 +213,32 @@ describe("source completion", () => {
           "../../config/sessions/session-accessor.js",
         )
       : undefined;
+    const storePath = path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json");
     const preparedScope = actualSessions
       ? {
-          storePath: path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json"),
+          storePath,
           sessionKey: "agent:main:discord:direct:source-completion",
         }
       : undefined;
     if (actualSessions) {
+      const actorScope = await import("../../config/sessions/session-actor-scope.js");
+      const actualActorScope = await vi.importActual<
+        typeof import("../../config/sessions/session-actor-scope.js")
+      >("../../config/sessions/session-actor-scope.js");
+      vi.spyOn(actorScope, "withSessionActor").mockImplementation(
+        actualActorScope.withSessionActor,
+      );
       const sessionAccessors = await import("../../config/sessions/session-accessor.js");
       const patch = actualSessions.patchSessionEntryCore;
       vi.spyOn(sessionAccessors, "patchSessionEntryCore").mockImplementation((...args) =>
         patch(...args),
+      );
+      const sqliteEntries = await import("../../config/sessions/session-accessor.sqlite-entry.js");
+      const actualSqliteEntries = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
+      >("../../config/sessions/session-accessor.sqlite-entry.js");
+      vi.spyOn(sqliteEntries, "applySessionEntryOperation").mockImplementation(
+        actualSqliteEntries.applySessionEntryOperation,
       );
     }
     let buffered = false;
@@ -317,14 +337,13 @@ describe("source completion", () => {
                 intentId: "source-intent",
                 sessionId: "session-1",
                 sessionKey: "agent:main:main",
-                storePath: "/tmp/mock-sessions.json",
+                storePath,
               },
             });
           }
           const { replyPayloads } = await buildReplyPayloads({
             payloads: [finalPayload],
             isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: true,
             blockReplyPipeline: pipeline,
             replyToMode: "off",
@@ -463,7 +482,6 @@ describe("source completion", () => {
           const { replyPayloads } = await buildReplyPayloads({
             payloads: [{ text: "See [" }],
             isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: true,
             blockReplyPipeline: pipeline,
             replyToMode: "off",

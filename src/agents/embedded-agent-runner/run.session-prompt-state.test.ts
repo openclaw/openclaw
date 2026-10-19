@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -115,6 +118,52 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("releases completed continuations while session callbacks remain retained", async () => {
+    const retainedCallbacks: Array<{
+      adoptSessionId: (sessionId: string) => void;
+      onUserMessagePersisted: (message: ReturnType<typeof makeUserMessage>) => void;
+    }> = [];
+    const references: WeakRef<object>[] = [];
+    for (let index = 0; index < 20; index++) {
+      await using state = await createState();
+      state.continueFromCurrentTranscript({ messages: [makeUserMessage(`turn ${index}`)] });
+      references.push(new WeakRef(state.continuation!));
+      retainedCallbacks.push({
+        adoptSessionId: state.adoptSessionId,
+        onUserMessagePersisted: state.onUserMessagePersisted,
+      });
+    }
+    const control = new WeakRef({ unowned: true });
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+    expect(retainedCallbacks).toHaveLength(20);
+  });
+
+  it("releases replaced and completed message payloads through retained attempt parameters", async () => {
+    const retainedContinuations: Array<{ prompt: string; messages: unknown[] }> = [];
+    const payloads: WeakRef<object>[] = [];
+    for (let index = 0; index < 20; index++) {
+      await using state = await createState();
+      state.continueFromCurrentTranscript({ messages: [makeUserMessage(`first ${index}`)] });
+      retainedContinuations.push(state.continuation!);
+      payloads.push(new WeakRef(state.continuation!.messages));
+      state.continueFromCurrentTranscript({ messages: [makeUserMessage(`second ${index}`)] });
+      expect(state.continuation!.messages).toHaveLength(2);
+      retainedContinuations.push(state.continuation!);
+      payloads.push(new WeakRef(state.continuation!.messages));
+    }
+    const control = new WeakRef({ unowned: true });
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(payloads.filter((reference) => reference.deref())).toHaveLength(0);
+    expect(retainedContinuations.every(({ prompt, messages }) => !prompt && !messages.length)).toBe(
+      true,
+    );
+  });
+
   it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
     await using state = await createState({ prompt: "Task B: inspect the blue database." });
     state.continueFromCurrentTranscript({ messages: [] });
@@ -125,12 +174,20 @@ describe("embedded run session prompt state", () => {
     const completed = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "The blue database was inspected." }],
     });
-    state.continueFromCurrentTranscript({ messages: [completed] });
+    const messages = [completed];
+    state.continueFromCurrentTranscript({ messages });
+    const previous = state.continuation!;
     state.continueFromCurrentTranscript({ messages: [] });
     expect(state.continuation).toEqual({
       prompt: "Task B: inspect the blue database.",
       messages: [completed],
     });
+    expect(previous).toEqual({ prompt: "", messages: [] });
+    expect(messages).toEqual([completed]);
+    expect(state.continuation!.messages[0]).toBe(completed);
+    const active = state.continuation;
+    state.continueFromCurrentTranscript();
+    expect(state.continuation).toBe(active);
     expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
@@ -146,6 +203,7 @@ describe("embedded run session prompt state", () => {
         env: { OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" },
       },
       async (fixture) => {
+        setRuntimeConfigSnapshot({});
         const target = {
           agentId: "main",
           sessionId: randomUUID(),
@@ -411,7 +469,7 @@ describe("embedded run session prompt state", () => {
     ).resolves.toEqual({ action: "retry" });
 
     const prompt = state.activePrompt.override ?? "";
-    expect(prompt).toContain("The previous attempt did not produce a user-visible answer.");
+    expect(prompt).toContain("Your turn ended without a final reply.");
     expect(prompt).not.toContain("recorded reasoning");
     expect(prompt.match(/Continue from the compacted transcript/gu)).toHaveLength(1);
   });
@@ -489,43 +547,14 @@ describe("embedded run session prompt state", () => {
     });
   });
 
-  it.each([{ modelRun: true }, { promptMode: "none" as const }])(
-    "keeps the original prompt for a raw model run retry (%o)",
-    async (rawRun) => {
-      await using state = await createState(rawRun);
+  it("keeps the original prompt for a raw model run retry", async () => {
+    await using state = await createState({ promptMode: "none" });
 
-      state.continueFromCurrentTranscript();
+    state.continueFromCurrentTranscript();
 
-      // Raw runs load no transcript history, so a continuation prompt would drop the task.
-      expect(state.activePrompt.override).toBeUndefined();
-      expect(state.activePrompt.internal).toBe(false);
-    },
-  );
-
-  it("continues from the transcript after compaction when the runtime persisted the user turn", async () => {
-    const runtimeMessage = makeUserMessage();
-    const persistApproved = vi.fn(async () => undefined);
-    const recorder = createRecorder({
-      hasPersisted: vi.fn(() => true),
-      persistApproved,
-    });
-    const onUserMessagePersisted = vi.fn();
-    await using state = await createState({
-      userTurnTranscriptRecorder: recorder,
-      onUserMessagePersisted,
-    });
-
-    state.onUserMessagePersisted(runtimeMessage);
-    await state.prepareCompactedTranscriptRetry(assertActive);
-
-    expect(persistApproved).toHaveBeenCalledOnce();
-    expect(onUserMessagePersisted).toHaveBeenCalledWith(runtimeMessage);
-    expect(state.activePrompt).toEqual({
-      override: CONTINUE_FROM_TRANSCRIPT_PROMPT,
-      persisted: true,
-      internal: true,
-    });
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
+    // Raw runs load no transcript history, so a continuation prompt would drop the task.
+    expect(state.activePrompt.override).toBeUndefined();
+    expect(state.activePrompt.internal).toBe(false);
   });
 
   it("persists before_agent_run block markers through the blocked path", async () => {
@@ -632,7 +661,11 @@ describe("embedded run session prompt state", () => {
         expect(state.suppressNextUserMessagePersistence).toBe(false);
       } else {
         await retryPromise;
-        expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
+        expect(state.activePrompt).toEqual({
+          override: CONTINUE_FROM_TRANSCRIPT_PROMPT,
+          persisted: true,
+          internal: true,
+        });
         expect(state.suppressNextUserMessagePersistence).toBe(true);
       }
       expect(persistApproved).toHaveBeenCalledOnce();

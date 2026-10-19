@@ -192,6 +192,7 @@ export function createAgentSelectionCapability(
     preferences.patch({ sidebarPreTeamScope: teamMode ? previousScopeId : undefined });
     publish({ ...state, scopeId: teamMode ? null : previousScopeId });
   });
+  // Connection receipts reconcile persisted selection before its synchronous consumers run.
   const stopGateway = gateway.subscribe((next) => {
     const nextAssistantAgentId = next.assistantAgentId
       ? normalizeAgentId(next.assistantAgentId)
@@ -230,6 +231,7 @@ export function createAgentSelectionCapability(
       });
     }
   });
+  // Removed agents retire selection and saved scope before callers can reuse them.
   const stopRoster = roster.subscribe(() => {
     if (options.requireConfiguredAgent) {
       const requestedId =

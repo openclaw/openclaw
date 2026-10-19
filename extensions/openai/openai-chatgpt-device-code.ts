@@ -99,12 +99,15 @@ function sanitizeDeviceCodeErrorText(value: string): string {
 }
 
 function resolveNextDeviceCodePollDelayMs(intervalMs: number, deadlineMs: number): number {
-  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  const remainingMs = Math.max(0, deadlineMs - performance.now());
   return Math.min(Math.max(intervalMs, OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
 }
 
 function resolveDeviceCodePollRequestTimeoutMs(deadlineMs: number): number {
-  return Math.min(OPENAI_CODEX_DEVICE_REQUEST_TIMEOUT_MS, Math.max(0, deadlineMs - Date.now()));
+  return Math.min(
+    OPENAI_CODEX_DEVICE_REQUEST_TIMEOUT_MS,
+    Math.max(0, deadlineMs - performance.now()),
+  );
 }
 
 function isDeviceCodeOperationTimeoutError(error: unknown): boolean {
@@ -262,16 +265,18 @@ async function pollOpenAICodexDeviceCode(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<DeviceCodeAuthorizationCode> {
-  const deadline = Date.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
+  // Keep the polling budget independent of wall-clock corrections. Whether
+  // suspended time counts toward performance.now() depends on the host runtime.
+  const deadline = performance.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
 
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     params.signal?.throwIfAborted();
     const requestTimeoutMs = resolveDeviceCodePollRequestTimeoutMs(deadline);
     if (requestTimeoutMs <= 0) {
       break;
     }
 
-    let result: DeviceCodeHttpResult;
+    let result: DeviceCodeHttpResult | undefined;
     try {
       result = await runOpenAICodexDeviceRequest({
         fetchFn: params.fetchFn,
@@ -301,14 +306,9 @@ async function pollOpenAICodexDeviceCode(params: {
       if (!retryableTransportError) {
         throw error;
       }
-      await waitForDeviceCodePoll(
-        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
-        params.signal,
-      );
-      continue;
     }
 
-    if (result.ok) {
+    if (result?.ok) {
       const body = parseJsonObject(result.bodyText);
       const authorizationCode = normalizeOptionalString(body?.authorization_code);
       const codeVerifier = normalizeOptionalString(body?.code_verifier);
@@ -321,20 +321,19 @@ async function pollOpenAICodexDeviceCode(params: {
       };
     }
 
-    if (result.status === 403 || result.status === 404) {
-      await waitForDeviceCodePoll(
-        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
-        params.signal,
+    if (result && result.status !== 403 && result.status !== 404) {
+      throw new Error(
+        formatDeviceCodeError({
+          prefix: "OpenAI device authorization failed",
+          status: result.status,
+          bodyText: result.bodyText,
+        }),
       );
-      continue;
     }
 
-    throw new Error(
-      formatDeviceCodeError({
-        prefix: "OpenAI device authorization failed",
-        status: result.status,
-        bodyText: result.bodyText,
-      }),
+    await waitForDeviceCodePoll(
+      resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
+      params.signal,
     );
   }
 

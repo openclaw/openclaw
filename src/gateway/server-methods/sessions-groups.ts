@@ -26,11 +26,23 @@ import {
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 import {
   isWorkspacePathContainmentCurrent,
   resolveWorkspacePathContainment,
 } from "./workspace-path-containment.js";
+
+function sessionGroupMutationError(
+  error: unknown,
+  inputError?: typeof SessionGroupNotEmptyError | typeof SessionGroupNotFoundError,
+) {
+  if (error instanceof SessionMutationAuthorizationChangedError) {
+    throw error;
+  }
+  return inputError && error instanceof inputError
+    ? errorShape(ErrorCodes.INVALID_REQUEST, error.message)
+    : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+}
 
 export const sessionGroupHandlers: GatewayRequestHandlers = {
   "sessions.groups.list": defineValidatedGatewayHandler(
@@ -55,13 +67,10 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       respond(true, { defaults }, undefined);
     },
   ),
-  "sessions.groups.put": async ({ params, respond, context, sessionMutationAuthorization }) => {
-    if (
-      !assertValidParams(params, validateSessionsGroupsPutParams, "sessions.groups.put", respond)
-    ) {
-      return;
-    }
-    try {
+  "sessions.groups.put": defineValidatedGatewayHandler(
+    "sessions.groups.put",
+    validateSessionsGroupsPutParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
       const groups = await putSessionGroups({
         cfg: context.getRuntimeConfig(),
         names: params.names,
@@ -76,17 +85,9 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       );
       // Catalog-only changes still need to reach other open clients.
       emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
-    } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        throw error;
-      }
-      if (error instanceof SessionGroupNotEmptyError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
+    },
+    (error) => sessionGroupMutationError(error, SessionGroupNotEmptyError),
+  ),
   "sessions.groups.rename": defineValidatedGatewayHandler(
     "sessions.groups.rename",
     validateSessionsGroupsRenameParams,
@@ -101,14 +102,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         });
         respond(true, { ok: true, ...result }, undefined);
       } catch (error) {
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          throw error;
-        }
-        if (error instanceof SessionGroupNotFoundError) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-          return;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        respond(false, undefined, sessionGroupMutationError(error, SessionGroupNotFoundError));
       } finally {
         // Interrupted sweeps can retain catalog entries and committed member moves.
         emitSessionsChanged(context, { reason: "groups" });
@@ -209,10 +203,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         });
         respond(true, { ok: true, ...result }, undefined);
       } catch (error) {
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          throw error;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        respond(false, undefined, sessionGroupMutationError(error));
       } finally {
         emitSessionsChanged(context, { reason: "groups" });
       }

@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
+import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
@@ -19,7 +20,14 @@ export type SessionWorkspaceProps = {
   loading: boolean;
   error: string | null;
   activeId: string | null;
+  connectionEpoch?: number;
+  onDownloadFile?: (
+    path: string,
+    origin: "session" | "workspace",
+    signal: AbortSignal,
+  ) => Promise<SessionFileDownload | null>;
   onBrowsePath: (path: string) => void;
+  onRetry: () => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onSetFilter: (filter: SessionWorkspaceFilter) => void;
@@ -77,6 +85,5 @@ export type SessionWorkspaceHost = {
   sessionWorkspaceDraftScope?: string;
   sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
   sidebarContent: SidebarSelection | null;
-  requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;
 };

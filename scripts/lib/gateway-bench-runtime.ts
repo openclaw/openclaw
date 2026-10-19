@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { delay } from "./gateway-bench-child.ts";
 import { requestProbeStatus } from "./gateway-bench-probes.ts";
 import { parseStrictIntegerOption } from "./strict-integer-option.ts";
@@ -32,7 +33,7 @@ export const BASE_GATEWAY_BENCH_CONFIG = {
     tailscale: { mode: "off" },
   },
   plugins: { enabled: true, entries: { browser: { enabled: false } } },
-} satisfies Record<string, unknown>;
+} satisfies OpenClawConfig;
 
 export class CliArgumentError extends Error {
   override name = "CliArgumentError";
@@ -75,7 +76,7 @@ export function buildGatewayBenchCommand(
 }
 
 export function parseCliArgs(
-  argv: string[],
+  argv: readonly string[],
   options: {
     booleanFlags: ReadonlySet<string>;
     repeatableValueFlags?: ReadonlySet<string>;
@@ -331,9 +332,7 @@ export function writePluginFixtures(
       `${JSON.stringify(
         {
           id,
-          ...(options.activationOnStartup === undefined
-            ? {}
-            : { activation: { onStartup: options.activationOnStartup } }),
+          activation: { onStartup: options.activationOnStartup ?? true },
           ...(stallsProviderCatalog || stallsProviderStaticCatalog
             ? {
                 providers: [STALLED_CATALOG_PROVIDER_ID],
@@ -546,11 +545,7 @@ export function flushOutputLineBuffers(
   buffers: Record<"stderr" | "stdout", string>,
   onLine: (line: string, nowMs: number) => void,
   nowMs: number,
-  options: { flushPartial?: boolean } = {},
 ): void {
-  if (!options.flushPartial) {
-    return;
-  }
   for (const stream of ["stdout", "stderr"] as const) {
     const line = buffers[stream];
     if (line) {

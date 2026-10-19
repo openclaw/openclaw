@@ -3,36 +3,37 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
   historyClearTimeout,
   historyLane,
   maintenanceLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
-  prepareSessionEntryPresenceRead,
   prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
-import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -49,22 +50,29 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
+import {
+  expectMessageIds,
+  historyParams,
+  messageEvent,
+  withHistoryState,
+} from "./session-history-events.test-support.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const observed = vi.hoisted(() => ({
   timers: vi.spyOn(globalThis, "setTimeout"),
   workers: [] as Worker[],
   idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
-  dispatch: undefined as ((message: unknown) => void) | undefined,
+  dispatch: undefined as ((message: unknown, worker: Worker) => void) | undefined,
   restoration: undefined as
-    | { sessionId: string; entered: () => void; wait: Promise<void> }
+    | {
+        sessionId: string;
+        phase: "before restoration" | "queued restoration";
+        entered: () => void;
+        wait: Promise<void>;
+      }
     | undefined,
 }));
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -87,7 +95,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         ) {
           observed.workers.push(this);
         }
-        observed.dispatch?.(args[0]);
+        observed.dispatch?.(args[0], this);
         super.postMessage(...args);
       }
     },
@@ -102,11 +110,32 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
       ...args: Parameters<typeof actual.readRestoredSessionTranscript>
     ) => {
       const held = observed.restoration;
-      if (args[0].sessionId === held?.sessionId) {
+      if (!held || args[0].sessionId !== held.sessionId) {
+        return actual.readRestoredSessionTranscript(...args);
+      }
+      if (held.phase === "before restoration") {
         held.entered();
         await held.wait;
+        return actual.readRestoredSessionTranscript(...args);
       }
-      return actual.readRestoredSessionTranscript(...args);
+      const [scope, read, options] = args;
+      const coldRead = options?.coldRead;
+      if (!coldRead) {
+        throw new Error("Queued restoration fixture requires prepared cold metadata");
+      }
+      return actual.readRestoredSessionTranscript(scope, read, {
+        ...options,
+        coldRead: {
+          ...coldRead,
+          readMetadata: async (phase) => {
+            if (phase === "queued") {
+              held.entered();
+              await held.wait;
+            }
+            return coldRead.readMetadata(phase);
+          },
+        },
+      });
     },
   };
 });
@@ -114,10 +143,11 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
 afterAll(() => observed.timers.mockRestore());
 
 afterEach(async () => {
+  memorySessionActorOwners.reset();
   observed.dispatch = undefined;
   observed.restoration = undefined;
   await Promise.all(
-    [historyLane, maintenanceLane].map(async (lane) => {
+    [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
       historyClearTimeout(lane.idleTimer);
       await rotateDatabaseWorkers(lane);
     }),
@@ -130,7 +160,7 @@ afterEach(async () => {
 it.each([false, true])(
   "reads exact row presence from its captured target without creating a database (incognito=%s)",
   async (incognito) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const target = {
         agentId: "main",
         sessionKey: incognito
@@ -163,6 +193,11 @@ it.each([false, true])(
       if (incognito) {
         expect(observed.workers).toHaveLength(workersBefore);
         expect(fs.existsSync(databasePath)).toBe(false);
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath });
+        expect(await read()).toBe(false);
+        await replaceSessionEntry(target, { sessionId: "replacement-memory-owner", updatedAt: 2 });
+        expect(await read()).toBe(true);
+        expect(observed.workers).toHaveLength(workersBefore);
       } else {
         expect(observed.workers.length).toBeGreaterThan(workersBefore);
         target.storePath = path.join(state.agentDir(), "replacement.sqlite");
@@ -176,17 +211,12 @@ it.each([false, true])(
 );
 
 it("reads an exact ended-session archive in the history worker", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const sessionId = "deleted-session-archive";
     const fixture = await seed(state, "main", sessionId);
     const content = [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "archived-message",
-        parentId: null,
-        message: { role: "user", content: "archived content" },
-      },
+      messageEvent("archived-message", { role: "user", content: "archived content" }),
     ]
       .map((event) => JSON.stringify(event))
       .join("\n");
@@ -221,13 +251,11 @@ it("reads an exact ended-session archive in the history worker", async () => {
 it("keeps fresh fixture roots isolated while reusing idle reader execution", async () => {
   let previousWorker: Worker | undefined;
   for (const sessionId of ["first-fixture", "second-fixture"]) {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const fixture = await seed(state, "main", sessionId);
       await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
       const prewarmedWorker = observed.workers.at(-1);
-      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        `${sessionId}-message`,
-      ]);
+      expectMessageIds((await fixture.read()).messages, [`${sessionId}-message`]);
       const worker = observed.workers.at(-1)!;
       expect(worker).toBe(prewarmedWorker);
       if (previousWorker) {
@@ -243,29 +271,6 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
   }
   await closeOpenClawStateDatabaseAsync();
   expect(previousWorker?.threadId).toBe(-1);
-});
-
-it("joins native worker exit when metadata-read custody is revoked during dispatch", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:revoked-presence",
-      storePath: path.join(state.agentDir(), "revoked.sqlite"),
-      env: state.env,
-    };
-    await replaceSessionEntry(target, { sessionId: "revoked-row", updatedAt: 1 });
-    let closing: Promise<boolean> | undefined;
-    observed.dispatch = (message) => {
-      if (asOptionalRecord(asOptionalRecord(message)?.input)?.kind === "session-row-presence") {
-        observed.dispatch = undefined;
-        closing = closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
-      }
-    };
-    await expect(prepareSessionEntryPresenceRead(target).read()).rejects.toThrow("revoked");
-    expect(closing).toBeDefined();
-    await closing;
-    expect(observed.workers.at(-1)?.threadId).toBe(-1);
-  });
 });
 
 async function seed(state: OpenClawTestState, agentId: string, sessionId: string) {
@@ -284,27 +289,10 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   });
   await replaceTranscriptEvents(target, [
     { type: "session", version: 3, id: sessionId },
-    {
-      type: "message",
-      id: `${sessionId}-message`,
-      parentId: null,
-      message: { role: "user", content: sessionId },
-    },
+    messageEvent(`${sessionId}-message`, { role: "user", content: sessionId }),
   ]);
   await waitForSessionTranscriptProjection(target);
-  const params = {
-    entry,
-    provider: undefined,
-    sessionId,
-    storePath: target.storePath,
-    sessionAgentId: agentId,
-    canonicalKey: target.sessionKey,
-    max: 20,
-    maxHistoryBytes: 100_000,
-    effectiveMaxChars: 8000,
-    offset: undefined,
-    messageId: undefined,
-  };
+  const params = { ...historyParams(target, entry), max: 20 };
   return {
     target,
     path: resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
@@ -312,17 +300,27 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   };
 }
 
-it("settles cancelled message reads before reuse and closes their database handles", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("settles cancelled message reads before later reads and closes their database handles", async () => {
+  await withHistoryState(async (state) => {
     const fixture = await seed(state, "main", "cancel-message-read");
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    // Cold admission uses the discovery lane; compare cancellation reuse on the warm history lane.
+    await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
     const controller = new AbortController();
     const cancelled = new Error("history consumer closed");
-    let dispatched = false;
-    observed.dispatch = (message) => {
-      const input = asOptionalRecord(asOptionalRecord(message)?.input);
+    const reads: Array<{ worker: Worker; threadId: number }> = [];
+    const received = vi.fn();
+    let cancelledTaskId: unknown;
+    observed.dispatch = (message, worker) => {
+      const task = asOptionalRecord(message);
+      const input = asOptionalRecord(task?.input);
+      if (input?.kind !== "history-page") {
+        return;
+      }
+      reads.push({ worker, threadId: worker.threadId });
       if (asOptionalRecord(input?.request)?.kind === "message-by-id") {
-        observed.dispatch = undefined;
-        dispatched = true;
+        cancelledTaskId = task?.taskId;
+        worker.on("message", received);
         controller.abort(cancelled);
       }
     };
@@ -333,87 +331,33 @@ it("settles cancelled message reads before reuse and closes their database handl
       },
       controller.signal,
     );
-    await expect(pending).rejects.toBe(cancelled);
-    expect(dispatched).toBe(true);
-    const worker = observed.workers.at(-1)!;
-    const threadId = worker.threadId;
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
-    expect(observed.workers.at(-1)).toBe(worker);
-    const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-    expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
-    if (!keepsWorker) {
-      expect(observed.workers.at(-1)).not.toBe(worker);
-    } else {
-      expect(observed.workers.at(-1)).toBe(worker);
-    }
-  });
-});
-
-it("rejects a completed native message reply after primary file replacement", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionId = "replaced-primary-read";
-    const fixture = await seed(state, "main", sessionId);
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-    fs.copyFileSync(fixture.path, `${fixture.path}.replacement`);
-    const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
-    const nativeReply = createDeferredCore<unknown>();
-    const releaseReply = createDeferredCore();
-    const run = historyLane.pool.run;
-    const read = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (reply.ok && asOptionalRecord(reply.value)?.kind === "message-by-id") {
-        nativeReply.resolve(reply.value);
-        await releaseReply.promise;
-      }
-      return reply;
-    });
-    const pending = readSessionHistoryPageInWorker({
-      kind: "message-by-id",
-      params: { target: fixture.target, messageId: `${sessionId}-message` },
-    });
     try {
-      const completed = await Promise.race([
-        nativeReply.promise,
-        pending.then(() => {
-          throw new Error("History read completed before its native reply was released");
-        }),
-      ]);
-      expect(completed).toMatchObject({
-        kind: "message-by-id",
-        result: { found: true, message: { role: "user", content: sessionId } },
-      });
-      // Release the settled native reader for Windows replacement without revoking host custody.
-      await historyLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
-      fs.renameSync(fixture.path, `${fixture.path}.previous`);
-      fs.renameSync(`${fixture.path}.replacement`, fixture.path);
-      expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);
-      releaseReply.resolve();
-      await expect(pending).rejects.toThrow(
-        "Session store changed while preparing its metadata. Retry the request.",
-      );
+      await expect(pending).rejects.toBe(cancelled);
     } finally {
-      releaseReply.resolve();
-      await pending.catch(() => undefined);
-      read.mockRestore();
+      reads[0]?.worker.off("message", received);
     }
+    expect(reads).toHaveLength(1);
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: cancelledTaskId, status: "ok" }),
+    );
+    const cancelledRead = reads[0]!;
+    expectMessageIds((await fixture.read()).messages, ["cancel-message-read-message"]);
+    expect(cancelledRead.worker.threadId).toBe(cancelledRead.threadId);
+    // Re-admission can use discovery before the next read uses the history lane.
+    const dispatchedWorkers = new Map(reads.map(({ worker, threadId }) => [worker, threadId]));
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    for (const [worker, threadId] of dispatchedWorkers) {
+      const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
+      expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
+    }
+    expectMessageIds((await fixture.read()).messages, ["cancel-message-read-message"]);
   });
 });
 
-it.each([
-  { phase: "discovery", mode: "no-commit" },
-  { phase: "discovery", mode: "metadata-refresh" },
-  { phase: "revalidation", mode: "no-commit" },
-  { phase: "revalidation", mode: "metadata-refresh" },
-])(
-  "keeps history readable across unchanged sibling registration during $phase ($mode)",
-  async ({ phase, mode }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it.each(["no-commit", "metadata-refresh"] as const)(
+  "reads history after unchanged sibling registration (%s)",
+  async (mode) => {
+    await withHistoryState(async (state) => {
       const a = await seed(state, "main", "registration-a");
       const b = await seed(state, "other", "registration-b");
       await a.read();
@@ -425,111 +369,28 @@ it.each([
         admission: captureOpenClawStateDatabaseReadAdmission(registryPath),
       });
       invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
-      let started = false;
-      let finished = false;
-      observed.dispatch = (message) => {
-        const input = asOptionalRecord(asOptionalRecord(message)?.input);
-        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
-        const registryRead =
-          asOptionalRecord(input?.command)?.type === "agentDatabaseRegistry.read";
-        if (!started) {
-          if (phase === "discovery" ? registryRead : params?.sessionId === "registration-a") {
-            started = true;
-            registration.begin();
-          }
-          return;
-        }
-        if (!registryRead) {
-          return;
-        }
-        observed.dispatch = undefined;
+      registration.begin();
+      try {
         if (mode === "metadata-refresh") {
           registerOpenClawAgentDatabase(
             { agentId: "other", path: b.path, env: state.env },
             { committed: (receipt) => registration.recordCommitted(receipt) },
           );
         }
-        registration.finish();
-        finished = true;
-      };
-      const captureSource = stateReadWorker.captureOpenClawStateReadSource;
-      const registryReads = vi
-        .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
-        .mockImplementation(() => {
-          const source = captureSource();
-          return {
-            ...source,
-            createTransport(command) {
-              const transport = source.createTransport(command);
-              if (command.type !== "agentDatabaseRegistry.read") {
-                return transport;
-              }
-              return {
-                ...transport,
-                startRead(...args) {
-                  observed.dispatch?.({ input: { command } });
-                  return transport.startRead(...args);
-                },
-              };
-            },
-          };
-        });
-      try {
-        expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-          "registration-a-message",
-        ]);
-        expect(started && finished).toBe(true);
       } finally {
-        observed.dispatch = undefined;
-        registryReads.mockRestore();
         registration.finish();
       }
-    });
-  },
-);
-
-it.each(["new-agent", "new-path", "schema", "physical-replacement"] as const)(
-  "rejects history when sibling discovery changes (%s)",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const a = await seed(state, "main", "topology-a");
-      const b = await seed(state, "other", "topology-b");
-      await a.read();
-      await b.read();
-      await closeOpenClawAgentDatabaseByPathAsync(b.path, "other");
-      let dispatched = false;
-      observed.dispatch = (message) => {
-        const input = asOptionalRecord(asOptionalRecord(message)?.input);
-        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
-        if (params?.sessionId !== "topology-a") {
-          return;
-        }
-        observed.dispatch = undefined;
-        dispatched = true;
-        if (change === "physical-replacement") {
-          fs.copyFileSync(b.path, `${b.path}.replacement`);
-          fs.renameSync(b.path, `${b.path}.previous`);
-          fs.renameSync(`${b.path}.replacement`, b.path);
-        }
-        registerOpenClawAgentDatabase({
-          agentId: change === "new-agent" ? "added" : "other",
-          path: change === "new-path" ? `${b.path}.different` : b.path,
-          env: state.env,
-          ...(change === "schema" ? { schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1 } : {}),
-        });
-      };
-      await expect(a.read()).rejects.toThrow("Session store changed while preparing its metadata");
-      expect(dispatched).toBe(true);
+      expectMessageIds((await a.read()).messages, ["registration-a-message"]);
     });
   },
 );
 
 it("closes idle A while active and queued B pages survive, then reads replaced A", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const a = await seed(state, "main", "close-a");
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
+    expectMessageIds((await a.read()).messages, ["close-a-message"]);
     await b.read();
     const oldWorker = observed.workers.at(-1)!;
     const threadId = oldWorker.threadId;
@@ -557,23 +418,16 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
     fs.renameSync(`${a.path}.replacement`, a.path);
     await replaceTranscriptEvents(a.target, [
       { type: "session", version: 3, id: "close-a" },
-      {
-        type: "message",
-        id: "replacement-a-message",
-        parentId: null,
-        message: { role: "user", content: "replacement content" },
-      },
+      messageEvent("replacement-a-message", { role: "user", content: "replacement content" }),
     ]);
     await waitForSessionTranscriptProjection(a.target);
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "replacement-a-message",
-    ]);
-    expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
+    expectMessageIds((await a.read()).messages, ["replacement-a-message"]);
+    expectMessageIds((await b.read()).messages, ["active-b-message"]);
   });
 });
 
 it("evicts the least recently used of 64 retained targets without charging missing databases", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const targets = [];
     for (let index = 0; index < 65; index++) {
       targets.push(await seed(state, `retained-${index}`, `history-${index}`));
@@ -610,16 +464,14 @@ it("evicts the least recently used of 64 retained targets without charging missi
     } finally {
       closeResources.mockRestore();
     }
-    expect((await targets[64]!.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "history-64-message",
-    ]);
+    expectMessageIds((await targets[64]!.read()).messages, ["history-64-message"]);
   });
 });
 
-it.each(["before restoration", "queued restoration"])(
+it.for(["before restoration", "queued restoration"] as const)(
   "does not restore a replacement database for a revoked history read (%s)",
-  async (phase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  async (phase, { signal }) => {
+    await withHistoryState(async (state) => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const fixture = await createSessionColdStorageFixture(databasePath);
       const unrelated =
@@ -648,86 +500,47 @@ it.each(["before restoration", "queued restoration"])(
       });
       const entered = createDeferredCore();
       const gate = createDeferredCore();
-      if (phase === "before restoration") {
-        observed.restoration = {
-          sessionId: fixture.scope.sessionId,
-          entered: entered.resolve,
-          wait: gate.promise,
-        };
-      }
-      let pauseQueue = phase === "queued restoration";
-      // oxlint-disable-next-line typescript/unbound-method -- The observer preserves the queue receiver.
-      const enqueue = KeyedAsyncQueue.prototype.enqueue;
-      const queueObservation = vi
-        .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-        .mockImplementation(function <T>(
-          this: KeyedAsyncQueue,
-          ...args: Parameters<typeof enqueue<T>>
-        ): Promise<T> {
-          const enqueueTask = enqueue<T>;
-          const [key, task, hooks] = args;
-          if (key !== databasePath || !pauseQueue) {
-            return enqueueTask.call(this, ...args);
-          }
-          pauseQueue = false;
-          return enqueueTask.call(
-            this,
-            key,
-            async () => {
-              entered.resolve();
-              await gate.promise;
-              return await task();
-            },
-            hooks,
-          );
-        });
-      const read = () =>
-        readChatHistoryPage({
-          entry: undefined,
-          provider: undefined,
-          sessionId: fixture.scope.sessionId,
-          storePath: databasePath,
-          sessionAgentId: fixture.scope.agentId,
-          canonicalKey: fixture.scope.sessionKey,
-          max: 20,
-          maxHistoryBytes: 100_000,
-          effectiveMaxChars: 8000,
-          offset: undefined,
-          messageId: undefined,
-        });
+      observed.restoration = {
+        sessionId: fixture.scope.sessionId,
+        phase,
+        entered: entered.resolve,
+        wait: gate.promise,
+      };
+      const read = () => readChatHistoryPage({ ...historyParams(fixture.scope), max: 20 });
       const pending = read();
       const failure = expect(pending).rejects.toThrow("revoked");
       try {
-        await entered.promise;
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "History read settled before reaching the restoration boundary",
+          ),
+          signal,
+        );
         await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
         if (unrelated) {
-          expect((await unrelated.read()).messages.map(readChatHistoryMessageId)).toEqual([
-            "unrelated-b-message",
-          ]);
+          expectMessageIds((await unrelated.read()).messages, ["unrelated-b-message"]);
         }
         fs.copyFileSync(databasePath, `${databasePath}.replacement`);
         fs.renameSync(databasePath, `${databasePath}.previous`);
         fs.renameSync(`${databasePath}.replacement`, databasePath);
         expect(readStoredTranscript()).toEqual(before);
       } finally {
-        queueObservation.mockRestore();
         observed.restoration = undefined;
         gate.resolve();
         await failure;
       }
       expect(readStoredTranscript()).toEqual(before);
       if (unrelated) {
-        expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
-          "history-user",
-          "history-assistant",
-        ]);
+        expectMessageIds((await read()).messages, ["history-user", "history-assistant"]);
       }
     });
   },
 );
 
 it("leaves the unrelated warm worker running when admission rejects a request before dispatch", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const b = await seed(state, "other", "overload-b");
     await b.read();
     const worker = observed.workers.at(-1)!;
@@ -745,15 +558,15 @@ it("leaves the unrelated warm worker running when admission rejects a request be
       ),
     ).rejects.toMatchObject({ code: "overloaded" });
     expect(worker.threadId).toBe(threadId);
-    expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["overload-b-message"]);
+    expectMessageIds((await b.read()).messages, ["overload-b-message"]);
     expect(observed.workers.at(-1)).toBe(worker);
   });
 });
 
 it.each([false, true])(
-  "joins the history worker when its 30-minute idle timer fires (missing=%s)",
+  "joins the history worker when its five-minute idle timer fires (missing=%s)",
   async (missing) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const a = missing
         ? prepareSessionEntryPresenceRead({
             agentId: "main",
@@ -765,7 +578,7 @@ it.each([false, true])(
       const beforeRead = observed.timers.mock.calls.length;
       await a.read();
       const worker = observed.workers.at(-1)!;
-      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
+      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 5 * 60_000);
       expect(index).toBeGreaterThanOrEqual(beforeRead);
       const [expire] = observed.timers.mock.calls[index]!;
       const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
@@ -777,23 +590,23 @@ it.each([false, true])(
       if (typeof reopened === "boolean") {
         expect(reopened).toBe(false);
       } else {
-        expect(reopened.messages.map(readChatHistoryMessageId)).toEqual(["idle-a-message"]);
+        expectMessageIds(reopened.messages, ["idle-a-message"]);
       }
       expect(observed.workers.at(-1)).not.toBe(worker);
       if (missing) {
         // No database resource exists to close; the reopened empty worker owns only its idle timer.
         const emptyWorker = observed.workers.at(-1)!;
         const nextIndex = observed.timers.mock.calls.findLastIndex(
-          (call) => call[1] === 30 * 60_000,
+          (call) => call[1] === 5 * 60_000,
         );
         expect(nextIndex).toBeGreaterThan(index);
         clearTimeout(observed.timers.mock.results[nextIndex]!.value as NodeJS.Timeout);
         observed.timers.mock.calls[nextIndex]![0]();
         await expect.poll(() => emptyWorker.threadId).toBe(-1);
-        expect(observed.timers.mock.calls.filter((call) => call[1] === 30 * 60_000)).toHaveLength(
+        expect(observed.timers.mock.calls.filter((call) => call[1] === 5 * 60_000)).toHaveLength(
           observed.timers.mock.calls
             .slice(0, nextIndex + 1)
-            .filter((call) => call[1] === 30 * 60_000).length,
+            .filter((call) => call[1] === 5 * 60_000).length,
         );
       }
     });

@@ -1,4 +1,3 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   ElevatedLevel,
@@ -59,6 +58,10 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
+import {
+  formatSessionCapabilities,
+  resolveSessionCapabilities,
+} from "./session-status-capabilities.js";
 import { patchSessionStatusModel, withActiveStatusModelIdentity } from "./session-status-model.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
@@ -210,6 +213,7 @@ export function createSessionStatusTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const gatewayScoped = opts?.callGateway !== undefined || hasGatewayToolRoutingContext();
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
+      const includeCapabilities = params.capabilities === true;
       const {
         cfg,
         mainKey,
@@ -375,8 +379,7 @@ export function createSessionStatusTool(opts?: {
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = deferTargetOwnerResolution
         ? undefined
-        : readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
-      resolved = isPromiseLike(resolved) ? await resolved : resolved;
+        : await readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
 
       if (
         !resolved &&
@@ -438,21 +441,18 @@ export function createSessionStatusTool(opts?: {
             agentId,
             mainKey,
           });
-          resolved = readStatusEntry(requestedKeyInput);
-          resolved = isPromiseLike(resolved) ? await resolved : resolved;
+          resolved = await readStatusEntry(requestedKeyInput);
         } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
           throw new Error(resolvedSession.error);
         }
       }
 
       if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
-        resolved = readStatusEntry(effectiveRequesterLookupKey, false);
-        resolved = isPromiseLike(resolved) ? await resolved : resolved;
+        resolved = await readStatusEntry(effectiveRequesterLookupKey, false);
       }
 
       if (!resolved && requestedKeyInput === "current") {
-        resolved = readStatusEntry(requestedKeyInput, true);
-        resolved = isPromiseLike(resolved) ? await resolved : resolved;
+        resolved = await readStatusEntry(requestedKeyInput, true);
       }
 
       if (!resolved && requestedKeyParam === undefined) {
@@ -460,8 +460,7 @@ export function createSessionStatusTool(opts?: {
           keyRaw: requestedKeyInput,
           mainKey,
         })) {
-          resolved = readStatusEntry(fallbackKey, true);
-          resolved = isPromiseLike(resolved) ? await resolved : resolved;
+          resolved = await readStatusEntry(fallbackKey, true);
           if (resolved) {
             resolvedViaImplicitCurrentFallback = true;
             break;
@@ -696,9 +695,18 @@ ${JSON.stringify(routeDetails, null, 2)}
           const stateChanges = rawStateChanges
             ? compactSessionStateChanges(rawStateChanges)
             : undefined;
+          const capabilities = includeCapabilities
+            ? await resolveSessionCapabilities({
+                callGateway: gatewayCall,
+                agentId,
+                // The Gateway inventory resolves canonical keys, not legacy bare main aliases.
+                sessionKey: normalizeVisibilityTargetSessionKey(scopedResolved.key, agentId),
+              })
+            : undefined;
           const extraBlocks = [
             routeContextText,
             stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
+            capabilities ? formatSessionCapabilities(capabilities) : undefined,
           ].filter((block): block is string => Boolean(block));
           const visibleStatusText = [statusText, ...extraBlocks].join("\n\n");
           const modelOverrideForResult =
@@ -728,6 +736,7 @@ ${JSON.stringify(routeDetails, null, 2)}
                 }
               : {}),
             statusText: visibleStatusText,
+            ...(capabilities ? { capabilities } : {}),
             ...routeDetails,
           });
         },

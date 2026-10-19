@@ -58,7 +58,11 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   });
   const resolveWorkspaceBootstrapFiles = (workspaceDir: string) =>
     resolveBootstrapFilesForRun({
-      ...attempt,
+      bootstrapUserProfileId: attempt.bootstrapUserProfileId,
+      config: attempt.config,
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
+      chatType: attempt.chatType,
       workspaceDir,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,
@@ -66,13 +70,14 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       runKind: attempt.bootstrapContextRunKind,
     });
   let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async () => {
-    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
-    return completedBootstrapTurn;
-  };
+  const hasCompletedBootstrapTurnForAttempt = async () =>
+    (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
     resolveWorkspaceBootstrapRouting({
-      ...attempt,
+      bootstrapContextRunKind: attempt.bootstrapContextRunKind,
+      trigger: attempt.trigger,
+      sessionKey: attempt.sessionKey,
+      isCanonicalWorkspace: attempt.isCanonicalWorkspace,
       isWorkspaceBootstrapPending,
       bootstrapFiles,
       isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
@@ -111,6 +116,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     bootstrapContextMode: attempt.bootstrapContextMode,
     bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
     bootstrapMode,
+    deliversCompleteWorkspaceContext: bootstrapRouting.deliversCompleteWorkspaceContext,
     hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =
@@ -122,12 +128,20 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       const executionProjectFiles =
         bootstrapWorkspaceDir === params.setup.resolvedWorkspace
           ? []
-          : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace)).filter(
-              (file) =>
-                file.name === DEFAULT_AGENTS_FILENAME &&
-                !file.missing &&
-                path.resolve(file.path) === executionAgentsPath,
-            );
+          : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace))
+              .filter(
+                (file) =>
+                  file.name === DEFAULT_AGENTS_FILENAME &&
+                  !file.missing &&
+                  path.resolve(file.path) === executionAgentsPath,
+              )
+              .map((file) => {
+                file.origin = {
+                  kind: "execution-project",
+                  rootPath: params.setup.resolvedWorkspace,
+                };
+                return file;
+              });
       const layeredBootstrapFiles = [...bootstrapFiles, ...executionProjectFiles];
       return {
         bootstrapFiles: layeredBootstrapFiles,

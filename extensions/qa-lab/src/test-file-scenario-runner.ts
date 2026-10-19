@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveQaArtifactPath, toRepoArtifactPath } from "./cli-paths.js";
 import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
@@ -23,7 +23,6 @@ import { sanitizeQaProgressValue } from "./progress-format.js";
 import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource, QaTestFileScenario } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import { shellQuote } from "./shell-quote.js";
 import {
   formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,
@@ -235,22 +234,17 @@ async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
       requireCurrentRunEvidence: requiresProducerEvidence,
     });
   } catch (error) {
-    if (result.status !== "pass") {
-      return result;
+    if (result.status === "pass") {
+      result.failureMessage = `Script producer evidence is invalid: ${formatErrorMessage(error)}`;
+      result.status = "fail";
     }
-    return {
-      ...result,
-      failureMessage: `Script producer evidence is invalid: ${formatErrorMessage(error)}`,
-      status: "fail" as const,
-    };
+    return result;
   }
   if (!producerEvidenceResult.producerEvidence) {
     if (requiresProducerEvidence && result.status === "pass") {
-      return {
-        ...result,
-        failureMessage: "Script exited successfully without writing fresh producer QA evidence.",
-        status: "fail" as const,
-      };
+      result.failureMessage =
+        "Script exited successfully without writing fresh producer QA evidence.";
+      result.status = "fail";
     }
     return result;
   }
@@ -354,9 +348,8 @@ export async function runQaTestFileScenarios(params: QaTestFileScenarioRunParams
     DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS,
   );
   const env = params.envMode === "replace" ? (params.env ?? {}) : { ...process.env, ...params.env };
-  const launch = structuredClone(
-    params.evidenceAnchors?.[0]?.launch ?? (await captureQaEvidenceLaunchIdentity(params.repoRoot)),
-  );
+  const launch =
+    params.evidenceAnchors?.[0]?.launch ?? (await captureQaEvidenceLaunchIdentity(params.repoRoot));
   if (params.preparedDockerEvidence) {
     assertQaPreparedDockerEnvironment(params.preparedDockerEvidence, env);
     const candidateRef = params.preparedDockerEvidence.receipt.identity.source.ref;
@@ -617,7 +610,6 @@ export async function runQaTestFileScenarios(params: QaTestFileScenarioRunParams
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   if (params.writeEvidenceFile ?? true) {
     await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-    await assertQaSuiteArtifactWritten("evidence", evidencePath);
   } else {
     await fs.rm(evidencePath, { force: true });
   }

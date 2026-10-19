@@ -9,8 +9,14 @@ const mocks = vi.hoisted(() => ({
   getModelsCommandSecretTargetIds: vi.fn(),
 }));
 
+// mock-isolation: Model-command fixtures control source and runtime snapshots without loading operator state.
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
   getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));

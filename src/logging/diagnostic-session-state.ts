@@ -1,3 +1,5 @@
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+
 export type SessionStateValue = "idle" | "processing" | "waiting";
 
 export type SessionState = {
@@ -199,6 +201,7 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   return created;
 }
 
+/** Looks up diagnostic state without creating a new entry. */
 export function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
   const key = resolveSessionKey(ref);
   return (
@@ -207,12 +210,30 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
   );
 }
 
+/** Classify optional output without admitting new diagnostic state. */
+export function resolveDiagnosticSessionKey(ref: SessionRef): string | undefined {
+  return ref.sessionKey ?? peekDiagnosticSessionState(ref)?.sessionKey;
+}
+
+export function isIncognitoDiagnosticSession(ref: SessionRef): boolean {
+  return (
+    isIncognitoSessionKey(ref.sessionKey) ||
+    isIncognitoSessionKey(peekDiagnosticSessionState(ref)?.sessionKey)
+  );
+}
+
+/** Renews this observation and invalidates recovery captured before the progress. */
+export function touchDiagnosticSessionState(state: SessionState): void {
+  state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
+  state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
+}
+
 /** Retires collector observations without resetting independent tool-loop or poll policy. */
 export function retireDiagnosticSessionObservations(): void {
   for (const state of diagnosticSessionStates.values()) {
-    // Recovery accepts one completion increment. A collector boundary must
-    // advance beyond that exception before this session can collect fresh work.
-    state.generation = (state.generation ?? 0) + 2;
+    state.generation = (state.generation ?? 0) + 1;
     state.state = "idle";
     state.queueDepth = 0;
     state.activeQueuedTurn = false;
@@ -222,6 +243,7 @@ export function retireDiagnosticSessionObservations(): void {
   }
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticSessionStateForTest(): void {
   diagnosticSessionStates.clear();
   lastSessionPruneAt = 0;

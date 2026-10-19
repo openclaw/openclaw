@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 export const PROMOTIONS_FEED_STATE_KEY = "clawhub.promotionsFeed";
 export type StoredPromotionsFeedState = {
@@ -20,7 +20,7 @@ export type PreparedPromotionClaim = {
 };
 
 export function markPromotionSlugsNotifiedInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   incoming: string[],
   now: number,
 ): void {
@@ -39,7 +39,7 @@ export function markPromotionSlugsNotifiedInDatabase(
 }
 
 export function recordPromotionClaimInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   record: PreparedPromotionClaim,
 ): void {
   const db = getNodeSqliteKysely<Pick<DB, "clawhub_promotion_claims">>(database);

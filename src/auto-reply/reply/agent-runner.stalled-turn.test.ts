@@ -5,15 +5,22 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/chat-send-source-finalization.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createSqliteTranscriptTarget,
   readTranscriptMessages,
 } from "../../sessions/user-turn-transcript.test-support.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { TemplateContext } from "../templating.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
 import { runReplyAgent } from "./agent-runner-run.js";
@@ -24,16 +31,14 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { clearFollowupDrainCallback } from "./queue/drain.js";
-import { clearFollowupQueue } from "./queue/state.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
-import { expireStaleReplyOperation } from "./reply-run-registry.state.js";
-import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 const mocks = vi.hoisted(() => ({
   executeAgentTurn: vi.fn(),
@@ -47,6 +52,7 @@ const executeAgentTurnMock = mocks.executeAgentTurn;
 const drainedRuns = mocks.drainedRuns;
 let executionStarted = createDeferred();
 
+// mock-isolation: Stalled-turn cases replace the complete compaction and memory-flush boundary.
 vi.mock("./agent-runner-memory.js", () => ({
   runSessionCompactionIfNeeded: (params: { abortSignal: AbortSignal }) => mocks.preflight(params),
   runMemoryFlushIfNeeded: async () => ({ sessionEntry: undefined, outcome: "skipped" }),
@@ -57,6 +63,7 @@ vi.mock("./agent-runner-execution.js", async () => ({
   executeAgentTurn: (...args: unknown[]) => mocks.executeAgentTurn(...args),
 }));
 
+// mock-isolation: Stalled-turn cases wrap the follow-up runner's sole exported entry point.
 vi.mock("./followup-runner.js", async (importOriginal) => {
   const { createFollowupRunner } = await importOriginal<typeof import("./followup-runner.js")>();
   return {
@@ -114,6 +121,7 @@ function createStalledRun(
   followupRun.run.skillLibraryAuthoring = options.skillLibraryAuthoring;
   followupRun.images = [{ type: "image", data: "aW1n", mimeType: "image/png" }];
   followupRun.transcriptPrompt = "what is good at the hotel restaurant?";
+  setRuntimeConfigSnapshot(followupRun.run.config);
   const transcriptTarget = createSqliteTranscriptTarget({
     dir: followupRun.run.workspaceDir,
     sessionId: "stalled-session",
@@ -166,12 +174,13 @@ function createStalledRun(
 async function stallBeforeOutput(stalled: StalledRun) {
   await executionStarted.promise;
   expect(executeAgentTurnMock).toHaveBeenCalledOnce();
-  expect(expireStaleReplyOperation(stalled.operation, "stuck_recovery")).toBe(false);
+  expect(stalled.operation.abortForStall()).toBe(true);
 }
 
 async function settleStalledOwner(stalled: StalledRun) {
   await stalled.run;
   stalled.operation.complete();
+  await stalled.operation.ownerSettlement;
 }
 
 function createQueuedRequest(from: { senderId: string; to: string }): FollowupRun {
@@ -191,10 +200,10 @@ function createQueuedRequest(from: { senderId: string; to: string }): FollowupRu
 
 describe("runReplyAgent stalled turn continuation", () => {
   beforeEach(() => {
-    replyRunTesting.resetReplyRunRegistry();
-    clearFollowupQueue(queueKey);
-    clearFollowupDrainCallback(queueKey);
-    drainedRuns.mockClear();
+    setRuntimeConfigSnapshot({});
+    clearSessionQueues([queueKey]);
+    resetSessionControllerStateForTest();
+    drainedRuns.mockReset();
     mocks.executeFollowups = false;
     executionStarted = createDeferred();
     mocks.preflight.mockReset().mockResolvedValue(undefined);
@@ -214,9 +223,35 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   afterEach(() => {
-    clearFollowupQueue(queueKey);
-    clearFollowupDrainCallback(queueKey);
-    replyRunTesting.resetReplyRunRegistry();
+    clearSessionQueues([queueKey]);
+    resetSessionControllerStateForTest();
+  });
+
+  it("queues exactly one transcript-only recovery run when nothing else is queued", async () => {
+    const stalled = createStalledRun();
+    await stallBeforeOutput(stalled);
+
+    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
+    expect(getFollowupQueueDepth(queueKey)).toBe(1);
+    // The lane stays dormant until the stalled owner releases the session.
+    expect(drainedRuns).not.toHaveBeenCalled();
+
+    await settleStalledOwner(stalled);
+    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
+    const recovery = drainedRuns.mock.calls[0]?.[0];
+    expect(recovery?.stalledTurnRecovery).toBe(true);
+    expect(recovery?.prompt).toContain("previous turn stopped making progress");
+    // Replay safety: the inbound request is not re-sent or re-persisted.
+    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
+    expect(recovery?.transcriptPrompt).toBeUndefined();
+    expect(recovery?.images).toBeUndefined();
+    expect(recovery?.abortSignal).toBeUndefined();
+    expect(recovery?.run.sessionKey).toBe(queueKey);
+    expect(stalled.recorder.hasPersisted()).toBe(true);
+    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
+      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
+    ]);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 
   it.each(["followup", "collect"] as const)(
@@ -233,7 +268,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       ).toBe(true);
       await stallBeforeOutput(stalled);
       executeAgentTurnMock.mockImplementationOnce(async ({ replyOperation }) => {
-        expireStaleReplyOperation(replyOperation, "stuck_recovery");
+        replyOperation.abortForStall();
         return { runId: "recovery-run", outcome: { kind: "aborted", reason: "user" } };
       });
 
@@ -299,6 +334,46 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(last).toBe(sameSenderLater);
   });
 
+  it("queues node-loss recovery once ahead of newer input without absorbing that input", async () => {
+    const drained = createDeferred();
+    drainedRuns.mockImplementation(async () => {
+      if (drainedRuns.mock.calls.length === 2) {
+        drained.resolve();
+      }
+    });
+    const interrupted = createStalledRun();
+    const queued = createQueuedRequest({ senderId: "traveler", to: "12345" });
+    expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
+      true,
+    );
+    await executionStarted.promise;
+    const guidance = `${new WorkerNodeLostError().message} Continue the interrupted request from the transcript.`;
+    const otherIngress = createReplyOperation({
+      sessionId: "other-ingress",
+      sessionKey: "agent:main:telegram:direct:other",
+      resetTriggered: false,
+    });
+    try {
+      expect(interrupted.runState.continueStalledTurn?.(guidance, otherIngress)).toBe(false);
+      expect(getFollowupQueueDepth(queueKey)).toBe(1);
+    } finally {
+      otherIngress.complete();
+    }
+    expect(interrupted.runState.continueStalledTurn?.(guidance)).toBe(true);
+    expect(interrupted.runState.continueStalledTurn?.(guidance)).toBe(false);
+    expect(queued.currentInboundContext).toBeUndefined();
+    expect(queued.stalledTurnRecovery).toBeUndefined();
+
+    expect(interrupted.operation.abortForStall()).toBe(true);
+    await settleStalledOwner(interrupted);
+    await drained.promise;
+    const [recovery, newer] = drainedRuns.mock.calls.map(([run]) => run);
+    expect(recovery).toMatchObject({ stalledTurnRecovery: true, transcriptPrompt: undefined });
+    expect(recovery?.prompt).toContain(guidance);
+    expect(newer).toBe(queued);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+  });
+
   it("leaves dispatch responsible for a stall before the request reaches the transcript", async () => {
     const preflightStarted = createDeferred();
     mocks.preflight.mockImplementationOnce(async ({ abortSignal }) => {
@@ -312,7 +387,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     const stalled = createStalledRun();
     const settled = stalled.run.catch(() => undefined);
     await preflightStarted.promise;
-    expireStaleReplyOperation(stalled.operation, "stuck_recovery");
+    stalled.operation.abortForStall();
 
     const continued = stalled.runState.continueStalledTurn?.();
     await settled;
@@ -356,6 +431,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       originatingChannel: "webchat",
       logGateway: context.logGateway,
       deliver: createChatSendLateReplyFinalizer({
+        terminalEntry: undefined,
         accountId: undefined,
         context,
         session: {
@@ -374,7 +450,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     });
     await stallBeforeOutput(stalled);
     executeAgentTurnMock.mockImplementationOnce(async ({ replyOperation }) => {
-      expireStaleReplyOperation(replyOperation, "stuck_recovery");
+      replyOperation.abortForStall();
       return { runId: "recovery-run", outcome: { kind: "aborted", reason: "user" } };
     });
 

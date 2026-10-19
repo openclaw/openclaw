@@ -11,6 +11,33 @@ export interface AgentToolExecutionContext {
 }
 
 const activeToolExecution = new AsyncLocalStorage<AgentToolExecutionContext>();
+const inputScopeByInvocation = new WeakMap<AssistantMessage, WeakMap<AgentToolCall, object>>();
+
+/** Bind before awaited admission; later input must not relabel an in-flight call. */
+export function captureAgentToolInputScope(
+  context: Pick<AgentToolExecutionContext, "assistantMessage" | "toolCall">,
+  inputScope: object,
+): void {
+  let calls = inputScopeByInvocation.get(context.assistantMessage);
+  if (!calls) {
+    calls = new WeakMap();
+    inputScopeByInvocation.set(context.assistantMessage, calls);
+  }
+  if (!calls.has(context.toolCall)) {
+    calls.set(context.toolCall, inputScope);
+  }
+}
+
+/** The same private identity is available during execution and after-tool publication. */
+export function getAgentToolInputScope(
+  context:
+    | Pick<AgentToolExecutionContext, "assistantMessage" | "toolCall">
+    | undefined = activeToolExecution.getStore(),
+): object | undefined {
+  return context
+    ? inputScopeByInvocation.get(context.assistantMessage)?.get(context.toolCall)
+    : undefined;
+}
 
 export function getAgentToolExecutionContext(): AgentToolExecutionContext | undefined {
   return activeToolExecution.getStore();

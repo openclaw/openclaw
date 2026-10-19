@@ -6,14 +6,17 @@ import {
   isHiddenAssistantStreamText,
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { isChatRunStartupPhase, reconcileChatRunStartup } from "./chat-run-startup.ts";
+import {
+  isChatRunStartupPhase,
+  isChatRunRecoveryStatus,
+  reconcileChatRunStartup,
+} from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
   getChatSessionProjection,
-  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   setChatRunOwner,
@@ -48,22 +51,6 @@ export function materializeVisibleAssistantStreamMessages(
 
 export function persistsChatCommentary(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary !== false;
-}
-
-function replayInFlightRunEvents(
-  state: ChatState,
-  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
-): void {
-  if (state.chatRunId !== run.runId || !Array.isArray(run.events)) {
-    return;
-  }
-  for (const event of run.events) {
-    if (!event || event.runId !== run.runId) {
-      continue;
-    }
-    // SAFETY: history replays the same agent events against the pane that owns live tool state.
-    handleAgentEvent(state as never, event as never);
-  }
 }
 
 function resolveInFlightAssistantText(bufferedText: unknown): string | null {
@@ -129,6 +116,10 @@ export function applyHistoryRun(params: {
     currentRunProjections,
     resetStream,
   } = params;
+  const hasOtherSendingRun = (runId: string) =>
+    state.chatQueue.some(
+      (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== runId,
+    );
   const inFlightRunId = run?.runId?.trim();
   if (!inFlightRunId || !run) {
     if (!sessionInfo) {
@@ -139,9 +130,7 @@ export function applyHistoryRun(params: {
       localRunId &&
       sessionInfo.lastRunId !== localRunId &&
       historyRun &&
-      !state.chatQueue.some(
-        (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== localRunId,
-      ) &&
+      !hasOtherSendingRun(localRunId) &&
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply) &&
       reconcileChatRunFromSessionRow(state, sessionInfo, {
         publishRunStatus: false,
@@ -162,12 +151,9 @@ export function applyHistoryRun(params: {
         sessionInfo.status === "killed" ||
         sessionInfo.status === "timeout") &&
       sessionInfo.hasActiveRun !== true &&
-      !isSessionRunActive(sessionInfo) &&
+      !isSessionRunStateActive(sessionInfo) &&
       (!state.chatRunId || state.chatRunId === terminalRunId) &&
-      !state.chatQueue.some(
-        (item) =>
-          item.sendState === "sending" && item.sendRunId && item.sendRunId !== terminalRunId,
-      ) &&
+      !hasOtherSendingRun(terminalRunId) &&
       ((sessionInfo.status !== "killed" && !knownRun) ||
         state.chatRunId === terminalRunId ||
         getChatRunOwner(state) === terminalRunId) &&
@@ -201,6 +187,7 @@ export function applyHistoryRun(params: {
             : sessionInfo.status === "timeout"
               ? "timeout"
               : "error",
+        suppressErrorNotice: sessionInfo.suppressErrorNotice,
         errorMessage:
           sessionInfo.status === "failed" || sessionInfo.status === "timeout"
             ? (failureMessage ?? sessionInfo.lastRunError)
@@ -235,7 +222,7 @@ export function applyHistoryRun(params: {
     runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
   const activeRunIds = sessionInfo?.activeRunIds;
   const inFlightRunIsActive =
-    isSessionRunActive(sessionInfo ?? {}) &&
+    isSessionRunStateActive(sessionInfo ?? {}) &&
     (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
     (!projectedInFlightRun || projectedInFlightRun.status === "streaming");
   // Only a read issued while this pane still owned the old run can replace it.
@@ -249,9 +236,7 @@ export function applyHistoryRun(params: {
     historyRun?.runId === state.chatRunId &&
     historyRun.sessionId === sessionInfo?.sessionId &&
     historyRun.isCurrent() &&
-    !state.chatQueue.some(
-      (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== inFlightRunId,
-    ),
+    !hasOtherSendingRun(inFlightRunId),
   );
   const canAdoptInFlightRun =
     inFlightRunIsActive &&
@@ -260,14 +245,10 @@ export function applyHistoryRun(params: {
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
       sameRunContinued);
   if (canAdoptInFlightRun) {
-    const recoveringRun = state.chatRunId !== inFlightRunId;
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; the same live run retains its ordered text baseline.
     adoptStartedChatRun(state, inFlightRunId, Date.now());
-    if (recoveringRun && sessionInfo) {
-      observeChatRunModel(state, inFlightRunId, sessionInfo);
-    }
     state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
@@ -294,7 +275,8 @@ export function applyHistoryRun(params: {
   const startupPhase = startup?.data.phase;
   if (
     run.text &&
-    !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+    startupPhase !== "waiting_for_model" &&
+    !isChatRunRecoveryStatus(state.chatRunStartup)
   ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
   } else if (startup && isChatRunStartupPhase(startupPhase)) {
@@ -302,11 +284,21 @@ export function applyHistoryRun(params: {
       state: "status",
       runId: inFlightRunId,
       phase: startupPhase,
+      ...(startupPhase === "waiting_for_model"
+        ? { waitReason: startup.data.reason === "slot" ? ("slot" as const) : ("response" as const) }
+        : {}),
       seq: startup.seq,
     });
   }
   // Disconnect cleanup intentionally removes transient activity rows while
   // retaining the owned run. Replay fills that gap; per-identity sequence
   // fences keep a delayed snapshot from replacing newer live progress.
-  replayInFlightRunEvents(state, run);
+  if (state.chatRunId === run.runId && Array.isArray(run.events)) {
+    for (const event of run.events) {
+      if (event?.runId === run.runId) {
+        // SAFETY: history replays the same agent events against the pane that owns live tool state.
+        handleAgentEvent(state as never, event as never, "history");
+      }
+    }
+  }
 }

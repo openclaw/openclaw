@@ -4,6 +4,7 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteScope,
 } from "../../config/sessions/session-accessor.types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { CompactionEntry } from "./session-manager-types.js";
 
@@ -20,10 +21,14 @@ export type PreparedCompactionAppend = {
   initializeEntry?: boolean;
 };
 
-export type CommittedCompactionAppend = {
+type CommittedCompactionAppend = {
   result: CompactionEntry;
   before: SessionTranscriptContextVersion;
   after: SessionTranscriptContextVersion;
+};
+
+export type CommittedCompactionBoundary = CommittedCompactionAppend & {
+  entry: InternalSessionEntry;
 };
 
 export type CompactionAppendPersistence = (

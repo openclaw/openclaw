@@ -3,6 +3,7 @@ import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import type { WebSearchProviderToolDefinition } from "../plugins/web-provider-types.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
+import { WebSearchProviderError } from "./runtime-error.js";
 import { executeWebSearchCandidates } from "./runtime-execution.js";
 
 function candidate(id: string, execute: WebSearchProviderToolDefinition["execute"]) {
@@ -69,31 +70,21 @@ describe("executeWebSearchCandidates", () => {
     },
   );
 
-  it("retains an undefined rejection across an unavailable factory and later failure", async () => {
-    const unavailable = createWebSearchTestProvider({
-      id: "unavailable",
-      pluginId: "fixture-search",
-      credentialPath: "plugins.entries.fixture-search.config.unavailable",
-      createTool: () => null,
+  it("returns the selected provider's missing-credential payload after fallback is exhausted", async () => {
+    const payload = { error: "missing_fixture_api_key", message: "set FIXTURE_KEY" };
+    const failure = await executeWebSearchCandidates({
+      candidates: [
+        candidate("first", async () => payload),
+        candidate("second", async () => ({ error: "missing_other_api_key" })),
+      ],
+      args: {},
+      allowFallback: true,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WebSearchProviderError);
+    expect((failure as WebSearchProviderError).toResult()).toEqual({
+      provider: "first",
+      result: payload,
     });
-    const laterFailure = vi.fn(async () => {
-      throw new Error("second provider failed");
-    });
-    await expect(
-      executeWebSearchCandidates({
-        candidates: [
-          candidate(
-            "first",
-            vi.fn<WebSearchProviderToolDefinition["execute"]>().mockRejectedValue(undefined),
-          ),
-          unavailable,
-          candidate("second", laterFailure),
-        ],
-        args: {},
-        allowFallback: true,
-      }),
-    ).rejects.toThrow("undefined");
-    expect(laterFailure).toHaveBeenCalledOnce();
   });
 
   it("gives cancellation precedence over a saved failure and later cleanup error", async () => {

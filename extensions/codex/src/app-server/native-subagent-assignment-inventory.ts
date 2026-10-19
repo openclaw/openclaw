@@ -17,6 +17,7 @@ import type { CodexNativeSubagentSubmission } from "./native-subagent-submission
 export class CodexNativeSubagentAssignmentInventory {
   private readonly writes = new Map<ParentState, Promise<void>>();
   private readonly snapshots = new WeakMap<ChildState, string>();
+  private readonly cancelled = new WeakSet<ChildState>();
 
   constructor(
     private readonly dependencies: {
@@ -101,6 +102,7 @@ export class CodexNativeSubagentAssignmentInventory {
       !assignment ||
       !state.assignmentStore ||
       child.nativeCompletionDelivered ||
+      child.completionDeliveryAbandoned ||
       child.subscriptionClosed
     ) {
       return;
@@ -127,8 +129,7 @@ export class CodexNativeSubagentAssignmentInventory {
 
   settle(state: ParentState, child: ChildState): void {
     const assignment = this.fact(child);
-    // Disconnection, interrupted execution, and an exhausted delivery retry do
-    // not acknowledge the result. Leave their durable locators for registration.
+    // Disconnection and interrupted execution leave locators for registration.
     if (
       !assignment ||
       !state.assignmentStore ||
@@ -143,6 +144,47 @@ export class CodexNativeSubagentAssignmentInventory {
     });
   }
 
+  abandon(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
+    return this.enqueue(state, async () => {
+      const assignment = this.fact(child);
+      if (!assignment || !state.assignmentStore || !child.pendingCompletion) {
+        return;
+      }
+      if (
+        !(await state.assignmentStore.consume(
+          assignment,
+          () => {
+            this.dependencies.assertCurrent(state);
+            assertCurrent();
+          },
+          { status: child.pendingCompletion.status },
+        ))
+      ) {
+        throw new Error("Undeliverable native assignment was not retired.");
+      }
+    });
+  }
+
+  settleCancelled(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
+    return this.enqueue(state, async () => {
+      const assertAdmission = () => {
+        this.dependencies.assertCurrent(state);
+        assertCurrent();
+      };
+      assertAdmission();
+      const assignment = this.fact(child);
+      if (!assignment || !state.assignmentStore || this.cancelled.has(child)) {
+        return;
+      }
+      if (!(await state.assignmentStore.consume(assignment, assertAdmission))) {
+        throw new Error("Cancelled native assignment was not acknowledged.");
+      }
+      // Remember a committed acknowledgement even if the following authority read fails.
+      this.cancelled.add(child);
+      assertAdmission();
+    });
+  }
+
   async restore(state: ParentState, owner: ParentOwner): Promise<void> {
     const store = state.assignmentStore;
     const current = state.historyOwner;
@@ -153,20 +195,36 @@ export class CodexNativeSubagentAssignmentInventory {
     }
     const custody = owner.completionCustody.retain();
     try {
-      store.assertCurrent();
-      for (const assignment of store.read()) {
+      const assignments = await store.read();
+      if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
+        return;
+      }
+      for (const assignment of assignments) {
         if (!matchesNativeAssignmentLifecycle(assignment.owner, current)) {
           continue;
         }
         const recovery = await this.dependencies.readHistory(assignment);
+        const pending = await store.read();
         if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
           return;
         }
-        store.assertCurrent();
         if (!recovery || recovery.parentThreadId !== assignment.nativeParentThreadId) {
           continue;
         }
-        await this.dependencies.restore(state, assignment, recovery, custody);
+        const surviving = pending.find(
+          (entry) =>
+            entry.childThreadId === assignment.childThreadId &&
+            entry.nativeParentThreadId === assignment.nativeParentThreadId &&
+            matchesNativeAssignmentLifecycle(entry.owner, assignment.owner) &&
+            ((entry.nativeTurnId === assignment.nativeTurnId &&
+              (entry.nativeTurnId !== undefined || entry.runId === assignment.runId)) ||
+              (recovery.nativeTurnId !== undefined &&
+                entry.nativeTurnId === recovery.nativeTurnId &&
+                (assignment.nativeTurnId === undefined || entry.runId === assignment.runId))),
+        );
+        if (surviving) {
+          await this.dependencies.restore(state, surviving, recovery, custody);
+        }
       }
     } catch (error) {
       embeddedAgentLog.warn("Native pending assignments remain for reconciliation", {

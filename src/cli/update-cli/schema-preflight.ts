@@ -118,14 +118,12 @@ export async function captureTargetDatabaseSchemaContext(
     )
       ? planned
       : undefined;
-  if (before?.path === snapshot.path && !legacyConfigPlan) {
+  if (before?.path === snapshot.path && !legacyConfigPlan && !snapshot.valid) {
     // This is read-only admission. A concurrent save needs a fresh projection,
     // never reuse of the old source's plan or refusal merely because it changed.
-    if (!snapshot.valid) {
-      const { planLegacyConfigForUpdateChannel } =
-        await import("../../commands/doctor/legacy-config-repair.js");
-      legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-    }
+    const { planLegacyConfigForUpdateChannel } =
+      await import("../../commands/doctor/legacy-config-repair.js");
+    legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
   }
   if (
     (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
@@ -154,22 +152,29 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
-  const inspectionContexts = contexts.map((context) => {
-    try {
-      return {
-        env: context.env,
-        configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
-          context.config,
-          { env: context.env },
-        ),
-      };
-    } catch (error) {
-      throw new UpdatePreMutationError(
-        "database-schema-preflight",
-        `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
-      );
-    }
-  });
+  const { resolveDatabaseEngineSelection } = await import("../../infra/database-engine/config.js");
+  const inspectionContexts = await Promise.all(
+    contexts.map(async (context) => {
+      try {
+        return {
+          env: context.env,
+          databaseEngineSelection: await resolveDatabaseEngineSelection(
+            context.config,
+            context.env,
+          ),
+          configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+            context.config,
+            { env: context.env },
+          ),
+        };
+      } catch (error) {
+        throw new UpdatePreMutationError(
+          "database-schema-preflight",
+          `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+        );
+      }
+    }),
+  );
   return preflightOpenClawDatabaseSchemaContexts({
     contexts: inspectionContexts,
     supportedVersions,

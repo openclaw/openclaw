@@ -139,7 +139,6 @@ describe("maybeRestartService", () => {
     "initial-stopped-reachable",
     "initial-plugin-error",
     "initial-plugin-unavailable",
-    "initial-channel-error",
     "initial-readyz-error",
     "initial-readyz-rollback",
     "initial-version-error",
@@ -206,9 +205,6 @@ describe("maybeRestartService", () => {
                 ],
               }
             : {}),
-          ...(change === "initial-channel-error"
-            ? { channelProbeErrors: [{ id: "fixture-channel", error: "connection failed" }] }
-            : {}),
         };
         mocks.waitForGatewayHealthyRestart.mockResolvedValue(observedHealth);
         mocks.inspectGatewayRestart.mockResolvedValue(observedHealth);
@@ -252,18 +248,11 @@ describe("maybeRestartService", () => {
             ? { check: "versionMatch", code: "version-mismatch" }
             : change === "initial-build-error"
               ? { check: "versionMatch", code: "build-id-mismatch" }
-              : change === "initial-channel-error"
-                ? {
-                    check: "channelsReady",
-                    code: "channel-errors",
-                    pluginId: "fixture-channel",
-                    message: "connection failed",
-                  }
-                : change === "initial-readyz-error" || rollback
-                  ? { check: "readyz", code: "readyz-unhealthy" }
-                  : change === "initial-settle-error"
-                    ? { check: "settled", code: "timeout" }
-                    : { check: "service", code: "service-not-running" };
+              : change === "initial-readyz-error" || rollback
+                ? { check: "readyz", code: "readyz-unhealthy" }
+                : change === "initial-settle-error"
+                  ? { check: "settled", code: "timeout" }
+                  : { check: "service", code: "service-not-running" };
         expect(updateResult.steps).toContainEqual(
           expect.objectContaining({
             name: "gateway verification",
@@ -449,6 +438,61 @@ describe("maybeRestartService", () => {
     expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
       warning,
     );
+  });
+  it("records measured reconciliation child timing in the outcome and run history", async () => {
+    const home = tempDirs.make("service-timing-history-");
+    const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+    const admitted = createUpdateRun({ trigger: "cli" }, options);
+    const liveRun = { ...run, runId: admitted.runId, env: options.env };
+    const ledger = await vi.importActual<typeof import("../../infra/update-run-ledger.js")>(
+      "../../infra/update-run-ledger.js",
+    );
+    const install = {
+      name: "managed-service-install",
+      command: "openclaw gateway install --force --port 18789 --json",
+      cwd: "/fixture/root",
+      durationMs: 24_000,
+      exitCode: 0,
+    };
+    mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(async (params) => {
+      params.onTimedStep?.(install);
+      return "unverified";
+    });
+    const result: UpdateRunResult = {
+      status: "ok",
+      mode: "npm",
+      root: "/fixture/root",
+      after: { version: gateway.version, buildId: gateway.buildId },
+      steps: [],
+      durationMs: 0,
+    };
+    await vi
+      .mocked(recordUpdateRunStep)
+      .withImplementation(ledger.recordUpdateRunStep, async () => {
+        await expect(
+          maybeRestartService({
+            shouldRestart: true,
+            result,
+            opts: { json: true, run: liveRun },
+            refreshServiceEnv: true,
+            serviceEnv: { HOME: "/home/operator" },
+            serviceInstallEnv: {},
+            gatewayPort: 18789,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toBe("ok");
+      });
+    expect(result.steps).toContainEqual(install);
+    const row = getUpdateRun(admitted.runId, options)?.steps.find(
+      (step) => step.step === "managed-service-install",
+    );
+    expect(row).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      startedAtMs: expect.any(Number),
+      endedAtMs: expect.any(Number),
+    });
+    expect((row?.endedAtMs ?? 0) - (row?.startedAtMs ?? 0)).toBe(24_000);
   });
   it.for([
     { outcome: "installed", profile: "default" },
@@ -720,7 +764,7 @@ describe("maybeRestartService", () => {
     },
   );
 
-  it("rejects channel failures even when a Git target has no build identity", async () => {
+  it("rejects unverified Git readiness despite channel warnings", async () => {
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
       runtime: { status: "running", pid: 8000 },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
@@ -742,7 +786,7 @@ describe("maybeRestartService", () => {
         onVerificationFailure,
       }),
     ).resolves.toBe("restart-health-failed");
-    expect(onVerificationFailure).toHaveBeenCalledWith("channel-errors");
+    expect(onVerificationFailure).toHaveBeenCalledWith("timeout");
   });
 
   it.for([

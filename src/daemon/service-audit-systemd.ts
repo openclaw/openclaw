@@ -1,4 +1,3 @@
-/** Audits effective systemd service settings and managed unit backups. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -16,6 +15,7 @@ import type {
   ServiceConfigIssue,
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import { resolveManagedGatewayServiceCommand } from "./service-types.js";
 import { execSystemctlUser } from "./systemd-exec.js";
 import {
@@ -121,13 +121,13 @@ export async function auditSystemdUnit(
   inspectRewrite = false,
 ) {
   const unitPath = resolveSystemdUnitPath(env);
+  const backupInspectionError = await auditSystemdUnitBackup(unitPath, issues);
   let definitionDriftError =
     definitionDrift &&
     command?.sourcePath &&
     path.resolve(command.sourcePath) !== path.resolve(unitPath)
       ? "Systemd definition inspection skipped: the selected service is outside the managed user-unit path."
-      : undefined;
-  await auditSystemdUnitBackup(unitPath, issues);
+      : backupInspectionError;
   let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
@@ -163,16 +163,18 @@ export async function auditSystemdUnit(
   // to the base unit only when its bounded effective-state query fails.
   // `systemctl show` still exits 0 for masked and not-found units, with empty
   // After/Wants and RestartUSec=100ms defaults. Those are not loaded settings.
-  const manager = await execSystemctlUser(
-    env,
-    [
-      "show",
-      `${resolveSystemdServiceName(env)}.service`,
-      "--no-page",
-      "--property",
-      "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
-    ],
-    timeoutMs && timeoutMs > 0 ? timeoutMs : SYSTEMD_AUDIT_TIMEOUT_MS,
+  const manager = await withServiceInspectionBudget(() =>
+    execSystemctlUser(
+      env,
+      [
+        "show",
+        `${resolveSystemdServiceName(env)}.service`,
+        "--no-page",
+        "--property",
+        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
+      ],
+      timeoutMs && timeoutMs > 0 ? timeoutMs : SYSTEMD_AUDIT_TIMEOUT_MS,
+    ),
   );
   const entries = manager.code === 0 ? parseKeyValueOutput(manager.stdout, "=") : undefined;
   const loadState = normalizeLowercaseStringOrEmpty(entries?.loadstate);
@@ -189,50 +191,43 @@ export async function auditSystemdUnit(
           parseSystemdTimeSpanMs(entries.timeoutstopusec ?? "") ?? SYSTEMD_DEFAULT_STOP_TIMEOUT_MS,
       }
     : parseSystemdUnit(directives);
+  const report = (code: string, message: string, detail = unitPath) => {
+    issues.push({ code, message, detail, level: "recommended" });
+  };
   if (parsed.stopTimeoutMs > 0 && parsed.stopTimeoutMs < GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdStopTimeout,
-      message: `TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000} or longer is required for the Gateway drain and final cleanup; inspect unit and drop-in overrides.`,
-      detail: `${unitPath}: ${parsed.stopTimeoutMs / 1_000}s (${entries ? "systemd manager" : "base unit; manager unavailable"})`,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdStopTimeout,
+      `TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000} or longer is required for the Gateway drain and final cleanup; inspect unit and drop-in overrides.`,
+      `${unitPath}: ${parsed.stopTimeoutMs / 1_000}s (${entries ? "systemd manager" : "base unit; manager unavailable"})`,
+    );
   }
   if (!parsed.after.has("network-online.target")) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
-      message: "Missing systemd After=network-online.target",
-      detail: unitPath,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
+      "Missing systemd After=network-online.target",
+    );
   }
   if (!parsed.wants.has("network-online.target")) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
-      message: "Missing systemd Wants=network-online.target",
-      detail: unitPath,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
+      "Missing systemd Wants=network-online.target",
+    );
   }
   if (!isRestartSecPreferred(parsed.restartSec)) {
-    issues.push({
-      code: SYSTEMD_SERVICE_AUDIT_CODES.systemdRestartSec,
-      message: "RestartSec does not match the recommended 5s",
-      detail: unitPath,
-      level: "recommended",
-    });
+    report(
+      SYSTEMD_SERVICE_AUDIT_CODES.systemdRestartSec,
+      "RestartSec does not match the recommended 5s",
+    );
   }
   const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode) || "control-group";
   if (killMode !== "mixed") {
-    issues.push({
-      code:
-        killMode === "process" || killMode === "none"
-          ? SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
-          : SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
-      message:
-        "KillMode=mixed is required to drain active turns before final service child cleanup; inspect unit and drop-in overrides.",
-      detail: `${unitPath}: ${killMode}`,
-      level: "recommended",
-    });
+    report(
+      killMode === "process" || killMode === "none"
+        ? SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+        : SYSTEMD_SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      "KillMode=mixed is required to drain active turns before final service child cleanup; inspect unit and drop-in overrides.",
+      `${unitPath}: ${killMode}`,
+    );
   }
   return definitionDriftError;
 }
@@ -357,8 +352,11 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
   let stat;
   try {
     stat = await fs.lstat(backupPath);
-  } catch {
-    return;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      return `Systemd service backup could not be inspected; check ${backupPath} and retry the service audit.`;
+    }
+    return undefined;
   }
   const mode = stat.mode & 0o777;
   const embeddedKeys = new Set<string>();
@@ -387,7 +385,7 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     }
   }
   if (stat.isFile() && !unreadable && embeddedKeys.size === 0 && (mode & 0o077) === 0) {
-    return;
+    return undefined;
   }
   const detail = [
     backupPath,
@@ -407,4 +405,5 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     detail,
     level: "recommended",
   });
+  return undefined;
 }

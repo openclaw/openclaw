@@ -6,6 +6,7 @@ import type { ConnectParams } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { MockWebSocket, wsInstances } from "../api/gateway-socket.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { fetchControlUiResource } from "./browser-http.ts";
@@ -21,8 +22,38 @@ let runtime: ApplicationRuntime | undefined;
 function setNativeAuth(auth: { gatewayUrl: string; token?: string; password?: string }) {
   window[NATIVE_AUTH_KEY] = auth;
 }
+function useGateway(settings?: Parameters<typeof createGatewayStoreTestStore>[0]) {
+  const store = createGatewayStoreTestStore(settings);
+  vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
+  return store;
+}
+async function startDocument() {
+  runtime = bootstrapApplication();
+  vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
+  await runtime.start();
+}
+function mockBrowserHandoff() {
+  const fetchMock = vi.fn<typeof fetch>(async () =>
+    Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
+  );
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+    input === "/control-ui-config.json"
+      ? Promise.resolve(new Response(null, { status: 401 }))
+      : fetchMock(input, init),
+  );
+  return fetchMock;
+}
+function rejectAuth(store: ReturnType<typeof useGateway>, code: string) {
+  store.current().opts.onClose?.({
+    code: 4008,
+    reason: "connect failed",
+    willRetry: false,
+    error: { code: "INVALID_REQUEST", message: "authentication missing", details: { code } },
+  });
+}
 
 beforeEach(() => {
+  wsInstances.length = 0;
   vi.spyOn(Math, "random").mockReturnValue(0);
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
@@ -30,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   runtime?.stop();
+  wsInstances.length = 0;
   runtime = undefined;
   delete window[NATIVE_AUTH_KEY];
   window.history.replaceState({}, "", originalUrl);
@@ -46,10 +78,9 @@ describe("pending Gateway credentials", () => {
   ])(
     "scopes browser recovery credentials to the document Gateway (%s)",
     async (gatewayUrl, authorization) => {
-      const store = createGatewayStoreTestStore({
+      useGateway({
         settings: { ...loadSettings(), gatewayUrl, token: "document-gateway-token" },
       });
-      vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
       const fetchMock = vi.fn<typeof fetch>(
         async (_url, init) =>
           new Response(null, {
@@ -78,40 +109,27 @@ describe("pending Gateway credentials", () => {
     "binds a reloaded bootstrap after another tab selects a remote ($decision, query: $queryGatewayUrl)",
     async ({ decision, queryGatewayUrl }) => {
       const sockets: RecordingWebSocket[] = [];
-      class RecordingWebSocket extends EventTarget {
-        static OPEN = 1;
-        readyState = 0;
-        sent: Array<{ id: string; method: string; params: ConnectParams }> = [];
-
+      class RecordingWebSocket extends MockWebSocket {
         constructor(readonly url: string) {
-          super();
+          super(url);
           sockets.push(this);
         }
-
-        send(data: string) {
-          this.sent.push(JSON.parse(data));
+        override close(code = 1000, reason = "") {
+          this.emitClose(code, reason);
         }
-
-        close(code = 1000, reason = "") {
-          this.readyState = 3;
-          this.dispatchEvent(new CloseEvent("close", { code, reason }));
-        }
-
-        deliver(frame: unknown) {
-          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
-        }
-
         async connectFrame() {
-          this.readyState = RecordingWebSocket.OPEN;
-          this.dispatchEvent(new Event("open"));
-          this.deliver({
+          this.emitOpen();
+          this.emitMessage({
             type: "event",
             event: "connect.challenge",
             payload: { nonce: "synthetic-challenge", ts: Date.now() },
           });
           await vi.waitFor(() => expect(this.sent).toHaveLength(1));
-          expect(this.sent[0]?.method).toBe("connect");
-          return this.sent[0]!;
+          const frame: { id: string; method: string; params: ConnectParams } = JSON.parse(
+            this.sent[0]!,
+          );
+          expect(frame.method).toBe("connect");
+          return frame;
         }
       }
       vi.stubGlobal("WebSocket", RecordingWebSocket);
@@ -130,13 +148,11 @@ describe("pending Gateway credentials", () => {
       const reload = vi
         .spyOn(staleChunkReload, "reloadControlUiDocument")
         .mockImplementation(() => {});
-      const startDocument = async () => {
-        runtime = bootstrapApplication();
-        vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
-        await runtime.start();
+      const startSocket = async () => {
+        await startDocument();
         return sockets.at(-1)!;
       };
-      const originalSocket = await startDocument();
+      const originalSocket = await startSocket();
       const firstConnect = await originalSocket.connectFrame();
       expect(originalSocket.url).toBe(originalGatewayUrl);
       expect(firstConnect.params.auth?.bootstrapToken).toBe(bootstrapToken);
@@ -147,7 +163,7 @@ describe("pending Gateway credentials", () => {
           `/settings/appearance?gatewayUrl=${encodeURIComponent(queryGatewayUrl)}`,
         );
       }
-      originalSocket.deliver({
+      originalSocket.emitMessage({
         type: "res",
         id: firstConnect.id,
         ok: false,
@@ -173,7 +189,7 @@ describe("pending Gateway credentials", () => {
       runtime!.stop();
       window.history.replaceState({}, "", destination);
 
-      const remoteSocket = await startDocument();
+      const remoteSocket = await startSocket();
       const remoteConnect = await remoteSocket.connectFrame();
       expect(remoteSocket.url).toBe(remoteGatewayUrl);
       expect(remoteConnect.params.auth?.bootstrapToken).toBeUndefined();
@@ -193,7 +209,7 @@ describe("pending Gateway credentials", () => {
         runtime!.cancelPendingGatewayConnection();
         runtime!.confirmPendingGatewayConnection();
         expect(sockets).toHaveLength(2);
-        expect(remoteSocket.sent).toEqual([remoteConnect]);
+        expect(remoteSocket.sent).toEqual([JSON.stringify(remoteConnect)]);
         expect(runtime!.context.gateway.connection.gatewayUrl).toBe(remoteGatewayUrl);
         expect(loadUiPreferences().gatewayUrl).toBe(remoteGatewayUrl);
       }
@@ -207,30 +223,16 @@ describe("pending Gateway credentials", () => {
   );
 
   it.each([
-    {
-      name: "an initial missing token",
-      authCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      retryUnavailable: false,
-    },
-    {
-      name: "a missing password after retrying an unavailable Gateway",
-      authCode: ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-      retryUnavailable: true,
-    },
-  ])(
-    "recovers $name through its same-origin handoff without changing the route",
-    async ({ authCode, retryUnavailable }) => {
+    [ConnectErrorDetailCodes.AUTH_TOKEN_MISSING, false],
+    [ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING, true],
+  ] as const)(
+    "recovers %s through its same-origin handoff (retry unavailable: %s) without changing the route",
+    async (authCode, retryUnavailable) => {
       window.history.replaceState({}, "", "/settings/appearance?keep=yes#section");
       const initialUrl = window.location.href;
-      const store = createGatewayStoreTestStore();
-      vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
-      const fetchMock = vi.fn<typeof fetch>(async () =>
-        Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      runtime = bootstrapApplication();
-      vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
-      await runtime.start();
+      const store = useGateway();
+      const fetchMock = mockBrowserHandoff();
+      await startDocument();
       expect(fetchMock).not.toHaveBeenCalled();
 
       if (retryUnavailable) {
@@ -251,16 +253,7 @@ describe("pending Gateway credentials", () => {
         expect(store.gateway.connectionRevision).toBe(revision);
       }
 
-      store.current().opts.onClose?.({
-        code: 4008,
-        reason: "connect failed",
-        error: {
-          code: "INVALID_REQUEST",
-          message: "authentication missing",
-          details: { code: authCode },
-        },
-        willRetry: false,
-      });
+      rejectAuth(store, authCode);
 
       await vi.waitFor(() =>
         expect(store.gateway.connection.bootstrapToken).toBe("owner-bootstrap"),
@@ -284,8 +277,7 @@ describe("pending Gateway credentials", () => {
     "does not replace the %s authentication flow with a browser handoff",
     async (flow) => {
       window.history.replaceState({}, "", "/settings/appearance");
-      const store = createGatewayStoreTestStore();
-      vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
+      const store = useGateway();
       if (flow === "native client") {
         window[NATIVE_AUTH_KEY] = {
           gatewayUrl: store.gateway.connection.gatewayUrl,
@@ -304,23 +296,9 @@ describe("pending Gateway credentials", () => {
           "/settings/appearance?gatewayUrl=wss%3A%2F%2Fother-gateway.example",
         );
       }
-      const fetchMock = vi.fn<typeof fetch>(async () =>
-        Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      runtime = bootstrapApplication();
-      vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
-      await runtime.start();
-      store.current().opts.onClose?.({
-        code: 4008,
-        reason: "connect failed",
-        error: {
-          code: "INVALID_REQUEST",
-          message: "token missing",
-          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-        },
-        willRetry: false,
-      });
+      const fetchMock = mockBrowserHandoff();
+      await startDocument();
+      rejectAuth(store, ConnectErrorDetailCodes.AUTH_TOKEN_MISSING);
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
       });
@@ -344,9 +322,11 @@ describe("pending Gateway credentials", () => {
 
     runtime.confirmPendingGatewayConnection();
 
-    expect(runtime.context.gateway.connection.gatewayUrl).toBe(nextGatewayUrl);
-    expect(runtime.context.gateway.connection.token).toBe("next-token");
-    expect(runtime.context.gateway.connection.password).toBe("");
+    expect(runtime.context.gateway.connection).toMatchObject({
+      gatewayUrl: nextGatewayUrl,
+      token: "next-token",
+      password: "",
+    });
     persistSessionToken(nextGatewayUrl, "");
   });
 
@@ -354,10 +334,9 @@ describe("pending Gateway credentials", () => {
     const gatewayUrl = "ws://localhost";
     setNativeAuth({ gatewayUrl });
     window.history.replaceState({}, "", "/settings/appearance");
-    const store = createGatewayStoreTestStore({
+    const store = useGateway({
       settings: { ...loadSettings(), gatewayUrl, token: "" },
     });
-    vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
     const pending = createDeferred();
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       if (new Headers(init?.headers).get("Authorization") !== "Bearer fixture-device-token") {
@@ -399,11 +378,9 @@ describe("pending Gateway credentials", () => {
         expect(methods).toContain("update.status");
         expect(methods).toContain("exec.approval.list");
       });
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledOnce();
 
-      // Native plugin activation requests its grant before unrelated queued
-      // startup RPCs finish; the connected Gateway already owns its credential.
-      await expect(runtime.context.config.refresh()).resolves.toMatchObject({
+      await expect(runtime.context.config.refresh({ ifNeeded: true })).resolves.toMatchObject({
         serverVersion: "paired",
         pluginFrameGrants: [{ pluginId: "fixture" }],
       });

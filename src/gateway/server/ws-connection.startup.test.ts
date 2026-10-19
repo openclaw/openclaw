@@ -17,6 +17,10 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
   ensureDevicePairSetupBootstrapToken,
   issueDevicePairSetupBootstrapToken,
@@ -111,6 +115,7 @@ async function drainStartupCleanups(owners: Set<() => Promise<void>>) {
 }
 
 function attachTrackedGatewayWs(params: Parameters<typeof attachGatewayWsForTest>[0]) {
+  setRuntimeConfigSnapshot({});
   const socket = params.socket ?? createGatewayWsTestSocket();
   const connectionWork = params.options?.connectionWork ?? new GatewayConnectionWork();
   let observedClose = false;
@@ -138,7 +143,7 @@ async function withStartupTestState<T>(
   options: Parameters<typeof createOpenClawTestState>[0],
   run: (state: OpenClawTestState) => Promise<T>,
 ): Promise<T> {
-  const state = await createOpenClawTestState(options);
+  const state = await createOpenClawTestState({ ...options, prepareProfileCatalog: true });
   const work = new AsyncWorkScope();
   return await runQaGatewayFixture(
     () => work.track(() => run(state)),
@@ -157,6 +162,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   resetGatewayWorkAdmission();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 async function attachStartupNodeConnect(params: {
@@ -391,63 +397,65 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   });
 
   it("admits only one of two connect frames that race during lazy handler loading", async () => {
-    const sent: unknown[] = [];
-    const clients = new GatewayClientRegistry();
-    const socket = createGatewayWsTestSocket({
-      onSend: (data) => {
-        sent.push(JSON.parse(data));
-      },
-    });
-
-    attachTrackedGatewayWs({
-      attach: attachGatewayWsConnectionHandler,
-      clients,
-      socket,
-      options: {
-        getResolvedAuth: () => ({ mode: "token", allowTailscale: false, token: "test-token" }),
-        buildRequestContext: () => createGatewayWsTestRequestContext() as never,
-      },
-    });
-    const connectFrame = (id: string) =>
-      JSON.stringify({
-        type: "req",
-        id,
-        method: "connect",
-        params: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: {
-            id: "gateway-client",
-            version: "dev",
-            platform: "test",
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-          },
-          role: "operator",
-          scopes: [],
-          caps: [],
-          auth: { token: "test-token" },
+    await withStartupTestState({}, async () => {
+      const sent: unknown[] = [];
+      const clients = new GatewayClientRegistry();
+      const socket = createGatewayWsTestSocket({
+        onSend: (data) => {
+          sent.push(JSON.parse(data));
         },
       });
 
-    socket.emit("message", Buffer.from(connectFrame("connect-1")));
-    socket.emit("message", Buffer.from(connectFrame("connect-2")));
-    await vi.dynamicImportSettled();
+      attachTrackedGatewayWs({
+        attach: attachGatewayWsConnectionHandler,
+        clients,
+        socket,
+        options: {
+          getResolvedAuth: () => ({ mode: "token", allowTailscale: false, token: "test-token" }),
+          buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+        },
+      });
+      const connectFrame = (id: string) =>
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "gateway-client",
+              version: "dev",
+              platform: "test",
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+            },
+            role: "operator",
+            scopes: [],
+            caps: [],
+            auth: { token: "test-token" },
+          },
+        });
 
-    await vi.waitFor(() => {
-      expect(clients.size).toBe(1);
-      expect(
-        sent.filter(
-          (frame) =>
-            typeof frame === "object" &&
-            frame !== null &&
-            (frame as { type?: unknown; ok?: unknown }).type === "res" &&
-            (frame as { ok?: unknown }).ok === true,
-        ),
-      ).toHaveLength(1);
+      socket.emit("message", Buffer.from(connectFrame("connect-1")));
+      socket.emit("message", Buffer.from(connectFrame("connect-2")));
+      await vi.dynamicImportSettled();
+
+      await vi.waitFor(() => {
+        expect(clients.size).toBe(1);
+        expect(
+          sent.filter(
+            (frame) =>
+              typeof frame === "object" &&
+              frame !== null &&
+              (frame as { type?: unknown; ok?: unknown }).type === "res" &&
+              (frame as { ok?: unknown }).ok === true,
+          ),
+        ).toHaveLength(1);
+      });
+
+      socket.emit("close", 1000, Buffer.from("done"));
+      expect(clients.size).toBe(0);
     });
-
-    socket.emit("close", 1000, Buffer.from("done"));
-    expect(clients.size).toBe(0);
   });
 
   it.each([GATEWAY_STARTUP_CLOSE_CODE])(

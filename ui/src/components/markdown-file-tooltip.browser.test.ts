@@ -1,5 +1,6 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import "../lib/toast-host.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import "../styles/base.css";
@@ -26,28 +27,39 @@ const anchor = () => document.querySelector<HTMLAnchorElement>("a[data-file-path
 const card = () =>
   document.querySelector<HTMLElement>("openclaw-tooltip[open] .markdown-file-tooltip");
 const copyButton = () => page.getByRole("button", { name: "Copy path", exact: true });
+const waitForReopen = (tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) =>
+  new Promise<void>((resolve) => {
+    // Closing content can still be visible; completion belongs to this owner.
+    tooltip.addEventListener("overlay-after-show", () => resolve(), { once: true });
+  });
 
 describe("file path tooltip", () => {
   it("keeps the popup reachable and copies the exact path without opening the file", async () => {
-    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const copied = Promise.withResolvers<void>();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(copied.promise);
     const open = vi.fn();
     anchor().addEventListener("click", open);
     await page.elementLocator(anchor()).hover();
     await expect.element(copyButton()).toBeVisible();
     expect(card()?.textContent?.trim()).toBe(filePath);
     await copyButton().hover();
-    await Promise.all([
-      expect.element(page.getByRole("status")).toHaveTextContent("Copied!"),
-      copyButton().click(),
-    ]);
+    await copyButton().click();
     expect(write).toHaveBeenCalledWith(filePath);
+    copied.resolve();
+    await expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
     expect(open).not.toHaveBeenCalled();
     expect(card()?.textContent).toContain(filePath);
     expect(document.querySelectorAll("openclaw-tooltip[open]")).toHaveLength(1);
+    const tooltip = copyButton().element().closest("openclaw-tooltip");
+    assert(tooltip, "Expected the file tooltip owner");
     await userEvent.keyboard("{Escape}");
+    await expect.poll(card).toBeNull();
+    await page.getByRole("button", { name: "Outside", exact: true }).hover();
+    const reopened = waitForReopen(tooltip);
     await page.elementLocator(anchor()).hover();
+    await reopened;
     await expect.element(copyButton()).toBeVisible();
-    expect(card()?.textContent).not.toContain("Copied!");
+    await expect.poll(() => card()?.textContent?.trim()).toBe(filePath);
     await page.elementLocator(anchor()).click();
     expect(open).toHaveBeenCalledOnce();
     expect(card()).toBeNull();
@@ -112,14 +124,21 @@ describe("file path tooltip", () => {
       const fallback = vi.spyOn(document, "execCommand").mockReturnValue(true);
       anchor().focus();
       await copyButton().click();
+      const tooltip = copyButton().element().closest("openclaw-tooltip");
+      assert(tooltip, "Expected the file tooltip owner");
       if (dismissal === "outside") {
         await page.getByRole("button", { name: "Outside", exact: true }).click();
       } else {
         await userEvent.keyboard("{Escape}");
       }
+      await expect.poll(card).toBeNull();
       if (dismissal === "reopen") {
+        await page.getByRole("button", { name: "Outside", exact: true }).hover();
+        const reopened = waitForReopen(tooltip);
         await page.elementLocator(anchor()).hover();
+        await reopened;
         await expect.element(copyButton()).toBeVisible();
+        await expect.poll(card).not.toBeNull();
       }
       reject(new Error("Denied"));
       await new Promise<void>((resolve) => {

@@ -10,6 +10,7 @@ import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ServiceInspectionError } from "../daemon/service-inspection-error.js";
+import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
@@ -30,6 +31,8 @@ import {
   migrateLegacyWorkspaceState,
 } from "../infra/state-migrations.workspace-setup.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -50,6 +53,8 @@ import { runDoctorHealthFlow } from "./doctor-health.js";
 const { mocks } = await import("./doctor-health.test-support.js");
 
 type DoctorManagedRepairOutcome =
+  | "interactive-ready"
+  | "interactive-declined"
   | "ready"
   | "archive-verification"
   | "clean-stopped-repair"
@@ -63,6 +68,7 @@ type DoctorManagedRepairOutcome =
   | "update-parent-stopped"
   | "update-legacy"
   | "repair-failed"
+  | "repair-cancelled"
   | "store-close-failed"
   | "config-refused"
   | "workspace-cleanup-failed"
@@ -80,7 +86,10 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         // These cases own managed agent repair after shared-state initialization.
         materializeSharedStateDatabase(state.env);
-        const clean = outcome.startsWith("clean-") || outcome.startsWith("update-");
+        await seedCompletedRuntimePinMigration(state.env);
+        const interactive = outcome.startsWith("interactive-");
+        const declined = outcome === "interactive-declined";
+        const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
         const archiveVerification = outcome === "archive-verification";
         const current = clean || archiveVerification;
         const inspectionOnly = outcome === "clean-force-inspect";
@@ -182,6 +191,8 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         });
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
+        const work = new AsyncWorkScope();
+        const cancellation = new DOMException("CLI stopping (SIGTERM)", "AbortError");
         const initiallyStopped =
           outcome.startsWith("clean-stopped-") || outcome === "update-no-restart-stopped";
         const inconclusiveActivation =
@@ -194,7 +205,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         if (initiallyStopped) {
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
         }
-        const pid = outcome === "ancestor-blocked" ? process.pid : 4200;
+        const pid = outcome === "ancestor-blocked" ? process.pid : process.pid + 1;
         mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
         const packageRoot = process.cwd();
         mocks.packageRoot.mockReturnValue(packageRoot);
@@ -211,8 +222,16 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
         });
         const restart = vi.fn(async () => {
+          if (outcome === "repair-cancelled") {
+            const child = await runUtf8CommandWithTimeout(
+              [process.execPath, "-e", 'process.stdout.write("restored")'],
+              {},
+            );
+            expect(child.code).toBe(0);
+            expect(child.stdout).toBe("restored");
+          }
           events.push("restart");
-          if (outcome === "ready") {
+          if (outcome === "ready" || outcome === "interactive-ready") {
             for (const agentId of ["main", "research"]) {
               expect(() =>
                 assertNoOpenClawAgentDatabaseLeases(agentId, { env: state.env }),
@@ -222,7 +241,11 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           // A refusal before schema convergence restores the captured service,
           // whose prior runtime already served this state. Other cases prove that
           // the candidate can reopen every migrated database before health passes.
-          if (outcome !== "repair-failed" && outcome !== "config-refused") {
+          if (
+            outcome !== "repair-failed" &&
+            outcome !== "repair-cancelled" &&
+            outcome !== "config-refused"
+          ) {
             for (const agentId of ["main", "research"]) {
               const reopened = openOpenClawAgentDatabase({ agentId, env: state.env });
               expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
@@ -230,7 +253,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
               );
             }
           }
-          running = true;
+          // An unhealthy restart leaves the service down; a running service with
+          // unverified readiness is a warning, covered by the readiness tests.
+          running = outcome !== "restart-unhealthy";
           return { outcome: "completed" as const };
         });
         const start = vi.fn(async () => {
@@ -266,12 +291,26 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         });
         mocks.runContributions.mockImplementation(async (ctx) => {
           events.push("repair");
-          expect(ctx.gatewayMaintenanceActive).toBe(!inspectionOnly);
+          expect(ctx.gatewayMaintenanceActive).toBe(!inspectionOnly && !declined);
+          if (interactive) {
+            expect(ctx.prompter.shouldRepair).toBe(false);
+            expect(running).toBe(declined);
+            expect(
+              await ctx.prompter.confirmAutoFix({
+                message: "Apply a selected repair?",
+                initialValue: true,
+              }),
+            ).toBe(false);
+          }
           if (clean || archiveVerification) {
             return;
           }
           if (outcome === "repair-failed") {
             throw new Error("synthetic migration failure");
+          }
+          if (outcome === "repair-cancelled") {
+            work.beginClose(cancellation);
+            throw cancellation;
           }
           if (outcome === "config-refused") {
             ctx.configWriteRefusal = "validation";
@@ -291,7 +330,11 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(approvals.warnings.length > 0).toBe(approvalsBlocked);
             await collectSecurityWarnings(ctx.cfg, state.env);
           }
-          if (outcome === "ready" || outcome === "store-close-failed") {
+          if (
+            outcome === "ready" ||
+            outcome === "interactive-ready" ||
+            outcome === "store-close-failed"
+          ) {
             // Later diagnostics reopen runtime handles after the migration closes its own.
             const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
             openOpenClawAgentDatabase({ agentId: "research", env: state.env });
@@ -323,6 +366,14 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        if (declined) {
+          mocks.lint.mockImplementation(async (diagnosticRuntime) => {
+            expect(running).toBe(true);
+            expect(events).toEqual([]);
+            diagnosticRuntime.log("Synthetic diagnostic finding; repairs remain pending.");
+            return 1;
+          });
+        }
         const archiveTransform = archiveVerification
           ? vi.spyOn(mediaArchiveTransform, "transformMediaArchiveContent")
           : undefined;
@@ -347,6 +398,11 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         };
         if (outcome === "config-refused") {
           runtime.exit.mockImplementation(expectProcessOwnerReleased);
+        }
+        const originalTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+        if (interactive) {
+          Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+          mocks.confirm.mockReset().mockResolvedValue(false).mockResolvedValueOnce(!declined);
         }
         try {
           const modernUpdate = outcome.startsWith("update-") && outcome !== "update-legacy";
@@ -376,11 +432,13 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
           }
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
-          const run = runDoctorHealthFlow(runtime, {
-            ...(inspectionOnly ? {} : { repair: true }),
-            force,
-            nonInteractive: true,
-          });
+          const inspect = () =>
+            runDoctorHealthFlow(runtime, {
+              ...(interactive || inspectionOnly ? {} : { repair: true }),
+              force,
+              ...(interactive ? {} : { nonInteractive: true }),
+            });
+          const run = outcome === "repair-cancelled" ? work.track(inspect) : inspect();
           if (outcome === "update-no-restart") {
             await expect(run).rejects.toThrow("update parent");
             expect(events).toEqual([]);
@@ -417,6 +475,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "repair-cancelled") {
+            await expect(run).rejects.toBe(cancellation);
+            await work.drain();
           } else if (outcome === "config-refused") {
             await run;
             expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -441,10 +502,25 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
             return;
           }
+          if (declined) {
+            expect(events).toEqual([]);
+            expect(stop).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(runtime.log).toHaveBeenCalledWith(
+              "Synthetic diagnostic finding; repairs remain pending.",
+            );
+            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+            expect(mocks.lint).toHaveBeenCalledBefore(runtime.exit);
+            expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+            expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
+            return;
+          }
           const shouldRestart =
+            outcome === "interactive-ready" ||
             outcome === "ready" ||
             archiveVerification ||
             outcome === "repair-failed" ||
+            outcome === "repair-cancelled" ||
             outcome === "store-close-failed" ||
             outcome === "config-refused" ||
             outcome === "workspace-cleanup-failed" ||
@@ -498,6 +574,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           if (
             outcome === "ready" ||
+            outcome === "interactive-ready" ||
             clean ||
             archiveVerification ||
             outcome === "approvals-migrated"
@@ -507,6 +584,14 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
           }
         } finally {
+          if (interactive) {
+            if (originalTty) {
+              Object.defineProperty(process.stdin, "isTTY", originalTty);
+            } else {
+              Reflect.deleteProperty(process.stdin, "isTTY");
+            }
+            mocks.confirm.mockReset().mockResolvedValue(true);
+          }
           archiveRepair?.mockRestore();
           archiveTransform?.mockRestore();
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });

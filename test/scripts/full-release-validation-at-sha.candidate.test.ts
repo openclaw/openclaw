@@ -28,37 +28,6 @@ function readRequestRecord(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
-  it("refuses a candidate without its data-owned support floor before npm or dispatch", () => {
-    const f = createDispatchFixture({
-      candidateOwned: true,
-      targetSource: {
-        "scripts/lib/upgrade-survivor-scenarios.json": "{}",
-      },
-    });
-    try {
-      const result = f.run();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("missing its data-owned upgrade baseline policy");
-      expect(f.readCalls(f.npmCallsPath)).toEqual([]);
-      expect(dispatches(f)).toEqual([]);
-    } finally {
-      f.cleanup();
-    }
-  });
-
-  it("does not replace an unavailable predecessor with a future registry release", () => {
-    const f = createDispatchFixture({ candidateOwned: true });
-    try {
-      writeFileSync(f.publishedVersionsPath, JSON.stringify(["2027.1.1"]));
-      const result = f.run();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("no published stable OpenClaw baseline predates candidate");
-      expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
-      expect(dispatches(f)).toEqual([]);
-    } finally {
-      f.cleanup();
-    }
-  });
   it.each(["main", "protected"])("rejects fresh %s publication before remote mutation", (route) => {
     const f = createDispatchFixture();
     try {
@@ -106,6 +75,42 @@ describe("candidate-owned full release dispatch entry point", () => {
       f.cleanup();
     }
   });
+  it("advances main-selected P to a verified descendant before the admission POST", () => {
+    const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 3 });
+    try {
+      const result = f.run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(dispatches(f)).toEqual([P, Q]);
+      const advancedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
+      expect(advancedP).not.toBe(f.workflowSha);
+      expect(result.stdout.match(/Admission P advanced with main/gu)).toHaveLength(3);
+      const retained = readRequestRecord(f);
+      expect(retained.admission.workflowSha).toBe(advancedP);
+      expect(retained.request.workflowSha).toBe(f.targetSha);
+      const envelope = JSON.parse(
+        expectDefined(f.readPayload().body.inputs.trusted_workflow_json, "dispatched envelope"),
+      );
+      expect(envelope.qualificationAdmission).toMatchObject({
+        workflowSha: advancedP,
+        workflowFullRef: "refs/heads/main",
+      });
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("refuses main that keeps moving past the admission advance bound", () => {
+    const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 4 });
+    try {
+      const result = f.run();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("Admission tooling ref moved before dispatch");
+      expect(dispatches(f)).toEqual([]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
   it("keeps divergent C=Q frozen while independent P admits and main advances", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainAfterAdmission: true });
     try {

@@ -4,7 +4,10 @@ import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js
 import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
+import {
+  requireSystemAgentInferenceRoute,
+  requireSystemAgentPersistentApplyInference,
+} from "./inference-guard.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
@@ -12,11 +15,7 @@ import {
   type SystemAgentCommandDeps,
   type SystemAgentOperation,
 } from "./operations.js";
-import {
-  formatSystemAgentOverview,
-  loadSystemAgentOverview,
-  type SystemAgentOverview,
-} from "./overview.js";
+import { formatSystemAgentOverview, loadSystemAgentOverview } from "./overview.js";
 import {
   hasCurrentSystemAgentOwnerPluginArtifacts,
   type SystemAgentVerifiedInferenceBinding,
@@ -39,7 +38,6 @@ export type RunSystemAgentOptions = {
   setupAgentName?: string;
   onReady?: () => void;
   deps?: SystemAgentCommandDeps;
-  formatOverview?: (overview: SystemAgentOverview) => string;
   loadOverview?: typeof loadSystemAgentOverview;
   planWithAssistant?: SystemAgentAssistantPlanner;
   input?: NodeJS.ReadableStream;
@@ -51,32 +49,6 @@ export type RunSystemAgentOptions = {
 
 /** User-supplied command options before the inference gate binds the run. */
 export type SystemAgentCommandOptions = Omit<RunSystemAgentOptions, "verifiedInference">;
-
-async function requirePersistentApplyInference(
-  opts: RunSystemAgentOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  if (!opts.verifiedInference) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
-  }
-  try {
-    const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-    const route = await resolvePersistentApplyInference({
-      binding: opts.verifiedInference,
-      runtime,
-      deps: opts.deps,
-    });
-    if (route) {
-      return;
-    }
-  } catch (error) {
-    if (error instanceof SystemAgentInferenceUnavailableError) {
-      throw error;
-    }
-    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
-  }
-  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
-}
 
 async function runOneShot(
   operation: SystemAgentOperation,
@@ -91,15 +63,22 @@ async function runOneShot(
   await requireSystemAgentInferenceRoute(opts.verifiedInference, opts.deps, "conversation");
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
   if (approved && isPersistentSystemAgentOperation(operation)) {
-    await requirePersistentApplyInference(opts, runtime);
+    await requireSystemAgentPersistentApplyInference(
+      { binding: opts.verifiedInference, runtime },
+      (failures) => {
+        if (failures[0] instanceof SystemAgentInferenceUnavailableError) {
+          throw failures[0];
+        }
+        throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
+      },
+    );
   }
   await executeSystemAgentOperation(operation, runtime, {
     approved,
     deps:
-      opts.deps || opts.formatOverview || opts.loadOverview
+      opts.deps || opts.loadOverview
         ? {
             ...opts.deps,
-            ...(opts.formatOverview ? { formatOverview: opts.formatOverview } : {}),
             ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
           }
         : undefined,
@@ -199,7 +178,7 @@ async function runBoundSystemAgent(
       },
       async () => await (boundOpts.loadOverview ?? loadSystemAgentOverview)(),
     );
-    runtime.log((boundOpts.formatOverview ?? formatSystemAgentOverview)(overview));
+    runtime.log(formatSystemAgentOverview(overview));
     runtime.log("");
     const operation = await resolveSystemAgentOperation(boundOpts.message, runtime, {
       ...boundOpts,
@@ -211,7 +190,7 @@ async function runBoundSystemAgent(
 
   if (boundOpts.interactive === false) {
     const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
-    runtime.log((boundOpts.formatOverview ?? formatSystemAgentOverview)(overview));
+    runtime.log(formatSystemAgentOverview(overview));
     return;
   }
 

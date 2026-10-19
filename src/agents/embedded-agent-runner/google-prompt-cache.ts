@@ -27,9 +27,14 @@ import {
 import { readProviderJsonObjectResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
+import { swapSecretSentinelsForEgress } from "../provider-transport-secret-egress.js";
 import type { StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
-import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import {
+  isGooglePromptCacheEligible,
+  resolveCacheRetention,
+  resolveExplicitCachedContent,
+} from "./prompt-cache-retention.js";
 import { prependRuntimeContextForModel } from "./run/runtime-context-prompt.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
@@ -81,19 +86,6 @@ type PrepareGooglePromptCacheStreamFnParams = {
   signal?: AbortSignal;
   streamFn: StreamFn | undefined;
 };
-
-function resolveExplicitCachedContent(
-  extraParams: Record<string, unknown> | undefined,
-): string | undefined {
-  const raw =
-    typeof extraParams?.cachedContent === "string"
-      ? extraParams.cachedContent
-      : typeof extraParams?.cached_content === "string"
-        ? extraParams.cached_content
-        : undefined;
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function stringifyGooglePromptCacheKeyPart(value: unknown): string {
   if (typeof value === "string") {
@@ -236,12 +228,10 @@ function resolveGooglePromptCacheAuthHeaders(params: {
 
 async function requestGooglePromptCache(
   params: {
-    apiKey: string;
     baseUrl: string;
     cacheRetention: CacheRetention;
     fetchImpl: typeof fetch;
-    headers?: Record<string, string>;
-    model: Model;
+    headers: Record<string, string>;
     now: number;
     signal?: AbortSignal;
   } & (
@@ -258,21 +248,7 @@ async function requestGooglePromptCache(
   const url = refreshing
     ? `${params.baseUrl}/${params.cachedContent}?updateMask=ttl`
     : `${params.baseUrl}/cachedContents`;
-  const authHeaders = resolveGooglePromptCacheAuthHeaders({
-    apiKey: params.apiKey,
-    provider: params.model.provider,
-  });
-  const headers =
-    resolveProviderRequestHeaders({
-      provider: params.model.provider,
-      api: params.model.api,
-      baseUrl: params.baseUrl,
-      capability: "llm",
-      transport: "http",
-      defaultHeaders: authHeaders,
-      callerHeaders: params.headers,
-      precedence: "caller-wins",
-    }) ?? mergeTransportHeaders(authHeaders, params.headers);
+  const headers = params.headers;
   const ttl = params.cacheRetention === "long" ? "3600s" : "300s";
   const body = JSON.stringify(
     refreshing
@@ -321,11 +297,10 @@ async function requestGooglePromptCache(
 }
 
 async function ensureGooglePromptCache(params: {
-  apiKey: string;
   cacheRetention: CacheRetention;
   model: Model;
   provider: string;
-  cacheConfigDigest?: string;
+  headers: Record<string, string>;
   sessionManager: GooglePromptCacheSessionManager;
   signal?: AbortSignal;
   systemPrompt: string;
@@ -337,13 +312,22 @@ async function ensureGooglePromptCache(params: {
   if (now === undefined) {
     return null;
   }
+  const scopeHeaders =
+    swapSecretSentinelsForEgress({ url: baseUrl, headers: params.headers }).headers ??
+    new Headers(params.headers);
   const cacheIdentity = {
     provider: params.provider,
     modelId: params.model.id,
     modelApi: params.model.api,
     baseUrl,
     systemPromptDigest: sha256Hex(params.systemPrompt),
-    cacheConfigDigest: params.cacheConfigDigest,
+    cacheConfigDigest: sha256Hex(
+      stableStringify({
+        tools: params.tools,
+        toolConfig: params.toolConfig,
+        headers: Object.fromEntries(scopeHeaders),
+      }),
+    ),
   };
   const latestEntry = readLatestGooglePromptCacheEntry(
     params.sessionManager,
@@ -367,7 +351,6 @@ async function ensureGooglePromptCache(params: {
     ...params,
     baseUrl,
     fetchImpl,
-    headers: params.model.headers,
     now,
   };
   const refreshWindowMs =
@@ -456,16 +439,26 @@ export async function prepareGooglePromptCacheStreamFn(
       ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
       : undefined;
     const toolConfig = toolChoice ? { functionCallingConfig: toolChoice } : undefined;
-    const cacheConfigDigest =
-      tools || toolConfig
-        ? stableStringify({
-            tools,
-            toolConfig,
-          })
-        : undefined;
-    const cachedContent = await ensureGooglePromptCache({
+    const authHeaders = resolveGooglePromptCacheAuthHeaders({
       apiKey,
-      cacheConfigDigest,
+      provider: params.model.provider,
+    });
+    const callerHeaders = mergeTransportHeaders(params.model.headers, options?.headers);
+    const headers =
+      resolveProviderRequestHeaders({
+        provider: params.model.provider,
+        api: params.model.api,
+        baseUrl: normalizeGoogleApiBaseUrl(params.model.baseUrl),
+        capability: "llm",
+        transport: "http",
+        defaultHeaders: authHeaders,
+        callerHeaders,
+        precedence: "caller-wins",
+      }) ??
+      mergeTransportHeaders(authHeaders, callerHeaders) ??
+      authHeaders;
+    const cachedContent = await ensureGooglePromptCache({
+      headers,
       tools,
       toolConfig,
       cacheRetention: resolvedRetention,
@@ -496,7 +489,9 @@ export async function prepareGooglePromptCacheStreamFn(
           sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(split.dynamicSuffix)),
         ),
       },
-      options,
+      // A provider cache resource belongs to its credential scope; inference
+      // must not rotate to another project's API key while referencing it.
+      { ...options, headers },
       (payload) => {
         payload.cachedContent = cachedContent;
       },

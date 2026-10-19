@@ -23,12 +23,14 @@ import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
+import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { readSystemDisks } from "../../infra/system-disks.js";
@@ -43,13 +45,15 @@ import {
 } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { acceptsPresenceDeltas, createPresenceReset } from "../presence-delivery.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
+import { getPresenceVersion } from "../server/health-state.js";
 import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
@@ -165,7 +169,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     ...(cpuModel ? { cpuModel } : {}),
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
-    memoryFreeBytes: os.freemem(),
+    memoryFreeBytes: readHostFreeMemoryBytes(),
     ...readGatewayProcessVitals(context.getEventLoopHealth),
     // Keep the existing state-volume reading when native discovery is unavailable;
     // an empty successful discovery intentionally stays empty.
@@ -226,18 +230,25 @@ export const systemHandlers: GatewayRequestHandlers = {
     },
   ),
   "system-presence": async (options) => {
-    const { respond, client, context } = options;
+    const { respond, client, context, params } = options;
     const projection = getSessionRowProjection(context);
     while (projection?.needsMembershipPreparation()) {
       await projection.prepareMembership();
       readGatewayRequestMutationAuthority(options).assertCurrent();
     }
+    const source = listSystemPresence();
     const presence = createPresenceRecipientProjection({
       cfg: context.getRuntimeConfig(),
-      presence: listSystemPresence(),
+      presence: source,
       projection,
     })(client);
-    respond(true, presence, undefined);
+    if (client && params.snapshot === true && acceptsPresenceDeltas(client)) {
+      // The RPC supplies a new client base; the next event must establish its own sent base.
+      client.presenceSnapshot = undefined;
+      respond(true, createPresenceReset(source, presence, getPresenceVersion()), undefined);
+    } else {
+      respond(true, presence, undefined);
+    }
   },
   "system.info": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSystemInfoParams, "system.info", respond)) {
@@ -245,7 +256,8 @@ export const systemHandlers: GatewayRequestHandlers = {
     }
     respond(true, await collectSystemInfo(context), undefined);
   },
-  "system-event": ({ params, respond, context }) => {
+  "system-event": async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
       return;
     }
@@ -292,11 +304,24 @@ export const systemHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      // A targeted wake starts a model run. Require a live persisted session
+      // A targeted wake starts a model run. Require a live session
       // so malformed keys cannot create phantom work under agent defaults.
-      const { entry: targetSession } = loadGatewaySessionEntryReadOnly(requestedSessionKey, {
-        agentId: requestedAgentId,
-      });
+      const authority = readGatewayRequestMutationAuthority(options);
+      const memory = captureSessionActorStorageOwner(
+        { agentId: requestedAgentId, sessionKey: requestedSessionKey },
+        { assertCurrent: authority.assertCurrent, authorize: authority.assertCurrent },
+      );
+      authority.assertCurrent();
+      const targetSession = memory
+        ? memory.owner?.readSession(requestedSessionKey, memory.authority)?.entry
+        : (
+            await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg,
+              key: requestedSessionKey,
+              agentId: requestedAgentId,
+              assertActive: authority.assertCurrent,
+            })
+          ).entry;
       if (!targetSession || targetSession.archivedAt !== undefined) {
         respond(
           false,

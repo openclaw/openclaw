@@ -1,4 +1,3 @@
-import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -11,46 +10,49 @@ import {
   readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   type SessionPatch,
 } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
+import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import {
-  switchChatContextWindow,
-  switchChatFastMode,
-  switchChatModel,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
+import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import type { ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.ts";
-import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
-import { getChatModelObservedRunId, getChatRunOwnerSessionKey } from "./history-merge.ts";
+import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 
 registerModelControlsEnglish();
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
-type SessionActionCallbacks = Pick<ChatProps, "onAbort" | "onForkMessage" | "onRewindMessage">;
+type SessionActionCallbacks = Pick<
+  ChatProps,
+  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage"
+>;
 
 type PendingPermissionChange = {
   expectedSessionId?: string;
   nextMode: ChatPermissionPickerProps["mode"];
   ownsSelection: () => boolean;
-  pending: boolean;
   retainWhileCurrent?: () => boolean;
 };
 
-const pendingPermissionChanges = new WeakMap<ChatPageHost, Map<string, PendingPermissionChange>>();
-const permissionOutcomeOwners = new WeakMap<ChatPageHost, Map<string, symbol>>();
+type PermissionSelection = {
+  pending: PendingPermissionChange | undefined;
+  outcome: symbol | undefined;
+};
+
+const permissionSelections = new WeakMap<ChatPageHost, Map<string, PermissionSelection>>();
 
 export function createChatPaneQueuedEditProps(
   state: ChatPageHost,
@@ -143,7 +145,9 @@ export function renderChatPaneComposerControls(params: {
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
-  composerControls: NonNullable<ChatProps["composerControls"]>;
+  composerControls: Parameters<typeof ChatPaneModelControl>[0] & {
+    component: typeof ChatPaneModelControl;
+  };
   permissionPicker: ChatPermissionPickerProps;
 } {
   const {
@@ -163,19 +167,20 @@ export function renderChatPaneComposerControls(params: {
   const sessionKey = state.sessionKey;
   const client = state.client;
   const accountSelection = state.chatAccountSelection;
-  const connectionEpoch = state.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(state);
   const agentScope = scopedAgentParamsForSession(state, sessionKey);
   const affectedAgentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
   const expectedSessionId = selectedSession?.sessionId?.trim();
   const permissionScopeKey = JSON.stringify([sessionKey, agentScope.agentId]);
-  const permissionChanges =
-    pendingPermissionChanges.get(state) ?? new Map<string, PendingPermissionChange>();
-  pendingPermissionChanges.set(state, permissionChanges);
+  const selections = permissionSelections.get(state) ?? new Map<string, PermissionSelection>();
+  permissionSelections.set(state, selections);
+  const selection =
+    selections.get(permissionScopeKey) ??
+    projectChatFields<PermissionSelection>({ pending: undefined, outcome: undefined }, ["pending"]);
+  selections.set(permissionScopeKey, selection);
   const ownsRoute = () =>
-    state.connected &&
+    connectionIsCurrent() &&
     state.sessionKey === sessionKey &&
-    state.client === client &&
-    state.connectionEpoch === connectionEpoch &&
     scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
   const ownsSelection = () => {
     const currentSession = selectedChatSessionRow(state);
@@ -201,18 +206,15 @@ export function renderChatPaneComposerControls(params: {
         session: selectedChatSessionRow(state),
       },
     ).allowed;
-  let pendingChange = permissionChanges.get(permissionScopeKey);
-  if (pendingChange && pendingChange.expectedSessionId !== expectedSessionId) {
-    permissionChanges.delete(permissionScopeKey);
-    pendingChange = undefined;
-  }
-  if (pendingChange?.retainWhileCurrent && !pendingChange.retainWhileCurrent()) {
-    permissionChanges.delete(permissionScopeKey);
-    pendingChange = undefined;
-  }
-  const currentChange = pendingChange?.ownsSelection() ? pendingChange : undefined;
+  const pendingChange = selection.pending;
+  const currentChange =
+    pendingChange?.expectedSessionId === expectedSessionId &&
+    pendingChange?.ownsSelection() &&
+    (!pendingChange.retainWhileCurrent || pendingChange.retainWhileCurrent())
+      ? pendingChange
+      : undefined;
   const permissionPending = Boolean(
-    currentChange?.pending || selectedSession?.permissionModePending,
+    (currentChange && !currentChange.retainWhileCurrent) || selectedSession?.permissionModePending,
   );
   const modelCatalogState = resolveModelCatalogState(
     {
@@ -240,101 +242,93 @@ export function renderChatPaneComposerControls(params: {
         }
       : selectedSession;
   return {
-    composerControls: html`
-      <div class="chat-composer-model-control">
-        ${renderChatModelControls({
-          modelAuthStatusResult: state.modelAuthStatusResult,
-          accountSelection,
-          renderAccountSection: (accountModel) =>
-            renderChatModelAccountControl({
-              owner: state,
-              client,
-              selection: accountSelection,
-              modelAuthStatusResult: state.modelAuthStatusResult,
-              model: accountModel,
-              disabled:
-                !modelAccess.allowed ||
-                !state.connected ||
-                !accountModel ||
-                selectedSession?.modelSelectionLocked === true ||
-                state.chatLoading ||
-                state.chatSending ||
-                Boolean(state.chatRunId) ||
-                state.chatStream !== null ||
-                Boolean(state.chatModelSwitchPromises[sessionKey]),
-              ownsSelection: () =>
-                ownsSelection() && state.chatAccountSelection === accountSelection,
-              onSelect: (account) =>
-                modelAccess.allowed &&
-                canPatch({ model: `${accountModel}@${account.authProfileId}` })
-                  ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
-                  : Promise.resolve(false),
-              onManage: onModelAccounts,
-              onRequestUpdate: () => state.requestUpdate?.(),
+    composerControls: {
+      component: ChatPaneModelControl,
+      model: {
+        modelAuthStatusResult: state.modelAuthStatusResult,
+        accountSelection,
+        renderAccountSection: (accountModel) =>
+          renderChatModelAccountControl({
+            owner: state,
+            client,
+            selection: accountSelection,
+            modelAuthStatusResult: state.modelAuthStatusResult,
+            model: accountModel,
+            disabled:
+              !modelAccess.allowed ||
+              !state.connected ||
+              !accountModel ||
+              selectedSession?.modelSelectionLocked === true ||
+              state.chatLoading ||
+              state.chatSending ||
+              Boolean(state.chatRunId) ||
+              state.chatStream !== null ||
+              Boolean(state.chatModelSwitchPromises[sessionKey]),
+            ownsSelection: () => ownsSelection() && state.chatAccountSelection === accountSelection,
+            onSelect: (account) =>
+              modelAccess.allowed && canPatch({ model: `${accountModel}@${account.authProfileId}` })
+                ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
+                : Promise.resolve(false),
+            onManage: onModelAccounts,
+          }),
+        activeRunId: state.chatRunId,
+        agentDefaultModel,
+        connected: state.connected,
+        gatewayAvailable: Boolean(state.client),
+        loading: state.chatLoading,
+        modelCatalog: state.chatModelCatalog,
+        modelCatalogState,
+        modelOverrides: state.sessions.state.modelOverrides,
+        thinkingSession: settingsSession,
+        fastModeTarget: settingsSession,
+        contextWindowTarget: settingsPreview
+          ? { ...(selectedSession ?? state.sessionsResult?.defaults), ...settingsPreview }
+          : undefined,
+        modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+        modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
+        modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
+        modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
+        modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
+        effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
+        contextWindowMutationDisabledReason: contextWindowAccess.allowed
+          ? undefined
+          : contextWindowAccess.reason,
+        sending:
+          state.chatSending &&
+          state.chatSendingScopeKey ===
+            storedChatOutboxScopeKey({
+              sessionKey,
+              ...(agentScope.agentId ? { agentId: agentScope.agentId } : {}),
             }),
-          activeRunId: state.chatRunId,
-          activeRunSessionKey: getChatRunOwnerSessionKey(state),
-          modelObservedRunId: getChatModelObservedRunId(state, selectedSession),
-          agentDefaultModel,
-          connected: state.connected,
-          gatewayAvailable: Boolean(state.client),
-          loading: state.chatLoading,
-          modelCatalog: state.chatModelCatalog,
-          modelCatalogState,
-          modelOverrides: state.sessions.state.modelOverrides,
-          thinkingSession: settingsSession,
-          fastModeTarget: settingsSession,
-          contextWindowTarget: settingsPreview
-            ? { ...(selectedSession ?? state.sessionsResult?.defaults), ...settingsPreview }
-            : undefined,
-          modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
-          modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
-          modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
-          modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-          modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
-          effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
-          contextWindowMutationDisabledReason: contextWindowAccess.allowed
-            ? undefined
-            : contextWindowAccess.reason,
-          sending:
-            state.chatSending &&
-            state.chatSendingScopeKey ===
-              storedChatOutboxScopeKey({
-                sessionKey,
-                ...(agentScope.agentId ? { agentId: agentScope.agentId } : {}),
-              }),
-          sessionKey: state.sessionKey,
-          selectedSession,
-          sessionsResult: state.sessionsResult,
-          stream: state.chatStream,
-          onRequestUpdate: () => state.requestUpdate?.(),
-          onModelSetup,
-          onProviderSettings,
-          onFastModeSelect: (next, targetSessionKey) =>
-            effortAccess.allowed && canPatch({ fastMode: null }, targetSessionKey)
-              ? switchChatFastMode(state, next, targetSessionKey)
-              : Promise.resolve(false),
-          onContextWindowSelect: (next, targetSessionKey) =>
-            contextWindowAccess.allowed && canPatch({ contextWindow: next }, targetSessionKey)
-              ? switchChatContextWindow(state, next, targetSessionKey)
-              : Promise.resolve(false),
-          onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
-          onModelPickerOpenChange: (open) => {
-            state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
-            // Closing also needs a render; catalog refresh only invalidates on open.
-            state.requestUpdate?.();
-          },
-          onModelSelect: (next, targetSessionKey, agentRuntime) =>
-            modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
-              ? switchChatModel(state, next, targetSessionKey, agentRuntime)
-              : Promise.resolve(false),
-          onThinkingSelect: (next, targetSessionKey) =>
-            effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)
-              ? switchChatThinkingLevel(state, next, targetSessionKey)
-              : Promise.resolve(false),
-        })}
-      </div>
-    `,
+        sessionKey: state.sessionKey,
+        selectedSession,
+        sessionsResult: state.sessionsResult,
+        stream: state.chatStream,
+        onModelSetup,
+        onProviderSettings,
+        onFastModeSelect: (next, targetSessionKey) =>
+          effortAccess.allowed && canPatch({ fastMode: null }, targetSessionKey)
+            ? switchChatSetting(state, { kind: "fastMode", value: next }, targetSessionKey)
+            : Promise.resolve(false),
+        onContextWindowSelect: (next, targetSessionKey) =>
+          contextWindowAccess.allowed && canPatch({ contextWindow: next }, targetSessionKey)
+            ? switchChatSetting(state, { kind: "contextWindow", value: next }, targetSessionKey)
+            : Promise.resolve(false),
+        onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
+        onModelPickerOpenChange: (open) => {
+          state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
+          // The native picker already presents this transition.
+        },
+        onModelSelect: (next, targetSessionKey, agentRuntime) =>
+          modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
+            ? switchChatModel(state, next, targetSessionKey, agentRuntime)
+            : Promise.resolve(false),
+        onThinkingSelect: (next, targetSessionKey) =>
+          effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)
+            ? switchChatSetting(state, { kind: "thinkingLevel", value: next }, targetSessionKey)
+            : Promise.resolve(false),
+      },
+    },
     permissionPicker: {
       canSelectFull,
       defaultMode: agentDefaultPermissionMode,
@@ -343,30 +337,26 @@ export function renderChatPaneComposerControls(params: {
       mode: currentChange ? currentChange.nextMode : selectedSession?.permissionMode,
       pending: permissionPending,
       onSelect: async (permissionMode) => {
-        const activeChange = permissionChanges.get(permissionScopeKey);
+        const activeChange = selection.pending;
         if (
           !permissionAccess.allowed ||
           !canPatch({ permissionMode }) ||
           selectedSession?.permissionModePending ||
-          (activeChange?.pending && activeChange.ownsSelection())
+          (activeChange && !activeChange.retainWhileCurrent && activeChange.ownsSelection())
         ) {
           return;
         }
         // Keep the selected mode visible while the exact runtime update settles.
         // The pending owner rejects duplicates; the shared settings tail serializes later work.
-        const change: PendingPermissionChange = {
+        let change: PendingPermissionChange = {
           expectedSessionId,
           nextMode: permissionMode ?? undefined,
           ownsSelection,
-          pending: true,
         };
         const outcomeOwner = Symbol(permissionScopeKey);
-        const outcomeOwners = permissionOutcomeOwners.get(state) ?? new Map<string, symbol>();
-        permissionOutcomeOwners.set(state, outcomeOwners);
-        outcomeOwners.set(permissionScopeKey, outcomeOwner);
-        const ownsOutcome = () => outcomeOwners.get(permissionScopeKey) === outcomeOwner;
-        permissionChanges.set(permissionScopeKey, change);
-        state.requestUpdate?.();
+        selection.outcome = outcomeOwner;
+        const ownsOutcome = () => selection.outcome === outcomeOwner;
+        selection.pending = change;
         try {
           state.chatError = state.lastError = null;
           const patched = await patchChatSessionSettings(
@@ -399,24 +389,18 @@ export function renderChatPaneComposerControls(params: {
             return;
           }
           if (outcome.status !== "refreshed") {
-            change.pending = false;
-            change.retainWhileCurrent = retainWhileCurrent;
+            change = { ...change, retainWhileCurrent };
+            selection.pending = change;
           }
           state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
             error: String(error),
           });
         } finally {
           if (ownsOutcome()) {
-            outcomeOwners.delete(permissionScopeKey);
+            selection.outcome = undefined;
           }
-          if (
-            permissionChanges.get(permissionScopeKey) === change &&
-            change.retainWhileCurrent === undefined
-          ) {
-            permissionChanges.delete(permissionScopeKey);
-          }
-          if (ownsRoute()) {
-            state.requestUpdate?.();
+          if (selection.pending === change && change.retainWhileCurrent === undefined) {
+            selection.pending = undefined;
           }
         }
       },
@@ -443,7 +427,7 @@ export function createChatPaneSessionActionCallbacks(params: {
   const runId = state.chatRunId ?? null;
   const activeRunIds = runId ? undefined : selectedSession?.activeRunIds?.slice();
   const sessionAbortable = state.chatRunSessionAbortable === true;
-  const ownsAbortTarget = () => {
+  const ownsActionTarget = () => {
     const currentSession = selectedChatSessionRow(state);
     const snapshot = params.getSnapshot();
     const currentRecoveryScope =
@@ -499,10 +483,20 @@ export function createChatPaneSessionActionCallbacks(params: {
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined
         : () => {
-            if (ownsAbortTarget() && requireCurrent("abort")) {
+            if (ownsActionTarget() && requireCurrent("abort")) {
               params.onAbort();
             }
           },
+    onCompact:
+      !params.sessionParticipationBlocked &&
+      !parseCatalogSessionKey(sessionKey) &&
+      access.compact.allowed
+        ? async () => {
+            if (ownsActionTarget() && requireCurrent("compact")) {
+              await state.handleSendChat("/compact");
+            }
+          }
+        : undefined,
     onRewindMessage: access.rewind.allowed
       ? (entryId) => (requireCurrent("rewind") ? params.onRewind(entryId) : false)
       : undefined,

@@ -7,9 +7,9 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { RequestClient } from "./internal/rest.js";
 import { getGateway } from "./monitor/gateway-registry.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
-import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import type { DiscordReactOpts, DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -79,7 +79,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
     proxyContext.proxyFetch ?? resolveDiscordProxyFetchForAccount(account, resolvedCfg);
   return {
     token,
-    rest: createDiscordRequestClient(token, {
+    rest: new RequestClient(token, {
       ...(proxyFetch ? { fetch: proxyFetch } : {}),
       ...(signal ? { signal } : {}),
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
@@ -98,6 +98,7 @@ export function createDiscordClient(opts: DiscordClientOpts) {
   const request = createDiscordRetryRunner({
     retry: opts.retry,
     verbose: opts.verbose,
+    signal: opts.signal,
     isGatewayDisconnected: () => {
       const gateway = getGateway(restAccount.accountId);
       return gateway !== undefined && !gateway.isConnected;

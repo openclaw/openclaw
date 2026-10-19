@@ -1,4 +1,3 @@
-import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
@@ -227,18 +226,10 @@ export function resolveFinalDoctorHealthContributions(params: {
       },
       run: runWorkspaceStatusHealth,
     }),
-    ...(isExperimentalClawsEnabled()
-      ? [
-          createDoctorHealthContribution("doctor:claws-state", "Claws state", {
-            healthCheckIds: ["core/doctor/claws-state"],
-            run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/claws-state"),
-          }),
-        ]
-      : []),
     createDoctorHealthContribution("doctor:workspace-alias", "Workspace alias", {
       healthChecks: {
         description:
-          "Persisted workspace aliases must resolve to the canonical target that owns their stored state.",
+          "Persisted workspace aliases must resolve to the resolved target that owns their stored state.",
         defaultEnabled: true,
         async detect(ctx) {
           const { collectRepointedWorkspaceAliasFindings } =

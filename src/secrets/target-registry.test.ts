@@ -2,11 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildTalkTestProviderConfig,
-  TALK_TEST_PROVIDER_API_KEY_PATH,
-  TALK_TEST_PROVIDER_ID,
-} from "../test-utils/talk-test-provider.js";
-import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
   resolveSecretPlanTargetByPathCore,
@@ -17,22 +12,24 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 describe("secret target registry", () => {
-  it("supports filtered discovery by target ids", () => {
-    const config = {
-      ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
-      gateway: {
-        remote: {
-          token: { source: "env" as const, provider: "default", id: "REMOTE_TOKEN" },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const targets = discoverConfigSecretTargetsByIds(config, new Set(["talk.providers.*.apiKey"]));
-
-    expect(targets).toHaveLength(1);
-    expect(targets[0]?.entry?.id).toBe("talk.providers.*.apiKey");
-    expect(targets[0]?.providerId).toBe(TALK_TEST_PROVIDER_ID);
-    expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
+  it("discovers PostgreSQL connection refs for configure, apply, and audit", () => {
+    const connection = { source: "env" as const, provider: "default", id: "DATABASE_DSN" };
+    const config: OpenClawConfig = { database: { engine: "postgres", postgres: { connection } } };
+    const [target] = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["database.postgres.connection"]),
+    );
+    expect(target).toMatchObject({
+      path: "database.postgres.connection",
+      value: connection,
+      entry: { includeInPlan: true, includeInConfigure: true, includeInAudit: true },
+    });
+    expect(
+      resolveSecretPlanTargetByPathCore({
+        configFile: "openclaw.json",
+        pathSegments: ["database", "postgres", "connection"],
+      })?.entry.id,
+    ).toBe("database.postgres.connection");
   });
 
   it("preserves dotted provider header keys during discovery", () => {
@@ -68,24 +65,27 @@ describe("secret target registry", () => {
     ]);
   });
 
-  it("resolves talk realtime provider api key targets", () => {
-    const target = resolveConfigSecretTargetByPath([
-      "talk",
-      "realtime",
-      "providers",
-      "openai",
-      "apiKey",
-    ]);
-
-    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
-    expect(target?.providerId).toBe("openai");
-  });
-
   it("returns null when no config target path matches", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 
     expect(target).toBeNull();
   });
+
+  it.each([{ prefix: [] }, { prefix: ["agents", "entries", "main"] }])(
+    "does not offer string-only memory headers as structured SecretRef apply targets ($prefix)",
+    ({ prefix }) => {
+      expect(
+        resolveConfigSecretTargetByPath([
+          ...prefix,
+          "memory",
+          "search",
+          "remote",
+          "headers",
+          "Authorization",
+        ]),
+      ).toBeNull();
+    },
+  );
 
   it("resolves plan targets by owning config document", () => {
     const configTarget = resolveSecretPlanTargetByPathCore({

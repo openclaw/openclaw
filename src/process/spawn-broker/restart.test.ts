@@ -19,8 +19,11 @@ beforeEach(() => {
   children.length = 0;
   native.spawn.mockReset().mockImplementation(() => {
     const child = createStubChild(41000 + children.length);
+    // The broker inherits stdin and ignores output; it owns no piped stdio descriptors.
+    Object.defineProperty(child.child, "stdio", { value: [null, null, null, null] });
     child.disconnectMock.mockImplementation(() => {
       Object.defineProperty(child.child, "connected", { value: false });
+      child.child.emit("disconnect");
       child.emitExit(0);
       child.emitClose(0);
     });
@@ -51,6 +54,8 @@ function markReady() {
   child.emit("message", { type: "ready", pid: child.pid });
 }
 function fail() {
+  Object.defineProperty(currentChild().child, "connected", { value: false });
+  currentChild().child.emit("disconnect");
   currentChild().emitExit(1);
   currentChild().emitClose(1);
 }

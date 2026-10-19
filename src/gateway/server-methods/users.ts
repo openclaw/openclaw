@@ -23,8 +23,8 @@ import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
+  readUserProfileSnapshot,
 } from "../../state/user-profile-list.js";
-import { readUserProfileSnapshot } from "../../state/user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
@@ -48,6 +48,7 @@ import {
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
+import { prepareUserBackgroundAction, usersBackgroundHandlers } from "./users-background.js";
 import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
@@ -107,6 +108,7 @@ export const usersHandlers: GatewayRequestHandlers = {
   ...usersChannelIdentityHandlers,
   ...usersGitHubHandlers,
   ...usersPersonalFileHandlers,
+  ...usersBackgroundHandlers,
   "users.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
@@ -128,7 +130,7 @@ export const usersHandlers: GatewayRequestHandlers = {
             canonical.id,
             canonical.role ?? null,
             cfg,
-            canonical.githubIdentity?.login ?? null,
+            canonical.githubIdentity?.host ? null : (canonical.githubIdentity?.login ?? null),
           ),
         );
       }),
@@ -199,7 +201,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.set": async ({ client, context, params, respond }) => {
+  "users.prefs.set": async (options) => {
+    const { client, context, params, respond } = options;
     if (!assertValidParams(params, validateUsersPrefsSetParams, "users.prefs.set", respond)) {
       return;
     }
@@ -213,7 +216,15 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const assertCurrent = preparePersonalPreferences(client);
+      const assertPersonal = preparePersonalPreferences(client);
+      const backgroundAction = Object.hasOwn(params.entries, "ui.background")
+        ? await prepareUserBackgroundAction(options, "operator.write")
+        : undefined;
+      const assertCurrent = () => {
+        assertPersonal();
+        options.sessionMutationAuthorization?.assertCurrent();
+        backgroundAction?.assertCurrent();
+      };
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
         assertCurrent,

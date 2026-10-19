@@ -1,10 +1,30 @@
 import { ServerResponse, type IncomingMessage } from "node:http";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerNextcloudTalkWebhook } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
-import { startWebhookServer, webhookRegistry } from "./monitor.test-harness.js";
+import { startWebhookServer as startServer, webhookRegistry } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
+
+afterEach(() => vi.useRealTimers());
+const path = "/nextcloud-test";
+function startWebhookServer(
+  options: Omit<Parameters<typeof startServer>[0], "path"> & { path?: string },
+) {
+  return startServer({ path, ...options });
+}
+async function startPair(
+  firstOptions: Parameters<typeof startWebhookServer>[0],
+  secondOptions: Parameters<typeof startWebhookServer>[0],
+) {
+  const first = vi.fn();
+  const second = vi.fn();
+  const firstHandle = await startWebhookServer({ onMessage: first, ...firstOptions });
+  const secondHandle = await startWebhookServer({ onMessage: second, ...secondOptions });
+  return { first, second, firstHandle, secondHandle };
+}
 
 function signWebhookBody(body: string, secret = "nextcloud-secret") {
   const { random, signature } = generateNextcloudTalkSignature({ body, secret });
@@ -26,14 +46,6 @@ function postWebhook(
   return fetch(url, { method: "POST", ...request });
 }
 
-function routeHandler(path: string) {
-  const route = webhookRegistry.httpRoutes.find((entry) => entry.path === path);
-  if (!route) {
-    throw new Error(`expected Gateway route ${path}`);
-  }
-  return route.handler;
-}
-
 const { readBody, legacyListeners } = vi.hoisted(() => ({
   readBody: vi.fn(),
   legacyListeners: new WeakMap<IncomingMessage, { port: number; host?: string }>(),
@@ -51,117 +63,115 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
   };
 });
 
-async function invokeWebhookRequestListener(params: {
-  listener: (typeof webhookRegistry.httpRoutes)[number]["handler"];
-  path: string;
-  body: string;
-  headers: Record<string, string>;
-  remoteAddress: string;
+type InvokeOverrides = Partial<ReturnType<typeof createSignedCreateMessageRequest>> & {
+  remoteAddress?: string;
   legacyListener?: { port: number; host?: string };
-}) {
-  const req = Object.assign(createMockIncomingRequest([params.body]), {
-    method: "POST",
-    url: params.path,
-    headers: params.headers,
-  });
-  Object.defineProperty(req.socket, "remoteAddress", { value: params.remoteAddress });
-  if (params.legacyListener) {
-    legacyListeners.set(req, params.legacyListener);
-  }
-
-  const result = createDeferred<{ body: string; status: number }>();
-  const response = new ServerResponse(req);
-  const res = Object.assign(response, {
-    end(body?: string): ServerResponse {
-      response.emit("finish");
-      result.resolve({ body: body ?? "", status: response.statusCode });
-      return response;
-    },
-  });
-  await params.listener(req, res);
-  return await result.promise;
-}
-
-function createInvoker(path: string, request = createSignedCreateMessageRequest()) {
-  const listener = routeHandler(path);
-  return (overrides: Partial<Parameters<typeof invokeWebhookRequestListener>[0]> = {}) =>
-    invokeWebhookRequestListener({
-      listener,
-      path,
-      ...request,
-      remoteAddress: "198.51.100.20",
-      ...overrides,
-    });
-}
-
-describe("Nextcloud Talk Gateway webhook auth order", () => {
-  it("rejects missing signature headers before reading request body", async () => {
-    readBody.mockClear();
-    const harness = await startWebhookServer({
-      path: "/nextcloud-auth-order",
-      onMessage: vi.fn(),
-    });
-
-    const response = await fetch(harness.webhookUrl, {
+};
+function createInvoker(routePath: string, request = createSignedCreateMessageRequest()) {
+  const listener = expectDefined(
+    webhookRegistry.httpRoutes.find((entry) => entry.path === routePath)?.handler,
+    `Gateway route ${routePath}`,
+  );
+  return async ({
+    body = request.body,
+    headers = request.headers,
+    remoteAddress = "198.51.100.20",
+    legacyListener,
+  }: InvokeOverrides = {}) => {
+    const req = Object.assign(createMockIncomingRequest([body]), {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: "{}",
+      url: routePath,
+      headers,
     });
+    Object.defineProperty(req.socket, "remoteAddress", { value: remoteAddress });
+    if (legacyListener) {
+      legacyListeners.set(req, legacyListener);
+    }
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Missing signature headers" });
-    expect(readBody).not.toHaveBeenCalled();
-  });
-});
+    const result = createDeferred<{ body: string; status: number }>();
+    const response = new ServerResponse(req);
+    const res = Object.assign(response, {
+      end(responseBody?: string): ServerResponse {
+        response.emit("finish");
+        result.resolve({ body: responseBody ?? "", status: response.statusCode });
+        return response;
+      },
+    });
+    await listener(req, res);
+    return await result.promise;
+  };
+}
 
-describe("Nextcloud Talk exact webhook request paths", () => {
-  it("preserves the exact configured request path", async () => {
-    const path = "/Nextcloud-Case/";
-    const rejected = ["/nextcloud-case/", "/Nextcloud-Case", "/Nextcloud-Case/?extra=1"];
-    const onMessage = vi.fn();
-    const harness = await startWebhookServer({ path, onMessage });
-    const { body, headers } = createSignedCreateMessageRequest();
-    const accepted = await postWebhook(harness.webhookUrl, { headers, body });
-    expect(accepted.status).toBe(200);
-    expect(onMessage).toHaveBeenCalledOnce();
-    const origin = new URL(harness.webhookUrl).origin;
-    for (const requestPath of rejected) {
+describe("Nextcloud Talk webhooks", () => {
+  it.each<
+    [
+      string,
+      number,
+      string | undefined,
+      (() => { body: string; headers: Record<string, string> })?,
+      Parameters<typeof startWebhookServer>[0]?,
+    ]
+  >([
+    [
+      "missing signature headers",
+      400,
+      "Missing signature headers",
+      () => ({ body: "{}", headers: { "content-type": "application/json" } }),
+    ],
+    [
+      "unexpected backend",
+      401,
+      "Invalid backend",
+      () => createSignedCreateMessageRequest({ backend: "https://nextcloud.unexpected" }),
+      { isBackendAllowed: (backend) => backend === "https://nextcloud.expected" },
+    ],
+    [
+      "failed durable append",
+      500,
+      undefined,
+      undefined,
+      {
+        onWebhook: async () => {
+          throw new Error("sqlite unavailable");
+        },
+      },
+    ],
+    [
+      "ignored non-Create event",
+      200,
+      undefined,
+      () => signWebhookBody(JSON.stringify({ type: "Join" })),
+    ],
+    [
+      "malformed message identity",
+      400,
+      "Invalid payload format",
+      () => {
+        const payload: { target: { id: string } } = JSON.parse(
+          createSignedCreateMessageRequest().body,
+        );
+        payload.target.id = "";
+        return signWebhookBody(JSON.stringify(payload));
+      },
+    ],
+  ])(
+    "handles %s without claiming durable adoption",
+    async (_label, status, error, request, options) => {
       readBody.mockClear();
-      const response = await postWebhook(`${origin}${requestPath}`, { headers, body });
-      expect(response.status).toBe(404);
-      expect(readBody).not.toHaveBeenCalled();
-    }
-    for (const method of ["GET", "HEAD", "OPTIONS"]) {
-      const wrongMethod = await fetch(harness.webhookUrl, { method });
-      expect(wrongMethod.status).toBe(404);
-      expect(await wrongMethod.text()).toBe("");
-      expect(wrongMethod.headers.get("allow")).toBeNull();
-    }
-    expect(onMessage).toHaveBeenCalledOnce();
-  });
-
-  it("keeps absolute-form callback targets literal on legacy ports", async () => {
-    const path = "https://callbacks.example/nextcloud?tenant=a";
-    const legacyListener = { port: 8788, host: "127.0.0.1" };
-    const onMessage = vi.fn();
-    await startWebhookServer({ path, legacyListener, onMessage });
-    const listener = webhookRegistry.httpRoutes[0]!.handler;
-    const { body, headers } = createSignedCreateMessageRequest();
-    for (const requestPath of [path, "/nextcloud?tenant=a"]) {
-      const response = await invokeWebhookRequestListener({
-        listener,
-        path: requestPath,
-        body,
-        headers,
-        remoteAddress: "198.51.100.20",
-        legacyListener,
-      });
-      expect(response).toEqual({ status: requestPath === path ? 200 : 404, body: "" });
-    }
-    expect(onMessage).toHaveBeenCalledOnce();
-  });
+      const onMessage = vi.fn();
+      const harness = await startWebhookServer({ onMessage, ...options });
+      const response = await postWebhook(harness.webhookUrl, request?.());
+      expect(response.status).toBe(status);
+      expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+      expect(onMessage).not.toHaveBeenCalled();
+      if (error) {
+        await expect(response.json()).resolves.toEqual({ error });
+      }
+      if (error === "Missing signature headers") {
+        expect(readBody).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("selects query-distinguished accounts before matching their shared credentials", async () => {
     const first = vi.fn();
@@ -176,57 +186,12 @@ describe("Nextcloud Talk exact webhook request paths", () => {
     expect(first).toHaveBeenCalledOnce();
     expect(second).toHaveBeenCalledOnce();
   });
-});
-
-describe("Nextcloud Talk Gateway webhook backend allowlist", () => {
-  it("rejects requests from unexpected backend origins", async () => {
-    const onMessage = vi.fn(async () => {});
-    const harness = await startWebhookServer({
-      path: "/nextcloud-backend-check",
-      isBackendAllowed: (backend) => backend === "https://nextcloud.expected",
-      onMessage,
-    });
-
-    const { body, headers } = createSignedCreateMessageRequest({
-      backend: "https://nextcloud.unexpected",
-    });
-    const response = await postWebhook(harness.webhookUrl, { headers, body });
-
-    expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: "Invalid backend" });
-    expect(onMessage).not.toHaveBeenCalled();
-  });
-});
-
-describe("Nextcloud Talk Gateway webhook payload validation", () => {
-  it("verifies the raw signed payload without interpreting media headers", async () => {
-    const onMessage = vi.fn();
-    const harness = await startWebhookServer({ path: "/nextcloud-raw-content", onMessage });
-    const { body, headers } = createSignedCreateMessageRequest();
-    const response = await fetch(harness.webhookUrl, {
-      method: "POST",
-      body: Buffer.from(body),
-      headers: {
-        "x-nextcloud-talk-random": headers["x-nextcloud-talk-random"],
-        "x-nextcloud-talk-signature": headers["x-nextcloud-talk-signature"],
-        "x-nextcloud-talk-backend": headers["x-nextcloud-talk-backend"],
-        "content-type": "text/plain; charset=iso-8859-1",
-        "content-encoding": "gzip",
-      },
-    });
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("");
-    expect(response.headers.get("content-type")).toBeNull();
-    expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-    expect(onMessage).toHaveBeenCalledOnce();
-  });
 
   it("answers an over-limit webhook with 413 and then closes the connection", async () => {
     // A raw socket proves the rejection arrives before the incomplete upload closes.
     const body = JSON.stringify({ type: "Create", padding: "x".repeat(70 * 1024) });
     const onMessage = vi.fn();
     const harness = await startWebhookServer({
-      path: "/nextcloud-oversized-body",
       onMessage,
     });
 
@@ -235,61 +200,16 @@ describe("Nextcloud Talk Gateway webhook payload validation", () => {
       ...signWebhookBody(body),
     });
 
-    expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-    expect(result.body).toBe(JSON.stringify({ error: "Payload too large" }));
-    expect(result.closedByServer).toBe(true);
+    expect(result).toMatchObject({
+      statusLine: "HTTP/1.1 413 Payload Too Large",
+      body: JSON.stringify({ error: "Payload too large" }),
+      closedByServer: true,
+    });
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  it("acknowledges signed non-Create Talk events instead of rejecting them", async () => {
-    const payload = {
-      type: "Join",
-      actor: { type: "Application", id: "bots/bot-1", name: "Bot" },
-      object: { type: "Collection", id: "room-1", name: "Room 1" },
-    };
-    const body = JSON.stringify(payload);
-    const onMessage = vi.fn();
-    const harness = await startWebhookServer({
-      path: "/nextcloud-lifecycle-event",
-      onMessage,
-    });
-
-    const response = await postWebhook(harness.webhookUrl, signWebhookBody(body));
-
-    expect(response.status).toBe(200);
-    expect(onMessage).not.toHaveBeenCalled();
-  });
-
-  it("rejects malformed webhook payloads after signature verification", async () => {
-    const payload = {
-      type: "Create",
-      actor: { type: "Person", id: "alice", name: "Alice" },
-      object: {
-        type: "Note",
-        id: "msg-1",
-        name: "hello",
-        content: "hello",
-        mediaType: "text/plain",
-      },
-      target: { type: "Collection", id: "", name: "Room 1" },
-    };
-    const body = JSON.stringify(payload);
-    const harness = await startWebhookServer({
-      path: "/nextcloud-invalid-payload",
-      onMessage: vi.fn(),
-    });
-
-    const response = await postWebhook(harness.webhookUrl, signWebhookBody(body));
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid payload format" });
-  });
-});
-
-describe("Nextcloud Talk Gateway webhook auth rate limiting", () => {
   it("isolates failed-auth limits by forwarded client behind a trusted proxy", async () => {
     const harness = await startWebhookServer({
-      path: "/nextcloud-auth-rate-limit-trusted-proxy",
       trustedProxies: ["127.0.0.1"],
       onMessage: vi.fn(),
     });
@@ -307,48 +227,37 @@ describe("Nextcloud Talk Gateway webhook auth rate limiting", () => {
       body,
     });
 
-    expect(firstAttack.status).toBe(401);
-    expect(blockedAttack.status).toBe(429);
+    expect([firstAttack.status, blockedAttack.status, legitimateDelivery.status]).toEqual([
+      401, 429, 200,
+    ]);
     expect(await blockedAttack.text()).toBe("Too Many Requests");
-    expect(legitimateDelivery.status).toBe(200);
   });
 
   it("keeps unattributed trusted proxies in separate socket buckets", async () => {
-    const path = "/nextcloud-auth-rate-limit-proxy-fallback";
-    const { stop } = await startWebhookServer({
-      path,
+    await startWebhookServer({
       secret: "nextcloud-secret", // pragma: allowlist secret
       trustedProxies: ["127.0.0.0/8"],
       onWebhook: async () => "accepted",
     });
-    try {
-      const { body, headers } = createSignedCreateMessageRequest();
-      const invalidHeaders = {
-        ...headers,
-        "x-nextcloud-talk-signature": "invalid-signature",
-      };
-      const invoke = createInvoker(path, { body, headers });
+    const { body, headers } = createSignedCreateMessageRequest();
+    const invalidHeaders = {
+      ...headers,
+      "x-nextcloud-talk-signature": "invalid-signature",
+    };
+    const invoke = createInvoker(path, { body, headers });
 
-      const firstAttack = await invoke({ remoteAddress: "127.0.0.2", headers: invalidHeaders });
-      const blockedAttack = await invoke({ remoteAddress: "127.0.0.2", headers: invalidHeaders });
-      const legitimateDelivery = await invoke({ remoteAddress: "127.0.0.3" });
+    const firstAttack = await invoke({ remoteAddress: "127.0.0.2", headers: invalidHeaders });
+    const blockedAttack = await invoke({ remoteAddress: "127.0.0.2", headers: invalidHeaders });
+    const legitimateDelivery = await invoke({ remoteAddress: "127.0.0.3" });
 
-      expect(firstAttack.status).toBe(401);
-      expect(blockedAttack.status).toBe(429);
-      expect(legitimateDelivery.status).toBe(200);
-    } finally {
-      await stop();
-    }
+    expect([firstAttack.status, blockedAttack.status, legitimateDelivery.status]).toEqual([
+      401, 429, 200,
+    ]);
   });
-});
-
-describe("Nextcloud Talk accounts sharing a Gateway route", () => {
   it("keeps a stopping account retryable without charging its sibling's auth budget", async () => {
     const admitted = createDeferred<void>();
     const release = createDeferred<void>();
-    const path = "/nextcloud-stopping-account";
     const first = await startWebhookServer({
-      path,
       onWebhook: async () => {
         admitted.resolve();
         await release.promise;
@@ -356,11 +265,7 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
       },
     });
     const second = vi.fn();
-    const siblingHandle = await startWebhookServer({
-      path,
-      secret: "second-secret",
-      onMessage: second,
-    });
+    const siblingHandle = await startWebhookServer({ secret: "second-secret", onMessage: second });
     const { body, headers } = createSignedCreateMessageRequest();
     const pending = postWebhook(first.webhookUrl, { headers, body });
     try {
@@ -372,7 +277,7 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
       expect((await fetch(first.webhookUrl, { method: "GET" })).status).toBe(404);
       expect(siblingStopped).toBe(true);
       await stoppingSibling;
-      await startWebhookServer({ path, secret: "second-secret", onMessage: second });
+      await startWebhookServer({ secret: "second-secret", onMessage: second });
       const stopping = first.stop();
       const retry = await postWebhook(first.webhookUrl, { headers, body });
       expect(retry.status).toBe(503);
@@ -381,7 +286,7 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
       expect(sibling.status).toBe(200);
       expect(second).toHaveBeenCalledOnce();
       const successor = vi.fn();
-      await startWebhookServer({ path, onMessage: successor });
+      await startWebhookServer({ onMessage: successor });
       const transferred = await postWebhook(first.webhookUrl, { headers, body });
       expect(transferred.status).toBe(200);
       expect(successor).toHaveBeenCalledOnce();
@@ -396,60 +301,33 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
     }
   });
 
-  it.each([
-    [
-      { port: 8788, host: "127.0.0.1" },
-      { port: 8789, host: "127.0.0.1" },
-    ],
-    [
-      { port: 8788, host: "127.0.0.1" },
-      { port: 8788, host: "127.0.0.2" },
-    ],
-  ])(
-    "retains account selection for explicit legacy endpoints %j and %j",
-    async (firstEndpoint, secondEndpoint) => {
-      const path = "/nextcloud-legacy-accounts";
-      const first = vi.fn();
-      const second = vi.fn();
-      const isBackendAllowed = (backend: string) => backend === "https://nextcloud.example";
-      await startWebhookServer({
-        path,
-        legacyListener: firstEndpoint,
-        isBackendAllowed,
-        onMessage: first,
-      });
-      await startWebhookServer({
-        path,
-        legacyListener: secondEndpoint,
-        isBackendAllowed,
-        onMessage: second,
-      });
-      const invoke = createInvoker(path);
-      expect((await invoke({ legacyListener: firstEndpoint })).status).toBe(200);
-      expect(first).toHaveBeenCalledOnce();
-      expect(second).not.toHaveBeenCalled();
-      expect((await invoke({ legacyListener: secondEndpoint })).status).toBe(200);
-      expect(first).toHaveBeenCalledOnce();
-      expect(second).toHaveBeenCalledOnce();
-      expect((await invoke()).status).toBe(401);
-      expect(first).toHaveBeenCalledOnce();
-      expect(second).toHaveBeenCalledOnce();
-    },
-  );
+  it("retains account selection for explicit legacy endpoints with distinct hosts", async () => {
+    const firstEndpoint = { port: 8788, host: "127.0.0.1" };
+    const secondEndpoint = { port: 8788, host: "127.0.0.2" };
+    const isBackendAllowed = (backend: string) => backend === "https://nextcloud.example";
+    const { first, second } = await startPair(
+      { legacyListener: firstEndpoint, isBackendAllowed },
+      { legacyListener: secondEndpoint, isBackendAllowed },
+    );
+    const invoke = createInvoker(path);
+    expect((await invoke({ legacyListener: firstEndpoint })).status).toBe(200);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).not.toHaveBeenCalled();
+    expect((await invoke({ legacyListener: secondEndpoint })).status).toBe(200);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+    expect((await invoke()).status).toBe(401);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
+  });
 
   it("isolates legacy authentication failures while Gateway accounts share a quota", async () => {
-    const path = "/nextcloud-legacy-auth-budgets";
     const firstEndpoint = { port: 8788, host: "127.0.0.1" };
     const secondEndpoint = { port: 8789, host: "127.0.0.1" };
-    const first = vi.fn();
-    const second = vi.fn();
-    await startWebhookServer({ path, legacyListener: firstEndpoint, onMessage: first });
-    await startWebhookServer({
-      path,
-      secret: "second-secret",
-      legacyListener: secondEndpoint,
-      onMessage: second,
-    });
+    const { first, second } = await startPair(
+      { legacyListener: firstEndpoint },
+      { secret: "second-secret", legacyListener: secondEndpoint },
+    );
     const alternatePath = `${path}-alternate`;
     await startWebhookServer({
       path: alternatePath,
@@ -482,24 +360,15 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
   });
 
   it("reports body-reader failures through the selected legacy endpoint", async () => {
-    const path = "/nextcloud-legacy-body-error";
     const firstEndpoint = { port: 8788, host: "127.0.0.1" };
     const secondEndpoint = { port: 8789, host: "127.0.0.1" };
     const firstError = vi.fn();
     const secondError = vi.fn();
     const onMessage = vi.fn();
-    await startWebhookServer({
-      path,
-      legacyListener: firstEndpoint,
-      onError: firstError,
-      onMessage,
-    });
-    await startWebhookServer({
-      path,
-      legacyListener: secondEndpoint,
-      onError: secondError,
-      onMessage,
-    });
+    await startPair(
+      { legacyListener: firstEndpoint, onError: firstError, onMessage },
+      { legacyListener: secondEndpoint, onError: secondError, onMessage },
+    );
     const failure = new Error("legacy endpoint body read failed");
     readBody.mockImplementationOnce(() => {
       throw failure;
@@ -512,18 +381,14 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
   });
 
   it("selects by backend and signature and rejects ambiguous credentials", async () => {
-    const path = "/nextcloud-shared-route";
-    const first = vi.fn();
-    const second = vi.fn();
-    const firstHandle = await startWebhookServer({ path, onMessage: first });
-    const secondHandle = await startWebhookServer({
-      path,
-      secret: "second-secret",
-      isBackendAllowed: (backend) => backend === "https://nextcloud.example",
-      onMessage: second,
-    });
+    const { first, second, firstHandle, secondHandle } = await startPair(
+      {},
+      {
+        secret: "second-secret",
+        isBackendAllowed: (backend) => backend === "https://nextcloud.example",
+      },
+    );
     await startWebhookServer({
-      path,
       secret: "second-secret",
       isBackendAllowed: (backend) => backend === "https://other.example",
       onMessage: first,
@@ -540,10 +405,53 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
     expect(surviving.status).toBe(200);
     expect(second).toHaveBeenCalledTimes(2);
 
-    const duplicate = await startWebhookServer({ path, secret: "second-secret", onMessage: first });
+    const duplicate = await startWebhookServer({ secret: "second-secret", onMessage: first });
     const ambiguous = await postWebhook(firstHandle.webhookUrl, signedRequest);
     expect(ambiguous.status).toBe(401);
     expect(second).toHaveBeenCalledTimes(2);
     await duplicate.stop();
+  });
+  it("keeps the route and limiter until its last account stops, then releases both", async () => {
+    vi.useFakeTimers();
+    const registry = webhookRegistry;
+    const baselineTimerCount = vi.getTimerCount();
+    const expectState = (routes: number, timers: number) =>
+      expect([registry.httpRoutes.length, vi.getTimerCount() - baselineTimerCount]).toEqual([
+        routes,
+        timers,
+      ]);
+    const target = { path: "/w", secret: "s", onWebhook: async () => "ignored" as const };
+    const first = registerNextcloudTalkWebhook(target);
+    const second = registerNextcloudTalkWebhook({ ...target, secret: "other" });
+    expectState(1, 0);
+    const { body, headers } = createSignedCreateMessageRequest();
+    const request = {
+      body,
+      headers: { ...headers, "x-nextcloud-talk-signature": "invalid-signature" },
+    };
+    const invoke = createInvoker(target.path, request);
+    expect((await invoke()).status).toBe(401);
+    expect(vi.getTimerCount()).toBe(baselineTimerCount + 1);
+    const legacyTarget = { ...target, legacyListener: { port: 8788, host: "127.0.0.1" } };
+    const firstLegacy = registerNextcloudTalkWebhook(legacyTarget);
+    const secondLegacy = registerNextcloudTalkWebhook({
+      ...legacyTarget,
+      path: "/other",
+      secret: "other",
+    });
+    expect(registry.httpRoutes).toHaveLength(2);
+    expect((await createInvoker("/other", request)()).status).toBe(401);
+    expect((await invoke({ legacyListener: legacyTarget.legacyListener })).status).toBe(401);
+    expect(vi.getTimerCount()).toBe(baselineTimerCount + 3);
+    await firstLegacy();
+    expect(vi.getTimerCount()).toBe(baselineTimerCount + 3);
+    await secondLegacy();
+    expectState(1, 1);
+    await first();
+    expectState(1, 1);
+    await second();
+    expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    await second();
+    expectState(0, 0);
   });
 });

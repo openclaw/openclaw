@@ -44,7 +44,10 @@ export type ChatFastModeSelectValue = "" | "on" | "off" | "auto" | "ultrafast";
 export type ChatFastModeSelectState = {
   /** Fast output is effectively enabled (explicitly or via auto/inherited default). */
   active: boolean;
+  /** Effective selection shown after defaults and capability recovery. */
   currentOverride: ChatFastModeSelectValue;
+  /** Saved session choice; an empty value still inherits the configured tier. */
+  persistedOverride: ChatFastModeSelectValue;
   disabled: boolean;
   /** Resolved speed label, separate from the saved preference. */
   label: string;
@@ -62,16 +65,13 @@ export type ChatFastModeTarget = Pick<
 >;
 
 type ChatFastModeSelectStateInput = {
-  activeRunId: string | null;
   catalog: ModelCatalogEntry[];
   connected: boolean;
   currentModelOverride: string;
   fastModeTarget?: ChatFastModeTarget;
   gatewayAvailable: boolean;
   loading: boolean;
-  sending: boolean;
   sessionsResult: SessionsListResult | null;
-  stream: string | null;
 };
 
 // Preserve existing controls only when the selected request's applicability is unknown.
@@ -91,7 +91,7 @@ function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
-  const catalog = state.chatModelCatalog ?? [];
+  const catalog = state.chatModelCatalog;
 
   const sharedOverrides = state.modelOverrides;
   if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
@@ -112,7 +112,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
   if (agentDefault) {
     return agentDefault;
@@ -120,7 +120,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
 }
 
@@ -250,7 +250,7 @@ export function chatModelUnavailableMessage(
 }
 
 export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
-  const catalog = state.chatModelCatalog ?? [];
+  const catalog = state.chatModelCatalog;
   const availableKeys = new Set(
     catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
   );
@@ -421,27 +421,25 @@ export function resolveChatFastModeSelectState(
   );
   const selectedSupport = applicability.size === 1 ? [...applicability][0] : undefined;
   const requestSupported = selectedSupport ?? isChatFastModeProviderSupported(effectiveProvider);
+  const everySelected = (
+    predicate: (selected: (typeof selectedEntries)[number]) => boolean | undefined,
+  ) => selectedEntries.length > 0 && selectedEntries.every(predicate);
   const ultrafastOffered =
     requestSupported &&
-    selectedEntries.length > 0 &&
-    selectedEntries.every(
+    everySelected(
       ({ runtime }) => runtime?.available === true && runtime.serviceTiers?.includes("ultrafast"),
     );
   // The transport owns recovery support; provider and runtime names do not identify the endpoint.
-  const canRecoverRejectedTier =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(({ runtime }) => runtime?.supportsServiceTierRecovery === true);
-  const standardOnly =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(({ runtime }) =>
-      isChatStandardOnlySpeed(runtime, canRecoverRejectedTier),
-    );
-  const ultrafastUnavailable =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(
-      ({ runtime }) =>
-        runtime?.serviceTiers !== undefined && !runtime.serviceTiers.includes("ultrafast"),
-    );
+  const canRecoverRejectedTier = everySelected(
+    ({ runtime }) => runtime?.supportsServiceTierRecovery === true,
+  );
+  const standardOnly = everySelected(({ runtime }) =>
+    isChatStandardOnlySpeed(runtime, canRecoverRejectedTier),
+  );
+  const ultrafastUnavailable = everySelected(
+    ({ runtime }) =>
+      runtime?.serviceTiers !== undefined && !runtime.serviceTiers.includes("ultrafast"),
+  );
   const effectiveMode = standardOnly
     ? false
     : savedMode === "ultrafast" &&
@@ -494,15 +492,9 @@ export function resolveChatFastModeSelectState(
   return {
     active,
     currentOverride,
+    persistedOverride: configuredOverride,
     disabled:
-      standardOnly ||
-      !supported ||
-      !input.connected ||
-      input.loading ||
-      input.sending ||
-      Boolean(input.activeRunId) ||
-      input.stream !== null ||
-      !input.gatewayAvailable,
+      standardOnly || !supported || !input.connected || input.loading || !input.gatewayAvailable,
     label,
     hint: observation
       ? observation.responseTier

@@ -86,9 +86,9 @@ function mapVoiceCallConsultTranscript(
 
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
-    config.tunnel?.provider === "ngrok" &&
-    isLoopbackHost(config.serve?.bind ?? "") &&
-    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
+    config.tunnel.provider === "ngrok" &&
+    isLoopbackHost(config.serve.bind) &&
+    config.tunnel.allowNgrokFreeTierLoopbackBypass;
 
   switch (config.provider) {
     case "telnyx": {
@@ -274,11 +274,11 @@ export async function createVoiceCallRuntime(params: {
       ...config.realtime,
       tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools),
     };
-    const resolveCallRegistration = (call: CallRecord) => {
+    const resolveCallRegistration = async (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
       const agentId = resolveCallAgentId(call);
-      const resolved = realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProvider({
+      const resolved = await realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProviderAsync({
         configuredProviderId: effectiveConfig.realtime.provider,
         providerConfigs: effectiveConfig.realtime.providers,
         cfg,

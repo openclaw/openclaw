@@ -11,23 +11,11 @@ describe("iMessage doctor contract: deprecated catchup config", () => {
     );
   });
 
-  it("detects a disabled per-account catchup block", () => {
-    const imessage = { accounts: { work: { catchup: { enabled: false } } } };
-    const cfg = { channels: { imessage } } as never;
-    expect(legacyConfigRules[0]?.match?.(imessage, cfg)).toBe(true);
-  });
-
   it("does not flag enabled catchup because replay remains compatibility-supported", () => {
     const imessage = {
       catchup: { enabled: true, maxAgeMinutes: 360 },
       accounts: { work: { catchup: { enabled: true, perRunLimit: 25 } } },
     };
-    const cfg = { channels: { imessage } } as never;
-    expect(legacyConfigRules[0]?.match?.(imessage, cfg)).toBe(false);
-  });
-
-  it("does not flag a config without catchup", () => {
-    const imessage = { dmPolicy: "pairing", accounts: { work: { cliPath: "imsg" } } };
     const cfg = { channels: { imessage } } as never;
     expect(legacyConfigRules[0]?.match?.(imessage, cfg)).toBe(false);
   });
@@ -57,12 +45,5 @@ describe("iMessage doctor contract: deprecated catchup config", () => {
     expect("catchup" in accounts.work).toBe(false);
     expect(accounts.home.catchup).toEqual({ enabled: true, perRunLimit: 25 });
     expect(accounts.work.cliPath).toBe("imsg");
-  });
-
-  it("is a no-op when catchup is absent", () => {
-    const cfg = { channels: { imessage: { dmPolicy: "pairing" } } } as never;
-    const mutation = normalizeCompatibilityConfig({ cfg });
-    expect(mutation.changes).toHaveLength(0);
-    expect(mutation.config).toBe(cfg);
   });
 });

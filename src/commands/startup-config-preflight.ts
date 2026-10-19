@@ -2,16 +2,23 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
-import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
-import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
-  assertPreflightConfigUnchanged,
+  getPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
+import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import {
   readAdmittedConfigSnapshot,
-  readConfigPreflightSnapshot,
+  createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
@@ -22,6 +29,8 @@ import {
 } from "./doctor-startup-migration-refusal.js";
 import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
+// Persistent lease loss must reach the operator instead of retrying startup forever.
+const STARTUP_LEASE_ATTEMPTS = 3;
 export type StartupConfigPreflightOptions = {
   gateway: boolean;
   observe?: boolean;
@@ -30,48 +39,63 @@ export type StartupConfigPreflightOptions = {
   beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
 };
 
-export type StartupConfigPreflightResult = ReturnType<typeof result>;
+export type StartupConfigPreflightResult = ReturnType<typeof result> & {
+  pluginCache?: PluginCache;
+};
 
 /** Prepare current runtime state; legacy imports and repair receipts belong to Doctor. */
 export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
-  const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-  try {
-    return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
-  } catch (error) {
-    if (options.gateway) {
-      rethrowStartupConfigFailure(error);
+  assertDatabasePortStartupAllowed(resolveStateDir(process.env));
+  for (let attempt = 1; ; attempt++) {
+    await using snapshots = createConfigPreflightSnapshotReader();
+    const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
+    try {
+      const prepared = await withSqliteReadOnlyWorkerScope(() =>
+        prepareStartupConfig(options, snapshots),
+      );
+      return {
+        ...prepared,
+        pluginCache: await snapshots.takePluginCache(prepared.pluginMetadataSnapshot),
+      };
+    } catch (error) {
+      const { StartupMigrationLeaseLostError } =
+        await import("../infra/startup-migration-checkpoint.js");
+      if (error instanceof StartupMigrationLeaseLostError && attempt < STARTUP_LEASE_ATTEMPTS) {
+        recordStartupMigrationWarnings(["Startup migration lease lost; reacquiring and retrying."]);
+        continue;
+      }
+      if (options.gateway) {
+        rethrowStartupConfigFailure(error);
+      }
+      throw error;
     }
-    throw error;
   }
 }
 
 function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
-  let warnings: string[] = [];
   try {
-    warnings = listAgentDatabaseAdmissionRefusals({ env }).map(
-      (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
-    );
     assertNoRetiredRuntimeStateFiles(resolveStateDir(env), env);
+    return [];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    warnings.push(
+    return [
       error instanceof RetiredStateFormatError && error.cause === undefined
         ? `Retired runtime state was left unchanged for Doctor; no import was attempted. ${message}`
         : `Could not inspect retired runtime state: ${message}; run openclaw doctor`,
-    );
+    ];
   }
-  return warnings;
 }
 
 async function prepareStartupConfig(
   options: StartupConfigPreflightOptions,
+  snapshots: ReturnType<typeof createConfigPreflightSnapshotReader>,
 ): Promise<StartupConfigPreflightResult> {
   let env = process.env;
   const measure: ConfigSnapshotReadMeasure = options.measure ?? (async (_name, run) => await run());
   const readSnapshot = (readOptions?: Pick<ConfigSnapshotReadOptions, "isolateEnv">) =>
-    readConfigPreflightSnapshot({
+    snapshots.read({
       purpose: "startup",
       allowCurrentPluginMetadata: false,
       includePluginMetadata: true,
@@ -149,10 +173,8 @@ async function prepareStartupConfig(
           }
           assertLeaseCurrent();
           if (read.recovery) {
-            const recovered = read.snapshot;
             await read.recovery.apply(() => pluginLease.assertOwned());
             read = await readSnapshot();
-            assertPreflightConfigUnchanged(recovered, read.snapshot);
           }
         },
       );
@@ -160,46 +182,82 @@ async function prepareStartupConfig(
         return result(read);
       }
     }
-    const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
-      await import("./doctor/shared/legacy-webhook-pins.js");
-    const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
-    if (
-      webhookCompletion !== true &&
-      !HISTORICAL_WEBHOOK_CHANNELS.every((id) => Object.hasOwn(webhookCompletion ?? {}, id))
-    ) {
+    const [{ initializeNativeOpenClawStateDatabase }, { isStatePostgres }] = await Promise.all([
+      import("../state/openclaw-state-db.js"),
+      import("../state/openclaw-state-db-engine.js"),
+    ]);
+    await beforeStatePreparation(read.snapshot);
+    assertLeaseCurrent();
+    // Native clients can create a version-zero catalog before the first Gateway.
+    // Finish that producer's bootstrap after read admission releases its snapshot,
+    // before webhook history or other runtime tables are consumed.
+    if (!isStatePostgres()) {
+      initializeNativeOpenClawStateDatabase({ env });
+      const { initializeFreshDaemonRuntimePinMigration } =
+        await import("../infra/state-migrations.daemon-runtime-pins.js");
+      initializeFreshDaemonRuntimePinMigration(env);
+    }
+    const {
+      HISTORICAL_WEBHOOK_CHANNELS,
+      prepareUnwrittenWebhookCompletion,
+      readUnwrittenWebhookCompletion,
+    } = await import("./doctor/shared/legacy-webhook-pins.js");
+    const webhookCompletion =
+      read.snapshot.sourceConfig.meta?.migrations?.webhookListeners ??
+      (await readUnwrittenWebhookCompletion(env));
+    const pendingWebhookChannels =
+      webhookCompletion === true
+        ? []
+        : HISTORICAL_WEBHOOK_CHANNELS.filter((id) => !Object.hasOwn(webhookCompletion ?? {}, id));
+    if (pendingWebhookChannels.length) {
       const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
         const { applyPluginDoctorCompatibilityMigrations } =
           await import("../plugins/doctor-contract-registry.js");
-        return applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
-          config: read.snapshot.sourceConfig,
-          env,
-          pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
-          historicalWebhookListeners: true,
-          startup: true,
-        });
+        // Legacy compatibility inspection is synchronous boot admission, before runtime starts.
+        return withEngineStoreAdmission(() =>
+          applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
+            config: read.snapshot.sourceConfig,
+            env,
+            manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
+            pluginIds: pendingWebhookChannels,
+            historicalWebhookListeners: true,
+            historicalWebhookCompletion: { marker: webhookCompletion },
+            startup: true,
+          }),
+        );
       });
       if (migration.warnings?.length) {
         throw new Error(migration.warnings.join("\n"));
       }
-      if (migration.changes.length) {
+      const completion = prepareUnwrittenWebhookCompletion(read.snapshot, migration, env);
+      if (!completion && migration.changes.length) {
+        const { StartupMaintenanceRequiredError } =
+          await import("../infra/startup-maintenance-required.js");
+        throw new StartupMaintenanceRequiredError(
+          "state-migrations",
+          `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
+        );
+      }
+      if (completion) {
         await beforeStatePreparation(read.snapshot);
-        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
         assertLeaseCurrent();
-        if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
-          const { StartupMaintenanceRequiredError } =
-            await import("../infra/startup-maintenance-required.js");
-          throw new StartupMaintenanceRequiredError(
-            "state-migrations",
-            `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
-          );
+        const { writeConfigMachineStateAsync } =
+          await import("../state/config-machine-state-async.js");
+        try {
+          await writeConfigMachineStateAsync(completion.key, completion.value, { env });
+        } catch (error) {
+          recordStartupMigrationWarnings([
+            `Could not record webhook listener completion; startup will retry on the next boot: ${String(error)}`,
+          ]);
         }
       }
     }
-    const verification = await refreshStartupPluginQuarantine({
-      cfg: read.snapshot.sourceConfig,
-      env,
-      measure,
-    });
+    const verification = await withPluginCache(
+      read.pluginMetadataSnapshot
+        ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
+        : getPluginCache(),
+      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
+    );
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([
       ...readStartupStateWarnings(env),
@@ -223,7 +281,9 @@ async function prepareStartupConfig(
 }
 
 function result(read: ConfigPreflightSnapshotRead) {
+  const selection = read.databaseEngineSelection ?? getDatabaseEngineSelection();
   return {
+    ...(selection ? { databaseEngineSelection: selection } : {}),
     snapshot: read.snapshot,
     baseConfig: read.snapshot.sourceConfig,
     ...(read.pluginMetadataSnapshot ? { pluginMetadataSnapshot: read.pluginMetadataSnapshot } : {}),

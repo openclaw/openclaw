@@ -7,11 +7,11 @@ describe("Browser English loading", () => {
   it.each([
     { surface: "annotation", load: () => import("../components/browser/browser-annotation.ts") },
     {
-      surface: "controller",
-      load: () => import("../components/browser/browser-panel-controller.ts"),
+      surface: "owner",
+      load: () => import("../components/browser/browser-panel-owner.ts"),
     },
     { surface: "client", load: () => import("../components/browser/browser-client.ts") },
-    { surface: "toolbar", load: () => import("../components/browser/browser-panel-render.ts") },
+    { surface: "toolbar", load: () => import("../components/browser/browser-panel-render.tsx") },
   ])(
     "loads fallback copy from the standalone $surface without replacing siblings",
     async ({ load }) => {

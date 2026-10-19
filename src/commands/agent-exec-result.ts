@@ -31,29 +31,6 @@ function projectAgentExecPayload(payload: AgentExecRawPayload): AgentExecPayload
   };
 }
 
-function finalTextFromResult(
-  result: AgentExecRunResult,
-  payloads: AgentExecPayload[],
-  allowMetadataFallback: boolean,
-): string {
-  const payloadText = payloads
-    .filter(
-      (payload) =>
-        payload.isError !== true &&
-        payload.isReasoning !== true &&
-        payload.isCommentary !== true &&
-        typeof payload.text === "string" &&
-        payload.text.trim().length > 0,
-    )
-    .map((payload) => payload.text!.trimEnd())
-    .join("\n");
-  return (
-    payloadText ||
-    (allowMetadataFallback ? result.meta.finalAssistantVisibleText?.trimEnd() : "") ||
-    ""
-  );
-}
-
 /** Classify an embedded result into the strict `agent exec` process contract. */
 export function classifyAgentExecResult(
   result: AgentExecRunResult,
@@ -108,10 +85,24 @@ export function classifyAgentExecResult(
               ? "agent_error"
               : undefined;
   const agentMeta = meta.agentMeta;
+  const payloadText = payloads
+    .filter(
+      (payload) =>
+        payload.isError !== true &&
+        payload.isReasoning !== true &&
+        payload.isCommentary !== true &&
+        typeof payload.text === "string" &&
+        payload.text.trim().length > 0,
+    )
+    .map((payload) => payload.text!.trimEnd())
+    .join("\n");
   return {
     ok: status === "ok",
     status,
-    final: finalTextFromResult(result, payloads, !hasErrorPayload),
+    final:
+      payloadText ||
+      (!hasErrorPayload ? result.meta.finalAssistantVisibleText?.trimEnd() : "") ||
+      "",
     payloads,
     ...(agentMeta?.usage ? { usage: agentMeta.usage } : {}),
     ...(agentMeta?.costUsd !== undefined ? { costUsd: agentMeta.costUsd } : {}),

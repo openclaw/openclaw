@@ -20,7 +20,8 @@ import * as replyRun from "../auto-reply/reply/get-reply-run.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -104,7 +105,10 @@ it("reports an adopted pre-model failure as one visible failure over the Gateway
     expect(accepted.ok).toBe(true);
     expect(accepted.payload).toMatchObject({ runId, status: "started" });
     const failed = await terminal;
-    expect(JSON.stringify(failed)).toContain(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(failed.payload).toMatchObject({
+      state: "error",
+      errorMessage: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    });
     expect(JSON.stringify(failed)).not.toContain(originalError.message);
     const replay = await rpcReq(socket, "chat.send", request);
     expect(replay.ok).toBe(false);
@@ -192,7 +196,10 @@ describe("chat.send quoted model profiles", () => {
   });
 
   afterEach(async () => {
-    await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
+    await captureSessionControllerSettlement({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+    });
     testState.agentConfig = undefined;
     runPreparedReply.mockRestore();
     Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
@@ -215,9 +222,12 @@ describe("chat.send quoted model profiles", () => {
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
+    await captureSessionControllerSettlement({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+    });
     expect(context.logGateway.error).not.toHaveBeenCalled();
-    expect(context.chatAbortControllers.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
   }
 
   async function expectUnchangedModelScope(

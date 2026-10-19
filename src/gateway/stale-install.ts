@@ -148,19 +148,10 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   if (observer.check) {
     return observer.check;
   }
-  // A suspend-and-resume can finish during this read. Do not publish its transient
-  // pointer as a replacement, even if admission is open again when the read settles.
-  let admissionChanged = false;
-  const releaseObservation = onGatewaySuspendAdmissionChange(() => {
-    admissionChanged = true;
-  });
   observer.check = tryReadJson(path.join(root, "dist", "build-info.json"), {
     maxBytes: 16 * 1024,
   })
     .then((value) => {
-      if (admissionChanged) {
-        return;
-      }
       const metadata = asNullableRecord(value);
       const version = normalizeNullableString(metadata?.version);
       const buildId = normalizeNullableString(metadata?.buildId);
@@ -173,7 +164,6 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       }
     })
     .finally(() => {
-      releaseObservation();
       observer.check = undefined;
     });
   return observer.check;

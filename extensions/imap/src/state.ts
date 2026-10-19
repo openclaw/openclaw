@@ -5,6 +5,16 @@ export type ImapClaim = { accountId: string; uid: number; recordedAt: number };
 export type ImapAttempt = { count: number; reason: string };
 export type ImapMessageRing = { messageIds: string[] };
 
+export const MAX_IMAP_UID = 0xffff_ffff;
+
+export function isImapUid(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= MAX_IMAP_UID;
+}
+
+function isCursorUid(value: unknown): value is number {
+  return value === 0 || isImapUid(value);
+}
+
 export function createImapState(runtime: OpenClawPluginApi["runtime"]) {
   return {
     cursors: runtime.state.openKeyedStore<ImapCursor>({
@@ -35,13 +45,36 @@ export async function initializeImapCursor(
   state: ImapWatcherState,
   accountId: string,
   uidValidity: string,
-  uidNext: number,
-): Promise<{ kind: "baseline" | "reset" | "resume"; cursor: ImapCursor }> {
+  resolveBaseline: () => Promise<number>,
+  isActive: () => boolean,
+): Promise<{ kind: "baseline" | "reset" | "resume"; cursor: ImapCursor } | undefined> {
+  // ImapFlow supports UIDVALIDITY values wider than message UIDs. Preserve the
+  // mailbox identity as a decimal string without narrowing its range or precision.
+  if (!/^[1-9]\d*$/u.test(uidValidity)) {
+    throw new Error("imap: invalid mailbox UIDVALIDITY");
+  }
   const existing = await state.cursors.lookup(accountId);
+  if (!isActive()) {
+    return undefined;
+  }
   if (existing?.uidValidity === uidValidity) {
+    if (!isCursorUid(existing.lastSeenUid)) {
+      throw new Error("imap: invalid persisted cursor UID");
+    }
     return { kind: "resume", cursor: existing };
   }
-  const cursor = { uidValidity, lastSeenUid: Math.max(0, uidNext - 1), updatedAt: Date.now() };
+  // A changed UIDVALIDITY invalidates the old UID space, including any invalid
+  // UID saved by an older initializer. Only the new baseline must be usable.
+  // Resolving a new baseline may perform I/O. A resumed cursor must never depend
+  // on that lookup or skip mail that arrived while the watcher was offline.
+  const lastSeenUid = await resolveBaseline();
+  if (!isActive()) {
+    return undefined;
+  }
+  if (!isCursorUid(lastSeenUid)) {
+    throw new Error("imap: invalid baseline UID");
+  }
+  const cursor = { uidValidity, lastSeenUid, updatedAt: Date.now() };
   await state.cursors.register(accountId, cursor);
   return { kind: existing ? "reset" : "baseline", cursor };
 }

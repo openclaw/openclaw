@@ -39,12 +39,17 @@ export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityP
 
 /** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
 export function createSessionIdentityProjection() {
+  let revision = {};
   let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner>>();
   let participants = new WeakMap<SessionEntry, ReadonlyMap<string, SessionParticipant>>();
   let people = new WeakMap<SessionEntry, readonly SessionPerson[]>();
   let involvement = new WeakMap<SessionEntry, Map<string, SessionProfileInvolvement>>();
   return {
+    get revision() {
+      return revision;
+    },
     invalidate() {
+      revision = {};
       owners = new WeakMap();
       participants = new WeakMap();
       people = new WeakMap();
@@ -53,23 +58,14 @@ export function createSessionIdentityProjection() {
     involvement(
       this: void,
       entry: SessionEntry,
-      profileId: string,
-      profiles: Parameters<typeof projectSessionProfileInvolvement>[2],
-    ) {
+      profiles: Parameters<typeof projectSessionProfileInvolvements>[1],
+    ): ReadonlyMap<string, SessionProfileInvolvement> {
       let projected = involvement.get(entry);
       if (!projected) {
-        projected = new Map();
-        for (const [id, state] of Object.entries(entry.profileInvolvement?.profiles ?? {})) {
-          const canonical = projectSessionParticipant({ type: "profile", id }, profiles).identity
-            .id;
-          const merged = mergeSessionProfileInvolvement([projected.get(canonical), state]);
-          if (merged) {
-            projected.set(canonical, merged);
-          }
-        }
+        projected = projectSessionProfileInvolvements(entry, profiles);
         involvement.set(entry, projected);
       }
-      return projected.get(profileId);
+      return projected;
     },
     owner(this: void, ...args: Parameters<typeof projectSessionOwner>) {
       const [entry] = args;
@@ -147,18 +143,19 @@ export function projectSessionParticipant(
 }
 
 /** Resolve merged profiles without rewriting personal choices in other agent stores. */
-export function projectSessionProfileInvolvement(
+export function projectSessionProfileInvolvements(
   entry: SessionEntry,
-  profileId: string,
   profiles: Map<string, SessionActorProfileIdentity | undefined>,
-): SessionProfileInvolvement | undefined {
-  return mergeSessionProfileInvolvement(
-    Object.entries(entry.profileInvolvement?.profiles ?? {}).flatMap(([id, state]) =>
-      projectSessionParticipant({ type: "profile", id }, profiles).identity.id === profileId
-        ? [state]
-        : [],
-    ),
-  );
+): Map<string, SessionProfileInvolvement> {
+  const projected = new Map<string, SessionProfileInvolvement>();
+  for (const [id, state] of Object.entries(entry.profileInvolvement?.profiles ?? {})) {
+    const canonical = projectSessionParticipant({ type: "profile", id }, profiles).identity.id;
+    const merged = mergeSessionProfileInvolvement([projected.get(canonical), state]);
+    if (merged) {
+      projected.set(canonical, merged);
+    }
+  }
+  return projected;
 }
 
 export function projectSessionActor(

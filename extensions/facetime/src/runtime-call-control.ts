@@ -9,8 +9,8 @@ import { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
 import {
   FaceTimeHelperAmbiguousError,
+  assertFaceTimeNativeAction,
   projectCompleteFaceTimeAbsence,
-  projectFaceTimeNativeAction,
   type HelperActionResult,
 } from "./helper-results.js";
 import type { FaceTimeHelperSocketServer } from "./helper-rpc.js";
@@ -48,7 +48,7 @@ export function createFaceTimeCallControl(params: {
           allowClosing: true,
           action: async () => await request.run(candidate),
         });
-        projectFaceTimeNativeAction(request.action, result);
+        assertFaceTimeNativeAction(request.action, result);
         request.call.promoteCarrierCallUUID(candidate);
         return result;
       } catch (error) {
@@ -113,14 +113,14 @@ export function createFaceTimeCallControl(params: {
     });
     call.lastHelperAction = mutedResult;
     retainHelperResultPeers(call, mutedResult);
-    projectFaceTimeNativeAction("unmute", mutedResult);
+    assertFaceTimeNativeAction("unmute", mutedResult);
     const transmissionResult = await call.runCarrierCommand({
       generation,
       action: async () => await params.helper.startTransmission(call.carrierCallUUID),
     });
     call.lastHelperAction = transmissionResult;
     retainHelperResultPeers(call, transmissionResult);
-    projectFaceTimeNativeAction("activate", transmissionResult);
+    assertFaceTimeNativeAction("activate", transmissionResult);
     call.markCarrierActive(generation);
     if (call.audioTransport) {
       call.audioTransport.processInputVerified = true;
@@ -136,26 +136,13 @@ export function createFaceTimeCallControl(params: {
       call.carrierHangupRetryTimer = undefined;
     }
     call.beginClosing();
-    await call.audioRouting?.catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] audio routing cancellation for active call: ${formatErrorMessage(error)}`,
-      );
-    });
-    await call.talkStarting?.catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] talk startup cancellation for active call: ${formatErrorMessage(error)}`,
-      );
-    });
-    await call.talk?.close(reason).catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] talk close ignored for active call: ${formatErrorMessage(error)}`,
-      );
-    });
-    await call.talkActivation?.catch((error: unknown) => {
-      params.logger.debug?.(
-        `[facetime] talk activation cancellation for active call: ${formatErrorMessage(error)}`,
-      );
-    });
+    const logCleanupFailure = (stage: string) => (error: unknown) => {
+      params.logger.debug?.(`[facetime] ${stage} for active call: ${formatErrorMessage(error)}`);
+    };
+    await call.audioRouting?.catch(logCleanupFailure("audio routing cancellation"));
+    await call.talkStarting?.catch(logCleanupFailure("talk startup cancellation"));
+    await call.talk?.close(reason).catch(logCleanupFailure("talk close ignored"));
+    await call.talkActivation?.catch(logCleanupFailure("talk activation cancellation"));
     call.audioReady = false;
     call.audioTransport = undefined;
     params.calls.close(call);
@@ -196,34 +183,22 @@ export function createFaceTimeCallControl(params: {
             return undefined;
           }
         };
-        try {
-          const muted = await runCarrierActionAcrossAliases({
-            call,
-            generation,
-            action: "safe-mute",
-            run: async (callUUID) => await params.helper.safetyMute(callUUID),
-          });
-          retainHelperResultPeers(call, muted);
-        } catch (error) {
-          if (readCompleteAbsenceGeneration(error) === undefined) {
-            params.logger.warn(
-              `[facetime] failed to confirm carrier safety mute: ${formatErrorMessage(error)}`,
-            );
-          }
-        }
-        try {
-          const leave = await runCarrierActionAcrossAliases({
-            call,
-            generation,
-            action: "terminate",
-            run: async (callUUID) => await params.helper.leaveCall(callUUID),
-          });
-          retainHelperResultPeers(call, leave);
-        } catch (error) {
-          if (readCompleteAbsenceGeneration(error) === undefined) {
-            params.logger.warn(
-              `[facetime] carrier termination request failed: ${formatErrorMessage(error)}`,
-            );
+        for (const [action, method, failure] of [
+          ["safe-mute", "safetyMute", "failed to confirm carrier safety mute"],
+          ["terminate", "leaveCall", "carrier termination request failed"],
+        ] as const) {
+          try {
+            const result = await runCarrierActionAcrossAliases({
+              call,
+              generation,
+              action,
+              run: async (callUUID) => await params.helper[method](callUUID),
+            });
+            retainHelperResultPeers(call, result);
+          } catch (error) {
+            if (readCompleteAbsenceGeneration(error) === undefined) {
+              params.logger.warn(`[facetime] ${failure}: ${formatErrorMessage(error)}`);
+            }
           }
         }
         // Action replies cover connected helpers only. Closure also requires
@@ -327,7 +302,7 @@ export function createFaceTimeCallControl(params: {
     } catch (error) {
       await call.talk?.suspendMedia("runtime-stop-carrier-unconfirmed");
       throw new Error(
-        `FaceTime fail-closed carrier termination failed: ${formatErrorMessage(error)}; carrier closure remains unconfirmed`,
+        `FaceTime safety shutdown failed: ${formatErrorMessage(error)}; carrier closure remains unconfirmed`,
         { cause: error },
       );
     }
@@ -393,10 +368,8 @@ export function createFaceTimeCallControl(params: {
     if (!call.talkActivation) {
       call.talkActivation = (async () => {
         await call.talk?.readyForAudio();
-        call.assertCurrent(generation);
         call.markModelReady(generation);
         await enableCallAudio(call);
-        call.assertCurrent(generation);
         call.markModelActive(generation);
         call.talk?.activate();
       })();

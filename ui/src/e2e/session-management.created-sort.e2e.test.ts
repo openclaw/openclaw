@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -57,6 +58,9 @@ suite.define(() => {
       await captureUiProof(suite, page, "sidebar-created-sort-before-refresh.png");
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
+      await page.clock.install();
+      await pauseVirtualClock(page);
+
       await gateway.setSessionsListResponse(sessionsListResponse([...olderRows, newestRow]));
       await gateway.emitGatewayEvent("sessions.changed", {
         key: newestKey,
@@ -65,9 +69,12 @@ suite.define(() => {
         sessionKey: newestKey,
         updatedAt: newestRow.updatedAt,
       });
+      // Cross the full refresh window and deliver its nested mock response timer.
+      await page.clock.runFor(5_001);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(initialListCount);
+      await page.clock.resume();
       await expect
         .poll(() =>
           rows.evaluateAll((elements) =>

@@ -36,15 +36,11 @@ export function listMessageReceiptSourceTargets(value: unknown): string[] {
     const target = asOptionalRecord(record.target);
     const ids = [
       target?.id,
-      ...(
-        [
-          "chatId",
-          "channelId",
-          "roomId",
-          "conversationId",
-          "toJid",
-        ] as const satisfies readonly (keyof MessageReceiptSourceResult)[]
-      ).map((key) => record[key]),
+      record.chatId,
+      record.channelId,
+      record.roomId,
+      record.conversationId,
+      record.toJid,
     ];
     for (const id of ids) {
       const normalized = normalizeOptionalString(id);
@@ -52,7 +48,7 @@ export function listMessageReceiptSourceTargets(value: unknown): string[] {
         targets.add(normalized);
       }
     }
-    pending.push(record.receipt, record.raw, record.parts);
+    pending.push(record.receipt, record.raw, record.parts, record.sourceResults);
   }
   return [...targets];
 }
@@ -145,6 +141,21 @@ export function createMessageReceiptFromOutboundResults(params: {
       : {}),
     sentAt: params.sentAt ?? firstNestedReceipt?.sentAt ?? Date.now(),
     raw: params.results,
+    sourceResults: params.results.flatMap((result) =>
+      result.outcome !== "not_sent" && result.receipt?.sourceResults?.length
+        ? result.receipt.sourceResults.map((source) => ({
+            ...(source.channel !== undefined ? { channel: source.channel } : {}),
+            ...(source.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
+            messageId: source.messageId ?? "",
+          }))
+        : [
+            {
+              ...(result.channel ? { channel: result.channel } : {}),
+              ...(result.outcome === "not_sent" ? { outcome: "not_sent" as const } : {}),
+              messageId: resolveReceiptSourceId(result) ?? "",
+            },
+          ],
+    ),
   };
 }
 
@@ -155,11 +166,8 @@ export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[]
 
 /** Resolves the explicit primary platform id, falling back to the first unique receipt id. */
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {
-  const primary = normalizeOptionalString(receipt.primaryPlatformMessageId);
-  if (primary) {
-    return primary;
-  }
   return (
+    normalizeOptionalString(receipt.primaryPlatformMessageId) ??
     listMessageReceiptPlatformIds(receipt)[0] ??
     receipt.parts.map((part) => normalizeOptionalString(part.platformMessageId)).find(Boolean)
   );

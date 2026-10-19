@@ -56,19 +56,44 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/lib/device-pair-setup.ts":
+      // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
+      return "device-pair-setup-runtime";
+    case "ui/src/app/app-root-focus.ts":
+    case "ui/src/app/app-root-focus-view.tsx":
+      return "focus-dashboard-runtime";
+    case "ui/src/components/solid/gateway-url-confirmation.tsx":
+      // A pending target owns this dialog; ordinary boot never requests it.
+      return "gateway-confirmation-runtime";
+    case "ui/src/pages/chat/route-entry.ts":
+      // Pending New Session previews must render while the Chat route entry waits.
+      return "chat-route-entry";
+    case "ui/src/pages/devices/devices-page.tsx":
+      return "devices-page";
+    case "ui/src/pages/plugins/plugins-page.tsx":
+      return "plugins-page";
+    case "ui/src/pages/cron/cron-page.tsx":
+      return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
-    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
+    case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
+    case "ui/src/components/solid/copy-button.tsx":
+    case "ui/src/components/copy-button-state.ts":
+      // Login recovery also copies commands, before any Chat route can load.
+      return "copy-button-runtime";
     case "ui/src/components/login-gate.ts":
+    case "ui/src/components/login-gate-solid.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
     case "ui/src/lib/gateway-secret-shape.ts":
       return "login-runtime";
-    case "ui/src/components/sidebar-update-card.ts":
+    case "ui/src/components/sidebar-update-card.tsx":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
+    case "ui/src/components/markdown-parser.ts":
+      return "markdown-runtime";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";
@@ -90,33 +115,21 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "chat-transcript-styles";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "lit") ||
-    moduleIdIncludesPackage(id, "lit-html") ||
-    moduleIdIncludesPackage(id, "@lit/reactive-element")
-  ) {
-    // Cache and async content directives have only deferred consumers. Keep
-    // their implementation and helpers with those consumers, outside startup.
-    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
-      ? undefined
-      : "lit-runtime";
+  // Code highlighting is requested by the first completed code block; it must
+  // not share the parser/sanitizer chunk used by ordinary transcript prose.
+  if (moduleIdIncludesPackage(id, "highlight.js")) {
+    return "markdown-highlight-runtime";
   }
-
-  if (
-    moduleIdIncludesPackage(id, "highlight.js") ||
-    moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "dompurify") ||
-    moduleIdIncludesPackage(id, "entities") ||
-    moduleIdIncludesPackage(id, "linkify-it") ||
-    moduleIdIncludesPackage(id, "mdurl") ||
-    moduleIdIncludesPackage(id, "punycode.js") ||
-    moduleIdIncludesPackage(id, "uc.micro")
-  ) {
+  if (moduleIdIncludesPackage(id, "dompurify")) {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (moduleIdIncludesPackage(id, "zod")) {
     return "config-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "json5")) {
+    // Config parsing loads only when a config consumer warms it.
+    return "json5-runtime";
   }
 
   if (moduleIdIncludesPackage(id, "libphonenumber-js")) {
@@ -142,13 +155,19 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         priority: 20,
       },
       {
-        name: (id: string) =>
-          normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+        name: "control-ui-core",
+        test: (id: string) => normalizeModuleId(id).includes("/ui/src/"),
         tags: ["$initial"] as ["$initial"],
         priority: 10,
-        // Keep the boot graph in fewer partitions; the performance checker owns
-        // the compressed-size and request budgets for the emitted chunks.
         maxSize: 1024 * 1024,
+      },
+      {
+        name: "control-ui-foundation",
+        test: (id: string) => !normalizeModuleId(id).includes("/ui/src/"),
+        tags: ["$initial"] as ["$initial"],
+        priority: 10,
+        // Already-initial dependencies compress well; the UI source-size cap
+        // fragmented them into tiny requests. The asset gzip budget bounds them.
       },
       ...(options.includeBootGroups === false
         ? []
@@ -164,8 +183,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
-                minSize: 16 * 1024,
-                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
+                // Keep disclosure JSX in its chat partition instead of splitting
+                // compression dictionaries. Shipped byte/request budgets still apply.
+                minSize: 128 * 1024,
+                maxSize: (route === "shared" ? 1280 : route === "chat" ? 1440 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {
@@ -174,7 +195,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               );
               return {
                 name: `control-ui-boot-${route}-styles`,
-                test: (id: string) => styles.has(controlUiBootManifestKey(id)),
+                test: (id: string) =>
+                  !/[?&]inline(?:[=&]|$)/u.test(id) && styles.has(controlUiBootManifestKey(id)),
                 // One stylesheet per measured route set, without per-page JS facades.
                 // Keep it separate from core CSS to preserve its existing size ceiling.
                 priority: 9,

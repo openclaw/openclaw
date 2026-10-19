@@ -1,14 +1,34 @@
 import path from "node:path";
+import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   isPathInside,
   readLocalFileFromRoots,
   resolveLocalPathFromRootsSync,
 } from "../../infra/fs-safe.js";
+import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveSandboxSkillRuntimeInputs } from "../embedded-agent-runner/sandbox-skills.js";
 import { MAX_SKILL_INSTRUCTION_BYTES, type InstalledSkill } from "../installed-skill-catalog.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import { cloneHostSnapshot } from "./host-snapshot.js";
+
+/** Carry the admitted pin's prepared entries through awaited tool construction. */
+export async function prepareHostSkillLibraryResources(
+  selections: readonly SkillLibrarySelection[],
+  assertActive: () => void,
+) {
+  const context = captureOpenClawStateReadWorkerContext();
+  // Retain exact entries so cache eviction cannot select the synchronous SDK fallback.
+  const entries = cloneHostSnapshot(
+    await prepareSkillLibrarySelection(selections, { env: context.environment }, assertActive),
+  );
+  return {
+    entries,
+    assertCurrent: assertActive,
+  };
+}
 
 /** Catalog identity is host-owned; readable paths follow the effective tool placement. */
 export function bindHostSkillCatalog(params: {

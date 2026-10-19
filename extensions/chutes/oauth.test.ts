@@ -1,12 +1,11 @@
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { jsonResponse } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { loginChutes, refreshChutesOAuthCredential } from "./oauth.js";
+import { jsonResponse, requestUrl } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { loginChutes, refreshChutesOAuthCredential as refreshChutes } from "./oauth.js";
 
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const REDIRECT_URI = "http://127.0.0.1:1456/oauth-callback";
-
 const waitForLocalOAuthCallbackMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
@@ -18,32 +17,32 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function boundedErrorResponse(body: string, status = 500) {
-  const cancel = vi.fn();
+function chunkedResponse(body: string | Uint8Array, chunks: number | null, status: number) {
+  const chunk = typeof body === "string" ? new TextEncoder().encode(body) : body;
+  const trace = { bytesPulled: 0, cancel: vi.fn() };
   const response = new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode(body));
+        if (chunks === null) {
+          controller.enqueue(chunk);
+        }
       },
-      cancel,
+      pull(controller) {
+        if (chunks === null) {
+          return; // Leave the error stream open until cancellation.
+        }
+        if (trace.bytesPulled >= chunks * chunk.length) {
+          controller.close();
+          return;
+        }
+        trace.bytesPulled += chunk.length;
+        controller.enqueue(chunk);
+      },
+      cancel: trace.cancel,
     }),
-    { status },
+    { status, headers: { "Content-Type": "application/json" } },
   );
-  const releaseLock = vi.spyOn(ReadableStreamDefaultReader.prototype, "releaseLock");
-  const text = vi
-    .spyOn(response, "text")
-    .mockRejectedValue(new Error("response.text() should not be called"));
-  return { response, cancel, releaseLock, text };
-}
-
-function fetchInputUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.href;
-  }
-  return input.url;
+  return { response, trace };
 }
 
 function oauthFetch({
@@ -54,14 +53,13 @@ function oauthFetch({
   userInfo?: (init?: RequestInit) => Promise<Response>;
 }) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    switch (fetchInputUrl(input)) {
-      case CHUTES_TOKEN_ENDPOINT:
-        return token;
-      case CHUTES_USERINFO_ENDPOINT:
-        return await userInfo(init);
-      default:
-        return new Response("not found", { status: 404 });
+    const url = requestUrl(input);
+    if (url === CHUTES_TOKEN_ENDPOINT) {
+      return token;
     }
+    return url === CHUTES_USERINFO_ENDPOINT
+      ? await userInfo(init)
+      : new Response("not found", { status: 404 });
   });
 }
 
@@ -81,22 +79,11 @@ function rejectWhenAborted(init?: RequestInit): Promise<Response> {
   });
 }
 
-function useImmediateOAuthDeadline() {
-  return vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
-    expect(delay).toBe(30_000);
-    return AbortSignal.abort(new DOMException("OAuth request timed out", "TimeoutError"));
-  });
-}
-
 function loginWithFetch(fetchFn: typeof fetch, signal?: AbortSignal) {
   vi.stubGlobal("fetch", fetchFn);
   let state = "";
   return loginChutes({
-    app: {
-      clientId: "cid_test",
-      redirectUri: REDIRECT_URI,
-      scopes: ["openid"],
-    },
+    app: { clientId: "cid_test", redirectUri: REDIRECT_URI, scopes: ["openid"] },
     manual: true,
     onAuth: async ({ url }) => {
       state = new URL(url).searchParams.get("state") ?? "";
@@ -106,21 +93,23 @@ function loginWithFetch(fetchFn: typeof fetch, signal?: AbortSignal) {
   });
 }
 
-function createStoredCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
-  return {
-    type: "oauth",
-    provider: "chutes",
-    access: "at_old",
-    refresh: "rt_old",
-    expires: 1_000_000,
-    clientId: "cid_stored",
-    email: "fred@example.com",
-    displayName: "Fred",
-    accountId: "acct_123",
-    copyToAgents: true,
-    ...overrides,
-  };
+function refreshWithFetch(fetchFn: typeof fetch, overrides: Partial<OAuthCredential> = {}) {
+  vi.stubGlobal("fetch", fetchFn);
+  return refreshChutes({ ...stored, ...overrides });
 }
+
+const stored: OAuthCredential = {
+  type: "oauth",
+  provider: "chutes",
+  access: "at_old",
+  refresh: "rt_old",
+  expires: 1_000_000,
+  clientId: "cid_stored",
+  email: "fred@example.com",
+  displayName: "Fred",
+  accountId: "acct_123",
+  copyToAgents: true,
+};
 
 afterEach(() => {
   waitForLocalOAuthCallbackMock.mockReset();
@@ -129,261 +118,161 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("chutes plugin OAuth", () => {
-  it("uses an IPv6 loopback callback without changing the OAuth redirect URI", async () => {
-    const redirectUri = "http://[::1]:1456/oauth-callback";
-    waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "code_test", state: "state_test" });
-    const fetchFn = oauthFetch({});
-    vi.stubGlobal("fetch", fetchFn);
-
-    await expect(
-      loginChutes({
-        app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
-        onAuth: vi.fn(async () => {}),
-        onPrompt: vi.fn(async () => {
-          throw new Error("IPv6 callback must not require manual fallback");
-        }),
+it("uses an IPv6 loopback callback without changing the OAuth redirect URI", async () => {
+  const redirectUri = "http://[::1]:1456/oauth-callback";
+  waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "code_test", state: "state_test" });
+  const fetchFn = oauthFetch({});
+  vi.stubGlobal("fetch", fetchFn);
+  await expect(
+    loginChutes({
+      app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
+      onAuth: vi.fn(async () => {}),
+      onPrompt: vi.fn(async () => {
+        throw new Error("IPv6 callback must not require manual fallback");
       }),
-    ).resolves.toMatchObject({ access: "at_123", refresh: "rt_123" });
-    expect(waitForLocalOAuthCallbackMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hostname: "::1", port: 1456, redirectUri }),
-    );
-    const tokenRequest = fetchFn.mock.calls[0]?.[1]?.body;
-    expect(tokenRequest).toBeInstanceOf(URLSearchParams);
-    expect((tokenRequest as URLSearchParams).get("redirect_uri")).toBe(redirectUri);
-  });
+    }),
+  ).resolves.toMatchObject({ access: "at_123", refresh: "rt_123" });
+  expect(waitForLocalOAuthCallbackMock).toHaveBeenCalledWith(
+    expect.objectContaining({ hostname: "::1", port: 1456, redirectUri }),
+  );
+  const tokenRequest = fetchFn.mock.calls[0]?.[1]?.body;
+  expect(tokenRequest).toBeInstanceOf(URLSearchParams);
+  expect((tokenRequest as URLSearchParams).get("redirect_uri")).toBe(redirectUri);
+});
 
-  it("rejects unsafe token lifetimes before storing credentials", async () => {
-    const fetchFn = oauthFetch({
-      token: new Response(
-        '{"access_token":"at_unsafe","refresh_token":"rt_unsafe","expires_in":1e309}',
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    });
-
-    await expect(loginWithFetch(fetchFn)).rejects.toThrow(
-      "Chutes token exchange returned invalid expires_in",
-    );
-  });
-
-  it("bounds token exchange error bodies without requiring response.text()", async () => {
-    const leakedClientSecret = "oauth-client-secret-1234567890";
-    const errorResponse = boundedErrorResponse(
-      `${`client_secret=${leakedClientSecret}&reason=unavailable `.repeat(1024)}tail-marker`,
-      502,
-    );
-    const fetchFn = oauthFetch({ token: errorResponse.response });
-
-    let error: unknown;
-    try {
-      await loginWithFetch(fetchFn);
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toBeInstanceOf(Error);
-    const message = (error as Error).message;
-    expect(error).toMatchObject({ name: "ProviderHttpError", status: 502 });
-    expect(message).toContain("Chutes token exchange failed (502): client_secret=");
-    expect(message).not.toContain(leakedClientSecret);
-    expect(message).not.toContain("tail-marker");
-    expect((error as { errorBody?: string }).errorBody).not.toContain(leakedClientSecret);
-    expect(errorResponse.text).not.toHaveBeenCalled();
-    expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
-    expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
-    expect(fetchFn.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-  });
-
-  it("cancels oversized token exchange JSON body via the 16 MiB provider cap", async () => {
-    const ONE_MIB = 1024 * 1024;
-    const TOTAL_CHUNKS = 32;
-    const chunk = new Uint8Array(ONE_MIB);
-
-    let bytesPulled = 0;
-    let canceled = false;
-    const oversizedTokenJson = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
-            controller.close();
-            return;
-          }
-          bytesPulled += chunk.length;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
+it("rejects unsafe token lifetimes before storing credentials", async () => {
+  const fetchFn = oauthFetch({
+    token: new Response(
+      '{"access_token":"at_unsafe","refresh_token":"rt_unsafe","expires_in":1e309}',
       { status: 200, headers: { "Content-Type": "application/json" } },
-    );
-
-    const fetchFn = oauthFetch({
-      token: oversizedTokenJson,
-      userInfo: async () => jsonResponse({ login: "test", name: "Test" }),
-    });
-
-    await expect(loginWithFetch(fetchFn)).rejects.toThrow(
-      /Chutes token exchange: JSON response exceeds 16777216 bytes/,
-    );
-
-    expect(canceled).toBe(true);
-    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+    ),
   });
+  await expect(loginWithFetch(fetchFn)).rejects.toThrow(
+    "Chutes token exchange returned invalid expires_in",
+  );
+});
 
-  it("uses the fixed deadline for token exchange requests", async () => {
-    const timeoutSpy = useImmediateOAuthDeadline();
-    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+it("bounds token exchange error bodies without requiring response.text()", async () => {
+  const leakedClientSecret = "oauth-client-secret-1234567890";
+  const stream = chunkedResponse(
+    `${`client_secret=${leakedClientSecret}&reason=unavailable `.repeat(1024)}tail-marker`,
+    null,
+    502,
+  );
+  const releaseLock = vi.spyOn(ReadableStreamDefaultReader.prototype, "releaseLock");
+  const text = vi.spyOn(stream.response, "text").mockRejectedValue(new Error("unexpected text()"));
+  const fetchFn = oauthFetch({ token: stream.response });
+  const error = await loginWithFetch(fetchFn).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(Error);
+  const message = (error as Error).message;
+  expect(error).toMatchObject({ name: "ProviderHttpError", status: 502 });
+  expect(message).toContain("Chutes token exchange failed (502): client_secret=");
+  expect(message).not.toContain(leakedClientSecret);
+  expect(message).not.toContain("tail-marker");
+  expect((error as { errorBody?: string }).errorBody).not.toContain(leakedClientSecret);
+  expect(text).not.toHaveBeenCalled();
+  expect(stream.trace.cancel).toHaveBeenCalledTimes(1);
+  expect(releaseLock).toHaveBeenCalledTimes(1);
+  expect(fetchFn.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+});
+
+it("cancels oversized token exchange JSON body via the 16 MiB provider cap", async () => {
+  const oversizedTokenJson = chunkedResponse(new Uint8Array(1024 * 1024), 32, 200);
+  const fetchFn = oauthFetch({
+    token: oversizedTokenJson.response,
+    userInfo: async () => jsonResponse({ login: "test", name: "Test" }),
+  });
+  await expect(loginWithFetch(fetchFn)).rejects.toThrow(
+    /Chutes token exchange: JSON response exceeds 16777216 bytes/,
+  );
+  expect(oversizedTokenJson.trace.cancel).toHaveBeenCalledOnce();
+  expect(oversizedTokenJson.trace.bytesPulled).toBeLessThan(32 * 1024 * 1024);
+});
+
+it("keeps issued tokens when userinfo exceeds the fixed deadline", async () => {
+  const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+    expect(delay).toBe(30_000);
+    return AbortSignal.abort(new DOMException("OAuth request timed out", "TimeoutError"));
+  });
+  const fetchFn = oauthFetch({ userInfo: rejectWhenAborted });
+  const credentials = await loginWithFetch(fetchFn);
+  expect(credentials).toMatchObject({
+    access: "at_123",
+    refresh: "rt_123",
+    email: undefined,
+    accountId: undefined,
+  });
+  expect(timeoutSpy).toHaveBeenCalledTimes(2);
+});
+
+it("cancels the userinfo error response body when profile lookup fails", async () => {
+  const userInfoResponse = chunkedResponse("temporarily unavailable", 1, 503);
+  const fetchFn = oauthFetch({ userInfo: async () => userInfoResponse.response });
+  const credentials = await loginWithFetch(fetchFn);
+  expect(userInfoResponse.trace.cancel).toHaveBeenCalledOnce();
+  expect(credentials).toMatchObject({ access: "at_123", email: undefined, accountId: undefined });
+});
+
+it("cancels authentication when the caller aborts during userinfo", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled by caller");
+  const fetchFn = oauthFetch({
+    userInfo: async (init) => {
+      controller.abort(reason);
       return await rejectWhenAborted(init);
-    });
-
-    await expect(loginWithFetch(fetchFn)).rejects.toMatchObject({ name: "TimeoutError" });
-    expect(timeoutSpy).toHaveBeenCalledOnce();
+    },
   });
+  await expect(loginWithFetch(fetchFn, controller.signal)).rejects.toBe(reason);
+});
 
-  it("keeps issued tokens when userinfo exceeds the fixed deadline", async () => {
-    const timeoutSpy = useImmediateOAuthDeadline();
-    const fetchFn = oauthFetch({ userInfo: rejectWhenAborted });
-
-    const credentials = await loginWithFetch(fetchFn);
-
-    expect(credentials).toMatchObject({ access: "at_123", refresh: "rt_123" });
-    expect(credentials.email).toBeUndefined();
-    expect(credentials.accountId).toBeUndefined();
-    expect(timeoutSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("cancels the userinfo error response body when profile lookup fails", async () => {
-    let canceled = false;
-    let bytesPulled = 0;
-    const userInfoResponse = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (bytesPulled > 0) {
-            controller.close();
-            return;
-          }
-          bytesPulled += 1;
-          controller.enqueue(new TextEncoder().encode("temporarily unavailable"));
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 503 },
+it.each([
+  { clientId: "cid_stored", refresh: "rt_new", secret: "secret_env" },
+  { clientId: undefined, refresh: undefined, secret: "" },
+])("refreshes $clientId / $refresh", async ({ clientId, refresh, secret }) => {
+  vi.stubEnv("CHUTES_CLIENT_ID", "cid_env");
+  vi.stubEnv("CHUTES_CLIENT_SECRET", secret);
+  const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+  const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(requestUrl(input)).toBe(CHUTES_TOKEN_ENDPOINT);
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("content-type")).toBe(
+      "application/x-www-form-urlencoded",
     );
-    const fetchFn = oauthFetch({ userInfo: async () => userInfoResponse });
-
-    const credentials = await loginWithFetch(fetchFn);
-
-    expect(canceled).toBe(true);
-    expect(credentials.access).toBe("at_123");
-    expect(credentials.email).toBeUndefined();
-    expect(credentials.accountId).toBeUndefined();
-  });
-
-  it("cancels authentication when the caller aborts during userinfo", async () => {
-    const controller = new AbortController();
-    const reason = new Error("cancelled by caller");
-    const fetchFn = oauthFetch({
-      userInfo: async (init) => {
-        controller.abort(reason);
-        return await rejectWhenAborted(init);
-      },
+    const body = init?.body as URLSearchParams;
+    expect(Object.fromEntries(body)).toEqual({
+      grant_type: "refresh_token",
+      client_id: clientId ?? "cid_env",
+      refresh_token: "rt_old",
+      ...(secret ? { client_secret: secret } : {}),
     });
-
-    await expect(loginWithFetch(fetchFn, controller.signal)).rejects.toBe(reason);
+    return jsonResponse({ access_token: "at_new", refresh_token: refresh, expires_in: 1800 });
   });
-
-  it("refreshes through the Chutes token endpoint and preserves credential metadata", async () => {
-    vi.stubEnv("CHUTES_CLIENT_ID", "cid_env");
-    vi.stubEnv("CHUTES_CLIENT_SECRET", "secret_env");
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(fetchInputUrl(input)).toBe(CHUTES_TOKEN_ENDPOINT);
-      expect(init?.method).toBe("POST");
-      expect(new Headers(init?.headers).get("content-type")).toBe(
-        "application/x-www-form-urlencoded",
-      );
-      const body = init?.body as URLSearchParams;
-      expect(Object.fromEntries(body)).toEqual({
-        grant_type: "refresh_token",
-        client_id: "cid_stored",
-        refresh_token: "rt_old",
-        client_secret: "secret_env",
-      });
-      return jsonResponse({
-        access_token: "at_new",
-        refresh_token: "rt_new",
-        expires_in: 1800,
-      });
-    });
-    const credential = createStoredCredential();
-    const now = 2_000_000;
-
-    vi.stubGlobal("fetch", fetchFn);
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    await expect(refreshChutesOAuthCredential(credential)).resolves.toEqual({
-      ...credential,
-      access: "at_new",
-      refresh: "rt_new",
-      expires: now + 1800 * 1000 - 5 * 60 * 1000,
-    });
-    expect(timeoutSpy).toHaveBeenCalledOnce();
-    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-    expect(fetchFn.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  const now = 2_000_000;
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  await expect(refreshWithFetch(fetchFn, { clientId })).resolves.toEqual({
+    ...stored,
+    clientId: clientId ?? "cid_env",
+    access: "at_new",
+    refresh: refresh ?? "rt_old",
+    expires: now + 1800 * 1000 - 5 * 60 * 1000,
   });
+  expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(30_000);
+  expect(fetchFn.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+});
 
-  it("falls back to CHUTES_CLIENT_ID when the credential has no client id", async () => {
-    vi.stubEnv("CHUTES_CLIENT_ID", "cid_env");
-    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = init?.body;
-      if (!(body instanceof URLSearchParams)) {
-        throw new Error("expected URL-encoded Chutes refresh request");
-      }
-      expect(body.get("client_id")).toBe("cid_env");
-      return jsonResponse({ access_token: "at_new", expires_in: 1800 });
-    });
+it.each<[Partial<OAuthCredential>, string]>([
+  [{ refresh: "" }, "Chutes OAuth credential is missing refresh token"],
+  [
+    { clientId: undefined },
+    "Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).",
+  ],
+])("rejects invalid refresh credentials: %j", async (overrides, message) => {
+  vi.stubEnv("CHUTES_CLIENT_ID", "");
+  await expect(refreshChutes({ ...stored, ...overrides })).rejects.toThrow(message);
+});
 
-    vi.stubGlobal("fetch", fetchFn);
-    const refreshed = await refreshChutesOAuthCredential(
-      createStoredCredential({ clientId: undefined }),
-    );
-
-    expect(refreshed.clientId).toBe("cid_env");
-  });
-
-  it("preserves the old refresh token when the replacement is omitted", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse({ access_token: "at_new", expires_in: 1800 }));
-
-    vi.stubGlobal("fetch", fetchFn);
-    const refreshed = await refreshChutesOAuthCredential(createStoredCredential());
-
-    expect(refreshed.refresh).toBe("rt_old");
-  });
-
-  it("requires a refresh token", async () => {
-    await expect(
-      refreshChutesOAuthCredential(createStoredCredential({ refresh: "" })),
-    ).rejects.toThrow("Chutes OAuth credential is missing refresh token");
-  });
-
-  it("requires a client id from the credential or environment", async () => {
-    vi.stubEnv("CHUTES_CLIENT_ID", "");
-
-    await expect(
-      refreshChutesOAuthCredential(createStoredCredential({ clientId: undefined })),
-    ).rejects.toThrow(
-      "Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).",
-    );
-  });
-
-  it("rejects missing access tokens", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse({ expires_in: 1800 }));
-
-    vi.stubGlobal("fetch", fetchFn);
-    await expect(refreshChutesOAuthCredential(createStoredCredential())).rejects.toThrow(
-      "Chutes token refresh returned no access_token",
-    );
-  });
+it("rejects missing access tokens", async () => {
+  await expect(
+    refreshWithFetch(vi.fn(async () => jsonResponse({ expires_in: 1800 }))),
+  ).rejects.toThrow("Chutes token refresh returned no access_token");
 });

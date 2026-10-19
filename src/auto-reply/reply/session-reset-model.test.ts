@@ -1,6 +1,9 @@
 // Tests reset model selection and persisted model override cleanup.
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
+import { clearRuntimeAuthProfileStoreSnapshotCore } from "../../agents/auth-profiles/runtime-snapshots.js";
+import * as authStore from "../../agents/auth-profiles/store.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { buildModelAliasIndex } from "../../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -8,6 +11,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 
@@ -41,7 +45,6 @@ function createResetFixture(entry: Partial<SessionEntry> = {}) {
     sessionEntry,
     sessionStore: { "agent:main:dm:1": sessionEntry } as Record<string, SessionEntry>,
     sessionCtx: { BodyStripped: "minimax summarize" },
-    ctx: { ChatType: "direct" },
   };
 }
 
@@ -199,7 +202,6 @@ describe("applyResetModelOverride", () => {
       resetTriggered: true,
       bodyStripped: "minimax summarize",
       sessionCtx: fixture.sessionCtx,
-      ctx: fixture.ctx,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
       aliasIndex: fixture.aliasIndex,
@@ -334,6 +336,7 @@ describe("applyResetModelOverride", () => {
   });
 
   it("clears auth profile overrides when reset applies a model", async () => {
+    await prepareSharedAuthStoreOwnership();
     const { sessionEntry } = await applyResetFixture({
       resetTriggered: true,
       sessionEntry: {
@@ -346,6 +349,51 @@ describe("applyResetModelOverride", () => {
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  it("prepares a cold auth pin asynchronously and observes a subsequent owner write", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const profileId = "team:prod";
+      await prepareSharedAuthStoreOwnership(state.env);
+      const writeCredential = (provider: string) =>
+        state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            [profileId]: { type: "api_key", provider, key: "test" },
+          },
+        });
+      await writeCredential("minimax");
+      const agentDir = state.agentDir();
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+      const synchronousRead = vi
+        .spyOn(authStore, "findPersistedAuthProfileCredential")
+        .mockImplementation(() => {
+          throw new Error("synchronous credential read during model selection");
+        });
+      try {
+        const fixture = createResetFixture({
+          authProfileOverride: profileId,
+          authProfileOverrideSource: "user",
+        });
+        const apply = () =>
+          applyResetModelOverride({
+            ...resetModelParams(fixture),
+            agentDir,
+            resetTriggered: true,
+            bodyStripped: "minimax/m2.7 summarize",
+          });
+
+        await apply();
+        expect(fixture.sessionEntry.authProfileOverride).toBe(profileId);
+
+        await writeCredential("openai");
+        await apply();
+        expect(fixture.sessionEntry.authProfileOverride).toBeUndefined();
+        expect(fixture.sessionEntry.authProfileOverrideSource).toBeUndefined();
+      } finally {
+        synchronousRead.mockRestore();
+      }
+    });
   });
 
   it("adopts a concurrent model winner instead of acknowledging the reset hint", async () => {

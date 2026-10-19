@@ -10,6 +10,7 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
@@ -458,7 +459,6 @@ export function buildTimedWatchCommand(
   } = {},
 ) {
   const isolatedStateDir = path.join(isolatedHomeDir, ".openclaw");
-  const isolatedConfigPath = path.join(isolatedStateDir, "openclaw.json");
   const configJson = JSON.stringify({
     gateway: { controlUi: { enabled: false } },
     logging: { file: path.join(isolatedStateDir, "gateway.log") },
@@ -477,12 +477,8 @@ export function buildTimedWatchCommand(
   const nodeBinDir = path.dirname(nodeExecPath);
   const env = {
     OPENCLAW_WATCH_PID_FILE: pidFilePath,
-    HOME: isolatedHomeDir,
-    OPENCLAW_HOME: isolatedHomeDir,
-    OPENCLAW_CONFIG_PATH: isolatedConfigPath,
-    OPENCLAW_STATE_DIR: isolatedStateDir,
+    ...createBuildSmokeEnv(isolatedHomeDir, {}),
     PATH: `${nodeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
-    XDG_CONFIG_HOME: path.join(isolatedHomeDir, ".config"),
     ...WATCH_GATEWAY_SKIP_ENV,
   };
 

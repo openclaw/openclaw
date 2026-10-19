@@ -5,7 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -15,7 +15,7 @@ import {
   ensurePairedTestGatewayClientIdentity,
 } from "../gateway/gateway-cli-backend.live-helpers.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
-import { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 
 const enabled = isLiveTestEnabled() && process.env.OPENCLAW_LIVE_SESSION_EVENT_WAKE === "1";
@@ -23,8 +23,13 @@ const describeLive = enabled ? describe : describe.skip;
 const TURN_TIMEOUT_MS = 180_000;
 const MODEL = "openai/gpt-5.6-luna";
 
-async function readMessages(sessionKey: string): Promise<unknown[]> {
-  const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
+async function readMessages(config: OpenClawConfig, sessionKey: string): Promise<unknown[]> {
+  const { storePath, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: config,
+    key: sessionKey,
+    // The child Gateway's writes cannot invalidate this process's retained exact-row facts.
+    exactRead: false,
+  });
   if (!entry?.sessionId) {
     return [];
   }
@@ -111,7 +116,7 @@ describeLive("session event wake through a live Gateway", () => {
       const nonce = randomBytes(8).toString("hex").toUpperCase();
       const startedReply = `STARTED-${nonce}`;
       const completionReply = `${exitCode === 0 ? "COMPLETION" : "WATCHER-FAILED"}-${nonce}`;
-      const followupReply = busySibling ? `${completionReply} | code ${exitCode}` : "NO_REPLY";
+      const followupReply = busySibling ? `${completionReply} | code ${exitCode}` : completionReply;
       const siblingReply = `SIBLING-FINISHED-${nonce}`;
       const monitorReply = `MAIN-MONITOR-${nonce}`;
       const workspace = instance.state.workspaceDir;
@@ -163,7 +168,7 @@ describeLive("session event wake through a live Gateway", () => {
               heartbeat: {
                 every: "24h",
                 target: busySibling ? "last" : "none",
-                prompt: `Call heartbeat_respond with outcome progress, notify false, summary ${monitorReply}. Do no other work.`,
+                prompt: `Reply exactly ${monitorReply}. Do no other work.`,
               },
             },
           },
@@ -173,6 +178,7 @@ describeLive("session event wake through a live Gateway", () => {
           },
         };
         await instance.state.writeConfig(config);
+        using _ = useLiveTestRuntimeConfig(config);
         const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
           displayName: "live-session-event-wake",
         });
@@ -199,18 +205,25 @@ describeLive("session event wake through a live Gateway", () => {
             `Once exec returns its running session, copy the entire following marker verbatim as your only reply, preserving every character and case, then end this turn:\n${startedReply}`,
             busySibling
               ? "When its later completion arrives, copy the entire output marker verbatim, preserving every character and its case. Append ' | code ' and the reported numeric exit code. Return only that single line; do not shorten the marker, add explanations, or call any tools for that completion."
-              : "Handle its later completion silently with NO_REPLY; this fixture disables notification delivery.",
+              : "When its later completion arrives, copy the entire output marker verbatim as your only reply, preserving every character and case. Do not call any tools for that completion.",
           ].join("\n"),
         );
         expect(response.status).toBe("ok");
-        expect(loadGatewaySessionEntryReadOnly(sessionKey).entry).toMatchObject({
+        expect(
+          (
+            await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg: config,
+              key: sessionKey,
+            })
+          ).entry,
+        ).toMatchObject({
           createdVia: "operator",
           delivery: { kind: "internal" },
         });
         expect(await fs.readFile(path.join(workspace, "completion-started"), "utf8")).toBe(
           "started",
         );
-        const foregroundMessages = await readMessages(sessionKey);
+        const foregroundMessages = await readMessages(config, sessionKey);
         expect(messagesWithRole(foregroundMessages, "assistant")).toContain(startedReply);
         expect(messagesWithRole(foregroundMessages, "assistant")).not.toContain(completionReply);
         await expect(fs.access(path.join(workspace, "completion-completed"))).rejects.toThrow();
@@ -253,49 +266,56 @@ describeLive("session event wake through a live Gateway", () => {
         await vi.waitFor(
           async () => {
             expect(instance.logs()).not.toContain("Async work scope is closed");
-            const continued = (await readMessages(sessionKey)).slice(foregroundMessages.length);
-            expect(continued).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  role: "assistant",
-                  provider: "openai",
-                  stopReason: "stop",
-                  content: expect.arrayContaining([
-                    expect.objectContaining({ type: "text", text: followupReply }),
-                  ]),
-                }),
-              ]),
+            // Internal sessions require a result; a persisted reply alone can
+            // precede finalization or recovery and is not a settled snapshot.
+            const described = await client!.request<{ session: { hasActiveRun: boolean } }>(
+              "sessions.describe",
+              { key: sessionKey },
             );
+            expect(described.session.hasActiveRun).toBe(false);
+            const continued = (await readMessages(config, sessionKey)).slice(
+              foregroundMessages.length,
+            );
+            expect(continued.at(-1)).toMatchObject({
+              role: "assistant",
+              provider: "openai",
+              stopReason: "stop",
+              content: expect.arrayContaining([
+                expect.objectContaining({ type: "text", text: followupReply }),
+              ]),
+            });
           },
           { timeout: TURN_TIMEOUT_MS, interval: 1_000 },
         );
-        const completedMessages = await readMessages(sessionKey);
+        const completedMessages = await readMessages(config, sessionKey);
         const completionUsers = messagesWithRole(
           completedMessages.slice(foregroundMessages.length),
           "user",
         );
-        expect(completionUsers).toContain("[OpenClaw exec completion]");
+        expect(completionUsers).toMatch(
+          new RegExp(`Exec completed \\([^)]*, code ${exitCode}\\) :: ${completionReply}`),
+        );
         expect(completionUsers).not.toContain("[OpenClaw heartbeat poll]");
         expect(await fs.readFile(path.join(workspace, "completion-completed"), "utf8")).toBe(
           "completed",
         );
-        expect(await readMessages(mainSessionKey)).toEqual([]);
+        expect(await readMessages(config, mainSessionKey)).toEqual([]);
 
         if (siblingRun) {
           expect(siblingSettled).toBe(false);
           await expect(fs.access(path.join(workspace, "sibling-completed"))).rejects.toThrow();
-          expect(messagesWithRole(await readMessages(siblingSessionKey), "user")).not.toContain(
-            completionReply,
-          );
+          expect(
+            messagesWithRole(await readMessages(config, siblingSessionKey), "user"),
+          ).not.toContain(completionReply);
           await fs.writeFile(siblingGatePath, "release");
           const siblingResponse = await siblingRun;
           expect(siblingResponse.status).toBe("ok");
-          expect(messagesWithRole(await readMessages(siblingSessionKey), "assistant")).toContain(
-            siblingReply,
-          );
+          expect(
+            messagesWithRole(await readMessages(config, siblingSessionKey), "assistant"),
+          ).toContain(siblingReply);
         }
 
-        // The silent-success case also exercises scheduled monitoring; target:last
+        // The success case also exercises scheduled monitoring; target:last
         // on the failure case's untouched main session has no delivery route.
         if (!busySibling) {
           const jobs = await client.request<{
@@ -318,14 +338,14 @@ describeLive("session event wake through a live Gateway", () => {
           expect(forced.ok).toBe(true);
           await vi.waitFor(
             async () => {
-              const mainMessages = await readMessages(mainSessionKey);
+              const mainMessages = await readMessages(config, mainSessionKey);
               expect(messagesWithRole(mainMessages, "user")).toContain("[OpenClaw heartbeat poll]");
               expect(messagesWithRole(mainMessages, "assistant")).toContain(monitorReply);
             },
             { timeout: TURN_TIMEOUT_MS, interval: 1_000 },
           );
         }
-        expect(await readMessages(sessionKey)).toEqual(completedMessages);
+        expect(await readMessages(config, sessionKey)).toEqual(completedMessages);
         expect(instance.logs()).not.toContain("Async work scope is closed");
       } finally {
         try {

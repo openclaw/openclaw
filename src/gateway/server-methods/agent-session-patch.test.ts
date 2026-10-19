@@ -1,11 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   mergeSessionEntry,
   resolveSessionResetPolicy,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
+import * as transcriptReader from "../../config/sessions/session-transcript-anchor-read.js";
 import { buildAgentSessionPatch, type AgentSessionPatchBuild } from "./agent-session-patch.js";
+
+beforeEach(() => {
+  const read = transcriptReader.readSessionTranscriptAnchorsAsync;
+  vi.spyOn(transcriptReader, "readSessionTranscriptAnchorsAsync").mockImplementation((...args) =>
+    args[1].includeMetadata
+      ? Promise.resolve({
+          anchors: [],
+          metadata: { present: true, observedAt: null, updatedAt: null },
+        })
+      : read(...args),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 async function buildPatch(
   touchInteraction: boolean,
@@ -40,7 +54,6 @@ async function buildPatch(
       visibleRequest: true,
       fallbackSessionId: "fallback",
       touchInteraction,
-      failedSessionTranscriptMissing: () => false,
     })
   ).patch;
 }
@@ -71,7 +84,6 @@ async function buildCreationPatch(opts: {
     visibleRequest: opts.visibleRequest ?? true,
     fallbackSessionId: "fallback",
     touchInteraction: false,
-    failedSessionTranscriptMissing: () => false,
   });
 }
 
@@ -83,10 +95,6 @@ describe("agent session patch", () => {
     expect(Object.hasOwn(patch, "lifecycleRunId")).toBe(true);
     expect(patch.lifecycleRunId).toBeUndefined();
     expect(patch.lastRunId).toBeUndefined();
-  });
-
-  it("does not clear agent status for lifecycle-only patches", async () => {
-    expect(Object.hasOwn(await buildPatch(false), "agentStatus")).toBe(false);
   });
 
   it("preserves a recovery reservation while reusing a session with a failed outcome", async () => {
@@ -129,7 +137,9 @@ describe("agent session patch", () => {
   });
 
   it("keeps the existing label when the request has none", async () => {
-    expect((await buildPatch(false, { label: "Existing" })).label).toBe("Existing");
+    const patch = await buildPatch(false, { label: "Existing" });
+    expect(patch.label).toBe("Existing");
+    expect(Object.hasOwn(patch, "agentStatus")).toBe(false);
   });
 
   it("names a new session from an explicit agent session key", async () => {
@@ -142,24 +152,18 @@ describe("agent session patch", () => {
   });
 
   it("does not name an existing session", async () => {
-    const entry: SessionEntry = { sessionId: "existing", updatedAt: 1_000 };
+    const entry: SessionEntry = {
+      sessionId: "existing",
+      updatedAt: 1_000,
+      displayName: "Existing display name",
+    };
     const result = await buildCreationPatch({
       explicitSessionKey: "agent:main:incident-42",
       freshEntry: entry,
     });
 
     expect(result.patch).not.toHaveProperty("displayName");
-  });
-
-  it("does not replace an existing display name", async () => {
-    const namedEntry = { displayName: "Existing display name" };
-    const entry: SessionEntry = { sessionId: "existing", updatedAt: 1_000, ...namedEntry };
-    const result = await buildCreationPatch({
-      explicitSessionKey: "agent:main:incident-42",
-      freshEntry: entry,
-    });
-
-    expect(mergeSessionEntry(entry, result.patch)).toMatchObject(namedEntry);
+    expect(mergeSessionEntry(entry, result.patch).displayName).toBe(entry.displayName);
   });
 
   it("does not name a defaulted main session", async () => {

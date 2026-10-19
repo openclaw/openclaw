@@ -4,29 +4,30 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   loadTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
+  withTranscriptWriteLock,
 } from "../../config/sessions/session-accessor.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
-import {
-  recordOpenClawDatabaseQuarantine,
-  clearOpenClawDatabaseQuarantine,
-} from "../../state/openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -47,6 +48,7 @@ function targetIn(stateDir: string) {
 }
 
 function createRecorder(target: ReturnType<typeof targetIn>, text: string, timestamp = 1) {
+  setRuntimeConfigSnapshot({});
   return createUserTurnTranscriptRecorder({
     target: { ...target, sessionEntry: undefined },
     input: { text, timestamp },
@@ -54,7 +56,9 @@ function createRecorder(target: ReturnType<typeof targetIn>, text: string, times
   });
 }
 
-it("reads CLI presence after an earlier admitted transcript write settles", async ({ signal }) => {
+it("reads CLI presence under a transcript lock after an earlier write settles", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ label: "cli-presence-admission" }, async ({ stateDir }) => {
     const target = targetIn(stateDir);
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -65,26 +69,34 @@ it("reads CLI presence after an earlier admitted transcript write settles", asyn
     const writing = admit({ agentId: target.agentId, path: target.storePath }, async () => {
       entered.resolve();
       await withinTest(resume.promise, signal);
-      await createRecorder(target, "Earlier admitted user turn").persistApproved();
+      const appended = appendTranscriptMessageSync(target, {
+        eventId: "earlier-admitted-user-turn",
+        parentId: null,
+        message: { role: "user", content: "Earlier admitted user turn" },
+      });
+      expect(appended.ok).toBe(true);
     });
     let reading: Promise<boolean> | undefined;
     let restore = () => {};
     try {
       await withinTest(entered.promise, signal);
+      const admitWorker = agentWriteAdmission.runOpenClawAgentWorkerWrite;
       const admission = vi
-        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
+        .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
         .mockImplementation((...args) => {
-          const pending = admit(...args);
+          const pending = admitWorker(...args);
           queued.resolve();
           return pending;
         });
       restore = () => admission.mockRestore();
-      reading = hasCliSessionTranscript({ sessionTarget: target });
+      reading = withTranscriptWriteLock(target, () =>
+        hasCliSessionTranscript({ sessionTarget: target }),
+      );
       await withinTest(
         awaitGateBeforeSettlement(
           queued.promise,
           reading,
-          "CLI presence bypassed the earlier admitted writer",
+          "Locked CLI presence bypassed the earlier admitted writer",
         ),
         signal,
       );
@@ -161,10 +173,16 @@ it.each(["schema", "owner"] as const)(
         new DatabaseSync(target.storePath).close();
       } else {
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-          "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
-        );
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        fs.renameSync(target.storePath, `${target.storePath}.template`);
+        fs.copyFileSync(
+          `${target.storePath}.template`,
+          target.storePath,
+          fs.constants.COPYFILE_EXCL,
+        );
+        const database = new DatabaseSync(target.storePath);
+        database.exec("UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'");
+        database.close();
       }
       await expect(
         loadCliSessionContextEngineMessages({ sessionTarget: target }),
@@ -190,22 +208,24 @@ it.each(["run", "read-resource"] as const)(
       };
       const interceptNext = () => {
         if (kind === "read-resource") {
-          const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce((input, options) => {
-            spy.mockRestore();
-            let pause = false;
-            return historyLane.pool
-              .run(async () => {
-                const request = typeof input === "function" ? await input() : input;
-                pause = request.kind === "transcript-hydration";
-                if (pause) {
-                  pausedKind = request.kind;
-                } else {
-                  interceptNext();
-                }
-                return request;
-              }, options)
-              .then((reply) => (pause ? pauseReply(reply) : reply));
-          });
+          const spy = vi
+            .spyOn(targetDiscoveryLane.pool, "run")
+            .mockImplementationOnce((input, options) => {
+              spy.mockRestore();
+              let pause = false;
+              return targetDiscoveryLane.pool
+                .run(async () => {
+                  const request = typeof input === "function" ? await input() : input;
+                  pause = request.kind === "transcript-hydration";
+                  if (pause) {
+                    pausedKind = request.kind;
+                  } else {
+                    interceptNext();
+                  }
+                  return request;
+                }, options)
+                .then((reply) => (pause ? pauseReply(reply) : reply));
+            });
           restoreSpy = () => spy.mockRestore();
           return;
         }
@@ -277,18 +297,14 @@ it.each(["persisted", "process-local"] as const)(
           timestamp: 1,
         });
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env: state.env,
-            kind: "agent",
-            path: target.storePath,
-            reason,
-          }),
-        ).toBe(true);
+        seedOpenClawDatabaseQuarantine({
+          env: state.env,
+          kind: "agent",
+          path: target.storePath,
+          reason,
+        });
       } else {
-        expect(recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason))).toBe(
-          true,
-        );
+        recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason));
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       }
       try {

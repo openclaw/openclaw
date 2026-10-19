@@ -7,6 +7,7 @@ import type { InboundImplicitMentionKind, InboundMentionFacts } from "../mention
 import type { IdentifierAuthentication } from "./identifier-authentication.js";
 
 export type ChannelIngressChannelId = ChatChannelId;
+export type ChannelIngressMatchContext = "dm" | "group" | "route" | "command";
 
 export type ChannelIngressIdentifierKind =
   | "stable-id"
@@ -84,14 +85,14 @@ type InternalChannelIngressNormalizeResult = {
 export type InternalChannelIngressAdapter = {
   normalizeEntries(params: {
     entries: readonly string[];
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
     accountId: string;
   }): InternalChannelIngressNormalizeResult | Promise<InternalChannelIngressNormalizeResult>;
 
   matchSubject(params: {
     subject: NormalizedIngressSubject;
     entries: readonly NormalizedIngressEntry[];
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
   }): RedactedIngressMatch | Promise<RedactedIngressMatch>;
 };
 

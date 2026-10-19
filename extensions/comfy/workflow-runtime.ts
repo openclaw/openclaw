@@ -2,11 +2,15 @@ import { randomInt } from "node:crypto";
 import fs from "node:fs/promises";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  resolveGeneratedImageDownloadMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -379,9 +383,8 @@ async function waitForComfyHistory(
   promptId: string,
   pollIntervalMs: number,
 ): Promise<unknown> {
-  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
-  const headers = new Headers(requestHeaders);
-  const deadline = Date.now() + params.timeoutMs;
+  const { baseUrl, headers, mode, ...request } = params;
+  const deadline = performance.now() + params.timeoutMs;
   const read = <T>(path: string, kind: "history" | "status", timeoutMs: number) =>
     readJsonResponse<T>({
       ...request,
@@ -432,7 +435,7 @@ function resolveComfyRemainingMs(
   defaultTimeoutMs = timeoutMs,
 ) {
   const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
-  const remainingMs = deadline - Date.now();
+  const remainingMs = deadline - performance.now();
   if (remainingMs <= 0) {
     throw new Error(`Comfy workflow did not finish within ${Math.ceil(timeoutMs / 1000)}s`);
   }
@@ -485,8 +488,7 @@ async function downloadOutputFile(
   capability: ComfyCapability,
   maxBytes: number,
 ): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
-  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
-  const headers = new Headers(requestHeaders);
+  const { baseUrl, headers, mode, ...request } = params;
   const fileName = normalizeOptionalString(file.filename) || normalizeOptionalString(file.name);
   if (!fileName) {
     throw new Error("Comfy output entry missing filename");
@@ -563,11 +565,15 @@ function hasUnavailableComfyHeaderSecret(value: unknown, cfg?: OpenClawConfig): 
   });
 }
 
-export function isComfyCapabilityConfigured(params: {
+type ComfyCapabilityConfiguredParams = {
   cfg?: OpenClawConfig;
   agentDir?: string;
   capability: ComfyCapability;
-}): boolean {
+};
+
+function resolveComfyConfigurationReadiness(
+  params: ComfyCapabilityConfiguredParams,
+): boolean | undefined {
   const { config } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const hasWorkflow = Boolean(
@@ -590,11 +596,32 @@ export function isComfyCapabilityConfigured(params: {
   if (configuredApiKey.status === "configured_unavailable") {
     return false;
   }
-  return isProviderApiKeyConfigured({
-    provider: "comfy",
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  });
+  return undefined;
+}
+
+/** The released resolveCapabilityModelCandidates SDK needs this hook through 2026-12-31. */
+export function isComfyCapabilityConfigured(params: ComfyCapabilityConfiguredParams): boolean {
+  return (
+    resolveComfyConfigurationReadiness(params) ??
+    isProviderApiKeyConfigured({
+      provider: "comfy",
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    })
+  );
+}
+
+export async function isComfyCapabilityConfiguredAsync(
+  params: ComfyCapabilityConfiguredParams,
+): Promise<boolean> {
+  return (
+    resolveComfyConfigurationReadiness(params) ??
+    isProviderApiKeyConfiguredAsync({
+      provider: "comfy",
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    })
+  );
 }
 
 export async function runComfyWorkflow(params: {
@@ -752,7 +779,10 @@ export async function runComfyWorkflow(params: {
 
   const assets: ComfyGeneratedAsset[] = [];
   const outputKind = params.capability === "music" ? "audio" : params.capability;
-  const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
+  const maxOutputBytes =
+    outputKind === "image"
+      ? resolveGeneratedImageDownloadMaxBytes(params.cfg)
+      : resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile(
       connection,

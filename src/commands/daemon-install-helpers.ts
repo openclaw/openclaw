@@ -38,7 +38,9 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { omitSecretEgressProxyEnvironment } from "../secrets/egress-proxy/environment.js";
 import {
   isPluginIntegrationSecretProviderConfig,
   resolveSecretProviderIntegrationConfig,
@@ -48,11 +50,6 @@ import { evaluateGatewayAuthSurfaceStates } from "../secrets/runtime-gateway-aut
 import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
-import {
-  collectAuthProfileSecretRefs,
-  collectAuthProfileServiceEnvVars,
-  resolveAuthProfileStoreForServiceEnv,
-} from "./daemon-install-auth-profile-env.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
@@ -70,17 +67,6 @@ const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
 ]);
-const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
-
-function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
-  if (isDangerousHostEnvVarName(key)) {
-    return true;
-  }
-  if (!isDangerousHostEnvOverrideVarName(key)) {
-    return false;
-  }
-  return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
-}
 
 async function collectAmbientProviderApiKeyServiceEnvVars(params: {
   env: Record<string, string | undefined>;
@@ -162,6 +148,21 @@ type ExecSecretRefPassEnvSource = {
   ref: SecretRef;
   warningTitle: "Config SecretRef" | "Auth profile" | "Plugin config SecretRef";
 };
+
+function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undefined): SecretRef[] {
+  if (!authStore) {
+    return [];
+  }
+  return Object.values(authStore.profiles).flatMap((credential) => {
+    const ref =
+      credential.type === "api_key"
+        ? credential.keyRef
+        : credential.type === "token"
+          ? credential.tokenRef
+          : undefined;
+    return ref ? [ref] : [];
+  });
+}
 
 function* configSecretRefsForService(config: OpenClawConfig) {
   for (const target of discoverConfigSecretTargets(config)) {
@@ -322,7 +323,10 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
       if (!value) {
         continue;
       }
-      if (isBlockedExecSecretRefPassEnvKey(key)) {
+      if (
+        isDangerousHostEnvVarName(key) ||
+        (isDangerousHostEnvOverrideVarName(key) && key.toUpperCase() !== "HOME")
+      ) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
           warningTitle,
@@ -354,14 +358,12 @@ function collectPluginConfigSecretRefs(params: {
   return context.assignments.map((assignment) => assignment.ref);
 }
 
-// Operator opt-in env vars that should survive service regeneration even though
-// they share the OPENCLAW_ prefix that is otherwise stripped from preserved
-// environments. These represent intentional, user-placed configuration on the
-// service definition that the install/repair flow should not silently revert.
+// Preserve operator opt-ins while discarding stale OpenClaw-managed values.
 const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
   "OPENCLAW_CLI_CONTAINER_BYPASS",
   "OPENCLAW_CONFIG_READONLY",
   "OPENCLAW_CONTAINER_HINT",
+  "OPENCLAW_GATEWAY_STARTUP_TRACE",
 ]);
 
 function collectExistingServiceEnvVars(
@@ -441,7 +443,17 @@ async function buildGatewayInstallEnvironment(params: {
       stateDirDotEnvEnvironment,
       warn: params.warn,
     });
-  const authStore = await resolveAuthProfileStoreForServiceEnv(params.authStore);
+  let authStore = params.authStore;
+  if (!authStore) {
+    // Keep the daemon install cold path cheap when there is no auth store to read.
+    const { hasAnyAuthProfileStoreSourceAsync } =
+      await import("./daemon-install-auth-profiles-source.runtime.js");
+    if (await hasAnyAuthProfileStoreSourceAsync()) {
+      const { loadAuthProfileStoreForSecretsRuntimeAsync } =
+        await import("./daemon-install-auth-profiles-store.runtime.js");
+      authStore = await loadAuthProfileStoreForSecretsRuntimeAsync();
+    }
+  }
   const execSecretRefPassEnvEnvironment = collectExecSecretRefPassEnvServiceEnvVars({
     env: params.env,
     config: params.config,
@@ -450,11 +462,28 @@ async function buildGatewayInstallEnvironment(params: {
     durableEnvironment,
     warn: params.warn,
   });
-  const authProfileEnvironment = collectAuthProfileServiceEnvVars({
-    env: params.env,
-    authStore,
-    warn: params.warn,
-  });
+  const authProfileEnvironment: Record<string, string> = {};
+  for (const ref of collectAuthProfileSecretRefs(authStore)) {
+    if (ref.source !== "env") {
+      continue;
+    }
+    const key = normalizeEnvVarKey(ref.id, { portable: true });
+    if (!key) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      params.warn?.(
+        `Auth profile env ref "${key}" blocked by host-env security policy`,
+        "Auth profile",
+      );
+      continue;
+    }
+    const value = params.env[key]?.trim();
+    if (!value) {
+      continue;
+    }
+    authProfileEnvironment[key] = value;
+  }
   const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
     env: params.env,
     config: params.config,
@@ -572,12 +601,20 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
+  const env = omitSecretEgressProxyEnvironment(params.env, platform);
+  const existingEnvironment = omitSecretEgressProxyEnvironment(
+    params.existingEnvironment ?? {},
+    platform,
+  );
+  env.NODE_EXTRA_CA_CERTS =
+    resolveEnvironmentValue(env, "NODE_EXTRA_CA_CERTS", platform) ??
+    resolveEnvironmentValue(existingEnvironment, "NODE_EXTRA_CA_CERTS", platform);
+  const wrapperInput = params.wrapperPath ?? env[OPENCLAW_WRAPPER_ENV_KEY];
   const generatedWrapperPath =
     platform === "win32"
-      ? resolveGatewayTaskScriptPath(params.env)
+      ? resolveGatewayTaskScriptPath(env)
       : platform === "darwin"
-        ? resolveLaunchAgentEnvWrapperPath(params.env, resolveLaunchAgentLabel(params.env))
+        ? resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env))
         : undefined;
   const wrapperPointsAtGeneratedScript =
     generatedWrapperPath !== undefined &&
@@ -594,7 +631,7 @@ export async function buildGatewayInstallPlan(params: {
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
   const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
-    env: params.env,
+    env,
     runtime: params.runtime,
     runtimeExplicit: params.runtimeExplicit,
     devMode: params.serviceCli ? false : params.devMode,
@@ -603,7 +640,7 @@ export async function buildGatewayInstallPlan(params: {
     wrapperPath,
     warn: params.warn,
   });
-  const serviceInputEnv = { ...params.env };
+  const serviceInputEnv = { ...env };
   if (wrapperPath) {
     serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY] = wrapperPath;
   } else if (wrapperPointsAtGeneratedScript) {
@@ -625,7 +662,7 @@ export async function buildGatewayInstallPlan(params: {
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
-    env: params.env,
+    env,
     runtime,
     nodeProgram: programArguments[0],
     warn: params.warn,
@@ -657,7 +694,7 @@ export async function buildGatewayInstallPlan(params: {
     authStore: params.authStore,
     warn: params.warn,
     serviceEnvironment,
-    existingEnvironment: params.existingEnvironment,
+    existingEnvironment,
     existingEnvironmentValueSources: params.existingEnvironmentValueSources,
     platform,
   });

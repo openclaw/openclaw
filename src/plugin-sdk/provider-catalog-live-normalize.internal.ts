@@ -29,6 +29,10 @@ export function readLiveModelCatalogId(row: unknown): string | undefined {
   return readLiveModelCatalogStringField(record, "id");
 }
 
+export function readOpenAICompatibleLiveModelId(row: unknown): string | undefined {
+  return readLiveModelCatalogStringField(row, ["id", "model", "model_name", "modelName"]);
+}
+
 export function readLiveModelCatalogStringField(
   row: unknown,
   keys: string | readonly string[],
@@ -130,8 +134,9 @@ function isSafeLiveModelId(value: string): boolean {
   return true;
 }
 
+// "<modality>-text-to-text" kinds (Hugging Face pipeline tags) are chat models with media input.
 const NON_TEXT_MODEL_ID_PATTERN =
-  /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|moderation|guard|gpt-image|dall-e|flux|sdxl|stable-diffusion|imagen|image-gen(?:eration)?|text-to-image|veo|sora|video-gen(?:eration)?|text-to-video)(?:$|[/_:.-])/i;
+  /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|realtime|moderation|guard|(?:audio|image|video)(?!-text-to-text)|dall-e|flux|sdxl|stable-diffusion|imagen|veo|sora|babbage|davinci|gpt-3[.]5-turbo-instruct)(?:$|[/_:.-])/i;
 
 function rowAdvertisesNonTextModel(
   record: Record<string, unknown>,
@@ -240,7 +245,7 @@ function buildOpenAICompatibleLiveModel(
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig | undefined {
   const record = asOptionalRecord(row);
-  const id = readLiveModelCatalogStringField(record, ["id", "model", "model_name", "modelName"]);
+  const id = readOpenAICompatibleLiveModelId(record);
   if (!record || !id || !isSafeLiveModelId(id)) {
     return undefined;
   }
@@ -250,11 +255,17 @@ function buildOpenAICompatibleLiveModel(
   if (readLiveModelCatalogBooleanField(record, ["archived", "deprecated"]) === true) {
     return undefined;
   }
+  // Retired rows can stay listed after shutdown, but every request to them fails.
+  const shutdownDate = readLiveModelCatalogStringField(record, ["shutdown_date", "shutdownDate"]);
+  if (shutdownDate && Date.parse(shutdownDate) <= Date.now()) {
+    return undefined;
+  }
   const capabilities = asOptionalRecord(record.capabilities);
   const architecture = asOptionalRecord(record.architecture);
   const topProvider = asOptionalRecord(record.top_provider);
   const modelInfo = asOptionalRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
+  const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(record, "parameterCount");
   const advertisedChatCapability = rowAdvertisesChatModel(record, nestedRecords);
   if (
     advertisedChatCapability === false ||
@@ -266,9 +277,17 @@ function buildOpenAICompatibleLiveModel(
 
   const exact = fallback.models.find((model) => model.id === id);
   if (exact) {
-    const liveContextWindow = readLiveModelContextWindow([record, ...nestedRecords]);
-    return exact.contextWindow === undefined && liveContextWindow !== undefined
-      ? { ...exact, contextWindow: liveContextWindow }
+    const contextWindow =
+      exact.contextWindow ?? readLiveModelContextWindow([record, ...nestedRecords]);
+    const resolvedParameterCount = exact.parameterCount ?? parameterCount;
+    return contextWindow !== exact.contextWindow || resolvedParameterCount !== exact.parameterCount
+      ? {
+          ...exact,
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(resolvedParameterCount !== undefined
+            ? { parameterCount: resolvedParameterCount }
+            : {}),
+        }
       : exact;
   }
   // Only unknown ids need the provider's request-shaping gate.
@@ -324,6 +343,7 @@ function buildOpenAICompatibleLiveModel(
   return {
     id,
     name: readLiveModelCatalogStringField(record, ["display_name", "displayName", "name"]) ?? id,
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(template?.api ? { api: template.api } : {}),
     reasoning,
     input,
@@ -432,9 +452,11 @@ export function projectUpstreamProviderCatalogModel(params: {
         ]
       : undefined;
   const contextTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "input");
+  const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(model, "parameterCount");
   return {
     id,
     name: readLiveModelCatalogStringField(model, "name") ?? id,
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     provider: params.providerId,
     api,
     baseUrl,

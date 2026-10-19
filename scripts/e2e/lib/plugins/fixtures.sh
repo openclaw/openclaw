@@ -141,41 +141,20 @@ openclaw_plugins_fixture_exit_trap() {
   exit "$status"
 }
 
-pack_fixture_plugin_with_cli_registry_dependency() {
-  local pack_dir="$1"
-  local output_tgz="$2"
-  local id="$3"
-  local version="$4"
-  local method="$5"
-  local name="$6"
-  local cli_root="$7"
-  local cli_output="$8"
+pack_fixture_archive() {
+  local fixture="$1"
+  local pack_dir="$2"
+  local output_tgz="$3"
+  shift 3
 
   mkdir -p "$pack_dir/package"
-  node scripts/e2e/lib/fixture.mjs plugin-cli-registry-dep "$pack_dir/package" "$id" "$version" "$method" "$name" "$cli_root" "$cli_output"
+  node scripts/e2e/lib/fixture.mjs "$fixture" "$pack_dir/package" "$@"
   tar -czf "$output_tgz" -C "$pack_dir" package
 }
 
-pack_fake_is_number_package() {
-  local pack_dir="$1"
-  local output_tgz="$2"
-
-  mkdir -p "$pack_dir/package"
-  node scripts/e2e/lib/fixture.mjs fake-is-number-package "$pack_dir/package"
-  tar -czf "$output_tgz" -C "$pack_dir" package
-}
-
+# Frozen corrupt-update scenarios are mounted onto the current harness.
 pack_fixture_plugin() {
-  local pack_dir="$1"
-  local output_tgz="$2"
-  local id="$3"
-  local version="$4"
-  local method="$5"
-  local name="$6"
-
-  mkdir -p "$pack_dir/package"
-  node scripts/e2e/lib/fixture.mjs plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
-  tar -czf "$output_tgz" -C "$pack_dir" package
+  pack_fixture_archive plugin "$1" "$2" "$3" "$4" "$5" "$6"
 }
 
 pack_fixture_plugin_with_invalid_extension_entry() {
@@ -199,6 +178,24 @@ NODE
   tar -czf "$output_tgz" -C "$pack_dir" package
 }
 
+openclaw_plugins_wait_fixture_port() {
+  local server_pid="$1" server_port_file="$2" server_log="$3" label="$4"
+  for _ in $(seq 1 100); do
+    if [[ -s "$server_port_file" ]]; then
+      return 0
+    fi
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      openclaw_plugins_print_fixture_log "$server_log"
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  openclaw_plugins_print_fixture_log "$server_log"
+  echo "Timed out waiting for $label." >&2
+  return 1
+}
+
 start_npm_fixture_registry() {
   local package_name="$1"
   local version="$2"
@@ -217,21 +214,11 @@ start_npm_fixture_registry() {
   echo "$server_pid" >"$server_pid_file"
   openclaw_plugins_register_fixture_pid_file "$server_pid_file"
 
-  for _ in $(seq 1 100); do
-    if [[ -s "$server_port_file" ]]; then
-      export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$server_port_file")"
-      # Override both spellings so an inherited prerelease registry cannot win in npm.
-      export npm_config_registry="$NPM_CONFIG_REGISTRY"
-      return 0
-    fi
-    if ! kill -0 "$server_pid" 2>/dev/null; then
-      openclaw_plugins_print_fixture_log "$server_log"
-      return 1
-    fi
-    sleep 0.1
-  done
-
-  openclaw_plugins_print_fixture_log "$server_log"
-  echo "Timed out waiting for npm fixture registry." >&2
-  return 1
+  openclaw_plugins_wait_fixture_port "$server_pid" "$server_port_file" "$server_log" "npm fixture registry"
+  local readiness_status=$?
+  [ "$readiness_status" -eq 0 ] || return "$readiness_status"
+  export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$server_port_file")"
+  # Override both spellings so an inherited prerelease registry cannot win in npm.
+  export npm_config_registry="$NPM_CONFIG_REGISTRY"
+  return 0
 }

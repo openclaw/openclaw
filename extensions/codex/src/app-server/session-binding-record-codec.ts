@@ -161,6 +161,8 @@ const threadBindingSchema = z
     ringZeroClientInstanceId: optionalStringSchema,
     /** Durable fact preventing a later unrestricted turn from widening this thread. */
     nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
+    // Optional creation-policy attestation; legacy bindings remain readable.
+    restrictedThreadConfigFingerprint: optionalNonBlankStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
@@ -169,6 +171,8 @@ const threadBindingSchema = z
     contextEngine: contextEngineSchema.optional().catch(undefined),
     environmentSelectionFingerprint: optionalStringSchema,
     conversationStartId: optionalStringSchema,
+    // Source lifecycle recorded at creation; cleanup may outlive the private session owner.
+    conversationIncognito: z.literal(true).optional(),
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
     // Observed density of the last completed turn on this thread: prompt chars

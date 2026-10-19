@@ -105,9 +105,10 @@ export async function createFileEditorView(params: {
     state: initialState,
   });
 
-  const clampLine = (line: number) => Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
-  // Compare logical lines without treating a read-only mixed-ending preview as an edit.
-  const contentEquals = (content: string) => view.state.toText(content).eq(view.state.doc);
+  // The detail-panel owner derives a fresh match array for each synchronization.
+  let previousDecorations:
+    | (FileEditorDecorations & { document: EditorState["doc"]; matches: readonly number[] })
+    | undefined;
 
   return {
     destroy: () => {
@@ -133,9 +134,10 @@ export async function createFileEditorView(params: {
       }
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
     },
-    contentEquals,
+    // Compare logical lines without treating a read-only mixed-ending preview as an edit.
+    contentEquals: (content: string) => view.state.toText(content).eq(view.state.doc),
     setEditable: (nextEditable: boolean) => {
-      if (destroyed) {
+      if (destroyed || nextEditable === isEditable) {
         return;
       }
       // Tracked so a setContent state rebuild keeps the current edit mode.
@@ -159,16 +161,25 @@ export async function createFileEditorView(params: {
       if (destroyed) {
         return;
       }
+      // Panel chrome refreshes must not dispatch unchanged editor effects. A
+      // changed document still needs fresh line anchors even with equal inputs.
+      const previous = previousDecorations;
+      if (
+        previous?.document === view.state.doc &&
+        previous.targetLine === targetLine &&
+        previous.currentMatch === currentMatch &&
+        previous.matches.length === matches.length &&
+        matches.every((line, index) => line === previous.matches[index])
+      ) {
+        return;
+      }
+      previousDecorations = { document: view.state.doc, targetLine, matches, currentMatch };
       const matchingLines = new Set(matches);
-      const lineNumbersToDecorate = new Set(matches);
-      if (targetLine != null) {
-        lineNumbersToDecorate.add(targetLine);
-      }
-      if (currentMatch != null) {
-        lineNumbersToDecorate.add(currentMatch);
-      }
-      const decorations = [...lineNumbersToDecorate]
-        .filter((line) => Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines)
+      const decorations = [...new Set([...matches, targetLine, currentMatch])]
+        .filter(
+          (line): line is number =>
+            line != null && Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines,
+        )
         .toSorted((a, b) => a - b)
         .map((line) => {
           const classes: string[] = [];
@@ -192,8 +203,9 @@ export async function createFileEditorView(params: {
       if (destroyed) {
         return;
       }
+      const targetLine = Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
       view.dispatch({
-        effects: EditorView.scrollIntoView(view.state.doc.line(clampLine(line)).from, {
+        effects: EditorView.scrollIntoView(view.state.doc.line(targetLine).from, {
           y: center ? "center" : "nearest",
         }),
       });

@@ -113,21 +113,15 @@ function formatStatusTailscaleValue(params: {
     const suffix = params.includeDnsNameWhenOff ? params.dnsName : null;
     return decorateOff(suffix ? `off · ${suffix}` : "off");
   }
-  if (params.dnsName && params.httpsUrl) {
-    const parts = [
-      params.tailscaleMode,
-      params.includeBackendStateWhenOn ? "unknown" : null,
-      params.dnsName,
-      params.httpsUrl,
-    ].filter(Boolean);
-    return parts.join(" · ");
-  }
-  const parts = [
+  const hasAddress = params.dnsName && params.httpsUrl;
+  const value = [
     params.tailscaleMode,
     params.includeBackendStateWhenOn ? "unknown" : null,
-    "magicdns unknown",
-  ].filter(Boolean);
-  return decorateWarn(parts.join(" · "));
+    ...(hasAddress ? [params.dnsName, params.httpsUrl] : ["magicdns unknown"]),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return hasAddress ? value : decorateWarn(value);
 }
 
 function formatStatusServiceValue(params: StatusManagedService): string {
@@ -160,7 +154,7 @@ function formatStatusServiceValue(params: StatusManagedService): string {
 }
 
 export function buildStatusOverviewSurfaceRows(params: {
-  cfg: Pick<OpenClawConfig, "update" | "gateway" | "telemetry">;
+  cfg: Pick<OpenClawConfig, "update" | "gateway" | "telemetry" | "database">;
   update: UpdateCheckResult;
   tailscaleMode: string;
   tailscaleDns?: string | null;

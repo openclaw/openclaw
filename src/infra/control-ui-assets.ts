@@ -8,7 +8,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import { selectControlUiRoutePreloads } from "../gateway/control-ui-route-preloads.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import type { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
 import { FsSafeError } from "./fs-safe.js";
@@ -108,43 +108,7 @@ async function resolveControlUiDistIndexPath(
     argv1: path.resolve(argv1),
     moduleUrl,
   });
-  if (packageRoot) {
-    return path.join(packageRoot, "dist", "control-ui", "index.html");
-  }
-
-  // Fallback: traverse up and find package.json with name "openclaw" + dist/control-ui/index.html
-  // This handles global installs where path-based resolution might fail.
-  const fallbackStartDirs = new Set(
-    entrypointCandidates.map((candidate) => path.dirname(candidate)),
-  );
-  for (const startDir of fallbackStartDirs) {
-    let dir = startDir;
-    for (let i = 0; i < 8; i++) {
-      const pkgJsonPath = path.join(dir, "package.json");
-      const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-      if (fs.existsSync(pkgJsonPath)) {
-        try {
-          const raw = fs.readFileSync(pkgJsonPath, "utf-8");
-          const parsed = JSON.parse(raw) as { name?: unknown };
-          if (parsed.name === "openclaw") {
-            return fs.existsSync(indexPath) ? indexPath : null;
-          }
-          // Stop at the first package boundary to avoid resolving through unrelated ancestors.
-          break;
-        } catch {
-          // Invalid package.json at package boundary; abort this candidate chain.
-          break;
-        }
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) {
-        break;
-      }
-      dir = parent;
-    }
-  }
-
-  return null;
+  return packageRoot ? resolveControlUiDistIndexPathForRoot(packageRoot) : null;
 }
 
 type ControlUiRootResolveOptions = {
@@ -156,13 +120,6 @@ type ControlUiRootResolveOptions = {
 
 function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
   return (tryRealpath(left) ?? path.resolve(left)) === (tryRealpath(right) ?? path.resolve(right));
-}
-
-function addCandidate(candidates: Set<string>, value: string | null) {
-  if (!value) {
-    return;
-  }
-  candidates.add(path.resolve(value));
 }
 
 export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
@@ -184,6 +141,11 @@ export function resolveControlUiRootOverrideSync(rootOverride: string): string |
 
 export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {}): string | null {
   const candidates = new Set<string>();
+  const addCandidate = (value: string | null) => {
+    if (value) {
+      candidates.add(path.resolve(value));
+    }
+  };
   const argv1 = opts.argv1 ?? process.argv[1];
   const cwd = opts.cwd ?? process.cwd();
   const moduleDir = opts.moduleUrl ? path.dirname(fileURLToPath(opts.moduleUrl)) : null;
@@ -196,25 +158,21 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
   });
 
   // Support legacy packaged runtimes that place assets alongside the executable.
-  addCandidate(candidates, execPath ? path.join(path.dirname(execPath), "control-ui") : null);
+  addCandidate(execPath ? path.join(path.dirname(execPath), "control-ui") : null);
   if (moduleDir) {
-    // dist/<bundle>.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "control-ui"));
-    // dist/gateway/control-ui.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../control-ui"));
-    // src/gateway/control-ui.ts -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../../dist/control-ui"));
+    // Bundle, nested Gateway bundle, then source Gateway module.
+    for (const relative of ["control-ui", "../control-ui", "../../dist/control-ui"]) {
+      addCandidate(path.join(moduleDir, relative));
+    }
   }
   // Keep the lexical launcher before its target for symlinked global wrappers.
   for (const entrypoint of entrypointPaths) {
     const directory = path.dirname(entrypoint);
-    addCandidate(candidates, path.join(directory, "dist", "control-ui"));
-    addCandidate(candidates, path.join(directory, "control-ui"));
+    addCandidate(path.join(directory, "dist", "control-ui"));
+    addCandidate(path.join(directory, "control-ui"));
   }
-  if (packageRoot) {
-    addCandidate(candidates, path.join(packageRoot, "dist", "control-ui"));
-  }
-  addCandidate(candidates, path.join(cwd, "dist", "control-ui"));
+  addCandidate(packageRoot ? path.join(packageRoot, "dist", "control-ui") : null);
+  addCandidate(path.join(cwd, "dist", "control-ui"));
 
   for (const dir of candidates) {
     const indexPath = path.join(dir, "index.html");
@@ -425,6 +383,7 @@ export async function ensureControlUiAssetsBuilt(
 
   let build: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
+    const { runCommandWithTimeout } = await import("../process/exec.js");
     build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
       cwd: repoRoot,
       timeoutMs: opts.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,

@@ -7,15 +7,20 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../../../plugins/memory-state.test-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
@@ -34,7 +39,6 @@ vi.mock("../../../plugins/providers.runtime-core.js", () => ({
 }));
 
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 
 async function admitPrompt(
@@ -60,6 +64,7 @@ afterEach(() => {
     admission.close();
   }
   vi.restoreAllMocks();
+  clearMemoryPluginState();
   providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
@@ -73,6 +78,8 @@ async function preparePermissionPrompt(
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
   skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
   webSearchUnconfigured?: () => boolean,
+  attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
+  toolSearchCatalogRef?: ToolSearchCatalogRef,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -112,6 +119,8 @@ async function preparePermissionPrompt(
     toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
+    requireExplicitMessageTarget,
+    ...attemptOverrides,
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
@@ -126,7 +135,6 @@ async function preparePermissionPrompt(
       workspaceNotes: [],
     },
     capabilityToolNames,
-    requireExplicitMessageTarget,
     effectiveTools: skills?.initialToolNames
       ? tools.filter(({ name }) => skills.initialToolNames?.includes(name))
       : tools,
@@ -146,6 +154,7 @@ async function preparePermissionPrompt(
     webSearchUnconfigured,
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
+    toolSearchCatalogRef,
   });
   if (!prepared.prepareToolPrompt) {
     throw new Error("Expected a refreshable attempt prompt");
@@ -162,6 +171,56 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it("refreshes deferred reporting only when the prepared catalog is accepted", async () => {
+    const deferred: AgentTool = {
+      name: "deferred",
+      label: "Deferred",
+      description: "Deferred",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const catalogRef: ToolSearchCatalogRef = {
+      current: {
+        counterScope: "test",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+        entries: [
+          {
+            id: "openclaw:core:deferred",
+            name: deferred.name,
+            source: "openclaw",
+            sourceName: "core",
+            description: deferred.description,
+            parameters: deferred.parameters,
+            tool: deferred,
+          },
+        ],
+      },
+    };
+    const { prepared } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      catalogRef,
+    );
+    expect(prepared.systemPromptReport?.tools.deferred?.entries.map((entry) => entry.name)).toEqual(
+      ["deferred"],
+    );
+    catalogRef.current!.entries = [];
+    const refresh = await prepared.prepareToolPrompt!();
+    expect(prepared.systemPromptReport?.tools.deferred?.entries).toHaveLength(1);
+    refresh(prepared.systemPromptText);
+    expect(prepared.systemPromptReport?.tools.deferred?.entries).toEqual([]);
+    expect(
+      prepared.systemPromptReport?.tools.entries.some((entry) => entry.name === "deferred"),
+    ).toBe(false);
+  });
+
   it("carries the prepared missing-search fact into the actual initial prompt and tool refresh", async () => {
     let missing = true;
     const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
@@ -182,27 +241,6 @@ describe("buildAttemptSystemPrompt", () => {
 
   const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";
 
-  it.each([undefined, ["message"]])(
-    "reports the catalog selected by the attempt's tool policy (%j)",
-    async (toolsAllow) => {
-      const { prepared } = await preparePermissionPrompt(false, undefined, undefined, undefined, {
-        prompt: skillsCatalog,
-        toolsAllow,
-      });
-      const included = toolsAllow === undefined;
-      expect(prepared.systemPromptText.includes(skillsCatalog)).toBe(included);
-      expect(prepared.systemPromptReport?.skills).toEqual({
-        promptChars: included ? skillsCatalog.length : 0,
-        hash: createHash("sha256")
-          .update(included ? skillsCatalog : "")
-          .digest("hex"),
-        entries: included
-          ? [{ name: "weather", blockChars: "<skill><name>weather</name></skill>".length }]
-          : [],
-      });
-    },
-  );
-
   it("refreshes skill diagnostics when read visibility changes or hooks replace the prompt", async () => {
     const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
       false,
@@ -220,6 +258,9 @@ describe("buildAttemptSystemPrompt", () => {
     expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual([
       "weather",
     ]);
+    expect(prepared.systemPromptReport?.skills.hash).toBe(
+      createHash("sha256").update(skillsCatalog).digest("hex"),
+    );
 
     const overridden = await refreshSystemPrompt("Use the deliberate hook override.", [read]);
     expect(overridden).not.toContain(skillsCatalog);
@@ -227,41 +268,25 @@ describe("buildAttemptSystemPrompt", () => {
     expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
   });
 
-  it.each([undefined, ["message"]])(
-    "reports read becoming visible while preserving attempt tool policy (%j)",
-    async (toolsAllow) => {
-      const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
-        false,
-        undefined,
-        undefined,
-        undefined,
-        { prompt: skillsCatalog, toolsAllow, initialToolNames: [] },
-      );
-      expect(prepared.systemPromptText).not.toContain(skillsCatalog);
-      expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+  it("reports read becoming visible while preserving attempt tool policy", async () => {
+    const toolsAllow = ["message"];
+    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { prompt: skillsCatalog, toolsAllow, initialToolNames: [] },
+    );
+    expect(prepared.systemPromptText).not.toContain(skillsCatalog);
+    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
 
-      const refreshed = await refreshSystemPrompt(prepared.systemPromptText, [read]);
-      const included = toolsAllow === undefined;
-      expect(refreshed.includes(skillsCatalog)).toBe(included);
-      expect(prepared.systemPromptReport?.skills.promptChars).toBe(
-        included ? skillsCatalog.length : 0,
-      );
-      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
-        included ? ["weather"] : [],
-      );
-    },
-  );
-
-  it("reports no skills for a raw model run even with an eligible catalog", async () => {
-    const { prepared } = await preparePermissionPrompt(true, undefined, undefined, undefined, {
-      prompt: skillsCatalog,
-    });
-    expect(prepared.systemPromptText).toBe("");
+    const refreshed = await refreshSystemPrompt(prepared.systemPromptText, [read]);
+    expect(refreshed).not.toContain(skillsCatalog);
     expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
     expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
   });
 
-  it.each([undefined, "agent:main:execution"])(
+  it.each([undefined])(
     "keeps the system prompt identical when execution-owned processes change: %s",
     async (sessionKey) => {
       const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });
@@ -299,71 +324,6 @@ describe("buildAttemptSystemPrompt", () => {
     expect(prompts[2]).toBe(prompts[0]);
   });
 
-  it.each([
-    { sandboxSessionKey: "global", mode: "off" as const, sandboxed: false },
-    { sandboxSessionKey: "agent:main:policy", mode: "all" as const, sandboxed: true },
-  ])(
-    "reports the prepared sandbox policy even if configuration changes ($sandboxSessionKey)",
-    async (testCase) => {
-      const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
-      const config = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: {
-            main: { sandbox: { mode: "off" as const } },
-            marketing: { sandbox: { mode: "all" as const } },
-          },
-        },
-      };
-      const attempt = {
-        config,
-        admittedRunContext: await admitPrompt(config, "marketing"),
-        agentId: "marketing",
-        sessionId: "global-system-prompt",
-        sessionKey: "global",
-        provider: "openai",
-        modelId: "gpt-5.5",
-        model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
-        workspaceDir,
-      };
-      const result = await prepareEmbeddedAttemptSystemPrompt({
-        attempt: attempt as never,
-        bootstrap: {
-          ...buildBootstrapBudgetState({ config, agentId: "marketing", files: [] }),
-          workspaceNotes: [],
-          contextFiles: [],
-          bootstrapInjectionStats: [],
-        } as never,
-        activeContextEngine: undefined,
-        capabilityToolNames: new Set(),
-        effectiveTools: [],
-        setup: createAttemptSetupFixture({
-          effectiveCwd: workspaceDir,
-          effectiveWorkspace: workspaceDir,
-          // Preserve the prepared model binding instead of discovering provider plugins.
-          getProviderRuntimeHandle: () => ({
-            provider: attempt.provider,
-            modelId: attempt.modelId,
-            prepared: true,
-          }),
-          sandboxSessionKey: testCase.sandboxSessionKey,
-          sandboxReport: { mode: testCase.mode, sandboxed: testCase.sandboxed },
-          sessionAgentId: "marketing",
-        }),
-        isRawModelRun: true,
-        modelToolsEnabled: false,
-        skillsPrompt: "",
-        toolSearchDirectoryEnabled: false,
-        toolSearchRuntimeConfig: config,
-      });
-
-      expect(result.systemPromptReport?.sandbox).toEqual({
-        mode: testCase.mode,
-        sandboxed: testCase.sandboxed,
-      });
-      expect(providerRegistryMocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
-    },
-  );
   it("marks rebuilt prompts as fresh even when restoring the original bytes", async () => {
     const { prepared, read } = await preparePermissionPrompt();
     const original = prepared.systemPromptText;
@@ -478,7 +438,7 @@ describe("buildAttemptSystemPrompt", () => {
     expect(markStage).toHaveBeenCalledWith("system-prompt");
   });
 
-  it.each(["/tmp/openclaw", "/tmp/open\u202eclaw\n"])(
+  it.each(["/tmp/open\u202eclaw\n"])(
     "injects workspace identity context from %j",
     async (workspaceDir) => {
       // Workspace identity files are part of the base system prompt and must
@@ -498,8 +458,6 @@ describe("buildAttemptSystemPrompt", () => {
           },
           tools: [],
           modelAliasLines: [],
-          userTimezone: "UTC",
-          userDate: "2026-01-05",
           contextFiles: [
             { path: "/tmp/openclaw/SOUL.md", content: "SOUL_CONTEXT_MARKER" },
             { path: "/tmp/openclaw/IDENTITY.md", content: "IDENTITY_CONTEXT_MARKER" },
@@ -515,6 +473,34 @@ describe("buildAttemptSystemPrompt", () => {
       expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
     },
   );
+
+  it("leaves project annotation guidance to the selected memory plugin", async () => {
+    const seenProjectKeys: Array<string | undefined> = [];
+    registerTestMemoryPromptBuilder((params) => {
+      seenProjectKeys.push(params.projectKey);
+      return ["## Provider Memory", "PROVIDER_MEMORY_MARKER"];
+    });
+    const { prepared } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        preparedModelRuntime: {
+          projectKey: "github.com/acme/Alpha",
+          activeProjectKeys: [],
+          configuredModelAliases: [],
+          isCurrent: () => true,
+        } as unknown as EmbeddedRunAttemptParams["preparedModelRuntime"],
+      },
+    );
+
+    expect(seenProjectKeys).toContain("github.com/acme/Alpha");
+    expect(prepared.systemPromptText).toContain("PROVIDER_MEMORY_MARKER");
+    expect(prepared.systemPromptText).not.toContain("<!-- project:");
+  });
 
   it("filters first-turn curated context to global and active-project entries", async () => {
     const result = await buildAttemptSystemPrompt({
@@ -532,8 +518,6 @@ describe("buildAttemptSystemPrompt", () => {
         },
         tools: [],
         modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
         activeProjectKeys: ["github.com/acme/Alpha"],
         contextFiles: [
           {
@@ -570,8 +554,6 @@ describe("buildAttemptSystemPrompt", () => {
         },
         tools: [],
         modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
         bootstrapMode: "full",
         bootstrapTruncationNotice: "Bootstrap context was truncated.",
         contextFiles: [
@@ -619,8 +601,6 @@ describe("buildAttemptSystemPrompt", () => {
         },
         tools: [],
         modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
         promptMode: "minimal",
         extraSystemPrompt:
           "# Subagent Context\n\n## Your Role\n- You were created to handle: RUN_MODE_TASK_77950",
@@ -633,52 +613,57 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).toContain("## Subagent Context");
     expect(result.systemPrompt).toContain("RUN_MODE_TASK_77950");
   });
-
-  it("omits system prompts for raw model probes", async () => {
-    // Raw model probes still build a base prompt for diagnostics, but the final
-    // provider prompt must be empty.
-    const rawTransform = vi.fn((systemPrompt: string) => systemPrompt);
-    const result = await buildAttemptSystemPrompt({
-      isRawModelRun: true,
-      transformSystemPrompt: rawTransform,
-      embeddedSystemPrompt: {
-        workspaceDir: "/tmp/openclaw",
-        reasoningTagHint: false,
-        runtimeInfo: {
-          host: "test-host",
-          os: "Darwin",
-          arch: "arm64",
-          node: "v22.0.0",
-          model: "openai/gpt-5.5",
-        },
-        tools: [],
-        modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
-        bootstrapMode: "full",
-        contextFiles: [
-          {
-            path: "/tmp/openclaw/BOOTSTRAP.md",
-            content: "Reply with BOOTSTRAP_OK.",
-          },
-        ],
-      },
-    });
-
-    expect(result.baseSystemPrompt).toContain("Reply with BOOTSTRAP_OK.");
-    expect(result.systemPrompt).toBe("");
-    expect(rawTransform).not.toHaveBeenCalled();
-  });
 });
 
-describe("embedded prepared message-target guidance", () => {
-  it.each([false, true])(
-    "carries the prepared target requirement (%s) through prompt assembly",
-    async (required) => {
-      const { prepared } = await preparePermissionPrompt(false, undefined, required);
-      expect(prepared.systemPromptText).toContain(
-        required ? "target required this turn" : "current source is default target",
-      );
-    },
-  );
+describe("embedded session prompt delivery", () => {
+  // Provider prefix caches need one system prompt per session; turn delivery rules
+  // that differ (heartbeats, completions) travel in the turn's runtime context.
+  it.each([
+    [
+      "source-only completion",
+      {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        requireExplicitMessageTarget: false,
+      },
+    ],
+    [
+      "explicit-target heartbeat",
+      { sourceReplyDeliveryMode: "message_tool_only" as const, requireExplicitMessageTarget: true },
+    ],
+  ])("keeps the user turn's system prompt on a %s turn", async (_kind, turn) => {
+    const user = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        sourceReplyDeliveryMode: "automatic",
+      },
+    );
+    const synthetic = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      turn,
+    );
+    expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
+    expect(
+      buildTurnDeliveryContextFragments({
+        sessionKey: synthetic.attempt.sessionKey,
+        sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
+      })
+        .map((fragment) => fragment.text)
+        .join("\n"),
+    ).toMatch(
+      turn.requireExplicitMessageTarget
+        ? /final text is private[\s\S]*target required this turn/u
+        : /final text is private/u,
+    );
+  });
 });

@@ -18,10 +18,6 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import {
-  createControlUiAssetRetention,
-  type ControlUiAssetRetention,
-} from "./control-ui-asset-retention.js";
 import type {
   ControlUiFileRead,
   ControlUiFileSnapshot,
@@ -35,7 +31,6 @@ export type ControlUiRootState =
       kind: "bundled";
       path: string;
       realPath?: string;
-      retainedAssets?: ControlUiAssetRetention;
       publicAssetBuildId?: string;
     }
   | { kind: "resolved"; path: string; realPath?: string }
@@ -48,6 +43,8 @@ export type ControlUiRootState =
 type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "resolved" }>;
 type RootFiles = {
   controller: AbortController;
+  generation: number;
+  cacheEnabled: boolean;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
   cached: LruCache<{ asset: ControlUiRootAsset; bytes: number }>;
 };
@@ -76,6 +73,8 @@ function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
   if (!files) {
     files = {
       controller: new AbortController(),
+      generation: 0,
+      cacheEnabled: true,
       pending: new Map(),
       cached: new LruCache(MAX_PREPARED_ENTRIES, {
         maxBytes: MAX_PREPARED_BYTES,
@@ -96,21 +95,25 @@ export function readControlUiRootAsset(
   const runtime = fileRuntime();
   const owner = rootFiles(runtime, root);
   owner.controller.signal.throwIfAborted();
+  const generation = owner.generation;
   const key = `${readBody ? "body" : "metadata"}:${fileRel}`;
+  const pendingKey = `${generation}:${key}`;
   const cachedKey = owner.cached.peek(`body:${fileRel}`) ? `body:${fileRel}` : key;
   const cached = owner.cached.get(cachedKey);
   if (cached) {
     return Promise.resolve(cached.asset);
   }
   const pending =
-    owner.pending.get(key) ?? (!readBody ? owner.pending.get(`body:${fileRel}`) : undefined);
+    owner.pending.get(pendingKey) ??
+    (!readBody ? owner.pending.get(`${generation}:body:${fileRel}`) : undefined);
   if (pending) {
     return pending;
   }
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
     workerClass: "file-reader",
-    sharedCompute: true,
+    // Reuse the bounded reader pool across UI visits several minutes apart.
+    idleTimeoutMs: 10 * 60_000,
     maxPendingTasks: 2_048,
     maxPendingBytes: 8 * 1024 * 1024,
   }));
@@ -134,20 +137,13 @@ export function readControlUiRootAsset(
     );
   };
   const preparation = (async (): Promise<ControlUiRootAsset | null> => {
-    let location = {
+    const location = {
       rootPath: root.path,
       rootRealPath: root.realPath,
       filePath: path.resolve(root.path, fileRel),
       rejectHardlinks: root.kind !== "bundled",
     };
-    let file = await read(location);
-    if (!file && root.kind === "bundled" && fileRel.startsWith("assets/")) {
-      const retained = await root.retainedAssets?.resolveAsset(fileRel);
-      if (retained) {
-        location = { ...retained, rootPath: retained.rootRealPath, rejectHardlinks: true };
-        file = await read(location);
-      }
-    }
+    const file = await read(location);
     if (!file) {
       return null;
     }
@@ -165,7 +161,13 @@ export function readControlUiRootAsset(
       [asset.br, asset.gzip] = await Promise.all([sidecar(".br"), sidecar(".gz")]);
     }
     owner.controller.signal.throwIfAborted();
-    if (root.kind === "bundled" && !(asset.br instanceof Error) && !(asset.gzip instanceof Error)) {
+    if (
+      root.kind === "bundled" &&
+      owner.cacheEnabled &&
+      owner.generation === generation &&
+      !(asset.br instanceof Error) &&
+      !(asset.gzip instanceof Error)
+    ) {
       const bytes =
         (file.body?.byteLength ?? 0) +
         (asset.br?.body?.byteLength ?? 0) +
@@ -175,8 +177,8 @@ export function readControlUiRootAsset(
       }
     }
     return asset;
-  })().finally(() => owner.pending.delete(key));
-  owner.pending.set(key, preparation);
+  })().finally(() => owner.pending.delete(pendingKey));
+  owner.pending.set(pendingKey, preparation);
   return preparation;
 }
 
@@ -227,7 +229,6 @@ function prepareResolvedRootState({
           kind: "bundled",
           ...resolvedRoot,
           publicAssetBuildId,
-          retainedAssets: createControlUiAssetRetention(root),
         }
       : { kind: "resolved", ...resolvedRoot };
   } catch (error) {
@@ -320,16 +321,6 @@ export function createGatewayControlUiRootLifecycle(
         const detail = error instanceof Error ? error.message : String(error);
         params.log.warn(`gateway: Control UI assets build failed: ${detail}`);
       }
-      return;
-    }
-    if (state.kind === "bundled") {
-      await state.retainedAssets?.prepare({ signal }).catch((error: unknown) => {
-        if (isStopped()) {
-          return;
-        }
-        const detail = error instanceof Error ? error.message : String(error);
-        params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
-      });
     }
   };
   const start = (): Promise<void> => {
@@ -362,6 +353,12 @@ export function createGatewayControlUiRootLifecycle(
         return;
       }
       enabled = nextEnabled;
+      // Admitted HTTP reads may finish, but cannot refill a disabled cache or
+      // coalesce with reads after re-enable. Stop still joins every generation.
+      const files = rootFiles(fileRuntime(), state);
+      files.generation++;
+      files.cacheEnabled = enabled;
+      files.cached.clear();
       if (enabled) {
         if (state.kind === "failed") {
           Object.assign(state, { kind: "preparing" });

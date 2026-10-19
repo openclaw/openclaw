@@ -1,6 +1,6 @@
 import { ButtonStyle } from "discord-api-types/v10";
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   type ApprovalViewModel,
   type ChannelApprovalCapabilityHandlerContext,
   type PendingApprovalView,
@@ -16,7 +16,7 @@ import type {
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
-import { buildExecApprovalCustomId } from "./approval-custom-id.js";
+import { buildExecApprovalCustomId, DISCORD_APPROVAL_DECISIONS } from "./approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
@@ -25,18 +25,13 @@ import { discordApprovalMessageUpdates } from "./approval-message-updates.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
-  Button,
-  Container,
   createChannelMessage,
-  createUserDmChannel,
   deleteChannelMessage,
   editChannelMessage,
-  Row,
-  Separator,
-  TextDisplay,
-  serializePayload,
-  type MessagePayloadObject,
-} from "./internal/discord.js";
+} from "./internal/api.messages.js";
+import { createUserDmChannel } from "./internal/api.users.js";
+import { Button, Container, Row, Separator, TextDisplay } from "./internal/components.message.js";
+import { serializePayload, type MessagePayloadObject } from "./internal/payload.js";
 import {
   createDiscordClient,
   createDiscordMessageNonce,
@@ -126,12 +121,9 @@ function createApprovalContainer(view: ApprovalViewModel): Container {
     : null;
   const decisionLabel =
     view.phase === "resolved"
-      ? formatChannelApprovalResolvedLabel(view, (decision) =>
-          decision === "allow-once"
-            ? "Allowed (once)"
-            : decision === "allow-always"
-              ? "Allowed (always)"
-              : "Denied",
+      ? formatChannelApprovalResolvedLabel(
+          view,
+          (decision) => DISCORD_APPROVAL_DECISIONS[decision].label,
         )
       : undefined;
   const title = pending
@@ -152,11 +144,7 @@ function createApprovalContainer(view: ApprovalViewModel): Container {
     view.phase === "expired"
       ? "#99AAB5"
       : view.phase === "resolved"
-        ? view.decision === "deny"
-          ? "#ED4245"
-          : view.decision === "allow-always"
-            ? "#5865F2"
-            : "#57F287"
+        ? DISCORD_APPROVAL_DECISIONS[view.decision].color
         : plugin
           ? view.severity === "critical"
             ? "#ED4245"
@@ -214,25 +202,19 @@ async function finalizeMessage(params: {
         token: params.token,
         accountId: params.accountId,
       });
+      let request: () => Promise<unknown>;
       if (operation === "delete") {
-        await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-          discordRequest(
-            () => deleteChannelMessage(rest, params.channelId, params.messageId),
-            "delete-approval",
-          ),
-        );
+        request = () => deleteChannelMessage(rest, params.channelId, params.messageId);
       } else {
         const payload = buildExecApprovalPayload(params.container);
-        await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-          discordRequest(
-            () =>
-              editChannelMessage(rest, params.channelId, params.messageId, {
-                body: stripUndefinedFields(serializePayload(payload)),
-              }),
-            "update-approval",
-          ),
-        );
+        request = () =>
+          editChannelMessage(rest, params.channelId, params.messageId, {
+            body: stripUndefinedFields(serializePayload(payload)),
+          });
       }
+      await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
+        discordRequest(request, `${operation}-approval`),
+      );
       return;
     } catch (err) {
       logError(`discord approvals: failed to ${operation} message: ${String(err)}`);
@@ -251,7 +233,7 @@ function buildTerminalApprovalResult(
   return { kind: "update", payload: createApprovalContainer(params.view) } as const;
 }
 
-export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   DiscordPendingDelivery,
   PreparedDeliveryTarget,
   PendingApproval,

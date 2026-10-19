@@ -78,7 +78,13 @@ export interface OutboundResult {
   verdict: Verdict;
 }
 
-export async function composeOutbound(options: ComposeOutboundOptions): Promise<OutboundResult> {
+export function prepareOutboundProposal(
+  options: Pick<
+    ComposeOutboundOptions,
+    "id" | "from" | "to" | "body" | "ts" | "recipientEncryptionPublicKey" | "policyVersion"
+  >,
+  senderSigningKeyLength: number,
+) {
   validateEnvelopeMetadata(
     options.id,
     options.from,
@@ -87,7 +93,7 @@ export async function composeOutbound(options: ComposeOutboundOptions): Promise<
   );
   validateMessageBody(options.body);
   if (
-    fromBase64url(options.senderSigningSecretKey).length !== 32 ||
+    senderSigningKeyLength !== 32 ||
     fromBase64url(options.recipientEncryptionPublicKey).length !== 32
   ) {
     throw new Error("invalid outbound key material");
@@ -109,6 +115,14 @@ export async function composeOutbound(options: ComposeOutboundOptions): Promise<
     proposalHash,
     options.policyVersion,
   );
+  return { checks, proposalHash, approvalDigest };
+}
+
+export async function composeOutbound(options: ComposeOutboundOptions): Promise<OutboundResult> {
+  const { checks, proposalHash, approvalDigest } = prepareOutboundProposal(
+    options,
+    fromBase64url(options.senderSigningSecretKey).length,
+  );
   await options.audit.appendEvent("proposal", {
     id: options.id,
     from: options.from,
@@ -124,7 +138,7 @@ export async function composeOutbound(options: ComposeOutboundOptions): Promise<
       decision: "deny",
       findings: checks.findings,
     });
-    throw new PipelineError("deterministic", "deterministic checks denied message");
+    throw new PipelineError("deterministic", "rule-based checks denied message");
   }
   const verdict = await classifyWithReview(
     options,
@@ -207,7 +221,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
       finalized = true;
       throw new PipelineError(
         "deterministic",
-        "deterministic checks denied message",
+        "rule-based checks denied message",
         undefined,
         receipt,
       );

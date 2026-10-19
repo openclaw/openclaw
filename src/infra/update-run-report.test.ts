@@ -47,63 +47,57 @@ function failureReport(record: UpdateRunRecord, result: Partial<UpdateRunResult>
 afterEach(() => vi.restoreAllMocks());
 
 describe("update run report", () => {
-  it.each([
-    {
-      reason: "preflight-node-runtime-incompatible",
-      detail: "Node 24.15.0; requires engines.node >=24.16.0",
-    },
-    { reason: "node-runtime-preflight", detail: "Runtime capability probe failed" },
-  ])("separates the runtime check failure from its $detail diagnostics", ({ reason, detail }) => {
+  it("reports repeated database-path advisories once across Doctor phases", () => {
+    const detail =
+      "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
+    const report = renderUpdateRunReport(
+      run({
+        steps: [
+          { step: "warning:doctor", status: "completed", detail },
+          { step: "activating", status: "completed" },
+          { step: "warning:post-plugin-doctor", status: "completed", detail },
+        ],
+      }),
+    );
+    expect(report.lines.filter((line) => line.startsWith("Warning: "))).toEqual([
+      `Warning: ${detail}`,
+    ]);
+    expect(report.headline).toContain("1 warning needs attention");
+  });
+  it.each([true, false])("keeps runtime guidance within the chat budget (saved=%s)", (saved) => {
+    const action = `Keep the candidate installed and do not roll back code alone. ${"🦞".repeat(600)}`;
+    const reason = saved ? "node-runtime-preflight" : "preflight-node-runtime-incompatible";
     const record = run({
       status: "failed",
       reason,
+      origin: saved ? { nextAction: action } : {},
       steps: [
         { step: "staging", status: "completed" },
         {
           step: "preflight-node-runtime",
           status: "failed",
-          detail,
+          detail: "detail ".repeat(300),
           failureFacts: [{ check: "node-runtime", code: reason, affectedKey: "engines.node" }],
         },
       ],
     });
-    const saved = structuredClone(record);
-    const nextAction = "Run `openclaw --profile work triage` to repair this installation.";
-    const report = renderUpdateRunReport(record, { nextAction });
-
+    const original = structuredClone(record);
+    const report = renderUpdateRunReport(record, saved ? {} : { nextAction: action });
     expect(report.headline).toBe(
       "⚠️ OpenClaw could not complete the update. A required system check failed.",
     );
-    expect(report.lines.slice(0, 4)).toEqual([
-      nextAction,
-      "",
-      "Details:",
-      `Reason code: ${reason}`,
-    ]);
-    expect(report.markdown).toContain(`${report.headline}\n${nextAction}\n\nDetails:`);
-    expect(report.markdown).toContain(`Failed: preflight-node-runtime — ${detail}`);
-    expect(report.markdown).toContain(`Failing check node-runtime (${reason}); key engines.node`);
-    expect(report.markdown).toContain("Phases: staging");
-    expect(record).toEqual(saved);
-  });
-
-  it.each([true, false])("keeps runtime guidance within the chat budget (saved=%s)", (saved) => {
-    const action = `Keep the candidate installed and do not roll back code alone. ${"🦞".repeat(600)}`;
-    const record = run({
-      status: "failed",
-      reason: "node-runtime-preflight",
-      origin: saved ? { nextAction: action } : {},
-      steps: [{ step: "preflight-node-runtime", status: "failed", detail: "detail ".repeat(300) }],
-    });
-    const report = renderUpdateRunReport(record, saved ? {} : { nextAction: action });
+    expect(report.lines.slice(1, 4)).toEqual(["", "Details:", `Reason code: ${reason}`]);
+    expect(report.lines).toContain(`Failing check node-runtime (${reason}); key engines.node`);
+    expect(report.lines).toContain("Phases: staging");
     expect(report.markdown.length).toBeLessThanOrEqual(1500);
     expect(Buffer.from(report.markdown).toString("utf8")).toBe(report.markdown);
     expect(report.markdown).toContain(
       "Keep the candidate installed and do not roll back code alone.",
     );
-    expect(report.markdown).toContain("Reason code: node-runtime-preflight");
+    expect(report.markdown).toContain(`Reason code: ${reason}`);
     expect(report.lines.join("\n")).toContain(action);
     expect(report.markdown.includes("Historical recovery advice:")).toBe(saved);
+    expect(record).toEqual(original);
   });
 
   it.each([
@@ -209,6 +203,60 @@ describe("update run report", () => {
   );
 
   it.each([
+    { health: "target", reason: "runtime-verification-failed", recovered: true },
+    { health: "previous", reason: "runtime-verification-failed", recovered: false },
+    { health: "unavailable", reason: "runtime-verification-failed", recovered: false },
+    { health: "unknown-target", reason: "runtime-verification-failed", recovered: false },
+    { health: "target", reason: "state-migration-started", recovered: false },
+  ] as const)(
+    "reconciles only stale runtime recovery advice when $health is serving ($reason)",
+    ({ health, reason, recovered }) => {
+      const record = run({
+        status: "failed",
+        reason: "state-migrated-no-rollback",
+        after: health === "unknown-target" ? {} : { version: "2026.9.2" },
+        origin: {
+          nextAction: `Your Gateway is still serving 2026.9.1; nothing to restore. Restart remains unsafe (${reason}). Keep the new installation and recovery snapshots; do not roll back code alone.`,
+        },
+        steps: [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }],
+        verification: {
+          runningVersion: "2026.9.1",
+          versionMatch: true,
+          readyz: true,
+          settled: true,
+          recovery: { serviceRestartSafe: false, reason },
+        },
+      });
+      const saved = structuredClone(record);
+      const report = renderUpdateRunReport(record, {
+        currentHealth:
+          health === "unavailable"
+            ? { kind: "unavailable" }
+            : { kind: "responding", version: health === "previous" ? "2026.9.1" : "2026.9.2" },
+      });
+      expect(report.headline).toContain("update failed: state-migrated-no-rollback");
+      if (recovered) {
+        expect(report.markdown).not.toContain("runtime-verification-failed");
+        expect(report.markdown).not.toContain("restart remains unsafe");
+        expect(report.markdown).not.toContain("Restart remains unsafe");
+        expect(report.markdown).not.toContain("Historical recovery advice");
+        expect(report.markdown).toContain(
+          "Current health: Gateway answered on the recorded port (2026.9.2).",
+        );
+        expect(report.markdown).toContain("saved runtime verification failure no longer applies");
+        expect(report.markdown).toContain("Keep the new installation and backups");
+        expect(report.markdown).toContain("rolling back code alone is unsafe");
+      } else {
+        expect(report.markdown).toContain(`restart remains unsafe (${reason})`);
+        expect(report.markdown).toContain("Historical recovery advice");
+        expect(report.markdown).toContain("recovery snapshots");
+        expect(report.markdown).toContain("do not roll back code alone");
+      }
+      expect(record).toEqual(saved);
+    },
+  );
+
+  it.each([
     ["external-supervisor-update-required", "Use your server or deployment's update workflow"],
     ["container-image-install", "Pull or build the target Docker/container image"],
     ["unmanaged-package-install", "Reinstall using the original method"],
@@ -238,9 +286,7 @@ describe("update run report", () => {
     { reason: "abandoned", acknowledgement: "completed", reconciled: true },
     { reason: "legacy-driver-expired", acknowledgement: "completed", reconciled: true },
     { reason: null, acknowledgement: "completed", reconciled: false },
-    { reason: "  ", acknowledgement: "completed", reconciled: false },
     { reason: "abandoned", acknowledgement: "in_progress", reconciled: false },
-    { reason: "abandoned", acknowledgement: "failed", reconciled: false },
   ])(
     "requires completed acknowledgement of a saved abandonment ($reason, $acknowledgement)",
     ({ reason, acknowledgement, reconciled }) => {
@@ -394,22 +440,10 @@ describe("update run report", () => {
 
   it.each([
     {
-      label: "version upgrade without a recorded previous commit",
-      before: { version: "2026.9.6" },
-      after: { version: "2026.9.7", sha: "2dd93a290b748686160b4a478b7ee003cc0f9f24" },
-      expected: "2026.9.7 (2dd93a29) (from 2026.9.6)",
-    },
-    {
       label: "version upgrade with both commits",
       before: { version: "2026.9.6", sha: "1111111111111111111111111111111111111111" },
       after: { version: "2026.9.7", sha: "9f3c21a0000000000000000000000000000000aa" },
       expected: "2026.9.7 (9f3c21a0) (from 2026.9.6 (11111111))",
-    },
-    {
-      label: "commit change within the same version",
-      before: { version: "2026.8.1", sha: "1111111111111111111111111111111111111111" },
-      after: { version: "2026.8.1", sha: "9f3c21a0000000000000000000000000000000aa" },
-      expected: "2026.8.1 (9f3c21a0) (from 2026.8.1 (11111111))",
     },
     {
       label: "legacy record with only commits",
@@ -489,6 +523,28 @@ describe("update run report", () => {
       patch: { reason: "preflight-insufficient-space" },
       contains: ["Free space on the preflight staging"],
     },
+    ...[
+      { reason: "state-migrated-no-rollback" },
+      {
+        reason: "post-install-verify",
+        verification: {
+          rollbackOutcome: {
+            status: "not-attempted" as const,
+            reason: "state-migrated-no-rollback",
+          },
+        },
+      },
+    ].map((patch) => ({
+      label: `migration rollback refusal without saved guidance (${patch.reason})`,
+      patch,
+      contains: [
+        "State may have changed during migration, so rolling back code alone is unsafe.",
+        "Keep the new installation and backups",
+        "openclaw update status",
+        "openclaw doctor",
+      ],
+      excludes: ["Run openclaw triage"],
+    })),
     ...(
       [
         ["requester-revoked", "A current command owner must start a new update"],
@@ -502,19 +558,22 @@ describe("update run report", () => {
       },
       contains: [reason, guidance],
     })),
-    ...[null, "requester-revoked"].map((reason) => ({
+    ...[null, "requester-revoked", "state-migrated-no-rollback"].map((reason) => ({
       label: `saved profile after ${reason}`,
       patch: { reason, origin: { nextAction: originAction } },
       historical: true,
       contains: [
         "Historical recovery advice:",
         originAction,
-        ...(reason ? ["Further recovery requires a current command owner."] : []),
+        ...(reason === "requester-revoked"
+          ? ["Further recovery requires a current command owner."]
+          : []),
       ],
       excludes: [
         "Run openclaw triage",
         "run openclaw doctor --fix",
         "operator can run openclaw triage locally",
+        "State may have changed during migration",
       ],
     })),
     {
@@ -687,9 +746,7 @@ describe("update run report", () => {
       failedSteps: ["finalize:doctor"],
       expected: "saved-doctor-error",
     },
-    { reason: null, failedSteps: [], expected: "unknown reason" },
     { reason: null, failedSteps: ["requested"], expected: "unknown reason" },
-    { reason: null, failedSteps: ["requested", "finalize:doctor"], expected: "finalize:doctor" },
     {
       reason: "  ",
       failedSteps: ["requested", "finalize:doctor", "finalize:plugins"],

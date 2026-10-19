@@ -40,6 +40,8 @@ export type ContextTokenResolutionParams = {
   modelContextTokens?: number;
   allowAsyncLoad?: boolean;
   allowUnscopedModelLookup?: boolean;
+  /** Reports with admitted model facts must not reuse a different cache generation. */
+  allowCacheLookup?: boolean;
 };
 
 export type ModelContextTokenProjection = {
@@ -48,7 +50,7 @@ export type ModelContextTokenProjection = {
 };
 
 const normalizePositiveContextTokens = (value: number | undefined) =>
-  typeof value === "number" && value > 0 ? value : undefined;
+  value !== undefined && value > 0 ? value : undefined;
 
 const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 
@@ -76,11 +78,11 @@ function resolveProviderModelRef(params: {
 
 /** Preserve shipped self-prefixed context refs after exact configured-row selection. */
 function resolveConfiguredProviderModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
 ): ConfigModelEntry | undefined {
-  const providerConfig = resolveMergedModelProviderConfig(cfg ?? undefined, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   const bareModel = stripSelfProviderModelPrefix(provider, model);
   const findModel = createConfiguredProviderModelResolver(providerConfig, provider, (id) =>
     normalizeConfiguredProviderCatalogModelId(provider, id),
@@ -89,7 +91,7 @@ function resolveConfiguredProviderModel(
 }
 
 function resolveConfiguredRuntimeModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   modelProvider: string | undefined,
   model: string,
@@ -192,21 +194,20 @@ function resolveConfiguredContextTokenLimitsForModel(
   configuredModel: ConfigModelEntry | undefined,
   normalize: (value: number | undefined) => number | null | undefined,
 ) {
-  const { provider, model } = params;
+  const { model } = params;
+  const provider = normalizeProviderId(params.provider);
   const extraParamSources = resolveModelExtraParamSources({
     config: params.cfg,
-    provider: normalizeProviderId(provider),
+    provider,
     modelId: model,
   });
   const effectiveContext1M =
     extraParamSources.modelParams && Object.hasOwn(extraParamSources.modelParams, "context1m")
       ? extraParamSources.modelParams.context1m
       : extraParamSources.defaultParams?.context1m;
-  const fixedContextWindow = resolveAnthropicFixedContextWindow(
-    normalizeProviderId(provider),
-    model,
-    { claudeCli1M: effectiveContext1M === true },
-  );
+  const fixedContextWindow = resolveAnthropicFixedContextWindow(provider, model, {
+    claudeCli1M: effectiveContext1M === true,
+  });
   const configuredContextTokens = normalize(configuredModel?.contextTokens) ?? undefined;
   const configuredContextWindow = normalize(configuredModel?.contextWindow) ?? undefined;
   // Fixed provider contracts deliberately ignore materialized catalog windows.
@@ -259,18 +260,15 @@ export function resolveModelContextTokenProjectionFromCache(
         configuredModel,
         normalizePositiveContextTokens,
       );
-    if (effectiveConfiguredTokens !== undefined) {
-      return { contextTokens: effectiveConfiguredTokens, authoredContextTokens };
+    const configuredTokens = effectiveConfiguredTokens ?? fixedContextWindow;
+    if (configuredTokens !== undefined) {
+      return { contextTokens: configuredTokens, authoredContextTokens };
     }
-    if (fixedContextWindow !== undefined) {
-      return { contextTokens: fixedContextWindow, authoredContextTokens };
-    }
-    const providerResult = lookupContextTokens(
-      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-    );
-    const providerWindow = lookupContextWindow(
-      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
-    );
+    const providerKey = providerContextTokenCacheKey(ref.provider, ref.model);
+    const providerResult =
+      params.allowCacheLookup === false ? undefined : lookupContextTokens(providerKey);
+    const providerWindow =
+      params.allowCacheLookup === false ? undefined : lookupContextWindow(providerKey);
     const discoveredCap = minPositiveContextTokens(
       providerResult,
       normalizePositiveContextTokens(params.modelContextTokens),
@@ -291,7 +289,7 @@ export function resolveModelContextTokenProjectionFromCache(
     }
   }
 
-  if (params.allowUnscopedModelLookup === false) {
+  if (params.allowCacheLookup === false || params.allowUnscopedModelLookup === false) {
     return { contextTokens: params.fallbackContextTokens, authoredContextTokens };
   }
 

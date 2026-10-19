@@ -17,6 +17,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
+import { readDelegatedToolPolicy, type DelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
@@ -36,7 +37,7 @@ export type {
   SessionCapabilityStore,
 } from "./subagent-session-store.js";
 
-export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
+type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 type SubagentControlScope = "children" | "none";
 
 type PersistedSubagentToolPolicyEnvelope = {
@@ -46,6 +47,7 @@ type PersistedSubagentToolPolicyEnvelope = {
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
   inheritedToolPolicySource?: "sender";
+  delegatedToolPolicy?: DelegatedToolPolicy;
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -71,12 +73,8 @@ function isDashboardSessionKey(sessionKey: string): boolean {
 }
 
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
-  const leftAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(leftSessionKey)?.agentId,
-  );
-  const rightAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(rightSessionKey)?.agentId,
-  );
+  const leftAgentId = parseAgentSessionKey(leftSessionKey)?.agentId;
+  const rightAgentId = parseAgentSessionKey(rightSessionKey)?.agentId;
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
@@ -260,6 +258,20 @@ export function isSubagentEnvelopeSession(
   });
 }
 
+/** Visible spawns are interactive sessions; a dashboard key alone grants nothing. */
+export function isVisibleSpawnedSession(
+  sessionKey: string,
+  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
+): boolean {
+  if (!isDashboardSessionKey(sessionKey)) {
+    return false;
+  }
+  const entry = resolveSessionCapabilityEntry({ sessionKey, ...opts });
+  return (
+    entry?.createdVia === "spawn" && isStoredSubagentEnvelopeSession({ sessionKey, ...opts, entry })
+  );
+}
+
 /**
  * Resolve a persisted child envelope that is strong enough to carry authority.
  * Session-key shape alone is useful for fail-closed subagent restrictions, but
@@ -272,12 +284,17 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     store?: SessionCapabilityStore;
     agentId?: string;
   },
+  visited = new Set<string>(),
 ): PersistedSubagentToolPolicyEnvelope | undefined {
   const stored = resolveStoredSubagentToolPolicy(sessionKey, opts);
   if (!stored) {
     return undefined;
   }
   const { sessionKey: normalizedSessionKey, store, entry } = stored;
+  if (visited.has(normalizedSessionKey) || visited.size >= 32) {
+    return undefined;
+  }
+  visited.add(normalizedSessionKey);
   const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   const hasSpawnDepth =
     typeof entry?.spawnDepth === "number" &&
@@ -295,12 +312,31 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     return undefined;
   }
   const completionOwnerSessionKey = normalizeOptionalString(entry.completionOwnerSessionKey);
+  let delegatedToolPolicy = readDelegatedToolPolicy(entry.delegatedToolPolicy);
+  if (delegatedToolPolicy) {
+    const targetAgentId = delegatedToolPolicy.targetAgentId;
+    const direct = spawnedBy === delegatedToolPolicy.requesterSessionKey;
+    const parent =
+      !direct && isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
+        ? resolvePersistedSubagentToolPolicyEnvelope(spawnedBy, { ...opts, store }, visited)
+        : undefined;
+    if (
+      parseAgentSessionKey(normalizedSessionKey)?.agentId !== targetAgentId ||
+      (!direct &&
+        (parent?.delegatedToolPolicy?.requesterSessionKey !==
+          delegatedToolPolicy.requesterSessionKey ||
+          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
+    ) {
+      delegatedToolPolicy = undefined;
+    }
+  }
   return {
     sessionKey: normalizedSessionKey,
     spawnedBy,
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
+    delegatedToolPolicy,
     ...(entry.inheritedToolPolicySource === "sender"
       ? { inheritedToolPolicySource: "sender" as const }
       : {}),

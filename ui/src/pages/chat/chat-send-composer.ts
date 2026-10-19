@@ -78,6 +78,7 @@ export function clearSubmittedComposerState(
         : [];
   }
   resetChatInputHistoryNavigation(host);
+  host.composerDraftChanged?.();
   return {
     previousAttachments: submittedAttachments,
     previousDraft: submittedDraft,
@@ -293,20 +294,10 @@ function restoreFailedCommandComposer(
     return composer.previousAttachments.length === 0;
   }
   const restorePlan = strictComposerRestore(owner, composer);
-  if (restorePlan.draft) {
-    owner.chatMessage = composer.previousDraft;
-    owner.chatMentions = composer.previousMentions ?? [];
-    owner.chatReplyTarget = composer.previousReplyTarget ?? null;
-  }
-  if (restorePlan.attachments) {
-    owner.chatAttachments = composer.previousAttachments;
-  }
+  restorePlan.apply();
   const retained = composer.previousAttachments.length === 0 || restorePlan.attachments;
   if (!restorePlan.complete) {
     clearOwnedCommandComposerFallback(host, recovery);
-  }
-  if (owner !== host) {
-    owner.requestUpdate?.();
   }
   return retained;
 }
@@ -349,10 +340,22 @@ function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot
   const draft = snapshot.previousDraft != null && composerBlank;
   return {
     attachments,
-    draft,
     complete:
       (!snapshot.previousDraft?.trim() || draft) &&
       (!snapshot.previousAttachments?.length || attachments),
+    apply() {
+      if (draft) {
+        host.chatMessage = snapshot.previousDraft ?? "";
+        host.chatMentions = snapshot.previousMentions ?? [];
+        host.chatReplyTarget = snapshot.previousReplyTarget ?? null;
+      }
+      if (attachments) {
+        host.chatAttachments = snapshot.previousAttachments ?? [];
+      }
+      if (draft || attachments) {
+        host.composerDraftChanged?.();
+      }
+    },
   };
 }
 
@@ -366,14 +369,8 @@ export function cancelChatDelivery(
   if (!removed) {
     return false;
   }
-  if (plan.draft) {
-    host.chatMessage = snapshot.previousDraft ?? "";
-    host.chatMentions = snapshot.previousMentions ?? [];
-    host.chatReplyTarget = snapshot.previousReplyTarget ?? null;
-  }
-  if (plan.attachments) {
-    host.chatAttachments = snapshot.previousAttachments ?? [];
-  } else {
+  plan.apply();
+  if (!plan.attachments) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }
   return true;

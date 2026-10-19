@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -10,6 +11,8 @@ import { withQuestionGateway } from "../../agents/harness/gateway-question.test-
 import { createAdmittedHostCapabilityTestFixture } from "../../agents/harness/host-capability.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createTestUserTurnTranscriptTarget,
@@ -52,14 +55,16 @@ it.each([
       storePath,
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const original = createUserTurnTranscriptRecorder({
-      target,
-      input: { text: "Plan a trip", idempotencyKey: "original:user" },
-    });
-    const persisted = await original.persistApproved();
-    if (!persisted) {
-      throw new Error("original input did not persist");
-    }
+    const recorder = (text: string, id: string) =>
+      createUserTurnTranscriptRecorder({
+        target,
+        input: { text, idempotencyKey: `${id}:user` },
+      });
+    const original = recorder("Plan a trip", "original");
+    const persisted = expectDefined(
+      await original.persistApproved(),
+      "original input did not persist",
+    );
     const controller = new AbortController();
     const attempt = {
       agentId: target.agentId,
@@ -77,6 +82,8 @@ it.each([
       abortSignal: controller.signal,
     };
     const host = await createAdmittedHostCapabilityTestFixture(attempt);
+    const revokeAtCommit = vi.fn(() => host.closeHost());
+    let commitAdmission: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
     const askQuestion = () =>
       runAgentHarnessGatewayQuestion({
         questions,
@@ -88,7 +95,7 @@ it.each([
         delivery: { hostCapabilities: host.hostCapabilities, onBlockReply: async () => {} },
       });
     const foreignQuestion = createDeferred<Awaited<ReturnType<typeof askQuestion>>>();
-    const writer = SessionManager.open(target, dir);
+    const writer = await SessionManager.openAsync(target, dir);
     const runStarted = createDeferred();
     const releaseAppend = createDeferred();
     const providerResumed = vi.fn();
@@ -103,7 +110,7 @@ it.each([
         const answer =
           scenario === "foreign-registration" ? await foreignQuestion.promise : await askQuestion();
         await releaseAppend.promise;
-        const entryId = writer.appendMessage({
+        const entryId = await writer.appendMessageAsync({
           role: "toolResult",
           toolCallId: "trip-question",
           toolName: "ask_user",
@@ -121,10 +128,7 @@ it.each([
     );
     let sourceAnchor: TranscriptEntryAnchor | undefined;
     const answer = async (text: string, id: string) => {
-      const source = createUserTurnTranscriptRecorder({
-        target,
-        input: { text, idempotencyKey: `${id}:user` },
-      });
+      const source = recorder(text, id);
       await source.stageApproved?.({ runId: id, assertCurrent: () => {} });
       const claimed = await claimPendingAgentQuestionAnswer({
         sessionKey: target.sessionKey,
@@ -161,33 +165,35 @@ it.each([
         await expect(answer("1: Lisbon\n2: 2000", "complete")).resolves.toBe(true);
       }
       if (scenario === "unrelated-user") {
-        await createUserTurnTranscriptRecorder({
-          target,
-          input: { text: "An unrelated new turn", idempotencyKey: "unrelated:user" },
-        }).persistApproved();
+        await recorder("An unrelated new turn", "unrelated").persistApproved();
       } else if (scenario === "missing-generation") {
-        if (!sourceAnchor) {
-          throw new Error("question answer did not persist");
-        }
         const database = openOpenClawAgentDatabase({
           agentId: target.agentId,
-          path: sourceAnchor.storePath,
+          path: expectDefined(sourceAnchor, "question answer did not persist").storePath,
         });
         await withTranscriptWriteLock(target, async () => {
           database.db.exec("DELETE FROM transcript_rewrite_watermarks");
         });
       } else if (scenario === "closed-authority") {
-        host.closeHost();
+        commitAdmission = sqliteWorkerOwnerProbe.admission(
+          workerAdmission,
+          (request, grant, admit) => {
+            if (request.stage === "commit") {
+              revokeAtCommit();
+            }
+            admit(request, grant);
+          },
+        );
       } else if (scenario === "rewritten-source") {
-        if (!sourceAnchor) {
-          throw new Error("question answer did not persist");
-        }
         expect(
-          await rewriteTranscriptMessageAtAnchor(sourceAnchor, () => ({
-            role: "user",
-            content: "Changed answer",
-            timestamp: 5,
-          })),
+          await rewriteTranscriptMessageAtAnchor(
+            expectDefined(sourceAnchor, "question answer did not persist"),
+            () => ({
+              role: "user",
+              content: "Changed answer",
+              timestamp: 5,
+            }),
+          ),
         ).not.toBeNull();
       } else if (scenario === "changed-branch") {
         const other = SessionManager.open(target, dir);
@@ -196,11 +202,7 @@ it.each([
       }
       releaseAppend.resolve();
       const result = await outcome;
-      const messages = await readTranscriptMessages({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        storePath,
-      });
+      const messages = await readTranscriptMessages(target);
       const toolResults = messages.filter((message) => message.role === "toolResult");
       if (scenario === "foreign-registration" || scenario === "partial-then-complete") {
         expect(result.error).toBeUndefined();
@@ -233,11 +235,15 @@ it.each([
         });
         expect(toolResults).toHaveLength(0);
         expect(providerResumed).not.toHaveBeenCalled();
+        if (scenario === "closed-authority") {
+          expect(revokeAtCommit).toHaveBeenCalledOnce();
+        }
         if (scenario === "missing-generation") {
           expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
         }
       }
     } finally {
+      commitAdmission?.mockRestore();
       controller.abort();
       releaseAppend.resolve();
       await outcome;

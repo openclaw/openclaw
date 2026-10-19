@@ -7,6 +7,7 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import {
   seedPersistedSubagentRunForAgentTest,
   withPluginSubagentTestState,
@@ -20,6 +21,7 @@ import {
   requireValue,
   waitForAssertion,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -41,7 +43,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
-          storePath: "/tmp/sessions.json",
+          storePath: getAgentTestStorePath(),
           entry: {
             sessionId: "plugin-subagent-registry-fail-session",
             updatedAt: Date.now(),
@@ -90,14 +92,16 @@ export function registerPluginSubagentPersistenceFailureTest() {
         expect(mocks.registryWrite).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(getRpcSource(runId)).toBeUndefined();
         expectRespondError(respond, {
           code: ErrorCodes.UNAVAILABLE,
           message:
-            "plugin subagent registry persistence failed; run was not started | Queued subagent registry persistence failed: disk full | SQLITE_FULL",
+            "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+          retryable: true,
+          details: { code: "SQLITE_FULL" },
         });
         expect(context.logGateway.warn).toHaveBeenCalledWith(
-          expect.stringContaining("rejecting untracked dispatch"),
+          expect.stringMatching(/rejecting untracked dispatch: .*disk full.*SQLITE_FULL/u),
         );
 
         await resetSubagentRegistryForTests({ persist: false });

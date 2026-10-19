@@ -1,8 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
@@ -24,7 +25,6 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
@@ -39,6 +39,7 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -57,6 +58,7 @@ import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { watchRowFacts as observeRowFacts } from "./session-row-projection.read-fixture.test-support.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
@@ -67,29 +69,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
-function observeRowFacts(
-  wrap: (
-    owner: history.SessionHistoryWorkerDatabase,
-  ) => history.SessionHistoryWorkerDatabase["readRowFacts"],
-  once = false,
-) {
-  const readDatabases = history.withSessionHistoryWorkerDatabases;
-  const observe: typeof readDatabases = (databases, consume, lane) =>
-    readDatabases(
-      databases,
-      (owners) =>
-        consume(
-          owners.map((owner) => ({
-            ...owner,
-            readRowFacts: wrap(owner),
-          })),
-        ),
-      lane,
-    );
-  const spy = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
-  return once ? spy.mockImplementationOnce(observe) : spy.mockImplementation(observe);
-}
 
 it.each([{ workMs: 20, rowCount: 65 }])(
   "accepts $rowCount rows once with $workMs ms of materialization work",
@@ -115,6 +94,9 @@ it.each([{ workMs: 20, rowCount: 65 }])(
         try {
           await projection.ensureMaterialized();
           expect(projection.dirtyRowCount).toBe(0);
+          for (const key of keys) {
+            projection.describe({ agentId: "main", key });
+          }
           const before = projection.materializedCount;
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
           const databases = observeRowFacts((owner) => async (input) => {
@@ -155,10 +137,16 @@ it.each([{ workMs: 20, rowCount: 65 }])(
           try {
             for (const [index, { scope, entry }] of entries.entries()) {
               replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: `latest-${index}` });
+              sessionChanges.emit({
+                ...scope,
+                storePath: projection.capture({ agentId: scope.agentId, key: scope.sessionKey })!
+                  .storeTarget.storePath,
+                factsInvalidated: true,
+              });
             }
             expect(projection.dirtyRowCount).toBe(rowCount);
             const published = publications;
-            expect(published).toBe(rowCount);
+            expect(published).toBe(rowCount * 2);
             // Each commit accepts its prepared entry before the worker refreshes database facts.
             expect(accepting).toBe(rowCount);
             expect(acceptance).toEqual([]);
@@ -248,6 +236,12 @@ it.each([
             { agentId: query.agentId, sessionKey: query.key },
             { ...entry, updatedAt: 2, label: "Committed" },
           );
+          sessionChanges.emit({
+            agentId: query.agentId,
+            sessionKey: query.key,
+            storePath: projection.capture(query)!.storeTarget.storePath,
+            factsInvalidated: true,
+          });
         }
         const selected = rows[0]!;
         const describe = () =>
@@ -285,11 +279,14 @@ it.each([
   },
 );
 
-it("refuses replacement shared-state bytes while its agent row preparation is pending", async () => {
+it("refuses held row facts after configured-alias close", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const aliasDirectory = state.path("row-alias");
+    fs.symlinkSync(state.root, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+    const storePath = path.join(aliasDirectory, "sessions.sqlite");
     const query = { agentId: "main", key: "agent:main:shared-source-replacement" };
     replaceSessionEntrySync(
-      { agentId: query.agentId, sessionKey: query.key },
+      { agentId: query.agentId, sessionKey: query.key, storePath },
       {
         sessionId: "shared-source",
         lifecycleRevision: "first",
@@ -297,37 +294,36 @@ it("refuses replacement shared-state bytes while its agent row preparation is pe
       },
     );
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    const successorPath = `${databasePath}.successor`;
-    for (const [pathname, backend] of [
-      [databasePath, "original"],
-      [successorPath, "successor"],
-    ] as const) {
-      seedCanonicalAcpSessionMeta({
-        databasePath: pathname,
-        env: state.env,
-        sessionKey: query.key,
-        lifecycleRevision: "first",
-        meta: {
-          backend,
-          agent: "main",
-          runtimeSessionName: "shared-source",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 1,
-        },
-      });
-    }
+    seedCanonicalAcpSessionMeta({
+      databasePath,
+      env: state.env,
+      sessionKey: query.key,
+      lifecycleRevision: "first",
+      meta: {
+        backend: "original",
+        agent: "main",
+        runtimeSessionName: "shared-source",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
     await closeOpenClawStateDatabaseAsync();
     const foreground = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
-      cfg: { agents: { entries: { main: {} } } },
+      cfg: { agents: { entries: { main: {} } }, session: { store: storePath } },
     });
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let reading: Promise<void> | undefined;
+    let closing: Promise<boolean> | undefined;
     try {
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "original" });
+      const materialized = projection.materializedCount;
+      // Retire warm discovery aliases before the fresh row owner must route its own close.
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, query.agentId);
+      await closeOpenClawAgentDatabaseByPathAsync(fs.realpathSync(storePath), query.agentId);
       observeRowFacts(
         (owner) => async (input) => {
           const reply = await owner.readRowFacts(input);
@@ -337,23 +333,23 @@ it("refuses replacement shared-state bytes while its agent row preparation is pe
         },
         true,
       );
-      sessionChanges.emit({
-        agentId: query.agentId,
-        sessionKey: query.key,
-      });
+      sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key });
       reading = projection.ensureMaterialized();
-      await awaitGateBeforeSettlement(entered.promise, reading, "Expected the held agent row read");
-      await closeOpenClawStateDatabaseAsync();
-      fs.renameSync(databasePath, `${databasePath}.original`);
-      fs.renameSync(successorPath, databasePath);
-      const refused = expect(reading).rejects.toThrow(/admission|changed|closed|retired/i);
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, reading, "Expected the held row read"),
+        signal,
+      );
+      closing = closeOpenClawAgentDatabaseByPathAsync(storePath, query.agentId);
+      await withinTest(closing, signal);
+      const refused = expect(reading).rejects.toThrow("Session history database read was revoked");
       release.resolve();
       await refused;
+      expect(projection.materializedCount).toBe(materialized);
       await projection.ensureMaterialized();
-      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "successor" });
+      expect(projection.snapshot(query).row?.agentRuntime).toMatchObject({ id: "original" });
     } finally {
       release.resolve();
-      await Promise.allSettled([reading]);
+      await Promise.allSettled([reading, closing]);
       projection.dispose();
       foreground();
     }
@@ -425,7 +421,7 @@ it("preserves a keyed replacement while an older worker reply is pending", async
 });
 
 it.each([false, true])(
-  "keeps an unrelated exact read while a lost category reply reconciles its changed row (structural pending: %s)",
+  "keeps an unrelated exact read while publishing a committed category after reply loss (structural pending: %s)",
   async (structuralPending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
@@ -455,8 +451,7 @@ it.each([false, true])(
       const capturedA = createDeferredCore();
       const repeatedA = createDeferredCore();
       const releaseA = createDeferredCore();
-      const capturedB = createDeferredCore();
-      const releaseB = createDeferredCore();
+      const releaseStructural = createDeferredCore();
       const pending: Promise<unknown>[] = [];
       let sql: ReturnType<typeof observeHostDataSql> | undefined;
       let authority:
@@ -479,8 +474,7 @@ it.each([false, true])(
         const generation = projection.capture(b)?.generation;
         expect(generation).toBeDefined();
         if (structuralPending) {
-          // This unknown structural publication predates category.prepare, so the
-          // producer's later publication fence cannot know it invalidated lineage.
+          // A committed category delta cannot resolve another row's unknown lineage.
           sessionChanges.emit({ sessionKey: c.key, factsInvalidated: true });
           expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
         }
@@ -497,11 +491,7 @@ it.each([false, true])(
             }
           }
           if (structuralPending && input.sessionKeys.includes(c.key)) {
-            await releaseB.promise;
-          }
-          if (input.sessionKeys.includes(b.key)) {
-            capturedB.resolve();
-            await releaseB.promise;
+            await releaseStructural.promise;
           }
           return reply;
         });
@@ -553,7 +543,7 @@ it.each([false, true])(
                         const result = await operation.execute(command, options);
                         if (command.type === "category.apply") {
                           applies++;
-                          // The real write has settled; expose the existing uncertainty path.
+                          // The native receipt survives losing the ordinary result message.
                           sql = observeHostDataSql();
                           throw failure;
                         }
@@ -571,18 +561,20 @@ it.each([false, true])(
           from: "Work",
         });
         pending.push(changing);
-        await expect(changing).rejects.toBe(failure);
+        await expect(changing).resolves.toBe(1);
+        if (structuralPending) {
+          expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
+        }
         const readingB = describe(b);
         pending.push(readingB);
-        await Promise.race([
-          capturedB.promise,
-          readingB.then(() => {
-            throw new Error("Changed row bypassed its held reconciliation");
-          }),
-        ]);
-        if (!structuralPending) {
-          expect.soft(projection.sharingTargetState(b)).toEqual({ status: "pending" });
-          expect.soft(() => resource!.assertCurrent()).toThrow("refreshing");
+        const changed = await readingB;
+        expect(changed).toMatchObject({ sessionId: b.key, label: "Changed row" });
+        expect(changed?.category).toBeUndefined();
+        expect(reads.filter((keys) => keys.includes(b.key))).toEqual([]);
+        expect(projection.sharingTargetState(b).status).toBe("ready");
+        expect(() => resource!.assertCurrent()).not.toThrow();
+        if (structuralPending) {
+          expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
         }
         expect(resource.signal.aborted).toBe(false);
 
@@ -591,26 +583,21 @@ it.each([false, true])(
           readingA.then(() => "response"),
           repeatedA.promise.then(() => "unrelated row read again"),
         ]);
-        expect.soft(boundary).toBe(structuralPending ? "unrelated row read again" : "response");
-        releaseB.resolve();
+        expect.soft(boundary).toBe("response");
+        releaseStructural.resolve();
         expect(await readingA).toMatchObject({ sessionId: a.key, label: "Unrelated row" });
-        const changed = await readingB;
-        expect(changed).toMatchObject({ sessionId: b.key, label: "Changed row" });
-        expect(changed?.category).toBeUndefined();
         await projection.prepareMembership();
         expect(projection.sharingTargetState(b)).toMatchObject({ status: "ready" });
         expect(projection.capture(b)?.generation).toBe(generation);
         expect(() => resource!.assertCurrent()).not.toThrow();
         expect(resource.signal.aborted).toBe(false);
         expect(applies).toBe(1);
-        expect
-          .soft(reads.filter((keys) => keys.includes(a.key)))
-          .toEqual(structuralPending ? [[a.key], [a.key]] : [[a.key]]);
+        expect.soft(reads.filter((keys) => keys.includes(a.key))).toEqual([[a.key]]);
         expect(sql).toBeDefined();
         expect(sql!.queries).toEqual([]);
       } finally {
         releaseA.resolve();
-        releaseB.resolve();
+        releaseStructural.resolve();
         await Promise.allSettled(pending);
         resource?.release();
         authority?.release();
@@ -630,15 +617,12 @@ it.each([
   "collector publication",
   "membership revocation",
   "runtime stored facts",
-  "invalidated presentation facts",
-  "unrelated stored row",
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
-    const changesOwner =
-      change === "runtime stored facts" || change === "invalidated presentation facts";
-    const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
+    const changesOwner = change === "runtime stored facts";
+    const changesSibling = change === "captured sibling row";
     const requiresFreshRead = change === "membership revocation" || changesOwner;
     const scope = { agentId: "main", sessionKey: "agent:main:worker-fact-freshness" };
     const owner = ensureProfileForEmail("projection-owner@example.test");
@@ -699,11 +683,25 @@ it.each([
           return reply;
         });
         replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Fresh stored label" });
+        sessionChanges.emit({
+          ...scope,
+          storePath: projection.capture({ agentId: scope.agentId, key: scope.sessionKey })!
+            .storeTarget.storePath,
+          factsInvalidated: true,
+        });
         if (change === "captured sibling row") {
           replaceSessionEntrySync(unrelated, {
             sessionId: "unrelated",
             updatedAt: 0,
             label: "Previous sibling",
+          });
+          sessionChanges.emit({
+            ...unrelated,
+            storePath: projection.capture({
+              agentId: unrelated.agentId,
+              key: unrelated.sessionKey,
+            })!.storeTarget.storePath,
+            factsInvalidated: true,
           });
         }
         reading = listSessions({ client, context, request });
@@ -762,12 +760,7 @@ it.each([
               publication.facts?.kind === "owner"
             ) {
               publicationObserved = true;
-              if (change === "runtime stored facts") {
-                publication.scope = "runtime";
-              } else {
-                emit({ all: true, scope: "profiles", factsInvalidated: true }, database);
-                return;
-              }
+              publication.scope = "runtime";
             }
             emit(publication, database);
           });
@@ -795,9 +788,15 @@ it.each([
         }
         const result = await reading;
         if (changesSibling) {
+          const sibling = { agentId: unrelated.agentId, key: unrelated.sessionKey };
+          expect(projection.capture(sibling)?.storedEntry?.label).toBe("Current sibling");
+          // Off-page metadata stays current; display facts are prepared when that row is read.
           expect(
-            projection.snapshot({ agentId: unrelated.agentId, key: unrelated.sessionKey }).row
-              ?.label,
+            await withReadySessionRows(
+              projection,
+              () => [sibling],
+              () => projection.snapshot(sibling).row?.label,
+            ),
           ).toBe("Current sibling");
         }
         expect(result.sessions).toEqual([

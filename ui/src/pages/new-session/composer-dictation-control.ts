@@ -1,71 +1,71 @@
-import { html } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import {
-  renderComposerDictationSendAction,
-  renderComposerDictationStatus,
-  renderComposerVoiceButton,
-  renderMicrophonePicker,
-} from "../chat/components/chat-composer-controls.ts";
-import { ComposerDictationController } from "../chat/composer-dictation.ts";
-import { ComposerMicrophonePicker } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
+import { ComposerMicrophoneOwner } from "../chat/composer-microphone-picker.ts";
+import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 
 registerNewSessionSetupEnglish();
 
 type NewSessionDictationOptions = {
-  textarea: NewSessionComposerTextareaController;
+  textarea: NewSessionComposerTextarea;
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
   canCommit: () => boolean;
   onMessage: (message: string) => void;
   onError: (message: string) => void;
   onSubmit: () => void;
-  requestUpdate: () => void;
 };
 
 /**
  * Dictation for the new-session draft. This surface has no Talk capability, so
  * its microphone enters the shared dictation session directly on click.
  */
-export class NewSessionDictationControl {
-  private readonly devicePicker: ComposerMicrophonePicker;
-  private dictation: ComposerDictationController | null = null;
+export class NewSessionDictationControl extends EventTarget {
+  private readonly devicePicker = new ComposerMicrophoneOwner();
+  private session: ComposerDictationOwner | null = null;
   private owner: { key: string } | null = null;
 
   constructor(private readonly options: NewSessionDictationOptions) {
-    this.devicePicker = new ComposerMicrophonePicker(options.requestUpdate);
+    super();
+    // Forward the owned device picker's receipts through the dictation owner's projection.
+    this.devicePicker.subscribe(this.changed);
+  }
+
+  private readonly changed = () => this.dispatchEvent(new Event("change"));
+
+  subscribe(listener: () => void) {
+    return listen(this, "change", listener);
   }
 
   dispose(): void {
     this.owner = null;
-    this.dictation?.dispose();
-    this.dictation = null;
+    this.session?.dispose();
+    this.session = null;
     this.devicePicker.dispose();
   }
 
   get active(): boolean {
-    return this.dictation?.active === true;
+    return this.session?.active === true;
   }
 
   previewDraft(): string | undefined {
-    const dictation = this.dictation;
-    return dictation?.active
-      ? this.options.textarea.previewTranscript(dictation.transcript)
+    return this.session?.active
+      ? this.options.textarea.previewTranscript(this.session.transcript)
       : undefined;
   }
 
-  renderStatus() {
-    return renderComposerDictationStatus(this.dictation ?? undefined);
+  get dictation() {
+    return this.session ?? undefined;
   }
 
-  render(ownerKey: string, inputDeviceId?: string) {
+  prepare(ownerKey: string, inputDeviceId?: string) {
     if (this.owner?.key !== ownerKey) {
       this.owner = { key: ownerKey };
-      this.dictation?.dispose();
-      this.dictation = null;
+      this.session?.dispose();
+      this.session = null;
     }
     const owner = this.owner;
     const ownsDraft = () => this.owner === owner;
@@ -89,31 +89,29 @@ export class NewSessionDictationControl {
         if (next !== null) {
           this.options.onMessage(next);
         }
-        this.options.requestUpdate();
       },
       onError: (message: string) => {
         if (ownsDraft()) {
           this.options.onError(message);
         }
       },
-      onStateChange: () => {
-        if (ownsDraft()) {
-          this.options.requestUpdate();
-        }
-      },
       onDictationUnavailable: this.devicePicker.handleOpen,
     };
-    this.dictation ??= new ComposerDictationController(dictationOptions);
-    this.dictation.update(dictationOptions);
-    const dictation = this.dictation;
+    if (!this.session) {
+      this.session = new ComposerDictationOwner(dictationOptions);
+      // Forward the owned recording session's receipts without copying its mutable state.
+      this.session.subscribe(this.changed);
+    }
+    this.session.update(dictationOptions);
+    const dictation = this.session;
 
-    return html`
-      ${renderComposerVoiceButton({
+    return {
+      voice: {
         connected,
         disabled: !enabled,
-        dictation,
+        readDictation: () => dictation,
         idleLabel: t("newSession.dictate"),
-        microphonePicker: renderMicrophonePicker({
+        microphonePicker: {
           devices: this.devicePicker.devices,
           loading: this.devicePicker.loading,
           open: this.devicePicker.open,
@@ -129,14 +127,14 @@ export class NewSessionDictationControl {
             patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
             this.devicePicker.handleClose();
           },
-        }),
+        },
         onDirectDictationStart: () => this.options.textarea.captureSelection(),
-      })}
-      ${renderComposerDictationSendAction(dictation, () => {
+      },
+      onSubmit: () => {
         if (ownsDraft() && this.options.canCommit()) {
           this.options.onSubmit();
         }
-      })}
-    `;
+      },
+    };
   }
 }

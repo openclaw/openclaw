@@ -79,14 +79,19 @@ for (const stopMethod of ["button", "slash"] as const) {
 
   async function capture(page: Page, name: string, surface: Locator, content: Locator[]) {
     const text = (await page.locator("body").textContent()) ?? "";
-    for (const secret of [
-      instance.gatewayToken,
-      instance.hookToken,
-      instance.stateDir,
-      instance.homeDir,
-      "synthetic-background-fixture-key",
-    ]) {
-      expect(text.includes(secret), "proof must contain synthetic public content only").toBe(false);
+    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+    const visibleText = await page.locator("body").innerText();
+    for (const [category, secret] of [
+      ["gatewayToken", instance.gatewayToken],
+      ["hookToken", instance.hookToken],
+      ["stateDir", instance.stateDir],
+      ["homeDir", instance.homeDir],
+      ["fixtureKey", "synthetic-background-fixture-key"],
+    ] as const) {
+      expect(
+        text.includes(secret),
+        `${category}: visible-text-match=${visibleText.includes(secret)}`,
+      ).toBe(false);
     }
     expect(new URL(page.url()).hash).toBe("");
     const frame = await takeControlUiScreenshotFrame(page, surface, content, {
@@ -193,20 +198,24 @@ for (const stopMethod of ["button", "slash"] as const) {
               await composer.press("Enter");
             }
             const stopped = await wire.waitFor(
-              (rpc) => rpc.request.method === "chat.abort",
+              (rpc) =>
+                rpc.request.method === (stopMethod === "slash" ? "sessions.abort" : "chat.abort"),
               beforeStop,
             );
             expect(stopped.response.ok).toBe(true);
-            expect(stopped.request.params).toMatchObject({ sessionKey: fixture.key });
-            expect(stopped.response.payload).toMatchObject({ ok: true, aborted: true });
+            expect(stopped.request.params).toMatchObject(
+              stopMethod === "slash"
+                ? { key: fixture.key, clearQueued: true }
+                : { sessionKey: fixture.key, runId: expect.any(String) },
+            );
+            expect(stopped.response.payload).toMatchObject(
+              stopMethod === "slash" ? { status: "aborted" } : { ok: true, aborted: true },
+            );
             await provider.wait(provider.parentClosed, signal);
             await provider.wait(provider.childClosed, signal);
             await stop.waitFor({ state: "hidden" });
             proof.childClosed = true;
             proof.processOpenAfterStopReply = provider.processIsOpen();
-            // Preserve the genuine baseline before the expected failure waits for process cleanup.
-            // The suite closes the recording even when this pre-fix wait reaches the test deadline.
-            await capture(page, "stop-replied", pane, [composer, output]);
             proof.stage = "wait for physical process cleanup";
             await saveProof();
             expect(proof.processOpenAfterStopReply, "Stop must join physical command cleanup").toBe(
@@ -233,8 +242,11 @@ for (const stopMethod of ["button", "slash"] as const) {
             expect(provider.parentRequests()).toBe(3);
             await composer.fill(fixture.nextPrompt);
             await pane.getByRole("button", { name: "Send message", exact: true }).click();
-            await pane.getByRole("paragraph").filter({ hasText: fixture.nextReply }).waitFor();
+            // The reply proves the new run started; Stop may still be hidden during send admission.
+            await pane.filter({ hasText: fixture.nextReply }).waitFor();
             await stop.waitFor({ state: "hidden" });
+            // Live and persisted reply copies can overlap until the run settles.
+            await pane.getByRole("paragraph").filter({ hasText: fixture.nextReply }).waitFor();
             expect(
               provider.parentRequests(),
               "only the new human prompt may start another model turn",

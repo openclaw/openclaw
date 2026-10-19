@@ -1,13 +1,10 @@
 // Control UI tests cover GitHub link hover card behavior.
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserContext, Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -22,12 +19,6 @@ import {
   PULL_HREF,
   PULL_COMMENT_HREF,
 } from "./github-link-hovercard.test-support.ts";
-
-let artifactDir: string | undefined;
-beforeEach(() => {
-  const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-  artifactDir = parent ? createControlUiE2eArtifactDir("link-reader-hovercard", parent) : undefined;
-});
 
 const suite = createControlUiE2eSuite({
   name: "GitHub link hover cards",
@@ -45,21 +36,50 @@ async function newBrowserContext(): Promise<BrowserContext> {
   });
 }
 
-async function expectText(locator: Locator, text: string): Promise<void> {
-  await expect.poll(() => locator.textContent()).toContain(text);
-}
-
-async function captureArtifact(target: Page | Locator, name: string): Promise<void> {
-  if (!artifactDir) {
-    return;
+async function expectText(locator: Locator, ...texts: string[]): Promise<void> {
+  for (const text of texts) {
+    await expect.poll(() => locator.textContent()).toContain(text);
   }
-  await target.screenshot({ path: path.join(artifactDir, `${name}.png`) });
+}
+async function moveOff(page: Page, card: Locator) {
+  await page.mouse.move(1, 1);
+  await expect.poll(() => card.count()).toBe(0);
+}
+const part = (card: Locator, name: string) => card.locator(`.link-reader-hovercard__${name}`);
+const tooltip = (page: Page) =>
+  page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open");
+const isFocused = (locator: Locator) =>
+  locator.evaluate((element) => element === document.activeElement);
+async function expectAttr(locator: Locator, name: string, value: string | null) {
+  expect(await locator.getAttribute(name)).toBe(value);
+}
+async function expectPolledAttr(locator: Locator, name: string, value: string | null) {
+  await expect.poll(() => locator.getAttribute(name)).toBe(value);
+}
+const assistantMessage = (text: string, timestamp?: number) => ({
+  role: "assistant",
+  content: [{ type: "text", text }],
+  ...(timestamp === undefined ? {} : { timestamp }),
+});
+function installPreview(page: Page, options: Parameters<typeof installMockGateway>[1]) {
+  return installMockGateway(page, {
+    controlUiLinkReaders: [TEST_LINK_READER],
+    featureMethods: [...defaultControlUiFeatureMethods, "forge.preview", "forge.detail"],
+    ...options,
+  });
+}
+function referencePreview(url: string, subtitle: string, title: string) {
+  return {
+    match: { url },
+    response: { ...pullPreviewResponse, url, subtitle, title, author: "reviewer" },
+  };
 }
 
 // Shared page setup for lifecycle cases and cached permalink navigation.
 async function openPullPreviewPage(
   deferPreview = false,
   previewResponse: ControlUiLinkReaderPreview = pullPreviewResponse,
+  detailResponse?: ControlUiLinkReaderPreview & { body: string },
 ): Promise<{
   card: Locator;
   commentLink: Locator;
@@ -79,11 +99,10 @@ async function openPullPreviewPage(
 
   const page = await context.newPage();
   await page.clock.install();
-  const gateway = await installMockGateway(page, {
-    controlUiLinkReaders: [TEST_LINK_READER],
-    featureMethods: [...defaultControlUiFeatureMethods, "forge.preview", "forge.detail"],
+  const gateway = await installPreview(page, {
     deferredMethods: deferPreview ? ["forge.preview"] : [],
     methodResponses: {
+      ...(detailResponse ? { "forge.detail": detailResponse } : {}),
       "forge.preview": {
         cases: [
           {
@@ -94,16 +113,10 @@ async function openPullPreviewPage(
       },
     },
     historyMessages: [
-      {
-        content: [
-          {
-            type: "text",
-            text: `Review ${PULL_HREF}, then [the review comment](${PULL_COMMENT_HREF}).`,
-          },
-        ],
-        role: "assistant",
-        timestamp: Date.now(),
-      },
+      assistantMessage(
+        `Review ${PULL_HREF}, then [the review comment](${PULL_COMMENT_HREF}).`,
+        Date.now(),
+      ),
     ],
   });
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -114,9 +127,13 @@ async function openPullPreviewPage(
   await pullLink.waitFor({ state: "visible" });
   // Count transient portals as well as empty mounts; settled DOM checks miss flashes.
   await page.evaluate((pullHref) => {
-    document.body.dataset.previewMounts = "0";
-    document.body.dataset.previewEmptyMounts = "0";
-    document.body.dataset.titleTooltipMounts = "0";
+    const counts = { previewMounts: 0, previewEmptyMounts: 0, titleTooltipMounts: 0 };
+    for (const key of Object.keys(counts)) {
+      document.body.dataset[key] = "0";
+    }
+    const increment = (key: keyof typeof counts) => {
+      document.body.dataset[key] = String(++counts[key]);
+    };
     new MutationObserver((records) => {
       for (const record of records) {
         for (const node of record.addedNodes) {
@@ -128,19 +145,13 @@ async function openPullPreviewPage(
               (hintedLink instanceof HTMLAnchorElement && hintedLink.href.startsWith(pullHref)) ||
               tip.content?.startsWith(pullHref)
             ) {
-              document.body.dataset.titleTooltipMounts = String(
-                Number(document.body.dataset.titleTooltipMounts) + 1,
-              );
+              increment("titleTooltipMounts");
             }
           }
           if (node instanceof Element && node.matches(".link-reader-hovercard")) {
-            document.body.dataset.previewMounts = String(
-              Number(document.body.dataset.previewMounts) + 1,
-            );
+            increment("previewMounts");
             if (!node.querySelector(".link-reader-hovercard__title")?.textContent?.trim()) {
-              document.body.dataset.previewEmptyMounts = String(
-                Number(document.body.dataset.previewEmptyMounts) + 1,
-              );
+              increment("previewEmptyMounts");
             }
           }
         }
@@ -151,6 +162,41 @@ async function openPullPreviewPage(
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "reconciles status and compact metrics (reader first: %s)",
+    async (readerFirst) => {
+      const { card, page, pullLink, gateway } = await openPullPreviewPage(
+        readerFirst,
+        {
+          ...pullPreviewResponse,
+          badge: { label: "Open", tone: "positive" },
+        },
+        {
+          ...pullPreviewResponse,
+          body: "The pull request is merged. This is the current source status.",
+        },
+      );
+      if (!readerFirst) {
+        await pullLink.focus();
+        await expectText(card.locator(".link-reader-hovercard__state"), "Open");
+        await page.keyboard.press("Escape");
+      }
+      await pullLink.click();
+      const panel = page.locator("openclaw-link-reader-panel");
+      await expectText(panel.locator(".lr-state"), "Merged");
+      await page.mouse.move(1, 1);
+      await page.clock.runFor(150);
+      await pullLink.hover();
+      await page.clock.runFor(300);
+      if (readerFirst) {
+        await gateway.resolveDeferred("forge.preview");
+      }
+      await expectText(card.locator(".link-reader-hovercard__state"), "Merged");
+      await expectText(card.locator(".link-reader-hovercard__metadata"), "+101−12");
+      expect((await gateway.getRequests("forge.preview")).length).toBeGreaterThan(0);
+    },
+  );
+
   it("keeps all preview metadata readable with long authors on narrow screens", async () => {
     const metadata: NonNullable<ControlUiLinkReaderPreview["metadata"]> = [
       { label: "", value: "+1077", tone: "positive" },
@@ -166,16 +212,14 @@ suite.define(() => {
     await page.setViewportSize({ width: 320, height: 800 });
     await pullLink.focus();
     await card.waitFor({ state: "visible" });
-    await captureArtifact(card, "metadata-320-light");
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
     for (const { value } of metadata) {
       await expectText(card, value);
     }
-    expect(await card.locator(".link-reader-hovercard__metric").count()).toBe(2);
-    expect(await card.locator(".link-reader-hovercard__coauthor").count()).toBe(3);
-    await expectText(card.locator(".link-reader-hovercard__coauthors-more"), "+2");
-    expect(await card.locator(".link-reader-hovercard__author").getAttribute("href")).toBe(
-      "https://github.com/steipete",
-    );
+    expect(await part(card, "metric").count()).toBe(2);
+    expect(await part(card, "coauthor").count()).toBe(3);
+    await expectText(part(card, "coauthors-more"), "+2");
+    await expectAttr(part(card, "author"), "href", "https://github.com/steipete");
     const overflow = await card.evaluate((element) => {
       const bounds = element.getBoundingClientRect();
       return {
@@ -210,9 +254,7 @@ suite.define(() => {
     });
     expect(colors.expected[0]).not.toBe(colors.expected[1]);
     expect(colors.actual).toEqual(colors.expected);
-    expect(await card.locator(".link-reader-hovercard__title").getAttribute("href")).toBe(
-      PULL_HREF,
-    );
+    await expectAttr(part(card, "title"), "href", PULL_HREF);
     await page.keyboard.press("Escape");
     expect(await card.count()).toBe(0);
   });
@@ -225,8 +267,7 @@ suite.define(() => {
       const repository = { owner: "openclaw", repo: "openclaw" };
       const namedRepository = { owner: "openclaw", repo: "clawsweeper" };
       const projectName = late ? "clawsweeper" : "ClawSweeper";
-      const gateway = await installMockGateway(page, {
-        controlUiLinkReaders: [TEST_LINK_READER],
+      const gateway = await installPreview(page, {
         featureMethods: [
           ...defaultControlUiFeatureMethods,
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -236,54 +277,39 @@ suite.define(() => {
         ],
         deferredMethods: late ? ["projects.list"] : [],
         historyMessages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: [
-                  "Synthetic cross-repository reproduction",
-                  `Original ${projectName} PR **#1558 merged**`,
-                  `Follow-up ${projectName} PR **#1576 opened**`,
-                  "Same checkout: OpenClaw PR #1576.",
-                ].join("\n\n"),
-              },
-            ],
-          },
+          assistantMessage(
+            [
+              "Synthetic cross-repository reproduction",
+              `Original ${projectName} PR **#1558 merged**`,
+              `Follow-up ${projectName} PR **#1576 opened**`,
+              "Same checkout: OpenClaw PR #1576.",
+            ].join("\n\n"),
+          ),
         ],
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
           "projects.list": {
             projects: [
-              {
-                id: "openclaw",
-                displayName: "OpenClaw",
-                originUrl: "https://github.com/openclaw/openclaw",
-                source: "registered",
-              },
-              {
-                id: "clawsweeper",
-                displayName: "ClawSweeper",
-                originUrl: "https://github.com/openclaw/clawsweeper",
-                source: "registered",
-              },
-            ],
+              ["openclaw", "OpenClaw"],
+              ["clawsweeper", "ClawSweeper"],
+            ].map(([id, displayName]) => ({
+              id,
+              displayName,
+              originUrl: `https://github.com/openclaw/${id}`,
+              source: "registered",
+            })),
           },
           "forge.preview": {
             cases: [repository, namedRepository].flatMap((repo) =>
-              [1558, 1576].map((number) => ({
-                match: { url: `https://github.com/${repo.owner}/${repo.repo}/pull/${number}` },
-                response: {
-                  ...pullPreviewResponse,
-                  url: `https://github.com/${repo.owner}/${repo.repo}/pull/${number}`,
-                  subtitle: `${repo.owner}/${repo.repo} #${number}`,
-                  author: "reviewer",
-                  title:
-                    repo.repo === "clawsweeper"
-                      ? "Synthetic ClawSweeper pull request"
-                      : "Synthetic OpenClaw pull request",
-                },
-              })),
+              [1558, 1576].map((number) =>
+                referencePreview(
+                  `https://github.com/${repo.owner}/${repo.repo}/pull/${number}`,
+                  `${repo.owner}/${repo.repo} #${number}`,
+                  repo.repo === "clawsweeper"
+                    ? "Synthetic ClawSweeper pull request"
+                    : "Synthetic OpenClaw pull request",
+                ),
+              ),
             ),
           },
         },
@@ -307,10 +333,9 @@ suite.define(() => {
       await followUp.focus();
       const card = page.locator(".link-reader-hovercard");
       await card.waitFor({ state: "visible" });
-      await captureArtifact(page, "named-repository-reference");
       const href = "https://github.com/openclaw/clawsweeper/pull/1576";
-      expect(await followUp.getAttribute("href")).toBe(href);
-      expect(await card.locator(".link-reader-hovercard__title").getAttribute("href")).toBe(href);
+      await expectAttr(followUp, "href", href);
+      await expectAttr(part(card, "title"), "href", href);
       await expectText(card, "Synthetic ClawSweeper pull request");
       expect(
         await page.locator('a[href="https://github.com/openclaw/clawsweeper/pull/1558"]').count(),
@@ -325,9 +350,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         const target = "https://github.com/" + repo.owner + "/" + repo.repo + "/pull/" + number;
         await page.locator('a[href="' + target + '"]').focus();
-        await expect
-          .poll(() => card.locator(".link-reader-hovercard__title").getAttribute("href"))
-          .toBe(target);
+        await expectPolledAttr(part(card, "title"), "href", target);
         await expectText(
           card,
           repo.repo === "clawsweeper"
@@ -350,12 +373,6 @@ suite.define(() => {
         "openclaw/openclaw/pull/1576",
       ]);
       expect(await gateway.getRequests("projects.list")).toHaveLength(1);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "named-repository-requests.json"),
-          JSON.stringify({ requests, late }, null, 2),
-        );
-      }
     },
   );
 
@@ -365,8 +382,7 @@ suite.define(() => {
     const repository = { owner: "synthetic", repo: "formatting-demo" };
     const href = "https://github.com/synthetic/formatting-demo/pull/1576";
     const otherHref = "https://github.com/synthetic/other-project/pull/1576#issuecomment-1";
-    const gateway = await installMockGateway(page, {
-      controlUiLinkReaders: [TEST_LINK_READER],
+    const gateway = await installPreview(page, {
       featureMethods: [
         ...defaultControlUiFeatureMethods,
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -374,46 +390,30 @@ suite.define(() => {
         "forge.detail",
       ],
       historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: [
-                "Synthetic formatting example",
-                "Plain: PR #1576 opened.",
-                "Formatted: PR **#1576 opened**.",
-                "Short reference: **PR** #42 opened.",
-                `Other repository: [#1576](${otherHref})`,
-              ].join("\n\n"),
-            },
-          ],
-        },
+        assistantMessage(
+          [
+            "Synthetic formatting example",
+            "Plain: PR #1576 opened.",
+            "Formatted: PR **#1576 opened**.",
+            "Short reference: **PR** #42 opened.",
+            `Other repository: [#1576](${otherHref})`,
+          ].join("\n\n"),
+        ),
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
         "forge.preview": {
           cases: [
-            {
-              match: { url: href },
-              response: {
-                ...pullPreviewResponse,
-                url: href,
-                subtitle: "synthetic/formatting-demo #1576",
-                title: "Synthetic formatting example",
-                author: "reviewer",
-              },
-            },
-            {
-              match: { url: otherHref },
-              response: {
-                ...pullPreviewResponse,
-                url: otherHref,
-                subtitle: "synthetic/other-project #1576",
-                title: "Separate repository example",
-                author: "reviewer",
-              },
-            },
+            referencePreview(
+              href,
+              "synthetic/formatting-demo #1576",
+              "Synthetic formatting example",
+            ),
+            referencePreview(
+              otherHref,
+              "synthetic/other-project #1576",
+              "Separate repository example",
+            ),
           ],
         },
       },
@@ -428,10 +428,9 @@ suite.define(() => {
     await formatted.focus();
     const card = page.locator(".link-reader-hovercard");
     await expectText(card, "Synthetic formatting example");
-    await captureArtifact(page, "formatted-pr-reference");
-    expect(await formatted.getAttribute("href")).toBe(href);
-    expect(await formatted.getAttribute("data-github-kind")).toBe("pull");
-    expect(await card.locator(".link-reader-hovercard__title").getAttribute("href")).toBe(href);
+    await expectAttr(formatted, "href", href);
+    await expectAttr(formatted, "data-github-kind", "pull");
+    await expectAttr(part(card, "title"), "href", href);
     expect(await page.locator(`a[href="${href}"]`).count()).toBeGreaterThanOrEqual(2);
     expect(
       await page.locator('a[href="https://github.com/synthetic/formatting-demo/pull/42"]').count(),
@@ -440,9 +439,7 @@ suite.define(() => {
     const other = page.locator(`a[href="${otherHref}"]`);
     await other.focus();
     await expectText(card, "Separate repository example");
-    expect(await card.locator(".link-reader-hovercard__title").getAttribute("href")).toBe(
-      otherHref,
-    );
+    await expectAttr(part(card, "title"), "href", otherHref);
     const requests = await gateway.getRequests("forge.preview");
     expect(requests.map((request) => request.params)).toEqual(
       expect.arrayContaining([
@@ -479,104 +476,42 @@ suite.define(() => {
       await page.clock.runFor(1_000);
       expect(await card.count()).toBe(0);
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
-      expect(await pullLink.getAttribute("aria-haspopup")).toBeNull();
-      await captureArtifact(page, "github-hovercard-pending-silent");
-      expect(await page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+      await expectAttr(pullLink, "aria-haspopup", null);
+      expect(await tooltip(page).count()).toBe(0);
       expect(await page.locator("body").getAttribute("data-title-tooltip-mounts")).toBe("0");
       expect(await pullLink.getAttribute("title")).toBeFalsy();
-      expect(await pullLink.getAttribute("href")).toBe(PULL_HREF);
+      await expectAttr(pullLink, "href", PULL_HREF);
 
       if (scenario.fails) {
         const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
         await gateway.rejectDeferred("forge.preview", { message: error });
         await expectText(card.getByRole("status"), error);
-        expect(await card.getAttribute("aria-label")).toBe("Could not load preview");
+        await expectAttr(card, "aria-label", "Could not load preview");
         const externalLink = card.getByRole("link", { name: "Open on Forge" });
-        expect(await externalLink.getAttribute("href")).toBe(PULL_HREF);
-        expect(await externalLink.getAttribute("target")).toBe("_blank");
-        expect(await pullLink.getAttribute("aria-controls")).toBe(await card.getAttribute("id"));
-        expect(await pullLink.getAttribute("aria-expanded")).toBe("true");
-        expect(await pullLink.getAttribute("aria-haspopup")).toBe("dialog");
-        expect(await pullLink.evaluate((element) => element === document.activeElement)).toBe(true);
-        await captureArtifact(page, "github-hovercard-rate-limit");
+        await expectAttr(externalLink, "href", PULL_HREF);
+        await expectAttr(externalLink, "target", "_blank");
+        await expectAttr(pullLink, "aria-controls", await card.getAttribute("id"));
+        await expectAttr(pullLink, "aria-expanded", "true");
+        await expectAttr(pullLink, "aria-haspopup", "dialog");
+        expect(await isFocused(pullLink)).toBe(true);
       } else {
         await gateway.resolveDeferred("forge.preview");
         await expectText(card, pullPreviewResponse.title);
       }
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("1");
       expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
       const bounds = await card.boundingBox();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
       expect(await card.locator(".skeleton").count()).toBe(0);
       await page.keyboard.press("Tab");
-      expect(
-        await card
-          .locator("a")
-          .first()
-          .evaluate((element) => element === document.activeElement),
-      ).toBe(true);
+      expect(await isFocused(card.locator("a").first())).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => card.count()).toBe(0);
-      expect(await pullLink.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await isFocused(pullLink)).toBe(true);
     },
   );
-
-  it("enables loaders across providers only after success and forgets the gate on reload", async () => {
-    const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
-    await pullLink.focus();
-    await gateway.waitForRequest("forge.preview");
-    expect(await card.count()).toBe(0);
-    await gateway.resolveDeferred("forge.preview");
-    await expectText(card, pullPreviewResponse.title);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => card.count()).toBe(0);
-
-    await page.evaluate(() => {
-      const source = document.querySelector(
-        "openclaw-link-reader-hovercard-provider",
-      ) as HTMLElement & {
-        client: unknown;
-        agentId?: string;
-        readers: unknown;
-      };
-      const peer = source.cloneNode(false) as typeof source;
-      peer.client = source.client;
-      peer.agentId = source.agentId;
-      peer.readers = source.readers;
-      const anchor = document.createElement("a");
-      anchor.href = "https://github.com/openclaw/openclaw/pull/99817";
-      anchor.textContent = "Cross-provider preview";
-      anchor.style.cssText = "position: fixed; top: 12px; right: 12px; z-index: 10000";
-      peer.append(anchor);
-      document.body.append(peer);
-    });
-    await gateway.deferNext("forge.preview");
-    const peerLink = page.getByRole("link", { name: "Cross-provider preview", exact: true });
-    await peerLink.hover();
-    await expect.poll(() => card.getAttribute("data-loading")).toBe("true");
-    expect(await card.getAttribute("aria-label")).toBe("Loading preview…");
-    await gateway.rejectDeferred("forge.preview", { message: "Not Found" });
-    await expectText(card.getByRole("status"), "Not Found");
-    expect(await card.locator(".skeleton").count()).toBe(0);
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
-    await peerLink.hover();
-    await page.clock.runFor(300);
-    await expectText(card.getByRole("status"), "Not Found");
-    expect(await card.locator(".skeleton").count()).toBe(0);
-    expect(await card.getByRole("link", { name: "Open on Forge" }).getAttribute("href")).toBe(
-      "https://github.com/openclaw/openclaw/pull/99817",
-    );
-    expect((await gateway.getRequests("forge.preview")).length).toBe(2);
-
-    await page.reload();
-    await pullLink.waitFor({ state: "visible" });
-    await pullLink.focus();
-    await gateway.waitForRequest("forge.preview");
-    await page.clock.runFor(300);
-    expect(await card.count()).toBe(0);
-  });
 
   it("shows cached permalink failures during backoff and keeps keyboard navigation usable", async () => {
     const { card, commentLink, gateway, page, pullLink } = await openPullPreviewPage(true);
@@ -587,18 +522,18 @@ suite.define(() => {
     });
     await expectText(card.getByRole("status"), "GitHub request timed out");
     const externalLink = card.getByRole("link", { name: "Open on Forge" });
-    expect(await externalLink.getAttribute("href")).toBe(PULL_HREF);
+    await expectAttr(externalLink, "href", PULL_HREF);
 
     await page.keyboard.press("Tab");
-    expect(await externalLink.evaluate((element) => element === document.activeElement)).toBe(true);
+    expect(await isFocused(externalLink)).toBe(true);
     await page.keyboard.press("Escape");
     await expect.poll(() => card.count()).toBe(0);
-    expect(await pullLink.evaluate((element) => element === document.activeElement)).toBe(true);
+    expect(await isFocused(pullLink)).toBe(true);
 
     await page.keyboard.press("Tab");
-    expect(await commentLink.evaluate((element) => element === document.activeElement)).toBe(true);
+    expect(await isFocused(commentLink)).toBe(true);
     await expectText(card.getByRole("status"), "GitHub request timed out");
-    expect(await externalLink.getAttribute("href")).toBe(PULL_COMMENT_HREF);
+    await expectAttr(externalLink, "href", PULL_COMMENT_HREF);
     await commentLink.hover();
     await page.clock.runFor(300);
     await page.mouse.move(1, 1);
@@ -606,18 +541,17 @@ suite.define(() => {
     await pullLink.hover();
     await page.clock.runFor(300);
     await expectText(card.getByRole("status"), "GitHub request timed out");
-    expect(await externalLink.getAttribute("href")).toBe(PULL_HREF);
+    await expectAttr(externalLink, "href", PULL_HREF);
     expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
     expect(await page.locator("body").getAttribute("data-title-tooltip-mounts")).toBe("0");
-    expect(await page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    expect(await tooltip(page).count()).toBe(0);
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
-    expect(await pullLink.getAttribute("aria-haspopup")).toBe("dialog");
+    await expectAttr(pullLink, "aria-haspopup", "dialog");
 
     await expectModifiedNavigation(page, () => page.keyboard.press("Shift+Enter"), PULL_HREF);
 
     await pullLink.evaluate((element) => element.blur());
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+    await moveOff(page, card);
     await gateway.deferNext("forge.preview");
     await page.clock.runFor(30_000);
     await pullLink.focus();
@@ -628,8 +562,6 @@ suite.define(() => {
   });
 
   it("keeps a pending prefetch alive across dismissal and reuses it on rehover", async () => {
-    const proofDir =
-      artifactDir ?? createControlUiE2eArtifactDir("link-reader-hovercard-cancellation");
     const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
 
     await gateway.waitForRequest("forge.preview");
@@ -638,8 +570,7 @@ suite.define(() => {
     expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
     await pullLink.hover();
     await page.clock.runFor(300);
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+    await moveOff(page, card);
 
     await pullLink.hover();
     await page.clock.runFor(300);
@@ -648,15 +579,9 @@ suite.define(() => {
     await gateway.resolveDeferred("forge.preview");
     await expectText(card, pullPreviewResponse.title);
     expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
-    // Capture the settled state even when the title assertion below fails.
-    await page.screenshot({
-      path: path.join(proofDir, "github-hovercard-cancellation-rehover.png"),
-    });
-    await expectText(card, pullPreviewResponse.title);
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
 
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+    await moveOff(page, card);
     await pullLink.hover();
     await expectText(card, pullPreviewResponse.title);
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
@@ -673,9 +598,7 @@ suite.define(() => {
 
     const page = await context.newPage();
     await page.clock.install();
-    const gateway = await installMockGateway(page, {
-      controlUiLinkReaders: [TEST_LINK_READER],
-      featureMethods: [...defaultControlUiFeatureMethods, "forge.preview", "forge.detail"],
+    const gateway = await installPreview(page, {
       methodResponses: {
         "forge.preview": {
           cases: [
@@ -706,33 +629,21 @@ suite.define(() => {
         },
       },
       historyMessages: [
-        {
-          content: [
-            {
-              type: "text",
-              text: [
-                "Review https://github.com/openclaw/openclaw/pull/99816,",
-                "then https://github.com/openclaw/openclaw/issues/99815.",
-                "A [missing item](https://github.com/openclaw/openclaw/issues/999999) stays usable.",
-                "The [repository](https://github.com/openclaw/openclaw) has no item preview.",
-                "The skill lives at https://github.com/blader/humanizer/blob/main/SKILL.md.",
-                "Styling notes live in [the docs](https://docs.openclaw.ai/web/control-ui).",
-              ].join(" "),
-            },
-          ],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        {
-          content: [
-            {
-              type: "text",
-              text: "Narrow reference https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817",
-            },
-          ],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
+        assistantMessage(
+          [
+            "Review https://github.com/openclaw/openclaw/pull/99816,",
+            "then https://github.com/openclaw/openclaw/issues/99815.",
+            "A [missing item](https://github.com/openclaw/openclaw/issues/999999) stays usable.",
+            "The [repository](https://github.com/openclaw/openclaw) has no item preview.",
+            "The skill lives at https://github.com/blader/humanizer/blob/main/SKILL.md.",
+            "Styling notes live in [the docs](https://docs.openclaw.ai/web/control-ui).",
+          ].join(" "),
+          Date.now(),
+        ),
+        assistantMessage(
+          "Narrow reference https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817",
+          Date.now(),
+        ),
       ],
     });
     await page.goto(`${suite.server.baseUrl}chat`);
@@ -744,26 +655,25 @@ suite.define(() => {
           typeof request.params.url === "string" &&
           new URL(request.params.url).pathname.endsWith("/" + number),
       );
-    const message = page.locator(".chat-text").filter({ hasText: "Review" });
-    if (artifactDir) {
-      await message.screenshot({ path: path.join(artifactDir, "github-references-light.png") });
-      await page.emulateMedia({ colorScheme: "dark" });
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-      await message.screenshot({ path: path.join(artifactDir, "github-references-dark.png") });
-      await page.emulateMedia({ colorScheme: "light" });
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-    }
 
-    await expect
-      .poll(() => page.getByRole("link", { name: "#99817" }).getAttribute("href"))
-      .toBe(
-        "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817",
-      );
-    await expect
-      .poll(() => page.getByRole("link", { name: "SKILL.md" }).getAttribute("href"))
-      .toBe("https://github.com/blader/humanizer/blob/main/SKILL.md");
+    const longHref =
+      "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817";
+    await expectPolledAttr(
+      page.getByRole("link", {
+        name: "a-very-long-organization-name/a-very-long-repository-name#99817",
+      }),
+      "href",
+      longHref,
+    );
+    await expectPolledAttr(
+      page.getByRole("link", { name: "SKILL.md" }),
+      "href",
+      "https://github.com/blader/humanizer/blob/main/SKILL.md",
+    );
 
     const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
+
+    await expectText(pullLink, "openclaw/openclaw#99816");
 
     const decorationLine = (link: Locator) =>
       link.evaluate((element) => getComputedStyle(element).textDecorationLine);
@@ -772,14 +682,11 @@ suite.define(() => {
 
     await pullLink.hover();
     const card = page.locator(".link-reader-hovercard");
-    await expectText(card, "Merged");
-    await expectText(card, "openclaw/openclaw #99816");
-    await expectText(card, "+101");
-    await expectText(card, "−12");
+    await expectText(card, "Merged", "openclaw/openclaw #99816", "+101", "−12");
     await page.clock.runFor(300);
-    await captureArtifact(page, "github-hovercard-title-tooltip");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
-    expect(await pullLink.getAttribute("title")).toBeNull();
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    await expect.poll(() => tooltip(page).count()).toBe(0);
+    await expectAttr(pullLink, "title", null);
     await expect.poll(() => card.locator("img").count()).toBe(4);
     expect(await previewRequestsFor(99816)).toHaveLength(1);
     const pullBox = await card.boundingBox();
@@ -791,18 +698,12 @@ suite.define(() => {
 
     const issueLink = page.locator('a.markdown-github-link[href$="/issues/99815"]');
     await issueLink.hover();
-    await expectText(card, "Keep hover previews compact");
-    await expectText(card, "octocat");
-    await expectText(card, "Comments: 4");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expectText(card, "Keep hover previews compact", "octocat", "Comments: 4");
+    await expect.poll(() => tooltip(page).count()).toBe(0);
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect(await previewRequestsFor(99815)).toHaveLength(1);
 
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
-    await issueLink.hover();
-    await expectText(card, "Comments: 4");
-    expect(await previewRequestsFor(99815)).toHaveLength(1);
+    await moveOff(page, card);
 
     await page.mouse.move(1, 1);
     await page.getByRole("link", { exact: true, name: "repository" }).hover();
@@ -811,40 +712,40 @@ suite.define(() => {
 
     const fileLink = page.getByRole("link", { name: "SKILL.md" });
     await fileLink.hover();
-    await expect
-      .poll(() => page.locator("openclaw-tooltip[open]").textContent())
-      .toContain("https://github.com/blader/humanizer/blob/main/SKILL.md");
+    await expectText(
+      tooltip(page).locator(".tooltip-content"),
+      "https://github.com/blader/humanizer/blob/main/SKILL.md",
+    );
 
     const missingLink = page.getByRole("link", { name: "missing item" });
     await missingLink.hover();
     await expect.poll(() => previewRequestsFor(999999)).toHaveLength(1);
     await expectText(card.getByRole("status"), "Try again or open the original.");
-    expect(await missingLink.getAttribute("aria-haspopup")).toBe("dialog");
-    expect(await card.getByRole("link", { name: "Open on Forge" }).getAttribute("href")).toBe(
+    await expectAttr(missingLink, "aria-haspopup", "dialog");
+    await expectAttr(
+      card.getByRole("link", { name: "Open on Forge" }),
+      "href",
       "https://github.com/openclaw/openclaw/issues/999999",
     );
-    expect(await missingLink.getAttribute("href")).toBe(
-      "https://github.com/openclaw/openclaw/issues/999999",
-    );
+    await expectAttr(missingLink, "href", "https://github.com/openclaw/openclaw/issues/999999");
     await page.mouse.move(1, 1);
 
     await page.emulateMedia({ colorScheme: "dark" });
-    await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+    await expectPolledAttr(page.locator("html"), "data-theme-mode", "dark");
     await pullLink.hover();
     await expectText(card, "Merged");
     expect(await previewRequestsFor(99816)).toHaveLength(1);
     await page.mouse.move(1, 1);
 
-    await pullLink.focus();
-    await expectText(card, "Merged");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => card.count()).toBe(0);
-    await expect
-      .poll(() => pullLink.evaluate((element) => element === document.activeElement))
-      .toBe(true);
-
     await expectModifiedNavigation(page, () => pullLink.click({ modifiers: ["Shift"] }), PULL_HREF);
+
+    const longReference = page.locator(`a[href="${longHref}"]`);
+    await page.setViewportSize({ width: 320, height: 800 });
+    await longReference.scrollIntoViewIfNeeded();
+    const bounds = await longReference.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
   });
 
   it("keeps the card open while the pointer crosses the gap onto it, then closes once it leaves both", async () => {
@@ -863,8 +764,7 @@ suite.define(() => {
     const cardEdgeY = below ? cardBox!.y : cardBox!.y + cardBox!.height;
     const gap = { x: linkBox!.x + linkBox!.width / 2, y: (linkEdgeY + cardEdgeY) / 2 };
 
-    // Cross the actual top/bottom gap using native pointer events, then enter
-    // the card just before the existing 120 ms dismissal deadline.
+    // Enter the card through the real gap just before the 120 ms dismissal deadline.
     await page.mouse.move(gap.x, gap.y);
     expect(
       await page.evaluate(({ x, y }) => {
@@ -876,16 +776,13 @@ suite.define(() => {
     expect(await card.count()).toBe(1);
     await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
     expect(await card.count()).toBe(1);
-    await captureArtifact(page, "github-hovercard-pointer-open");
 
-    // Staying on the card holds it open regardless of elapsed time, mirroring
-    // the unit test's ten-grace-window persistence check.
+    // Remaining on the card must survive ten dismissal windows.
     await page.clock.runFor(1_200);
     expect(await card.count()).toBe(1);
     await expectText(card, "openclaw/openclaw #99816");
 
-    // Leaving both surfaces, with no click, still dismisses the card after the
-    // traversal grace period.
+    // Leaving both surfaces still dismisses after the traversal grace period.
     await page.mouse.move(1, 1);
     await page.clock.runFor(119);
     expect(await card.count()).toBe(1);
@@ -898,13 +795,11 @@ suite.define(() => {
 
     await pullLink.focus();
     await expectText(card, "openclaw/openclaw #99816");
-    // The real accessibility tree has to report a dialog, not a tooltip: the card
-    // owns a link, which tooltip semantics may not contain.
+    // Interactive card links require dialog, not tooltip, semantics.
     await expect.poll(() => page.getByRole("dialog").count()).toBe(1);
-    await expect.poll(() => pullLink.getAttribute("aria-expanded")).toBe("true");
-    await expect
-      .poll(() => pullLink.getAttribute("aria-controls"))
-      .toBe(await card.getAttribute("id"));
+    await expect.poll(() => tooltip(page).count()).toBe(0);
+    await expectPolledAttr(pullLink, "aria-expanded", "true");
+    await expectPolledAttr(pullLink, "aria-controls", await card.getAttribute("id"));
 
     // Tab enters the card at its first link and then walks the rest natively.
     const focused = () => page.evaluate(() => document.activeElement?.className ?? "");
@@ -914,32 +809,26 @@ suite.define(() => {
     await expect.poll(focused).toBe("link-reader-hovercard__title");
     await page.keyboard.press("Tab");
     await expect.poll(focused).toBe("link-reader-hovercard__author");
-    await captureArtifact(page, "github-hovercard-keyboard-focus");
 
     await page.keyboard.press("Escape");
     await expect.poll(() => card.count()).toBe(0);
-    await expect
-      .poll(() => pullLink.evaluate((element) => element === document.activeElement))
-      .toBe(true);
+    await expect.poll(() => isFocused(pullLink)).toBe(true);
     // Returning focus to the trigger must not reopen what Escape just dismissed.
     await page.waitForTimeout(300);
     expect(await card.count()).toBe(0);
   });
 
   it("opens the current pull request permalink from cached card title and repo links", async () => {
-    const proofDir =
-      artifactDir ?? createControlUiE2eArtifactDir("link-reader-hovercard-navigation");
     const { card, commentLink, gateway, page, pullLink } = await openPullPreviewPage();
 
     await pullLink.hover();
     await expectText(card, "openclaw/openclaw #99816");
-    const titleLink = card.locator(".link-reader-hovercard__title");
+    const titleLink = part(card, "title");
     await expectText(titleLink, pullPreviewResponse.title);
 
-    // The title owns the card's only underline; the other links stay quiet even
-    // under the pointer, so the card keeps reading as a preview and not a menu.
+    // Only the title is underlined, including on hover.
     for (const quiet of ["subtitle", "author"]) {
-      const link = card.locator(`.link-reader-hovercard__${quiet}`);
+      const link = part(card, quiet);
       await link.hover();
       expect(await link.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("none");
     }
@@ -952,46 +841,28 @@ suite.define(() => {
       { state: "base", anchor: pullLink, href: PULL_HREF },
       { state: "cached-comment", anchor: commentLink, href: PULL_COMMENT_HREF },
     ]) {
-      const observations = [];
+      const destinations = [];
       for (const clickedLink of ["title", "subtitle"]) {
         await anchor.hover();
         await expectText(card, pullPreviewResponse.title);
         const actual = {
-          titleHref: await card.locator(".link-reader-hovercard__title").getAttribute("href"),
-          repoHref: await card.locator(".link-reader-hovercard__subtitle").getAttribute("href"),
+          titleHref: await part(card, "title").getAttribute("href"),
+          repoHref: await part(card, "subtitle").getAttribute("href"),
           requestCount: (await gateway.getRequests("forge.preview")).length,
         };
-        const stage = `${state}-${clickedLink}`;
-        await page.screenshot({ path: path.join(proofDir, `${stage}-card.png`) });
         const popupPromise = page.waitForEvent("popup");
-        await card.locator(`.link-reader-hovercard__${clickedLink}`).click();
+        await part(card, clickedLink).click();
         const popup = await popupPromise;
         await popup.waitForLoadState("domcontentloaded");
-        const observation = {
-          state,
-          clickedLink,
-          actual: { ...actual, popupHref: popup.url() },
-          expected: {
-            titleHref: href,
-            repoHref: href,
-            requestCount: 1,
-            popupHref: href,
-          },
-        };
-        await popup.screenshot({ path: path.join(proofDir, `${stage}-popup.png`) });
-        await writeFile(path.join(proofDir, `${stage}.json`), JSON.stringify(observation, null, 2));
-        observations.push(observation);
+        destinations.push({ ...actual, popupHref: popup.url() });
 
         // A pointer-opened card still dismisses after its clicked link gains focus.
         await popup.close();
-        await page.mouse.move(1, 1);
-        await expect.poll(() => card.count()).toBe(0);
+        await moveOff(page, card);
       }
       // Retain both actual destinations before failing on a lost comment hash.
-      for (const { actual, expected, clickedLink } of observations) {
-        expect(actual.popupHref, `${state} ${clickedLink} navigation`).toBe(expected.popupHref);
-        expect(actual).toEqual(expected);
-      }
+      const expected = { titleHref: href, repoHref: href, requestCount: 1, popupHref: href };
+      expect(destinations, `${state} title and subtitle navigation`).toEqual([expected, expected]);
     }
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
   });

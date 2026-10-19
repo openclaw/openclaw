@@ -1,6 +1,7 @@
 // Shared Gateway connection owner: admission, registration, dispatch, and tracked cleanup.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolvePreauthHandshakeTimeoutMs } from "../../../packages/gateway-client/src/timeouts.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
@@ -13,7 +14,11 @@ import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { getHeader } from "../http-header-value.js";
-import type { GatewayIngressAttribution } from "../ingress-attribution.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+  type GatewayIngressAttribution,
+} from "../ingress-attribution.js";
 import { isLoopbackAddress } from "../net.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
 import {
@@ -34,11 +39,7 @@ import type {
   PrepareGatewayAuthenticatedReceive,
 } from "./connection-transport.js";
 import { sanitizeWsLogValue, stringMetaValue } from "./ws-connection-diagnostics.js";
-import {
-  buildHandshakeAuthLogKey,
-  HandshakeAuthLogLimiter,
-  shouldLimitMissingCredentialAuthLog,
-} from "./ws-connection/handshake-auth-log-limiter.js";
+import { HandshakeAuthLogLimiter } from "./ws-connection/handshake-auth-log-limiter.js";
 import { attachGatewayWsMessageHandlerOnDemand } from "./ws-connection/message-handler-loader.js";
 import type {
   GatewayWsMessageHandlerParams,
@@ -122,14 +123,12 @@ type AttachGatewayConnectionParams = GatewayConnectionOptions & {
 };
 
 export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.request);
   const {
     socket,
     connectionKind,
     request: upgradeReq,
     ingressAttribution,
-    pluginNodeCapabilities,
-    pluginSurfaceBaseUrl,
-    originCheckMetrics,
     clients,
     connectionWork,
     getPluginNodeCapabilities,
@@ -139,23 +138,12 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
         getResolvedAuth(),
         getRuntimeConfig().gateway?.trustedProxies,
       ),
-    rateLimiter,
-    browserRateLimiter,
-    nodeReapprovalCoordinator,
     isStartupPending,
-    isPendingWorkerNodeSetup,
-    admitsNodeSetupCompletion,
-    gatewayMethods,
-    events,
-    refreshHealthSnapshot,
     logGateway,
-    logHealth,
     logWsControl,
-    extraHandlers,
-    getMethodRegistry,
     buildRequestContext,
   } = params;
-  if (connectionWork.isClosing) {
+  if (connectionWork.isClosing || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
     socket.terminate();
     return;
   }
@@ -272,12 +260,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     closeGatewayTransportWithGrace(socket, code, reason ?? "");
   };
   const close = closeWithGrace;
+  const closeRemoteIngress = () => closeWithGrace(1008, "remote Control UI ingress closed");
+  remoteIngress?.signal.addEventListener("abort", closeRemoteIngress, { once: true });
+  socket.once("close", () =>
+    remoteIngress?.signal.removeEventListener("abort", closeRemoteIngress),
+  );
 
   const releaseConnection = connectionWork.registerConnection(() => {
     closeWithGrace(1012, connectionKind === "worker" ? "gateway-shutdown" : "service restart");
   });
 
   const send = (obj: unknown) => {
+    if (!hasCurrentRemoteControlUiIngress(remoteIngress)) {
+      closeRemoteIngress();
+      return { kind: "unavailable" } as const;
+    }
     if (closed) {
       return { kind: "unavailable" } as const;
     }
@@ -299,22 +296,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       closeWithGrace(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
       return { kind: "unavailable" } as const;
     }
-    let encoded: string | Buffer;
+    let encoded: Buffer;
     try {
-      encoded = serializeGatewayFrame(obj);
+      const serialized = serializeGatewayFrame(obj);
+      encoded = typeof serialized === "string" ? Buffer.from(serialized) : serialized;
     } catch (error) {
       return { kind: "serialization", error } as const;
     }
     try {
-      if (typeof encoded === "string") {
-        socket.send(encoded);
-      } else {
-        socket.send(encoded, { binary: false });
+      socket.send(encoded, { binary: false });
+      const bytes = encoded.byteLength;
+      const frame = asOptionalRecord(obj);
+      if (frame?.type === "event" && typeof frame.event === "string") {
+        socket.recordEventSent?.(frame.event, encoded);
       }
-      return {
-        kind: "sent",
-        bytes: typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength,
-      } as const;
+      return { kind: "sent", bytes } as const;
     } catch {
       socket.terminate();
       retireConnection();
@@ -384,32 +380,19 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
         isExpectedLocalAppStartupAbort(code)
           ? logWsControl.debug
           : logWsControl.warn;
-      const authReason = stringMetaValue(closeMeta, "authReason");
-      // Only missing shared credentials are suppressible startup retry noise.
-      const shouldLimitMissingAuthClose =
-        closeCause === "unauthorized" &&
-        shouldLimitMissingCredentialAuthLog({
-          reason: authReason,
-          authProvided: "none",
-        });
-      const closeLogDecision = shouldLimitMissingAuthClose
-        ? unauthorizedCloseBeforeConnectLogLimiter.register(
-            buildHandshakeAuthLogKey({
-              reason: authReason,
+      const suppressedText =
+        closeCause === "unauthorized"
+          ? unauthorizedCloseBeforeConnectLogLimiter.missingCredentialLogSuffix({
+              reason: stringMetaValue(closeMeta, "authReason"),
               remoteAddr,
               client:
                 stringMetaValue(closeMeta, "clientDisplayName") ??
                 stringMetaValue(closeMeta, "client"),
               mode: stringMetaValue(closeMeta, "mode"),
               authProvided: "none",
-            }),
-          )
-        : { shouldLog: true, suppressedSinceLastLog: 0 };
-      if (closeLogDecision.shouldLog) {
-        const suppressedText =
-          closeLogDecision.suppressedSinceLastLog > 0
-            ? ` suppressed=${closeLogDecision.suppressedSinceLastLog}`
-            : "";
+            })
+          : "";
+      if (suppressedText !== undefined) {
         logFn(
           `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"} phase=${lastHandshakePhase}${suppressedText}`,
           closeContext,
@@ -525,7 +508,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
 
   const setClient = (next: GatewayWsClient) => {
     // Keep one socket owner when concurrent connect frames finish out of order.
-    if (closed || client) {
+    if (closed || client || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
       return false;
     }
     if (
@@ -582,7 +565,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     isStartupPending,
     send,
     close,
-    isClosed: () => closed,
+    isClosed: () => closed || !hasCurrentRemoteControlUiIngress(remoteIngress),
     clearHandshakeTimer: () => clearTimeout(handshakeTimer),
     getClient: () => client,
     setClient,
@@ -608,40 +591,17 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   }
 
   attachGatewayWsMessageHandlerOnDemand({
-    clients,
+    ...params,
     ...connectionLifecycle,
-    socket,
-    prepareAuthenticatedReceive: params.prepareAuthenticatedReceive,
     upgradeReq,
     ingressAttribution,
-    bootId: params.bootId,
-    remoteAddr,
-    remotePort,
-    localAddr,
-    localPort,
-    endpoint,
+    ...params.addresses,
     forwardedFor,
     requestHost,
     requestOrigin,
     requestUserAgent,
-    pluginSurfaceBaseUrl,
-    pluginNodeCapabilities,
     connectNonce,
-    getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration,
-    rateLimiter,
-    browserRateLimiter,
-    nodeReapprovalCoordinator,
-    isPendingWorkerNodeSetup,
-    admitsNodeSetupCompletion,
-    gatewayMethods,
-    events,
-    extraHandlers,
-    getMethodRegistry,
-    buildRequestContext,
     nodeLifecycleDispatch,
-    refreshHealthSnapshot,
-    originCheckMetrics,
-    logHealth,
   });
 }

@@ -1,10 +1,11 @@
-// Resolves Windows system and Program Files install roots.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
+import { canAccessSync } from "./path-existence.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -30,12 +31,7 @@ let cachedProcessRoots: WindowsProcessRoots | null = null;
 
 function locateWindowsRegExe(): string | null {
   const filePath = path.win32.join(DEFAULT_WINDOWS_SYSTEM_ROOT, "System32", "reg.exe");
-  try {
-    fs.accessSync(filePath, fs.constants.R_OK);
-    return filePath;
-  } catch {
-    return null;
-  }
+  return canAccessSync(filePath, fs.constants.R_OK) ? filePath : null;
 }
 
 function trimTrailingSeparators(value: string): string {
@@ -111,6 +107,7 @@ export function queryWindowsRegistryValue(
     if (timeoutMs <= 0) {
       return null;
     }
+    assertAppContainerSpawnSupported();
     try {
       const stdout = execFileSync(regExe, ["query", key, "/v", valueName, ...viewArgs], {
         env: resolveDiagnosticProcessEnv(),
@@ -135,20 +132,14 @@ export function queryWindowsRegistryValue(
 }
 
 function getRegistryProgramFilesRoots(): Partial<WindowsInstallRoots> {
+  const readRoot = (valueName: string) =>
+    normalizeWindowsInstallRoot(
+      queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, valueName) ?? undefined,
+    ) ?? undefined;
   return {
-    programFiles:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir") ?? undefined,
-      ) ?? undefined,
-    programFilesX86:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir (x86)") ??
-          undefined,
-      ) ?? undefined,
-    programW6432:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramW6432Dir") ?? undefined,
-      ) ?? undefined,
+    programFiles: readRoot("ProgramFilesDir"),
+    programFilesX86: readRoot("ProgramFilesDir (x86)"),
+    programW6432: readRoot("ProgramW6432Dir"),
   };
 }
 

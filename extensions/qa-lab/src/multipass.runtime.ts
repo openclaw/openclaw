@@ -7,13 +7,13 @@ import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import type { RuntimeId } from "./runtime-id.js";
-import { shellQuote } from "./shell-quote.js";
 
 const MULTIPASS_MOUNTED_REPO_PATH = "/workspace/openclaw-host";
 const MULTIPASS_GUEST_REPO_PATH = "/workspace/openclaw";
@@ -251,7 +251,7 @@ function renderQaMultipassGuestScript(plan: QaMultipassPlan, redactSecrets = fal
     `import { isSupportedOpenClawNodeVersion } from ${JSON.stringify(
       `file://${plan.guestMountedRepoPath}/node-version.mjs`,
     )};`,
-    "process.exit(isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1);",
+    "process.exitCode = isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1;",
   ].join(" ");
   const rsyncCommand = [
     "rsync -a --delete",

@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
@@ -19,19 +20,42 @@ import {
   type AgentEventPayload,
   emitAgentAuditEvent,
   emitAgentEvent,
+  emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
+  onAgentRuntimeEvent,
 } from "../infra/agent-events.js";
-import { claimAgentRunContext } from "../infra/agent-run-registry.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../sessions/session-controller.mailbox.js";
+import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
+import {
+  getRpcSource,
+  getRpcSourceProjectSessionActive,
+} from "../sessions/session-controller.rpc-sources.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+
+export function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 export function createSubscriptionTestFixture() {
   const warn = vi.fn();
@@ -65,7 +89,6 @@ export function createSubscriptionTestFixture() {
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: createSessionEventSubscriberRegistry(),
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
         refreshConnectedUserProfiles: vi.fn(),
       };
@@ -74,31 +97,48 @@ export function createSubscriptionTestFixture() {
 }
 
 export function registerSubscriptionChatRun(
-  params: Parameters<typeof startGatewayEventSubscriptions>[0],
-  input: Omit<
-    Parameters<typeof registerChatAbortController>[0],
-    "chatAbortControllers" | "timeoutMs"
-  >,
+  _params: Parameters<typeof startGatewayEventSubscriptions>[0],
+  input: Omit<Parameters<typeof registerChatAbortController>[0], "timeoutMs">,
 ) {
   const registration = registerChatAbortController({
     ...input,
-    chatAbortControllers: params.chatAbortControllers,
+    target:
+      input.target ??
+      captureSessionTarget({
+        storeScope: `/synthetic/subscription/${randomUUID()}/sessions`,
+        sessionKey: input.sessionKey ?? "agent:main:subscription",
+        agentId: input.agentId,
+        incarnation: input.sessionId,
+      }),
     timeoutMs: 60_000,
   });
   if (!registration.entry) {
     throw new Error("expected registered chat abort controller");
   }
-  return { ...registration, entry: registration.entry };
+  registration.initializeTiming();
+  const entry = registration.entry;
+  onTestFinished(async () => {
+    const claim = entry.input.claim;
+    claim?.operation?.complete();
+    if (claim) {
+      releaseSessionControllerClaim(claim);
+      await Promise.allSettled([claim.settlement.promise]);
+    }
+    registration.cleanup();
+    retireSessionControllerInput(entry.input);
+    await Promise.allSettled([entry.input.settlement.promise]);
+  });
+  return { ...registration, entry };
 }
 
-export function readLifecycleState(entry: ChatAbortControllerEntry) {
+export function readLifecycleState(entry: RpcSourceRef) {
   return {
-    projectSessionActive: entry.projectSessionActive,
-    projectSessionTerminalPending: entry.projectSessionTerminalPending,
-    projectSessionTerminalObservedAt: entry.projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence: entry.projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted: entry.projectSessionTerminalPersisted,
-    registrationCleanupRequested: entry.registrationCleanupRequested,
+    projectSessionActive: getRpcSourceProjectSessionActive(entry),
+    projectSessionTerminalPending: entry.adapter.projectSessionTerminalPending,
+    projectSessionTerminalObservedAt: entry.adapter.projectSessionTerminalObservedAt,
+    projectSessionTerminalPersistence: entry.adapter.projectSessionTerminalPersistence,
+    projectSessionTerminalPersisted: entry.adapter.projectSessionTerminalPersisted,
+    retirementRequested: entry.input.retirementRequested,
   };
 }
 
@@ -108,7 +148,7 @@ export function lifecycleState(
   projectSessionTerminalObservedAt?: number,
   projectSessionTerminalPersistence?: Promise<void>,
   projectSessionTerminalPersisted?: boolean,
-  registrationCleanupRequested?: boolean,
+  retirementRequested?: boolean,
 ): ReturnType<typeof readLifecycleState> {
   return {
     projectSessionActive,
@@ -116,7 +156,7 @@ export function lifecycleState(
     projectSessionTerminalObservedAt,
     projectSessionTerminalPersistence,
     projectSessionTerminalPersisted,
-    registrationCleanupRequested,
+    retirementRequested,
   };
 }
 
@@ -246,7 +286,7 @@ export function registerAuditSubscriptionTests(params: {
       }),
     ).toBeUndefined();
 
-    unsubs.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
     const restarted = start();
@@ -367,10 +407,166 @@ export function registerAuditSubscriptionTests(params: {
       data: { phase: "start", startedAt: 3_000 },
     });
     expect(auditTestState.recorded).toBe(1);
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce(), { interval: 1 });
+    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
     warn.mockClear();
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
+  });
+}
+
+export function registerSubscriptionRegistrationTests(
+  start: typeof startGatewayEventSubscriptions,
+  prepareTerminalWrite: (terminal: Promise<void>) => void,
+) {
+  const { createParams } = createSubscriptionTestFixture();
+  it.each(["fulfilled", "rejected"] as const)(
+    "joins the subscription-owned terminal write during registration cleanup and restart (%s)",
+    async (outcome) => {
+      const params = createParams();
+      const runId = "terminal-cleanup-restart";
+      const sessionKey = "agent:main:main";
+      const sessionId = "terminal-cleanup-session";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const resolveGatewayContext = () => undefined;
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId,
+        sessionKey,
+        lifecycleGeneration,
+      });
+      bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
+      const terminal = createDeferred();
+      const failure = new Error("terminal write failed");
+      prepareTerminalWrite(terminal.promise);
+      const unsubs = start({ ...params, resolveGatewayContext });
+      const marker =
+        vi.fn<
+          NonNullable<
+            Parameters<typeof prepareGatewayRunShutdown>[0]["markMainSessionsAbortedForRestart"]
+          >
+        >();
+      try {
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          sessionKey,
+          sessionId,
+          lifecycleGeneration,
+          data: { phase: "end", endedAt: Date.now() },
+        });
+        const persistence = registration.entry.adapter.projectSessionTerminalPersistence;
+        expect(persistence).toBeInstanceOf(Promise);
+        registration.cleanup();
+        expect(getRpcSource(runId)).toBe(registration.entry);
+        const shutdown = prepareGatewayRunShutdown({
+          ...params,
+          resolveGatewayContext,
+          removeChatRun: (chatSessionId, clientRunId, key) =>
+            params.chatRunState.registry.remove(chatSessionId, clientRunId, key),
+          getPendingReplyCount: () => 0,
+          timeoutMs: 0,
+          warnings: [],
+          markMainSessionsAbortedForRestart: marker,
+        });
+        expect(marker).not.toHaveBeenCalled();
+        if (outcome === "fulfilled") {
+          terminal.resolve();
+        } else {
+          terminal.reject(failure);
+        }
+        const { released } = await shutdown;
+        if (outcome === "fulfilled") {
+          await released;
+        } else {
+          // The terminal owner below asserts failure; shutdown still joins physical settlement.
+          await Promise.allSettled([released]);
+        }
+        await unsubs.agentUnsub();
+        expect(getRpcSource(runId)).toBeUndefined();
+        expect(registration.entry.adapter.projectSessionTerminalPersisted).toBe(
+          outcome === "fulfilled",
+        );
+        expect(marker).toHaveBeenCalledOnce();
+        const recovery = marker.mock.calls[0]?.[0];
+        expect(recovery?.activeRuns.filter(recovery.isActiveRun)).toEqual(
+          outcome === "fulfilled"
+            ? []
+            : [
+                expect.objectContaining({
+                  runId,
+                  sessionKey,
+                  sessionId,
+                }),
+              ],
+        );
+        if (outcome === "rejected") {
+          await expect(waitForChatAbortTerminalPersistence(registration.entry)).rejects.toBe(
+            failure,
+          );
+        }
+      } finally {
+        terminal.resolve();
+        await unsubs.agentUnsub();
+        registration.cleanup();
+      }
+    },
+  );
+
+  it("does not mark a reentrant replacement terminal from the previous claim", () => {
+    const params = createParams();
+    const runId = "replaced-terminal-claim";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const identity = {
+      sessionKey: "agent:main:replaced",
+      sessionId: "replaced-session",
+      lifecycleGeneration,
+    };
+    let registration = registerSubscriptionChatRun(params, { runId, ...identity });
+    const ownership = { exclusive: true, ownsContext: true, trackOwner: true };
+    const originalClaim = claimAgentRunContext(runId, identity, ownership);
+    if (!originalClaim) {
+      throw new Error("Missing original claim");
+    }
+    let replacementClaim: string | undefined;
+    const removeListener = onAgentRuntimeEvent((event) => {
+      if (event.runId !== runId) {
+        return;
+      }
+      releaseAgentRunContext(runId, originalClaim);
+      registration.cleanup();
+      registration = registerSubscriptionChatRun(params, { runId, ...identity });
+      replacementClaim = claimAgentRunContext(runId, identity, ownership);
+    });
+    start(params);
+    try {
+      emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, originalClaim);
+      expect(replacementClaim).toBeTruthy();
+      expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(undefined));
+    } finally {
+      removeListener();
+      registration.cleanup();
+      releaseAgentRunContext(runId, replacementClaim ?? originalClaim);
+    }
+  });
+
+  it("does not attach a missing-key terminal to a registration created during deferred preparation", async () => {
+    const params = createParams();
+    const runId = "late-terminal-registration";
+    const unsubs = start(params);
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    const registration = registerSubscriptionChatRun(params, {
+      runId,
+      sessionKey: "agent:main:main",
+      sessionId: "late-terminal-session",
+    });
+    try {
+      await unsubs.agentUnsub();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(undefined));
+      expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();
+    } finally {
+      registration.cleanup();
+    }
   });
 }
 

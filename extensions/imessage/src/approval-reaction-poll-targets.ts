@@ -1,5 +1,4 @@
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-// Imessage plugin module owns persisted approval reaction poll targets.
 import { readApprovalReactionDecisionList } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -82,28 +81,23 @@ const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
 );
 
 let pendingReactionPollTargetStore:
-  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget>
+  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget, 2>
   | undefined;
-let pendingReactionPollTargetStoreDisabled = false;
 
-function disablePendingReactionPollTargetStore(error: unknown): void {
-  pendingReactionPollTargetStoreDisabled = true;
+function invalidatePendingReactionPollTargetStore(error: unknown): void {
   pendingReactionPollTargetStore = undefined;
   reportPersistentApprovalReactionError(error);
 }
 
 function getPendingReactionPollTargetStore():
-  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget>
+  | PluginStateKeyedStore<PendingIMessageApprovalReactionPollTarget, 2>
   | undefined {
-  if (pendingReactionPollTargetStoreDisabled) {
-    return undefined;
-  }
   if (pendingReactionPollTargetStore) {
     return pendingReactionPollTargetStore;
   }
   try {
     pendingReactionPollTargetStore =
-      getOptionalIMessageRuntime()?.state.openKeyedStore<PendingIMessageApprovalReactionPollTarget>(
+      getOptionalIMessageRuntime()?.state.openKeyedStoreV2<PendingIMessageApprovalReactionPollTarget>(
         {
           namespace: PERSISTENT_POLL_TARGET_NAMESPACE,
           maxEntries: PERSISTENT_MAX_ENTRIES,
@@ -112,7 +106,7 @@ function getPendingReactionPollTargetStore():
       );
     return pendingReactionPollTargetStore;
   } catch (error) {
-    disablePendingReactionPollTargetStore(error);
+    invalidatePendingReactionPollTargetStore(error);
     return undefined;
   }
 }
@@ -194,7 +188,7 @@ export async function recordIMessageApprovalReactionPollTarget(params: {
       writes.push(
         store
           .register(key, target, { ttlMs: expiry.ttlMs })
-          .catch(disablePendingReactionPollTargetStore),
+          .catch(invalidatePendingReactionPollTargetStore),
       );
     }
   }
@@ -210,7 +204,7 @@ export async function deleteIMessageApprovalReactionPollTargets(
   for (const key of keys) {
     pendingReactionPollTargets.delete(key);
     if (store) {
-      deletions.push(store.delete(key).catch(disablePendingReactionPollTargetStore));
+      deletions.push(store.delete(key).catch(invalidatePendingReactionPollTargetStore));
     }
   }
   await Promise.all(deletions);
@@ -236,7 +230,7 @@ export async function listPendingIMessageApprovalReactionPollTargets(params: {
         pendingReactionPollTargets.set(entry.key, target);
       }
     } catch (error) {
-      disablePendingReactionPollTargetStore(error);
+      invalidatePendingReactionPollTargetStore(error);
     }
   }
   prunePendingReactionPollTargets(nowMs);
@@ -263,5 +257,4 @@ export async function listPendingIMessageApprovalReactionPollTargets(params: {
 export function clearIMessageApprovalReactionPollTargetsForTest(): void {
   pendingReactionPollTargets.clear();
   pendingReactionPollTargetStore = undefined;
-  pendingReactionPollTargetStoreDisabled = false;
 }

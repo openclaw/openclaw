@@ -1,14 +1,28 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { createComponent, createRoot, createSignal, flush } from "solid-js";
+import { afterEach, expect, it, onTestFinished } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
-import { resolveComposerQuestionPanel } from "./components/chat-composer-question.ts";
+import { createComposerQuestionPanel } from "./components/chat-composer-question.tsx";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import "./components/chat-question-panel.ts";
+import { ChatQuestionPanel } from "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
+
+function questionReader(props: ReturnType<typeof createComposerProps>) {
+  return createRoot((dispose) => {
+    onTestFinished(dispose);
+    const [current, refresh] = createSignal(props, { equals: false });
+    const panel = createComposerQuestionPanel(current, getChatComposerState(props.paneId));
+    return () => {
+      refresh(props);
+      flush();
+      return panel();
+    };
+  });
+}
 
 it.each(["draft", "focus"])(
   "keeps a new optional question compact around existing composer %s without closing an explicit expansion",
@@ -46,20 +60,20 @@ it.each(["draft", "focus"])(
     props.asyncQuestions.drafts.set("audience", {
       answers: new Map([["0", { selected: new Set(["Everyone"]), freeText: "" }]]),
     });
-    const requestUpdate = vi.fn();
-    let panel = resolveComposerQuestionPanel(props, state, requestUpdate)!;
+    const readPanel = questionReader(props);
+    let panel = readPanel()!;
     expect(panel.model.nonBlocking).toBe(true);
     expect(panel.model.collapsed).toBe(true);
     expect(panel.model.autoFocus).toBe(false);
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      html`<openclaw-chat-question-panel .props=${panel}></openclaw-chat-question-panel>`,
+    const view = mountSolid(() => createComponent(ChatQuestionPanel, { props: panel }), {
       container,
-    );
-    await (container.firstElementChild as HTMLElement & { updateComplete: Promise<unknown> })
-      .updateComplete;
-    expect(container.textContent).toContain("Optional · work can continue");
+    });
+    onTestFinished(view.unmount);
+    await container.querySelector<ChatQuestionPanel>("openclaw-chat-question-panel")
+      ?.updateComplete;
+    expect(container.textContent).not.toContain("Optional · work can continue");
     expect(container.textContent).toContain("1 unanswered question");
     if (editing === "focus") {
       expect(document.activeElement).toBe(textarea);
@@ -68,7 +82,7 @@ it.each(["draft", "focus"])(
     // Durability becoming ready or a reconnect changes the callback scope, not
     // the operator's disclosure choice for this still-pending question.
     props.asyncQuestions.scope = `${props.asyncQuestions.scope}:owner-ready`;
-    panel = resolveComposerQuestionPanel(props, state, requestUpdate)!;
+    panel = readPanel()!;
     expect(panel.model.collapsed).toBe(true);
     if (editing === "focus") {
       expect(document.activeElement).toBe(textarea);
@@ -76,18 +90,18 @@ it.each(["draft", "focus"])(
 
     const submit = props.asyncQuestions.submit;
     props.asyncQuestions.submit = undefined;
-    expect(resolveComposerQuestionPanel(props, state, requestUpdate)).toBeNull();
+    expect(readPanel()).toBeNull();
     props.asyncQuestions.scope = `${props.asyncQuestions.scope}:reconnected`;
     props.asyncQuestions.submit = submit;
-    panel = resolveComposerQuestionPanel(props, state, requestUpdate)!;
+    panel = readPanel()!;
     expect(panel.model.collapsed).toBe(true);
 
     panel.onCollapsedChange?.(false);
-    panel = resolveComposerQuestionPanel(props, state, requestUpdate)!;
+    panel = readPanel()!;
     expect(panel.model.collapsed).toBe(false);
     textarea.focus();
     props.asyncQuestions.scope = `${props.asyncQuestions.scope}:reconnected`;
-    expect(resolveComposerQuestionPanel(props, state, requestUpdate)!.model.collapsed).toBe(false);
+    expect(readPanel()!.model.collapsed).toBe(false);
 
     const other = document.createElement("button");
     document.body.append(other);
@@ -126,19 +140,19 @@ it("keeps an unseen queued optional question compact when the previous request l
       ],
     },
   );
-  const requestUpdate = vi.fn();
-  expect(resolveComposerQuestionPanel(props, state, requestUpdate)!.model.collapsed).toBe(true);
+  const readPanel = questionReader(props);
+  expect(readPanel()!.model.collapsed).toBe(true);
 
   props.asyncQuestions.pending.push({
     itemId: "format",
     questions: [{ title: "Which format?" }],
   });
-  let panel = resolveComposerQuestionPanel(props, state, requestUpdate)!;
+  let panel = readPanel()!;
   expect(panel.model.questions[0]?.question).toBe("Which audience?");
   expect(panel.model.collapsed).toBe(true);
 
   props.asyncQuestions.pending.shift();
-  panel = resolveComposerQuestionPanel(props, state, requestUpdate)!;
+  panel = readPanel()!;
   expect(panel.model.questions[0]?.question).toBe("Which format?");
   expect(panel.model.collapsed).toBe(true);
   expect(document.activeElement).toBe(textarea);
@@ -148,8 +162,8 @@ it("keeps an unseen queued optional question compact when the previous request l
     itemId: "tone",
     questions: [{ title: "Which tone?" }],
   });
-  resolveComposerQuestionPanel(props, state, requestUpdate)!.onNextRequest?.();
-  panel = resolveComposerQuestionPanel(props, state, requestUpdate)!;
+  readPanel()!.onNextRequest?.();
+  panel = readPanel()!;
   expect(panel.model.questions[0]?.question).toBe("Which tone?");
   expect(panel.model.collapsed).toBe(false);
 });

@@ -39,6 +39,7 @@ import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./de
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 import {
+  messageActionRequesterMediaContext,
   resolveMessageActionOutcome,
   type MessageActionInput,
   type MessageActionResult,
@@ -46,19 +47,19 @@ import {
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
 import {
-  assertMessageDeliveryCurrent,
+  captureMessageDeliveryAuthority,
   beforeMessageDeliveryAttempt,
-  withMessageActionEffectAuthority,
   executeMessagePlugin,
   executeMessagePoll,
 } from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
+  waitForLocalMessageMedia,
   normalizeSandboxMediaParams,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
-  resolveExtraActionMediaSourceParamKeys,
+  resolveExtraActionMediaSourceParamKeysAsync,
 } from "./message-action-params.js";
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
 import { withSendNormalization } from "./message-action-send-payload.js";
@@ -163,11 +164,10 @@ async function handleBroadcastAction(
     }
     return undefined;
   };
-  let attemptIndex = 0;
   let interrupted = false;
   for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     for (const target of rawTargets) {
-      const receiptDiscriminator = `broadcast:${attemptIndex++}`;
+      const receiptDiscriminator = `broadcast:${results.length}`;
       const hadAcceptedResult = !interrupted && hasAcceptedResult();
       if (!interrupted) {
         try {
@@ -319,21 +319,22 @@ async function handleInternalSourceReplySendAction(
       params.message = recommendations.text;
     }
   }
+  const mediaSources = collectActionMediaSourceHints(params, [], { structuredAttachments: "all" });
+  await waitForLocalMessageMedia({
+    ...input,
+    sources: mediaSources,
+    assertCurrent: input.assertDirectAdapterHandoff,
+  });
   const mediaAccess =
     input.mediaAccess ??
     resolveAgentScopedOutboundMediaAccess({
       cfg: input.cfg,
       agentId,
       workspaceDir: input.workspaceDir,
-      mediaSources: collectActionMediaSourceHints(params, [], { structuredAttachments: "all" }),
-      workspaceMediaAccess: input.workspaceMediaAccess,
-      sessionKey: input.sessionKey,
+      mediaSources,
+      ...messageActionRequesterMediaContext(input),
       messageProvider: input.sessionKey ? undefined : INTERNAL_MESSAGE_CHANNEL,
       accountId: input.sessionKey ? input.requesterAccountId : undefined,
-      requesterSenderId: input.requesterSenderId,
-      requesterSenderName: input.requesterSenderName,
-      requesterSenderUsername: input.requesterSenderUsername,
-      requesterSenderE164: input.requesterSenderE164,
     });
   const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
     ? mediaAccess.readFile
@@ -410,7 +411,6 @@ async function handleInternalSourceReplySendAction(
   const sourceReplyMediaUrls = resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls;
   const sourceReplyMessage = sourceReplyPayload.text ?? sourceReply.message;
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
-  let persistedIdempotencyKey: string | undefined;
   let persistedTranscriptOwner = false;
   if (!dryRun) {
     await beforeMessageDeliveryAttempt(input);
@@ -445,13 +445,12 @@ async function handleInternalSourceReplySendAction(
           sessionId: input.sessionId,
           storePath: resolveSessionStorePathCore(input.cfg.session?.store, { agentId }),
         },
-        () => assertMessageDeliveryCurrent(input),
+        captureMessageDeliveryAuthority(input),
         persist,
       );
     } else {
       await persist();
     }
-    persistedIdempotencyKey = idempotencyKey;
     persistedTranscriptOwner = true;
   }
   const payload = {
@@ -460,7 +459,7 @@ async function handleInternalSourceReplySendAction(
     channel: INTERNAL_MESSAGE_CHANNEL,
     target: "current-run",
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
-    ...(persistedIdempotencyKey ? { idempotencyKey: persistedIdempotencyKey } : {}),
+    ...(persistedTranscriptOwner && idempotencyKey ? { idempotencyKey } : {}),
     ...(persistedTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
     ...(dryRun ? {} : { sourceReplySink: "internal-ui" as const }),
     sourceReply: sourceReplyPayload,
@@ -508,12 +507,6 @@ async function handleInternalSourceReplySendAction(
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
-  return withMessageActionEffectAuthority(input, () => runMessageActionWithAuthority(input));
-}
-
-async function runMessageActionWithAuthority(
-  input: MessageActionInput,
-): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const cfg = input.cfg;
   let params = { ...input.params };
@@ -565,36 +558,44 @@ async function runMessageActionWithAuthority(
           const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } =
             route;
 
-          const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
-            cfg,
-            action,
-            args: params,
-            channel,
-            accountId,
-            sessionKey: input.sessionKey,
-            sessionId: input.sessionId,
-            agentId: resolvedAgentId,
-            requesterSenderId: input.requesterSenderId,
-            senderIsOwner: input.senderIsOwner,
-          });
+          const extraActionMediaSourceParamKeys = await resolveExtraActionMediaSourceParamKeysAsync(
+            {
+              cfg,
+              action,
+              args: params,
+              channel,
+              accountId,
+              sessionKey: input.sessionKey,
+              sessionId: input.sessionId,
+              agentId: resolvedAgentId,
+              requesterSenderId: input.requesterSenderId,
+              senderIsOwner: input.senderIsOwner,
+            },
+          );
+          (route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff)?.();
           const structuredAttachmentMode = action === "send" ? "all" : "selected";
+          const mediaSources = collectActionMediaSourceHints(
+            params,
+            extraActionMediaSourceParamKeys,
+            {
+              structuredAttachments: structuredAttachmentMode,
+            },
+          );
+          await waitForLocalMessageMedia({
+            ...input,
+            sources: mediaSources,
+            assertCurrent: route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff,
+          });
 
           const mediaAccess =
             input.mediaAccess ??
             resolveAgentScopedOutboundMediaAccess({
               cfg,
               agentId: resolvedAgentId,
-              mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
-                structuredAttachments: structuredAttachmentMode,
-              }),
-              workspaceMediaAccess: input.workspaceMediaAccess,
-              sessionKey: input.sessionKey,
+              mediaSources,
+              ...messageActionRequesterMediaContext(input),
               messageProvider: input.sessionKey ? undefined : channel,
               accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-              requesterSenderId: input.requesterSenderId,
-              requesterSenderName: input.requesterSenderName,
-              requesterSenderUsername: input.requesterSenderUsername,
-              requesterSenderE164: input.requesterSenderE164,
             });
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile
@@ -687,7 +688,7 @@ async function runMessageActionWithAuthority(
           const deliveryInput = context.input;
           context.input = {
             ...deliveryInput,
-            assertDirectAdapterHandoff: () => assertMessageDeliveryCurrent(deliveryInput),
+            assertDirectAdapterHandoff: captureMessageDeliveryAuthority(deliveryInput),
           };
         }
       }

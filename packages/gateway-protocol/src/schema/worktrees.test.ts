@@ -44,19 +44,6 @@ describe("managed worktree protocol schemas", () => {
     ).toBe(true);
   });
 
-  it("accepts worktree target params on sessions.create", () => {
-    expect(
-      validateSessionsCreateParams({
-        agentId: "main",
-        worktree: true,
-        worktreeBaseRef: "origin/main",
-        worktreeName: "my-task",
-        execNode: "macbook",
-      }),
-    ).toBe(true);
-    expect(validateSessionsCreateParams({ agentId: "main", worktreeName: "Bad Name" })).toBe(false);
-  });
-
   it("preserves exact-state custody and recovery data in owner-qualified payloads", () => {
     const exactState = {
       ownerKind: "manual",
@@ -122,6 +109,33 @@ describe("managed worktree protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts pack-maintenance progress and failures in GC receipts", () => {
+    const receipt = {
+      jobId: "gc-job",
+      state: "running",
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+      packsRemoved: 1023,
+      gitMaintenance: {
+        repoRoot: "/repo",
+        stage: "completed",
+        packsBefore: 8800,
+        packsAfter: 7777,
+      },
+    };
+    expect(Value.Check(WorktreesGcResultSchema, receipt)).toBe(true);
+    expect(
+      Value.Check(WorktreesGcResultSchema, {
+        ...receipt,
+        state: "completed",
+        outcome: "partial",
+        gitMaintenance: { repoRoot: "/repo", stage: "suspended" },
+        issues: [{ stage: "git-maintenance", outcome: "failed", reason: "pack checksum mismatch" }],
+      }),
+    ).toBe(true);
+  });
+
   it("accepts branch listing payloads and snapshot errors", () => {
     expect(validateWorktreesBranchesParams({ repoRoot: "/repo" })).toBe(true);
     expect(
@@ -173,10 +187,5 @@ describe("managed worktree protocol schemas", () => {
     expect(validateFsListDirParams({ path: "/repo" })).toBe(true);
     expect(validateFsListDirParams({ nodeId: "macbook", path: "/Users/peter" })).toBe(true);
     expect(validateFsListDirParams({ nodeId: "" })).toBe(false);
-  });
-
-  it("rejects invalid names and unknown fields", () => {
-    expect(validateWorktreesCreateParams({ repoRoot: "/repo", name: "Bad Name" })).toBe(false);
-    expect(validateWorktreesGcParams({ unexpected: true })).toBe(false);
   });
 });

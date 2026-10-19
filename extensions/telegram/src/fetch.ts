@@ -107,7 +107,7 @@ type TelegramTransportAttemptHealth = {
   unhealthyUntilMs: number;
 };
 
-type TelegramDnsResultOrder = "ipv4first" | "verbatim";
+type TelegramDnsResultOrder = ReturnType<typeof resolveTelegramDnsResultOrderDecision>["value"];
 
 type LookupCallback =
   | ((err: NodeJS.ErrnoException | null, address: string, family: number) => void)
@@ -179,12 +179,12 @@ function resolveTelegramDispatcherPolicy(params: {
       mode: "explicit-proxy",
       proxyUrl: explicitProxyUrl,
       allowPrivateProxy: true,
-      proxyTls: { ...connect },
+      proxyTls: connect,
     };
   }
   return {
     mode: params.useEnvProxy ? "env-proxy" : "direct",
-    connect: { ...connect },
+    connect,
   };
 }
 
@@ -419,11 +419,6 @@ function createTelegramTransportAttempts(params: {
   return attempts;
 }
 
-async function destroyOwnedDispatchers(dispatchers: Iterable<TelegramDispatcher>): Promise<void> {
-  // Destroy abandoned sockets immediately; already-destroyed dispatchers may reject.
-  await Promise.allSettled([...dispatchers].map(async (dispatcher) => dispatcher.destroy()));
-}
-
 export function resolveTelegramTransport(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
@@ -434,13 +429,6 @@ export function resolveTelegramTransport(
   const dnsDecision = resolveTelegramDnsResultOrderDecision({
     network: options?.network,
   });
-  for (const [name, decision] of [
-    ["autoSelectFamily", autoSelectDecision],
-    ["dnsResultOrder", dnsDecision],
-  ] as const) {
-    log.debug(`${name}=${decision.value} (${decision.source})`);
-  }
-
   const effectiveProxyFetch =
     proxyFetch ??
     (() => {
@@ -457,9 +445,8 @@ export function resolveTelegramTransport(
       : undefined;
   const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
-  const sourceFetch = resolvedExplicitProxyUrl
-    ? undiciSourceFetch
-    : effectiveProxyFetch
+  const sourceFetch =
+    !resolvedExplicitProxyUrl && effectiveProxyFetch
       ? resolveWrappedFetch(effectiveProxyFetch)
       : undiciSourceFetch;
   if (effectiveProxyFetch && !explicitProxyUrl) {
@@ -582,9 +569,6 @@ export function resolveTelegramTransport(
     }
 
     if (attemptIndex < stickyAttemptIndex) {
-      log.debug(
-        `fetch fallback: recovered from attempt ${stickyAttemptIndex} to attempt ${attemptIndex}`,
-      );
       stickyAttemptIndex = attemptIndex;
       resetStickyRecoveryProbe();
       return;
@@ -598,7 +582,6 @@ export function resolveTelegramTransport(
     if (stickySuccessCount >= TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD) {
       stickySuccessCount = 0;
       primaryProbeDue = true;
-      log.debug("fetch fallback: scheduling primary dispatcher recovery check");
     }
   };
 
@@ -610,6 +593,7 @@ export function resolveTelegramTransport(
     const method = extractTelegramApiMethod(input);
     const freshConnection = method === "sendmessage" || method === "sendrichmessage";
     const shouldRetryRequest = (error: unknown) =>
+      !closed &&
       shouldRetryTelegramTransportFallback(error) &&
       (!freshConnection || isSafeToRetrySendError(error));
     const requestFetch = bindTelegramTransportAuthority(
@@ -631,11 +615,6 @@ export function resolveTelegramTransport(
     const startIndex = primaryProbe ? 0 : stickyStartIndex;
     if (primaryProbe) {
       primaryProbeDue = false;
-      log.debug(
-        stickyCooldownError
-          ? "fetch fallback: rechecking primary dispatcher while sticky fallback is cooling down"
-          : "fetch fallback: rechecking primary dispatcher after sticky fallback successes",
-      );
     }
     let err: unknown;
     const captureResponse = (response: Response, fallbackAttempt?: number): void => {
@@ -647,10 +626,10 @@ export function resolveTelegramTransport(
         requestBody: init?.body ?? null,
         response,
         flowId: randomUUID(),
-        meta:
-          fallbackAttempt === undefined
-            ? { subsystem: "telegram-fetch" }
-            : { subsystem: "telegram-fetch", fallbackAttempt },
+        meta: {
+          subsystem: "telegram-fetch",
+          ...(fallbackAttempt === undefined ? {} : { fallbackAttempt }),
+        },
       }).catch(() => {});
     };
 
@@ -733,7 +712,8 @@ export function resolveTelegramTransport(
       closed = true;
       const toDestroy = [...ownedDispatchers];
       ownedDispatchers.clear();
-      await destroyOwnedDispatchers(toDestroy);
+      // Destroy abandoned sockets immediately; already-destroyed dispatchers may reject.
+      await Promise.allSettled(toDestroy.map(async (dispatcher) => dispatcher.destroy()));
     },
   };
 }

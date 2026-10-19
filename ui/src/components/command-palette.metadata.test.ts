@@ -9,7 +9,7 @@ import {
   findPaletteOption,
   mountPalette,
 } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 it("refreshes open palette skills without reloading unchanged models", async () => {
   vi.useFakeTimers();

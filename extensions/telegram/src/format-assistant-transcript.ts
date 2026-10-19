@@ -8,23 +8,6 @@ type TelegramHtmlVisibleProjection = {
   excludedRanges: Array<{ start: number; end: number }>;
 };
 
-function maskTelegramExcludedText(text: string): string {
-  return text.replace(/[^\n]+/g, (line) =>
-    line.trim() ? `x${" ".repeat(line.length - 1)}` : " ".repeat(line.length),
-  );
-}
-
-function maskTelegramExcludedRanges(projection: TelegramHtmlVisibleProjection): string {
-  let masked = "";
-  let cursor = 0;
-  for (const range of projection.excludedRanges) {
-    masked += projection.text.slice(cursor, range.start);
-    masked += maskTelegramExcludedText(projection.text.slice(range.start, range.end));
-    cursor = range.end;
-  }
-  return masked + projection.text.slice(cursor);
-}
-
 function telegramProjectionHasRoleHeader(projection: TelegramHtmlVisibleProjection): boolean {
   // Header delimiters must be literal or entity-encoded before Markdown parsing.
   if (
@@ -34,8 +17,19 @@ function telegramProjectionHasRoleHeader(projection: TelegramHtmlVisibleProjecti
   ) {
     return false;
   }
+  let masked = "";
+  let cursor = 0;
+  for (const range of projection.excludedRanges) {
+    masked += projection.text.slice(cursor, range.start);
+    masked += projection.text
+      .slice(range.start, range.end)
+      .replace(/[^\n]+/g, (line) =>
+        line.trim() ? `x${" ".repeat(line.length - 1)}` : " ".repeat(line.length),
+      );
+    cursor = range.end;
+  }
   return Boolean(
-    markdownToIR(maskTelegramExcludedRanges(projection), {
+    markdownToIR(masked + projection.text.slice(cursor), {
       assistantTranscriptRoleHeaders: true,
       autolink: false,
       blockquotePrefix: "",

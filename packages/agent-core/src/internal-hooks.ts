@@ -1,11 +1,27 @@
 import type {
   AgentLoopConfig,
+  AfterToolOutcomeContext,
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
   InternalBeforeToolBatchResult,
   ToolLoopWarning,
+  ToolLoopIntervention,
+  ToolLoopRecoveryState,
+  ToolResultContentSource,
 } from "./types.js";
+
+type RepetitionGuardPolicy = (model: AgentLoopConfig["model"]) => boolean;
+const repetitionGuardByAgent = new WeakMap<object, RepetitionGuardPolicy>();
+
+/** Host policy only: no plugin-facing option or user setting. */
+export function setInternalRepetitionGuard(agent: object, policy: RepetitionGuardPolicy): void {
+  repetitionGuardByAgent.set(agent, policy);
+}
+
+export function getInternalRepetitionGuard(agent: object): RepetitionGuardPolicy | undefined {
+  return repetitionGuardByAgent.get(agent);
+}
 
 export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
 
@@ -14,6 +30,26 @@ const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>(
 export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
+const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
+
+/** Keep the accepted input identity across same-input Agent.continue() calls. */
+export function getInternalToolTurnInputScope(hook: InternalToolTurnCompletionHook): object {
+  let scope = toolTurnInputScopeByHook.get(hook);
+  if (!scope) {
+    scope = {};
+    toolTurnInputScopeByHook.set(hook, scope);
+  }
+  return scope;
+}
+
+/** Queueing, cancellation and context-only updates do not commit a new input. */
+export function commitInternalToolTurnInput(
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnInputScopeByHook.set(hook, {});
+  }
+}
 
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
@@ -23,9 +59,14 @@ export type InternalToolBatchLifecycle = {
    * before their implementations start, argument-validation rejections when the
    * launch reaches them. May throw before launch.
    */
-  commitReadyCalls: (calls: readonly InternalReadyToolCall[]) => void;
+  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
   /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
-  releaseSkippedCalls: (toolCallIds: readonly string[]) => void;
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
+  /** Observe settled outcomes in assistant order, before warning text changes their identity. */
+  observeOutcome?: (
+    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    state: ToolLoopRecoveryState,
+  ) => ToolLoopIntervention | undefined;
 };
 
 const toolBatchLifecycleByResult = new WeakMap<
@@ -44,7 +85,7 @@ export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
   drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
-  subscribe: (listener: () => void) => () => void;
+  onChange?: () => void;
 };
 const steeringQueueObserverByCallback = new WeakMap<
   InternalSteeringGetter,
@@ -79,6 +120,7 @@ const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPre
 type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
+const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
@@ -204,6 +246,26 @@ export function getInternalToolResultProvenance(value: object): object | undefin
   return toolResultProvenanceByValue.get(value);
 }
 
+/**
+ * Mark one result or thrown error as carrying content from a nested call whose
+ * tool declares a result content source. Dispatchers such as Tool Search and
+ * Code Mode use this because their own static declaration cannot describe each
+ * call; finalization combines it with the executed tool's declaration.
+ */
+export function attachInternalToolResultContentSource<T extends object>(
+  value: T,
+  source: ToolResultContentSource,
+): T {
+  toolResultContentSourceByValue.set(value, source);
+  return value;
+}
+
+export function getInternalToolResultContentSource(
+  value: object,
+): ToolResultContentSource | undefined {
+  return toolResultContentSourceByValue.get(value);
+}
+
 /** Carry private commit ownership through result transforms and message construction. */
 export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
   const acknowledge = toolResultAcknowledgementByValue.get(source);
@@ -213,6 +275,10 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
   const provenance = toolResultProvenanceByValue.get(source);
   if (provenance) {
     toolResultProvenanceByValue.set(target, provenance);
+  }
+  const contentSource = toolResultContentSourceByValue.get(source);
+  if (contentSource) {
+    toolResultContentSourceByValue.set(target, contentSource);
   }
   return target;
 }

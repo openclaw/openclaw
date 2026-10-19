@@ -1,17 +1,12 @@
-// Protect complete, deterministic UI E2E partitions and timing fallback precedence.
+// Protect UI E2E resource ownership across native project initialization and teardown.
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TestSpecification } from "vitest/node";
-import type { CiTestTimings } from "../scripts/lib/ci-test-timings-schema.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const timingPath = path.join(repoRoot, "config/ci-test-timings.json");
 const tempDirs: string[] = [];
 
 beforeEach(() => {
@@ -21,7 +16,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
   vi.unstubAllEnvs();
   vi.resetModules();
   for (const dir of tempDirs.splice(0)) {
@@ -29,81 +23,10 @@ afterEach(() => {
   }
 });
 
-function useTimings(contents: string | null) {
-  const readFileSync = fs.readFileSync;
-  vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-    if ((file instanceof URL ? fileURLToPath(file) : file) === timingPath) {
-      if (contents === null) {
-        throw new Error("ENOENT");
-      }
-      return contents;
-    }
-    return readFileSync(file, options);
-  });
-  syncBuiltinESMExports();
-}
-
-function timingFile(fileSeconds: Record<string, number>, perFileOverheadSeconds = 0.6) {
-  return JSON.stringify({
-    version: 1,
-    updatedAt: "2026-08-27",
-    source: "fixture measurements",
-    uiE2e: { fileSeconds, perFileOverheadSeconds },
-    compactGroupSeconds: { blacksmith: {}, github: {} },
-    runtimePlacementTimings: { blacksmith: [], github: [] },
-    repoE2eFileSeconds: {},
-    toolingFileSeconds: { blacksmith: {}, github: {} },
-  } satisfies CiTestTimings);
-}
-
-function specifications(
-  paths: string[],
-  options: { name?: string; projectWorkers?: number | null; rootWorkers?: number } = {},
-): TestSpecification[] {
-  const project = {
-    config: {
-      maxWorkers: options.projectWorkers === null ? undefined : (options.projectWorkers ?? 1),
-    },
-    name: options.name ?? "fixture",
-    vitest: { config: { maxWorkers: options.rootWorkers ?? 1 } },
-  };
-  return paths.map((moduleId) => ({ moduleId, project }) as TestSpecification);
-}
-
-function temporaryFiles(sizes: number[]): TestSpecification[] {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-e2e-shards-"));
-  tempDirs.push(tempDir);
-  return specifications(
-    sizes.map((bytes, index) => {
-      const moduleId = path.join(tempDir, `suite-${index}.e2e.test.ts`);
-      fs.writeFileSync(moduleId, "x".repeat(bytes));
-      return moduleId;
-    }),
-  );
-}
-
-async function partitionSpecifications(files: TestSpecification[], count = 11) {
-  const { UiE2eSequencer } = await import("./vitest/vitest.ui-e2e.sequencer.ts");
-  return Promise.all(
-    Array.from({ length: count }, async (_, index) => {
-      const sequencer = new UiE2eSequencer({
-        config: { shard: { count, index: index + 1 } },
-      } as never);
-      return sequencer.shard(files);
-    }),
-  );
-}
-
-async function partition(files: TestSpecification[], count = 11) {
-  return (await partitionSpecifications(files, count)).map((shard) =>
-    shard.map((file) => file.moduleId),
-  );
-}
-
 const standaloneFile = "ui/src/e2e/board-fixture.e2e.test.ts";
 const bundledFile = "ui/src/e2e/mount-fallback.e2e.test.ts";
 const serialBundledFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
-const privateFile = "ui/src/e2e/approval-bootstrap.e2e.test.ts";
+const workboardFile = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
 const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
@@ -119,16 +42,22 @@ const realGatewayFiles = [
   "chat-composer-websearch-kill-switch.real-gateway",
   "chat-flow.catalog-bootstrap",
   "chat-loading-performance.real-gateway",
+  "chat-managed-media-order.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-reconnect-continuity.real-gateway",
+  "chat-session-diff-folding.real-gateway",
+  "chat-steer-deferred-custody.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-stop-owned-exec.real-gateway",
   "chat-thinking-metadata.real-gateway",
   "chat-tts-supplement.real-gateway",
+  "chat-wait-clock.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
   "command-palette-search.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
+  "deepseek-search.real-gateway",
   "desktop-resize.real-gateway",
   "device-alias-rename.real-gateway",
   "device-platform-family.real-gateway",
@@ -137,17 +66,20 @@ const realGatewayFiles = [
   "model-api-keys.real-gateway",
   "model-catalog-partial-refresh.real-gateway",
   "model-picker-search.real-gateway",
+  "peer-followup-restart.real-gateway",
   "profile-page.real-gateway",
   "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
   "session-pr-reader-lifetime.real-gateway",
   "session-progress-hovercard.real-gateway",
   "session-roster-request-rate.real-gateway",
+  "sidebar-running-counts.real-gateway",
+  "task-pull-requests.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
 ]
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-  .concat(qaLabFiles);
+  .concat(qaLabFiles, workboardFile);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
 const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
@@ -374,109 +306,6 @@ describe("Control UI E2E resource ownership", () => {
   });
 
   it.each([
-    { filters: [standaloneFile], files: [standaloneFile], leases: 0 },
-    { filters: [privateFile], files: [privateFile], leases: 0 },
-    { filters: [bundledFile], files: [bundledFile], leases: 1 },
-    { filters: [serialBundledFile], files: [serialBundledFile], leases: 1 },
-    {
-      filters: [standaloneFile, privateFile, bundledFile, serialBundledFile],
-      files: [standaloneFile, privateFile, bundledFile, serialBundledFile],
-      leases: 1,
-    },
-    {
-      filters: ["ui/src/pages/cron"],
-      files: ["ui/src/pages/cron/run-transcript.e2e.test.ts"],
-      leases: 1,
-    },
-    {
-      include: [standaloneFile, bundledFile],
-      files: [standaloneFile, bundledFile],
-      leases: 1,
-    },
-    {
-      include: [standaloneFile, bundledFile],
-      filters: [standaloneFile],
-      files: [standaloneFile],
-      leases: 0,
-    },
-    {
-      include: ["ui/src/e2e/**/*.test.ts"],
-      filters: [standaloneFile],
-      files: [standaloneFile],
-      leases: 0,
-    },
-    {
-      include: ["ui/src/e2e/**/*.test.ts"],
-      files: fs.globSync("ui/src/e2e/**/*.test.ts", { cwd: repoRoot }),
-      leases: 1,
-    },
-    { include: [], files: [], leases: 0 },
-    { filters: ["ui/src/e2e/does-not-exist.e2e.test.ts"], files: [], leases: 0 },
-    { filters: [bundledFile], available: false, files: [bundledFile], leases: 0 },
-    { prebuilt: true, filters: [builtGatewayFile], files: [builtGatewayFile], leases: 0 },
-    { prebuilt: true, filters: [mcpFile], files: [mcpFile], leases: 0 },
-    { prebuilt: true, filters: [bundledFile], files: [], leases: 0 },
-    { prebuilt: true, skipRealGateway: true, files: [], leases: 0 },
-    {
-      prebuilt: true,
-      include: ["ui/src/e2e/*.real-gateway.e2e.test.ts"],
-      filters: [builtGatewayFile, bundledFile],
-      files: [builtGatewayFile],
-      leases: 0,
-    },
-    {
-      prebuilt: true,
-      include: [mcpFile, qaLabFiles[0]],
-      cli: ["--exclude", mcpFile],
-      files: [qaLabFiles[0]],
-      leases: 1,
-    },
-  ])(
-    "scopes setup and leases to selection $filters / $include / $available",
-    ({ files, leases, ...options }) => {
-      const result = probeOwnership(options);
-      expect(result.setupError).toBeUndefined();
-      const compareFiles = (left: string, right: string) => left.localeCompare(right);
-      expect(result.files.map((entry) => entry.file).toSorted(compareFiles)).toEqual(
-        files.toSorted(compareFiles),
-      );
-      expect(result.leases).toHaveLength(leases);
-      expect(
-        result.leases.every((lease) => lease.closed && lease.removed === !options.prebuilt),
-      ).toBe(true);
-      expect(result.steps).toEqual([
-        { builds: options.prebuilt ? 0 : leases, previews: leases, closes: 0 },
-      ]);
-      expect(result.canonicalAssetsIntact).toBe(true);
-      expect(result.lifecycle).toEqual(
-        leases > 0
-          ? [
-              ...(options.prebuilt ? [] : ["native-fixtures"]),
-              options.prebuilt ? "prebuilt-server" : "bundle-server",
-            ]
-          : [],
-      );
-      for (const context of result.contexts) {
-        expect(context.buildInfo ?? null).toEqual(
-          options.prebuilt && leases > 0 ? prebuiltBuildInfo : null,
-        );
-        expect(context.chromium?.available).toBe(options.available !== false);
-        const consumesBundle = ["ui-e2e-bundled", "ui-e2e-serial", "ui-e2e-real-gateway"].includes(
-          context.name,
-        );
-        // Root context is inherited by all projects; only consumers install the URL bridge.
-        expect(context.bridge).toBe(consumesBundle);
-        if (consumesBundle) {
-          expect(context.url).toBe(options.available === false ? null : "http://127.0.0.1:12345/");
-        }
-      }
-      expect(result.admissions.toSorted()).toEqual(
-        options.prebuilt ? result.contexts.map((context) => context.name).toSorted() : [],
-      );
-    },
-  );
-
-  it.each([
     { first: bundledFile, second: serialBundledFile, available: true },
     { first: serialBundledFile, second: bundledFile, available: true },
     { first: bundledFile, second: serialBundledFile, available: false },
@@ -625,6 +454,27 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -639,7 +489,21 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
@@ -667,6 +531,13 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -687,9 +558,30 @@ describe("Control UI E2E resource ownership", () => {
           workers: 1,
           fileParallelism: false,
         },
+        {
+          file: "ui/src/e2e/sidebar-running-counts.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/task-pull-requests.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: workboardFile,
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
       ]);
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(27);
+      expect(parallel).toHaveLength(28);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {
@@ -743,171 +635,5 @@ describe("Control UI E2E resource ownership", () => {
     expect(result.leases).toEqual([]);
     expect(result.canonicalAssetsIntact).toBe(true);
     expect(result.contexts.every((context) => context.url === undefined)).toBe(true);
-  });
-});
-
-describe("Control UI E2E Vitest sharding", () => {
-  it("shares isolated cleanup policy with the duration weighted sequencer", async () => {
-    const [{ default: config }, { UiE2eSequencer }] = await Promise.all([
-      import("./vitest/vitest.ui-e2e.config.ts"),
-      import("./vitest/vitest.ui-e2e.sequencer.ts"),
-    ]);
-    expect(config.test?.sequence?.sequencer).toBe(UiE2eSequencer);
-    expect(Number.isFinite(config.test?.hookTimeout)).toBe(true);
-    expect(config.test?.hookTimeout).toBeGreaterThan(0);
-    for (const project of config.test?.projects ?? []) {
-      expect(project).toMatchObject({
-        test: {
-          pool: "forks",
-          isolate: true,
-          runner: undefined,
-          hookTimeout: config.test?.hookTimeout,
-        },
-      });
-    }
-  });
-
-  it("balances unmeasured files by source bytes", async () => {
-    useTimings(null);
-    const shards = await partition(temporaryFiles([600, 500, 400, 300, 200, 100]), 3);
-    expect(
-      shards.map((shard) => shard.reduce((sum, file) => sum + fs.statSync(file).size, 0)),
-    ).toEqual([700, 700, 700]);
-  });
-
-  it("uses repo-relative measurements before basename hints, then the byte proxy", async () => {
-    const measured = "ui/src/pages/chat/chat-flow.clipboard.e2e.test.ts";
-    const hinted = "ui/src/e2e/chat-flow.clipboard.e2e.test.ts";
-    useTimings(timingFile({ [measured]: 1 }));
-    const [large, small] = temporaryFiles([40 * 1024, 1024]);
-    const files = [
-      ...specifications([measured, hinted].map((file) => path.join(repoRoot, file))),
-      large!,
-      small!,
-    ];
-    const shards = await partition(files, 4);
-    expect(shards).toEqual([
-      [files[1]!.moduleId],
-      [large!.moduleId],
-      [files[0]!.moduleId],
-      [small!.moduleId],
-    ]);
-  });
-
-  it("charges per-file overhead so many small suites do not look free", async () => {
-    useTimings(timingFile({}, 5));
-    const files = temporaryFiles([10_000, 3_000, 3_000, 3_000]);
-    const shards = await partition(files, 2);
-    expect(shards).toEqual([
-      [files[0]!.moduleId, files[3]!.moduleId],
-      [files[1]!.moduleId, files[2]!.moduleId],
-    ]);
-  });
-
-  it("balances both project phases by their effective worker count", async () => {
-    const fixtureFiles = temporaryFiles([400, 200, 200, 100]);
-    const [bundledLarge, bundledSmall, serialLarge, serialSmall] = fixtureFiles.map(
-      (file) => file.moduleId,
-    );
-    const rawSeconds = new Map<string, number>([
-      [bundledLarge!, 10],
-      [bundledSmall!, 10],
-      [serialLarge!, 10],
-      [serialSmall!, 20],
-    ]);
-    useTimings(
-      timingFile(
-        Object.fromEntries(
-          [...rawSeconds].map(([file, seconds]) => [path.relative(repoRoot, file), seconds]),
-        ),
-        0,
-      ),
-    );
-    const bundled = specifications([bundledLarge!, bundledSmall!], {
-      name: "ui-e2e-bundled",
-      projectWorkers: null,
-      rootWorkers: 2,
-    });
-    const serial = specifications([serialLarge!, serialSmall!], {
-      name: "ui-e2e-serial",
-      projectWorkers: 1,
-      rootWorkers: 2,
-    });
-    const shards = await partitionSpecifications([...bundled, ...serial], 2);
-    const workerCount = (file: TestSpecification) =>
-      (file.project.config.maxWorkers ?? file.project.vitest.config.maxWorkers)!;
-
-    expect(
-      shards.map((shard) =>
-        shard.reduce((sum, file) => sum + rawSeconds.get(file.moduleId)! / workerCount(file), 0),
-      ),
-    ).toEqual([20, 20]);
-    expect(
-      shards
-        .flat()
-        .map((file) => file.moduleId)
-        .toSorted(),
-    ).toEqual(fixtureFiles.map((file) => file.moduleId).toSorted());
-    expect(new Set(shards.flat()).size).toBe(fixtureFiles.length);
-    expect(shards.flat().filter((file) => file.project.name === "ui-e2e-serial")).toHaveLength(2);
-  });
-
-  it("assigns every discovered file once with committed timings, ignoring stale keys", async () => {
-    const committed = fs.readFileSync(timingPath, "utf8");
-    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot });
-    const { uiE2eSerialTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
-    const serial = new Set(uiE2eSerialTestFiles);
-    const files = [
-      ...specifications(
-        discovered.filter((file) => !serial.has(file)).map((file) => path.join(repoRoot, file)),
-        { name: "ui-e2e-bundled", projectWorkers: null, rootWorkers: 2 },
-      ),
-      ...specifications(
-        discovered.filter((file) => serial.has(file)).map((file) => path.join(repoRoot, file)),
-        { name: "ui-e2e-serial", projectWorkers: 1, rootWorkers: 2 },
-      ),
-    ];
-    expect(files.length).toBeGreaterThan(0);
-    useTimings(committed);
-    const original = await partition(files, 12);
-    expect(original).toHaveLength(12);
-    // Validate via the production loader before adding a stale but valid weight.
-    const { readUiE2eFileTimings } = await import("../scripts/lib/ci-test-timings.mts");
-    const timings = readUiE2eFileTimings();
-    expect(Object.keys(timings.fileSeconds).length).toBeGreaterThan(0);
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    vi.resetModules();
-    useTimings(
-      timingFile(
-        { ...timings.fileSeconds, "ui/src/e2e/deleted.e2e.test.ts": 9999 },
-        timings.perFileOverheadSeconds,
-      ),
-    );
-    expect(await partition(files.toReversed(), 12)).toEqual(original);
-    expect(original.flat().toSorted()).toEqual(files.map((file) => file.moduleId).toSorted());
-    expect(new Set(original.flat()).size).toBe(files.length);
-  });
-
-  it.each([
-    ["truncated JSON", '{"version":1'],
-    ["wrong version", timingFile({}).replace('"version":1', '"version":2')],
-    ["negative seconds", timingFile({ "ui/src/e2e/chat-flow.clipboard.e2e.test.ts": -1 })],
-  ])("preserves the no-file partition with %s", async (_name, contents) => {
-    const files = specifications(
-      fs
-        .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
-        .map((file) => path.join(repoRoot, file)),
-    );
-    useTimings(null);
-    const baseline = await partition(files);
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    vi.resetModules();
-    useTimings(contents);
-    const actual = await partition(files);
-    expect(actual).toEqual(baseline);
-    expect(actual.flat().toSorted()).toEqual(files.map((file) => file.moduleId).toSorted());
-    expect(new Set(actual.flat()).size).toBe(files.length);
   });
 });

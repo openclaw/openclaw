@@ -1,6 +1,5 @@
 // Config snapshots and pre/post-update config restoration.
 import fs from "node:fs/promises";
-import { isDeepStrictEqual } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -14,6 +13,10 @@ import {
   parseConfigJson5,
   readConfigFileSnapshot,
 } from "../../config/config.js";
+import {
+  getDeferredPluginMigrationConfigFacts,
+  setDeferredPluginMigrationConfigFacts,
+} from "../../config/deferred-plugin-migration-config.js";
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
 import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
@@ -23,6 +26,8 @@ import { resolveConfigPath, resolveIncludeRoots } from "../../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldWarnOnTouchedVersion } from "../../config/version.js";
 import { composeConfigWriteAssertions } from "../../config/write-authority.js";
+import { withConfigWriteLock } from "../../config/write-lock.js";
+import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -30,6 +35,15 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** Update preparation keeps Doctor's retained inputs available until plugin convergence. */
+export async function readUpdateConfigFileSnapshot(
+  options: Parameters<typeof readConfigFileSnapshot>[0] = {},
+) {
+  const deferredPluginMigrations =
+    options.deferredPluginMigrations ?? (await readDeferredPluginMigrationsAsync());
+  return await readConfigFileSnapshot({ ...options, deferredPluginMigrations });
+}
 
 export function capturePreUpdateSourceConfig(
   snapshot: ConfigFileSnapshot,
@@ -231,17 +245,25 @@ export async function persistValidatedDowngradeConfig(
     // so same-channel downgrades retain ordinary restart eligibility.
     await withPluginLifecycleLease({ assertCurrent }, async () => {
       assertCurrent?.();
-      await mutateConfigFileWithRetry({
-        mutate: () => undefined,
-        ...(assertCurrent
-          ? {
-              writeOptions: withUpdateConfigWriteAuthority(
-                { beforeCommit: assertCurrent },
-                assertCurrent,
-              ),
-            }
-          : {}),
-      });
+      const deferredPluginMigrations = await readDeferredPluginMigrationsAsync();
+      assertCurrent?.();
+      await withConfigWriteLock(
+        snapshot.path,
+        () =>
+          mutateConfigFileWithRetry({
+            mutate: () => undefined,
+            writeOptions: withUpdateConfigWriteAuthority(
+              {
+                deferredPluginMigrations,
+                expectedConfigPath: snapshot.path,
+                ...(assertCurrent ? { beforeCommit: assertCurrent } : {}),
+              },
+              assertCurrent,
+            ),
+          }),
+        process.env,
+        assertCurrent,
+      );
     });
   }
 }
@@ -259,22 +281,35 @@ export async function persistRequestedUpdateChannel(params: {
     return params.configSnapshot;
   }
   const requestedChannel = params.requestedChannel;
+  params.assertCurrent?.();
+  const deferredPluginMigrations =
+    getDeferredPluginMigrationConfigFacts(params.configSnapshot.sourceConfig) ??
+    (await readDeferredPluginMigrationsAsync());
+  params.assertCurrent?.();
 
-  const mutation = await mutateConfigFileWithRetry({
-    writeOptions: withUpdateConfigWriteAuthority(
-      {
-        skipPluginValidation: true,
-        ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
-      },
-      params.assertCurrent,
-    ),
-    mutate: (draft) => {
-      draft.update = {
-        ...draft.update,
-        channel: requestedChannel,
-      };
-    },
-  });
+  const mutation = await withConfigWriteLock(
+    params.configSnapshot.path,
+    () =>
+      mutateConfigFileWithRetry({
+        writeOptions: withUpdateConfigWriteAuthority(
+          {
+            deferredPluginMigrations,
+            expectedConfigPath: params.configSnapshot.path,
+            skipPluginValidation: true,
+            ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
+          },
+          params.assertCurrent,
+        ),
+        mutate: (draft) => {
+          draft.update = {
+            ...draft.update,
+            channel: requestedChannel,
+          };
+        },
+      }),
+    process.env,
+    params.assertCurrent,
+  );
   return createUpdatedConfigSnapshot(mutation.snapshot, mutation.nextConfig);
 }
 
@@ -286,8 +321,12 @@ export async function preparePostCorePluginConfig(params: {
   observe?: boolean;
   assertCurrent?: () => void;
 }) {
+  params.assertCurrent?.();
+  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync();
+  params.assertCurrent?.();
   const io = createConfigIO({
     pluginValidation: "skip",
+    deferredPluginMigrations,
     suppressFutureVersionWarning: params.suppressFutureVersionWarning,
     observe: params.observe,
   });
@@ -308,6 +347,7 @@ export async function preparePostCorePluginConfig(params: {
     configWriteOptions: withUpdateConfigWriteAuthority(
       {
         ...prepared.writeOptions,
+        deferredPluginMigrations,
         ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
       },
       params.assertCurrent,
@@ -324,7 +364,7 @@ function createUpdatedConfigSnapshot(
   if (!snapshot.valid) {
     return snapshot;
   }
-  return {
+  const updated = {
     ...snapshot,
     hash: undefined,
     parsed: next,
@@ -333,6 +373,11 @@ function createUpdatedConfigSnapshot(
     runtimeConfig: asRuntimeConfig(next),
     config: asRuntimeConfig(next),
   };
+  setDeferredPluginMigrationConfigFacts(
+    updated.sourceConfig,
+    getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
+  );
+  return updated;
 }
 
 /** Read-only startup configuration, retaining the authored snapshot alongside any projection. */
@@ -343,7 +388,7 @@ export async function readUpdateChannelConfig(
   let configSnapshot: ConfigFileSnapshot;
   let configReadFailure: Error | undefined;
   try {
-    configSnapshot = await readConfigFileSnapshot({
+    configSnapshot = await readUpdateConfigFileSnapshot({
       skipPluginValidation: true,
       observe: false,
     });
@@ -402,25 +447,8 @@ async function planUpdateChannelLegacyConfig(snapshot: ConfigFileSnapshot): Prom
   const current = await createConfigIO({
     observe: false,
     pluginValidation: "skip",
+    deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
   }).readConfigFileSnapshotForWrite();
-  if (snapshot.path !== current.snapshot.path) {
-    throw new Error(
-      "Legacy configuration path changed during update planning; retry against the current source.",
-    );
-  }
-  const keys = [
-    "exists",
-    "raw",
-    "hash",
-    "includedPaths",
-    "includeProvenance",
-    "sourceConfig",
-  ] as const;
-  if (keys.some((key) => !isDeepStrictEqual(snapshot[key], current.snapshot[key]))) {
-    defaultRuntime.error(
-      `Warning: Configuration changed during update planning at ${snapshot.path}; continuing with the current configuration.`,
-    );
-  }
   return {
     configSnapshot: current.snapshot,
     legacyConfigPlan: current.snapshot.valid
@@ -481,31 +509,25 @@ async function readPostCoreSourceConfigFile(
       };
     }
     const authored = parsed.parsed as OpenClawConfig;
-    return {
-      sourceConfig: options?.configPath
-        ? resolvePreUpdateSourceConfigFromAuthored(authored, options.configPath)
-        : authored,
-      authoredConfig: authored,
-    };
+    let resolvedSourceConfig = authored;
+    if (options?.configPath) {
+      try {
+        const withIncludes = resolveConfigIncludes(authored, options.configPath, undefined, {
+          allowedRoots: resolveIncludeRoots(process.env),
+        });
+        const resolved = resolveConfigEnvVars(withIncludes, process.env, {
+          onMissing: () => undefined,
+        });
+        if (isRecord(resolved)) {
+          resolvedSourceConfig = resolved as OpenClawConfig;
+        }
+      } catch {
+        // A legacy authored handoff still supplies recovery input when includes cannot resolve.
+      }
+    }
+    return { sourceConfig: resolvedSourceConfig, authoredConfig: authored };
   } catch {
     return undefined;
-  }
-}
-
-function resolvePreUpdateSourceConfigFromAuthored(
-  authoredConfig: OpenClawConfig,
-  configPath: string,
-): OpenClawConfig {
-  try {
-    const withIncludes = resolveConfigIncludes(authoredConfig, configPath, undefined, {
-      allowedRoots: resolveIncludeRoots(process.env),
-    });
-    const resolved = resolveConfigEnvVars(withIncludes, process.env, {
-      onMissing: () => undefined,
-    });
-    return isRecord(resolved) ? (resolved as OpenClawConfig) : authoredConfig;
-  } catch {
-    return authoredConfig;
   }
 }
 

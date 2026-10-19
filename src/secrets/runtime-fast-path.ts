@@ -1,13 +1,14 @@
-import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
+import { readAuthProfileDatabaseIdentity } from "../agents/auth-profiles/file-state.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
+  recordRuntimeAuthProfilePersistedStore,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -183,11 +184,20 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   if (includeAuthStoreRefs) {
     if (!params.loadAuthStore) {
+      const databasePaths = uniqueStrings([
+        ...candidateDirs.map(resolveAuthProfileDatabasePath),
+        resolveSharedAuthStorePath(runtimeEnv),
+      ]);
       if (
-        candidateDirs.some((agentDir) => existsSync(resolveAuthProfileDatabasePath(agentDir))) ||
-        existsSync(resolveSharedAuthStorePath(runtimeEnv))
+        databasePaths.some(
+          (pathname) => !readAuthProfileDatabaseIdentity(pathname)?.key.startsWith("path:"),
+        )
       ) {
         return null;
+      }
+      // Empty startup snapshots carry the admitted absence into later session-only creation.
+      for (const pathname of databasePaths) {
+        recordRuntimeAuthProfilePersistedStore(pathname, null);
       }
       authStores = candidateDirs.map((agentDir) => ({
         agentDir,

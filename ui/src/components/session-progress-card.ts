@@ -1,150 +1,39 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { html, nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
-import { directive } from "lit/directive.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
-import { i18n, t } from "../i18n/index.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
+import { t } from "../i18n/index.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
-import { icons } from "./icons.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import { scrollState } from "./scroll-state.ts";
-import {
-  composerDisclosure,
-  type ComposerProgressDisclosureContext,
-} from "./session-progress-disclosure-controller.ts";
 
-type SessionProgressCardPlacement = "board" | "composer";
-
-const REFRESH_STATUS_LABEL_KEYS: Record<SessionProgressCardRefreshState, Parameters<typeof t>[0]> =
-  {
-    pending: "sessionProgressCard.refresh.pending",
-    failed: "sessionProgressCard.refresh.failed",
-    timeout: "sessionProgressCard.refresh.timeout",
-    updated: "sessionProgressCard.refresh.updated",
-  };
+export const REFRESH_STATUS_LABEL_KEYS: Record<
+  SessionProgressCardRefreshState,
+  Parameters<typeof t>[0]
+> = {
+  pending: "sessionProgressCard.refresh.pending",
+  failed: "sessionProgressCard.refresh.failed",
+  timeout: "sessionProgressCard.refresh.timeout",
+  updated: "sessionProgressCard.refresh.updated",
+};
 
 export type SessionProgressCardRefreshAction = {
   state?: SessionProgressCardRefreshState;
   onRefresh: (card: ProgressCard) => void;
 };
 
-function renderRefresh(card: ProgressCard, action?: SessionProgressCardRefreshAction) {
-  if (!action) {
-    return nothing;
-  }
-  const pending = action.state === "pending";
-  const retry = action.state === "failed" || action.state === "timeout";
-  const label = t(
-    pending
-      ? "sessionProgressCard.refresh.pending"
-      : retry
-        ? "sessionProgressCard.refresh.retry"
-        : "sessionProgressCard.refresh.label",
-  );
-  return html`<button
-    class="session-progress-card__refresh"
-    type="button"
-    data-state=${action.state ?? "idle"}
-    aria-label=${label}
-    title=${retry && action.state ? t(REFRESH_STATUS_LABEL_KEYS[action.state]) : label}
-    aria-busy=${String(pending)}
-    ?disabled=${pending}
-    @click=${(event: MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!pending) {
-        action.onRefresh(card);
-      }
-    }}
-  >
-    ${pending ? icons.loader : action.state === "updated" ? icons.check : icons.refresh}
-  </button>`;
-}
-type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
+export type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
 
-const PROGRESS_MARKDOWN_CACHE_LIMIT = 16;
-const PROGRESS_MARKDOWN_CACHE_MAX_CHARS = 140_000;
-const progressMarkdownCache = new Map<string, string>();
-
-function sanitizedProgressMarkdown(markdown: string): string {
-  if (markdown.length > PROGRESS_MARKDOWN_CACHE_MAX_CHARS) {
-    return toSanitizedMarkdownHtml(markdown, { progressBars: true });
-  }
-  const key = `${i18n.getLocale()}\0${markdown}`;
-  const cached = progressMarkdownCache.get(key);
-  if (cached !== undefined) {
-    progressMarkdownCache.delete(key);
-    progressMarkdownCache.set(key, cached);
-    return cached;
-  }
-  const sanitized = toSanitizedMarkdownHtml(markdown, { progressBars: true });
-  progressMarkdownCache.set(key, sanitized);
-  pruneMapToMaxSize(progressMarkdownCache, PROGRESS_MARKDOWN_CACHE_LIMIT);
-  return sanitized;
-}
-
-const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
+export const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
   in_progress: "sessionProgressCard.status.inProgress",
   pending: "sessionProgressCard.status.pending",
 };
 
-const TERMINAL_RUN_OUTCOMES: Partial<Record<SessionRunStatus, "completed" | "failed" | "stopped">> =
-  {
-    done: "completed",
-    failed: "failed",
-    killed: "stopped",
-    timeout: "failed",
-  };
-
-class ProgressActivityTimeDirective extends AsyncDirective {
-  private timestamp = 0;
-  private labelKey: Parameters<typeof t>[0] = "sessionProgressCard.activity.updated";
-  private timer: ReturnType<typeof setInterval> | undefined;
-
-  render(timestamp: number, labelKey: Parameters<typeof t>[0]) {
-    this.timestamp = timestamp;
-    this.labelKey = labelKey;
-    if (this.isConnected) {
-      this.startTimer();
-    }
-    return this.renderTime();
-  }
-
-  protected override disconnected(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
-  }
-
-  protected override reconnected(): void {
-    this.setValue(this.renderTime());
-    this.startTimer();
-  }
-
-  private startTimer(): void {
-    if (this.timer) {
-      return;
-    }
-    this.timer = setInterval(() => this.setValue(this.renderTime()), 30_000);
-  }
-
-  private renderTime() {
-    const label = t(this.labelKey, { time: formatRelativeTimestamp(this.timestamp) });
-    return html`<time
-      datetime=${new Date(this.timestamp).toISOString()}
-      aria-label=${label}
-      title=${label}
-      >${label}</time
-    >`;
-  }
-}
-
-const progressActivityTime = directive(ProgressActivityTimeDirective);
+export const TERMINAL_RUN_OUTCOMES: Partial<
+  Record<SessionRunStatus, "completed" | "failed" | "stopped">
+> = {
+  done: "completed",
+  failed: "failed",
+  killed: "stopped",
+  timeout: "failed",
+};
 
 function progressCounts(card: ProgressCard): { completed: number; total: number } | null {
   const steps = card.steps;
@@ -204,24 +93,7 @@ function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardSt
   return unfinishedProgressStep(steps) ?? steps.findLast((step) => step.status === "completed");
 }
 
-function progressStepMarker(status: PresentedProgressStepStatus, sessionStatus?: SessionRunStatus) {
-  const outcome = sessionStatus && TERMINAL_RUN_OUTCOMES[sessionStatus];
-  if (status === "in_progress" && outcome) {
-    return outcome === "completed" ? icons.check : icons.circleX;
-  }
-  switch (status) {
-    case "completed":
-      return icons.check;
-    case "in_progress":
-      return html`<span class="session-run-spinner"></span>`;
-    case "paused":
-    case "pending":
-      return icons.clock;
-  }
-  return status satisfies never;
-}
-
-function promoteFirstProgressBar(sanitizedHtml: string): string {
+export function promoteFirstProgressBar(sanitizedHtml: string): string {
   const template = document.createElement("template");
   template.innerHTML = sanitizedHtml;
   const progress = template.content.querySelector("progress");
@@ -256,98 +128,13 @@ function promoteFirstProgressBar(sanitizedHtml: string): string {
   return template.innerHTML;
 }
 
-export function renderProgressCardMarkdown(
-  markdown: string | undefined,
-  options: { promoteProgress?: boolean } = {},
-) {
-  if (!markdown) {
-    return nothing;
-  }
-  const sanitizedHtml = sanitizedProgressMarkdown(markdown);
-  return html`<div class="session-progress-card__markdown sidebar-markdown">
-    ${unsafeHTML(options.promoteProgress ? promoteFirstProgressBar(sanitizedHtml) : sanitizedHtml)}
-  </div>`;
-}
-
-function renderSteps(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: SessionRunStatus) {
-  const steps = card.steps;
-  if (!steps?.length) {
-    return nothing;
-  }
-  return html`<ol class="session-progress-card__steps">
-    ${steps.map((step) => {
-      const terminalOutcome =
-        step.status === "in_progress" && sessionStatus
-          ? TERMINAL_RUN_OUTCOMES[sessionStatus]
-          : undefined;
-      const presentedStatus =
-        step.status === "in_progress" && !hasActiveRun && !terminalOutcome ? "paused" : step.status;
-      const statusLabel = t(
-        terminalOutcome
-          ? `sessionProgressCard.status.${terminalOutcome}`
-          : presentedStatus === "paused"
-            ? "sessionProgressCard.status.paused"
-            : STATUS_LABEL_KEYS[presentedStatus],
-      );
-      return html`<li
-        class="session-progress-card__step session-progress-card__step--${presentedStatus}"
-        aria-label=${t("sessionProgressCard.stepLabel", { status: statusLabel, step: step.step })}
-      >
-        <span
-          class="session-progress-card__step-marker"
-          data-status=${presentedStatus}
-          data-outcome=${terminalOutcome ? sessionStatus : nothing}
-          aria-hidden="true"
-          >${progressStepMarker(presentedStatus, sessionStatus)}</span
-        >
-        <span class="session-progress-card__step-text">${step.step}</span>
-      </li>`;
-    })}
-  </ol>`;
-}
-
-function renderProgressCardAction(
+export function progressCardPresentation(
   card: ProgressCard,
-  action: "dismiss" | "clear-saved",
-  onAction?: (card: ProgressCard) => void,
-) {
-  if (!onAction) {
-    return nothing;
-  }
-  const label = t(
-    action === "dismiss" ? "sessionProgressCard.dismiss" : "sessionProgressCard.clearSaved",
-  );
-  return html`<button
-    class="rail-header__action session-progress-card__${action}"
-    type="button"
-    aria-label=${label}
-    title=${label}
-    @click=${(event: MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onAction(card);
-    }}
-  >
-    ${action === "dismiss" ? icons.x : icons.trash}
-  </button>`;
-}
-
-export function renderSessionProgressCard(
-  card: ProgressCard | null | undefined,
-  placement: SessionProgressCardPlacement,
-  onDismiss?: (card: ProgressCard) => void,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
   endedAt?: number,
   hasActiveRun = true,
-  collapseComposerByDefault = false,
-  composerDisclosureContext?: ComposerProgressDisclosureContext,
-  refreshAction?: SessionProgressCardRefreshAction,
-  onClearSaved?: (card: ProgressCard) => void,
 ) {
-  if (!card) {
-    return nothing;
-  }
   const counts = progressCounts(card);
   const countLabel = counts
     ? t("sessionProgressCard.countLabel", {
@@ -387,130 +174,32 @@ export function renderSessionProgressCard(
   const activityKey = terminalTimestamp
     ? (`sessionProgressCard.activity.${TERMINAL_RUN_OUTCOMES[sessionStatus!]!}` as const)
     : "sessionProgressCard.activity.updated";
-  const lastActivity = progressActivityTime(activityTimestamp, activityKey);
-  const dismiss = renderProgressCardAction(card, "dismiss", onDismiss);
-  const clearSaved = renderProgressCardAction(card, "clear-saved", onClearSaved);
-  if (placement === "composer") {
-    const steps = card.steps ?? [];
-    const currentStep = currentProgressStep(steps);
-    const currentPosition = Math.max(1, currentStep ? steps.indexOf(currentStep) + 1 : 0);
-    const complete = steps.length > 0 && steps.every((step) => step.status === "completed");
-    const stepLabel = currentStep?.step ?? t("sessionProgressCard.noteLabel");
-    const terminalOutcome = effectiveSessionStatus
-      ? TERMINAL_RUN_OUTCOMES[effectiveSessionStatus]
-      : undefined;
-    const outcomeLabel = terminalOutcome
-      ? t(`sessionProgressCard.outcome.${terminalOutcome}`)
-      : null;
-    const summaryLabel = `${stepLabel}. ${outcomeLabel ?? countLabel}`;
-    const shortCount = counts
-      ? t("sessionProgressCard.shortCount", {
-          completed: String(currentPosition),
-          total: String(counts.total),
-        })
-      : nothing;
-    const presentedCurrentStatus =
-      currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcome
-        ? "paused"
-        : currentStep?.status;
-    const summaryIndicator = terminalOutcome
-      ? terminalOutcome === "completed"
-        ? icons.check
-        : icons.circleX
-      : complete
-        ? icons.check
-        : currentStep?.status === "in_progress"
-          ? progressStepMarker(presentedCurrentStatus ?? "pending")
-          : icons.clock;
-    return html`<details
-      class="session-progress-card session-progress-card--composer"
-      data-progress-card-placement="composer"
-      data-complete=${String(complete)}
-      ${composerDisclosure(
-        composerDisclosureContext?.sessionIdentity ?? card.sessionKey,
-        !collapseComposerByDefault,
-        composerDisclosureContext,
-      )}
-    >
-      <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
-        <span
-          class="session-progress-card__summary-indicator session-progress-card__current-marker${
-            complete || effectiveSessionStatus === "done"
-              ? " session-progress-card__summary-indicator--complete"
-              : ""
-          }"
-          data-status=${presentedCurrentStatus ?? "pending"}
-          data-outcome=${effectiveSessionStatus ?? nothing}
-          aria-hidden="true"
-        >
-          ${summaryIndicator}
-        </span>
-        <span class="session-progress-card__summary-collapsed">
-          <span class="session-progress-card__current">${stepLabel}</span>
-        </span>
-        ${
-          counts
-            ? html`<span
-                class="session-progress-card__summary-count session-progress-card__summary-count--collapsed"
-                data-outcome=${effectiveSessionStatus ?? nothing}
-                >${outcomeLabel ?? `${currentPosition}/${counts.total}`}</span
-              >`
-            : nothing
-        }
-        <span class="session-progress-card__summary-expanded">
-          <span class="session-progress-card__summary-title"
-            >${t("sessionProgressCard.composerTitle")}</span
-          >
-          <span class="session-progress-card__heading-actions"
-            ><span>${lastActivity}${counts ? html` · ${shortCount}` : nothing}</span></span
-          >
-        </span>
-        <span class="session-progress-card__summary-controls">
-          ${renderRefresh(card, refreshAction)} ${clearSaved} ${dismiss}
-          <span
-            class="session-progress-card__summary-chevron session-progress-card__chevron"
-            aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </span>
-        ${
-          refreshAction?.state
-            ? html`<span
-                class="session-progress-card__refresh-status"
-                data-state=${refreshAction.state}
-                role="status"
-                >${t(REFRESH_STATUS_LABEL_KEYS[refreshAction.state])}</span
-              >`
-            : nothing
-        }
-      </summary>
-      <div
-        class="session-progress-card__body"
-        role="region"
-        aria-label=${countLabel}
-        ${scrollState()}
-      >
-        ${renderProgressCardMarkdown(card.markdown)}
-        ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
-      </div>
-    </details>`;
-  }
-  return html`<section
-    class="session-progress-card session-progress-card--${placement}"
-    data-progress-card-placement=${placement}
-    aria-label=${countLabel}
-  >
-    <div class="session-progress-card__heading">
-      <span>${t("sessionProgressCard.title")}</span>
-      <span class="session-progress-card__heading-actions">
-        <span
-          >${lastActivity}${counts ? html` · ${counts.completed}/${counts.total}` : nothing}</span
-        >${dismiss}
-      </span>
-    </div>
-    <div class="session-progress-card__body">
-      ${renderProgressCardMarkdown(card.markdown)}
-      ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
-    </div>
-  </section>`;
+  const steps = card.steps ?? [];
+  const currentStep = currentProgressStep(steps);
+  const currentPosition = Math.max(1, currentStep ? steps.indexOf(currentStep) + 1 : 0);
+  const complete = steps.length > 0 && steps.every((step) => step.status === "completed");
+  const stepLabel = currentStep?.step ?? t("sessionProgressCard.noteLabel");
+  const terminalOutcome = effectiveSessionStatus
+    ? TERMINAL_RUN_OUTCOMES[effectiveSessionStatus]
+    : undefined;
+  const outcomeLabel = terminalOutcome ? t(`sessionProgressCard.outcome.${terminalOutcome}`) : null;
+  const presentedCurrentStatus: PresentedProgressStepStatus | undefined =
+    currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcome
+      ? "paused"
+      : currentStep?.status;
+  return {
+    counts,
+    countLabel,
+    hasCurrentRunActivity,
+    effectiveSessionStatus,
+    activityTimestamp,
+    activityKey,
+    currentStep,
+    currentPosition,
+    complete,
+    stepLabel,
+    terminalOutcome,
+    outcomeLabel,
+    presentedCurrentStatus,
+  };
 }

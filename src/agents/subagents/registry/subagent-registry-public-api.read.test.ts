@@ -1,16 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
-import * as registryState from "./subagent-registry-state.js";
 import {
   clearSubagentRunsReadCacheForTest,
   prepareSubagentSessionListReadCache,
@@ -69,69 +66,6 @@ async function withPersistedReads(run: () => Promise<void>): Promise<void> {
 }
 
 describe("subagent registry known-run reads", () => {
-  it("does not revisit unrelated resident or live rows when waiting for known collectors", async () => {
-    await withPersistedReads(async () => {
-      const target = createRun("physical", { swarmRunId: "collector" });
-      const unrelated = Array.from({ length: 16 }, (_, index) => createRun(`unrelated-${index}`));
-      for (const entry of [target, ...unrelated]) {
-        subagentRuns.set(entry.runId, entry);
-      }
-      persistRegistryFixture(subagentRuns);
-      const api = createReadApi(subagentRuns);
-      const warm = await api.prepareSubagentRunsByRunIds(["collector"]);
-      expect(warm.consume((runs) => runs.get("collector"))).toEqual({ ready: true, value: target });
-
-      const snapshot = registryState.getSubagentSessionListReadSnapshotIdentity();
-      expect(snapshot).toBeInstanceOf(Map);
-      let unrelatedVisits = 0;
-      const restore: Array<() => void> = [];
-      for (const entry of unrelated) {
-        const persistedRows = snapshot as Map<string, SubagentRunReadRecord>;
-        const persistedSource = persistedRows.get(entry.runId)!;
-        const persisted = { ...persistedSource };
-        persistedRows.set(entry.runId, persisted);
-        restore.push(() => persistedRows.set(entry.runId, persistedSource));
-        for (const row of [entry, persisted]) {
-          const runId = row.runId;
-          Object.defineProperty(row, "runId", {
-            configurable: true,
-            get() {
-              unrelatedVisits += 1;
-              return runId;
-            },
-          });
-          restore.push(() =>
-            Object.defineProperty(row, "runId", {
-              configurable: true,
-              writable: true,
-              value: runId,
-            }),
-          );
-        }
-      }
-      try {
-        const prepared = await api.prepareSubagentRunsByRunIds([
-          " collector ",
-          "physical",
-          "missing",
-        ]);
-        const replacement = { ...target, completion: { required: false, resultText: "updated" } };
-        subagentRuns.set(replacement.runId, replacement);
-        persistRegistryFixture(subagentRuns, [replacement.runId]);
-        expect(prepared.consume((runs) => [...runs])).toEqual({
-          ready: true,
-          value: [
-            [" collector ", replacement],
-            ["physical", replacement],
-          ],
-        });
-        expect(unrelatedVisits).toBe(0);
-      } finally {
-        restore.forEach((reset) => reset());
-      }
-    });
-  });
-
   it("uses the replacement owner published while collector payload hydration is pending", async () => {
     await withPersistedReads(async () => {
       const original = createRun("original", { swarmRunId: "collector" });
@@ -184,7 +118,7 @@ describe("subagent registry known-run reads", () => {
     });
   });
 
-  it.each([0, 4])(
+  it.each([4])(
     "counts %i retained children without preparing unrelated descendant graphs",
     async (activeChildren) => {
       await withPersistedReads(async () => {
@@ -205,7 +139,8 @@ describe("subagent registry known-run reads", () => {
           ),
         );
         saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
-        const api = createReadApi();
+        const memory = new Map<string, SubagentRunRecord>();
+        const api = createReadApi(memory);
         expect(() => api.countActiveRunsForSession("agent:main:main")).toThrow("must be prepared");
         const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
         try {
@@ -219,69 +154,43 @@ describe("subagent registry known-run reads", () => {
           expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
             "subagents.sessionList",
           ]);
+          const count = () =>
+            api.countActiveRunsForSession("agent:main:main", {
+              collect: false,
+              requesterAgentId: "main",
+            });
+          const settled = createRun("active-0", { collect: false, requesterAgentId: "main" });
+          memory.set(settled.runId, settled);
+          expect(count()).toBe(activeChildren - 1);
+
+          const descendant = createRun("descendant", {
+            collect: false,
+            requesterSessionKey: settled.childSessionKey,
+            execution: { status: "running", startedAt: Date.now() },
+          });
+          memory.set(descendant.runId, descendant);
+          expect(count()).toBe(activeChildren);
+          memory.set(descendant.runId, {
+            ...descendant,
+            execution: { status: "terminal", endedAt: Date.now() },
+            cleanupCompletedAt: Date.now(),
+          });
+          expect(count()).toBe(activeChildren - 1);
+          memory.set(
+            "active-1",
+            createRun("active-1", {
+              collect: false,
+              controllerSessionKey: "agent:other:main",
+              execution: { status: "running", startedAt: Date.now() },
+            }),
+          );
+          expect(count()).toBe(activeChildren - 2);
         } finally {
           read.mockRestore();
         }
       });
     },
   );
-
-  it("resolves retained collector aliases without hydrating unrelated results", async () => {
-    await withPersistedReads(async () => {
-      const retainedResult = "unrelated-retained-result".repeat(128);
-      const rows = [
-        createRun("collector"),
-        createRun("same-zulu", { swarmRunId: "collector", createdAt: 300 }),
-        createRun("same-alpha", { swarmRunId: "collector", createdAt: 300 }),
-        createRun("retained", { completion: { required: false, resultText: retainedResult } }),
-        createRun("malformed"),
-      ];
-      saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
-      openOpenClawStateDatabase()
-        .db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?")
-        .run("{", "malformed");
-      const api = createReadApi();
-      const parse = vi.spyOn(JSON, "parse");
-      const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      try {
-        const prepared = await api.prepareSubagentRunsByRunIds([
-          " collector ",
-          "same-alpha",
-          "missing",
-        ]);
-        expect(
-          prepared.consume((selected) => {
-            expect([...selected.keys()]).toEqual([" collector ", "same-alpha"]);
-            expect(selected.get(" collector ")).toMatchObject({
-              runId: "same-zulu",
-              completion: { resultText: "result-same-zulu" },
-            });
-            expect(selected.get("same-alpha")?.runId).toBe("same-alpha");
-          }),
-        ).toEqual({ ready: true, value: undefined });
-        expect(read.mock.calls.map(([, command]) => command)).toEqual([
-          { type: "subagents.sessionList" },
-          {
-            type: "subagents.runs",
-            scope: { kind: "ids", runIds: ["collector", "same-alpha", "same-zulu"] },
-          },
-        ]);
-        expect(parse.mock.calls.some(([raw]) => raw.includes(retainedResult))).toBe(false);
-      } finally {
-        read.mockRestore();
-        parse.mockRestore();
-      }
-
-      // A scoped result must never masquerade as a complete registry cache.
-      const retained = await api.prepareSubagentRunsByRunIds(["retained"]);
-      expect(
-        retained.consume((selected) => selected.get("retained")?.completion?.resultText),
-      ).toEqual({
-        ready: true,
-        value: retainedResult,
-      });
-    });
-  });
 
   it("keeps live alias changes authoritative", async () => {
     await withPersistedReads(async () => {
@@ -341,40 +250,6 @@ describe("subagent registry known-run reads", () => {
         ready: true,
         value: "replacement",
       });
-    });
-  });
-
-  it("refreshes physical rows replaced or deleted after another reader cached their aliases", async () => {
-    await withPersistedReads(async () => {
-      const previous = createRun("previous", { swarmRunId: "collector" });
-      saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
-      await prepareSubagentSessionListReadCache();
-
-      // A direct store write models another process without publishing local cache updates.
-      const replacement = createRun("replacement", {
-        swarmRunId: "collector",
-        createdAt: 300,
-        swarmRequesterSessionKey: "agent:other:main",
-      });
-      saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-      const api = createReadApi();
-      const prepared = await api.prepareSubagentRunsByRunIds(["collector"]);
-      expect(
-        prepared.consume((selected) => {
-          expect(selected.get("collector")).toMatchObject({
-            runId: "replacement",
-            swarmRequesterSessionKey: "agent:other:main",
-          });
-        }),
-      ).toEqual({ ready: true, value: undefined });
-
-      saveSubagentRegistryToSqlite(new Map());
-      const deleted = await api.prepareSubagentRunsByRunIds(["collector"]);
-      expect(
-        deleted.consume((selected) => {
-          expect(selected.size).toBe(0);
-        }),
-      ).toEqual({ ready: true, value: undefined });
     });
   });
 });

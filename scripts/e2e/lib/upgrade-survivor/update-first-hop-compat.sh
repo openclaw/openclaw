@@ -60,14 +60,28 @@ first_hop_timing() {
   printf 'first-hop timing: %s %ss\n' "$1" "$((SECONDS - $2))"
 }
 
+# Shipped extended-stable updaters refuse explicit --tag targets on their
+# inferred channel, so a tag update first selects stable as an operator would.
+update_channel_args() {
+  local version version_pattern='^[1-9][0-9]{3}\.([1-9]|1[0-2])\.([1-9][0-9]*)$'
+  version="$(node -p 'require(process.argv[1]).version' "$(package_root)/package.json")"
+  if [[ "$version" =~ $version_pattern ]] && ((10#${BASH_REMATCH[2]} >= 33)); then
+    printf '%s\n' --channel stable
+  fi
+}
+
 run_update() {
   local started=$SECONDS
   local output="$ARTIFACT_DIR/$1" target="$2" update_status=0
+  local arg update_args=(--yes)
+  while IFS= read -r arg; do
+    update_args+=("$arg")
+  done < <(update_channel_args)
   cp "$(package_root)/package.json" "$output-source-package.json"
   printf '%q ' env "PATH=$PATH" "npm_config_prefix=$npm_config_prefix" openclaw \
-    update --yes "--tag=$target" --json >"$output-command.txt"
+    update "${update_args[@]}" "--tag=$target" --json >"$output-command.txt"
   printf '\n' >>"$output-command.txt"
-  openclaw update --yes "--tag=$target" --json \
+  openclaw update "${update_args[@]}" "--tag=$target" --json \
     >"$output.stdout" 2>"$output.stderr" || update_status="$?"
   printf '%s\n' "$update_status" >"$output.exit"
   node - "$output.stdout" <<'TIMINGS'
@@ -293,76 +307,55 @@ run_negative_control() {
 run_positive_hops() {
   local lane=positive
   setup_lane "$lane" 18792
-  local first_pid
-  first_pid="$(cat "$ARTIFACT_DIR/$lane-before.pid")"
-
-  run_update "$lane-first" "$CANDIDATE_PACKAGE"
-  local assert_started=$SECONDS
-  assert_installed_build "$CANDIDATE_PACKAGE" "$ARTIFACT_DIR/$lane-first-build-info.json"
-  if [ "$candidate_source_version" = "2026.9.3" ]; then
-    node scripts/e2e/lib/external-package-transition.mjs schema 16 \
-      >"$ARTIFACT_DIR/$lane-first-shared-schema.json"
-  fi
-  wait_service_active
-  local candidate_pid
-  candidate_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
-  if [ "$candidate_pid" = "$first_pid" ]; then
-    echo "first hop did not replace the managed service process" >&2
-    return 1
-  fi
-  if grep -Eq 'ERR_MODULE_NOT_FOUND|Cannot find module' \
-    "$ARTIFACT_DIR/$lane-first.stdout" "$ARTIFACT_DIR/$lane-first.stderr"; then
-    echo "first hop reported a missing runtime import" >&2
-    return 1
-  fi
-  record_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
-  assert_no_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
-  record_service_state "$ARTIFACT_DIR/$lane-service-after-first.txt"
-  node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
-
-  first_hop_timing "$lane-first assertions" "$assert_started"
-
-  run_update "$lane-second" "$FUTURE_PACKAGE"
-  assert_started=$SECONDS
+  local previous_pid current_pid hop target assert_started
+  local service_pids
+  service_pids=("$(cat "$ARTIFACT_DIR/$lane-before.pid")")
+  local hops=(first second)
   if [ "$ADMISSION_PROTOCOL" = "1" ]; then
-    assert_admission "$lane-second" candidate
+    hops+=(unsupported-admission)
   fi
-  assert_installed_build "$FUTURE_PACKAGE" "$ARTIFACT_DIR/$lane-second-build-info.json"
-  wait_service_active
-  local future_pid
-  future_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
-  if [ "$future_pid" = "$candidate_pid" ]; then
-    echo "second hop did not replace the managed service process" >&2
-    return 1
-  fi
-  if grep -Eq 'ERR_MODULE_NOT_FOUND|Cannot find module' \
-    "$ARTIFACT_DIR/$lane-second.stdout" "$ARTIFACT_DIR/$lane-second.stderr"; then
-    echo "second hop reported a missing runtime import" >&2
-    return 1
-  fi
-  record_residue "$ARTIFACT_DIR/$lane-second-transaction-residue.txt"
-  assert_no_residue "$ARTIFACT_DIR/$lane-second-transaction-residue.txt"
-  record_service_state "$ARTIFACT_DIR/$lane-service-after-second.txt"
-  printf '%s\n' "$first_pid" "$candidate_pid" "$future_pid" \
-    >"$ARTIFACT_DIR/$lane-service-pids.txt"
-  first_hop_timing "$lane-second assertions" "$assert_started"
-  if [ "$ADMISSION_PROTOCOL" = "1" ]; then
-    run_update "$lane-unsupported-admission" "$UNSUPPORTED_ADMISSION_PACKAGE"
+  for hop in "${hops[@]}"; do
+    case "$hop" in
+      first) target="$CANDIDATE_PACKAGE" ;;
+      second) target="$FUTURE_PACKAGE" ;;
+      unsupported-admission) target="$UNSUPPORTED_ADMISSION_PACKAGE" ;;
+    esac
+    previous_pid="${service_pids[${#service_pids[@]} - 1]}"
+    run_update "$lane-$hop" "$target"
     assert_started=$SECONDS
-    assert_admission "$lane-unsupported-admission" installed update-admission-unsupported-target
-    assert_installed_build "$UNSUPPORTED_ADMISSION_PACKAGE" "$ARTIFACT_DIR/$lane-unsupported-admission-build-info.json"
+    if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+      case "$hop" in
+        second) assert_admission "$lane-$hop" candidate ;;
+        unsupported-admission) assert_admission "$lane-$hop" installed update-admission-unsupported-target ;;
+      esac
+    fi
+    assert_installed_build "$target" "$ARTIFACT_DIR/$lane-$hop-build-info.json"
+    if [ "$hop" = first ] && [ "$candidate_source_version" = "2026.9.3" ]; then
+      node scripts/e2e/lib/external-package-transition.mjs schema 16 \
+        >"$ARTIFACT_DIR/$lane-first-shared-schema.json"
+    fi
     wait_service_active
-    local unsupported_pid
-    unsupported_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
-    if [ "$unsupported_pid" = "$future_pid" ]; then
-      echo "unsupported-admission hop did not replace the managed service process" >&2
+    current_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")"
+    if [ "$current_pid" = "$previous_pid" ]; then
+      echo "$hop hop did not replace the managed service process" >&2
       return 1
     fi
-    record_residue "$ARTIFACT_DIR/$lane-unsupported-admission-transaction-residue.txt"
-    assert_no_residue "$ARTIFACT_DIR/$lane-unsupported-admission-transaction-residue.txt"
-    record_service_state "$ARTIFACT_DIR/$lane-service-after-unsupported-admission.txt"
-    first_hop_timing "$lane-unsupported-admission assertions" "$assert_started"
-  fi
+    if [ "$hop" != unsupported-admission ] && grep -Eq 'ERR_MODULE_NOT_FOUND|Cannot find module' \
+      "$ARTIFACT_DIR/$lane-$hop.stdout" "$ARTIFACT_DIR/$lane-$hop.stderr"; then
+      echo "$hop hop reported a missing runtime import" >&2
+      return 1
+    fi
+    record_residue "$ARTIFACT_DIR/$lane-$hop-transaction-residue.txt"
+    assert_no_residue "$ARTIFACT_DIR/$lane-$hop-transaction-residue.txt"
+    record_service_state "$ARTIFACT_DIR/$lane-service-after-$hop.txt"
+    service_pids+=("$current_pid")
+    if [ "$hop" = first ]; then
+      node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
+    elif [ "$hop" = second ]; then
+      printf '%s\n' "${service_pids[@]}" >"$ARTIFACT_DIR/$lane-service-pids.txt"
+    fi
+    first_hop_timing "$lane-$hop assertions" "$assert_started"
+  done
   stop_lane
 }
 

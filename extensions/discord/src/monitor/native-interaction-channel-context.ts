@@ -17,17 +17,16 @@ export async function resolveDiscordNativeInteractionChannelContext(
     channelIdFallback: rawData.channel_id ?? channelIdFallback,
   });
   const channelType = channelContext.channelType;
-  const isDirectMessage = channelType === ChannelType.DM;
-  const isGroupDm = channelType === ChannelType.GroupDM;
 
   return {
     channelType,
-    isDirectMessage,
-    isGroupDm,
+    isDirectMessage: channelType === ChannelType.DM,
+    isGroupDm: channelType === ChannelType.GroupDM,
     isThreadChannel: channelContext.isThreadChannel,
     channelName: channelContext.channelName,
     channelSlug: channelContext.channelSlug,
     rawChannelId: channelContext.channelId,
+    memberRoleIds: interaction.rawData.member?.roles ?? [],
     threadParentId: hasGuild ? channelContext.threadParentId : undefined,
     threadParentName: hasGuild ? channelContext.threadParentName : undefined,
     threadParentSlug: hasGuild ? channelContext.threadParentSlug : "",

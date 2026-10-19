@@ -42,6 +42,7 @@ export function createAgentRunEventHandler(params: {
     params.messageToolDeliveryState.completed &&
     params.turn.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
 
+  let modelWaitActive = false;
   const currentMessageId =
     params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
@@ -67,6 +68,26 @@ export function createAgentRunEventHandler(params: {
         await preparation;
       }
       params.notifyAgentRunStart(evt.transcriptStart);
+    }
+    if (evt.stream === "run_status" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const waiting = evt.data.phase === "waiting_for_model";
+      if (waiting || (modelWaitActive && evt.data.phase === "starting_model")) {
+        modelWaitActive = waiting;
+        await params.turn.opts?.onItemEvent?.({
+          itemId: "model-wait",
+          kind: "model-wait",
+          suppressDurableProgress: true,
+          phase: waiting ? "update" : "end",
+          ...(waiting
+            ? {
+                progressText:
+                  evt.data.reason === "slot"
+                    ? "Waiting for a free model slot"
+                    : "Waiting for the local model to respond",
+              }
+            : {}),
+        });
+      }
     }
     if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
       const phase = readStringValue(evt.data.phase) ?? "";
@@ -221,7 +242,9 @@ export function createAgentRunEventHandler(params: {
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
     const hookMessages = normalizeTrimmedStringList(evt.data.messages);
-    const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
+    const sendCompactionUserNotices = async (
+      noticePhase: "start" | "end" | "incomplete" | "degraded" | "context_bounded",
+    ) => {
       if (hookMessages.length > 0) {
         const noticePayload = createCompactionHookNoticePayload({
           messages: hookMessages,
@@ -232,7 +255,11 @@ export function createAgentRunEventHandler(params: {
           await deliverCompactionNoticePayload(noticePayload, "hook");
         }
       }
-      if (params.notifyUserAboutCompaction) {
+      if (
+        noticePhase === "degraded" ||
+        noticePhase === "context_bounded" ||
+        params.notifyUserAboutCompaction
+      ) {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
@@ -243,6 +270,10 @@ export function createAgentRunEventHandler(params: {
         );
       }
     };
+    if (phase === "context_bounded") {
+      await sendCompactionUserNotices("context_bounded");
+      return;
+    }
     if (phase === "start") {
       await params.turn.opts?.onCompactionStart?.();
       await sendCompactionUserNotices("start");
@@ -278,6 +309,6 @@ export function createAgentRunEventHandler(params: {
       });
     }
     await params.turn.opts?.onCompactionEnd?.({ completed: true });
-    await sendCompactionUserNotices("end");
+    await sendCompactionUserNotices(evt.data.qualityDegraded === true ? "degraded" : "end");
   };
 }

@@ -12,10 +12,8 @@ import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
-  logTelegramOutboundSendOk,
   resolveAcceptedReplyToMessageId,
   sendLogger,
-  toAcceptedThreadScopedParams,
   type TelegramApi,
   type TelegramThreadScopedParams,
 } from "./send-context.js";
@@ -100,10 +98,7 @@ export function createTelegramTextSender(config: {
     let acceptedReplyToMessageId: number | undefined;
     const deliveryResults: TelegramSendResult[] = [];
     const buildReceipt = () => {
-      if (deliveryResults.length === 0) {
-        return undefined;
-      }
-      if (deliveryResults.length === 1) {
+      if (deliveryResults.length < 2) {
         return deliveryResults[0]?.receipt;
       }
       const receipt = createMessageReceiptFromOutboundResults({
@@ -148,10 +143,9 @@ export function createTelegramTextSender(config: {
       if (keyboardError !== undefined) {
         // Finalization routes this through sender.fail(), which preserves the
         // accepted message IDs in a partial-delivery error.
-        if (keyboardError instanceof Error) {
-          throw keyboardError;
-        }
-        throw new Error(formatErrorMessage(keyboardError));
+        throw keyboardError instanceof Error
+          ? keyboardError
+          : new Error(formatErrorMessage(keyboardError));
       }
     };
 
@@ -258,19 +252,6 @@ export function createTelegramTextSender(config: {
       const last = parts.at(-1);
       const lastMessageId = last ? String(last.messageId) : "";
       const lastChatId = String(last?.result.chat?.id ?? chatId);
-      if (lastMessageId) {
-        logTelegramOutboundSendOk({
-          accountId: account.accountId,
-          chatId: lastChatId,
-          messageId: lastMessageId,
-          operation: useRichMessages ? "sendRichMessage" : "sendMessage",
-          deliveryKind: "text",
-          messageThreadId: toAcceptedThreadScopedParams(last?.acceptedParams)?.message_thread_id,
-          replyToMessageId: opts.replyToMessageId,
-          silent: opts.silent,
-          chunkCount: parts.length,
-        });
-      }
       const receipt = buildReceipt();
       return {
         messageId: lastMessageId,

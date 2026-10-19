@@ -129,21 +129,6 @@ describe("action client helpers", () => {
     });
   });
 
-  it("releases shared action clients with the requested discard mode", async () => {
-    const sharedClient = createMockMatrixClient();
-    setAcquiredMatrixClient(sharedClient);
-
-    await withResolvedActionClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async (client) => {
-        expect(client).toBe(sharedClient);
-      },
-      "discard",
-    );
-
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "discard" });
-  });
-
   it("releases shared action clients when the wrapped call throws", async () => {
     const sharedClient = createMockMatrixClient();
     setAcquiredMatrixClient(sharedClient);
@@ -154,7 +139,7 @@ describe("action client helpers", () => {
       }),
     ).rejects.toThrow("boom");
 
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
   it("resolves room ids before running wrapped room actions", async () => {
@@ -174,6 +159,6 @@ describe("action client helpers", () => {
 
     expect(resolveMatrixRoomIdMock).toHaveBeenCalledWith(sharedClient, "room:#ops:example.org");
     expect(result).toBe("!room:example.org");
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 });

@@ -2,6 +2,8 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   type buildCachedChatItems,
@@ -15,17 +17,17 @@ import {
   persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { isInterSessionMessage, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import type { StreamGroupPart } from "./chat-message-stream.ts";
+import type { StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { projectChatPositions, type ChatPositionIndex } from "./chat-position-projection.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = {
   searchActive: boolean;
@@ -110,7 +112,9 @@ function coalesceInterSessionUpdates(items: ChatRenderItem[]): ChatRenderItem[] 
   for (const item of items) {
     if (
       item.kind !== "group" ||
-      !isInterSessionGroup(item) ||
+      !isSessionActivityGroup(item) ||
+      // Automation runs stay separate even when they target the same conversation.
+      !isInterSessionMessage(item.messages[0]?.message) ||
       !item.senderSession?.sessionKey ||
       // Reply targets retain the original group's run and prompt attribution.
       item.messages.some(({ message }) => normalizeMessage(message).replyTarget)
@@ -142,9 +146,10 @@ function ownsStream(item: ChatRenderItem, stream: LiveStream): item is StreamOwn
 }
 
 function sameStreamStructure(previous: LiveStream, next: LiveStream): boolean {
-  const fields = Reflect.ownKeys(previous).filter((field) => field !== "text");
+  const structural = (field: PropertyKey) => field !== "text" && field !== "thinking";
+  const fields = Reflect.ownKeys(previous).filter(structural);
   return (
-    fields.length === Reflect.ownKeys(next).filter((field) => field !== "text").length &&
+    fields.length === Reflect.ownKeys(next).filter(structural).length &&
     fields.every(
       (field) =>
         Object.hasOwn(next, field) &&
@@ -178,6 +183,9 @@ export function projectTranscriptChain(
     sessionKey: string;
     runWorking: boolean;
     searchActive: boolean;
+    bubbleMode?: boolean;
+    messages?: readonly unknown[];
+    activeRunId?: string | null;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
@@ -187,6 +195,9 @@ export function projectTranscriptChain(
     options.sessionKey,
     options.runWorking,
     options.searchActive,
+    options.bubbleMode,
+    options.messages,
+    options.activeRunId,
     session?.key,
     session?.lastRunId,
     session?.status,
@@ -228,7 +239,9 @@ export function projectTranscriptChain(
     ),
     options,
   );
-  const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
+  const collapsedItems = options.searchActive
+    ? frames
+    : coalesceSystemEvents(coalesceInterSessionUpdates(frames));
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
@@ -423,10 +436,10 @@ export function expandReplyTargetWork(
     for (const part of parts) {
       if (
         part.kind === "group" &&
-        isInterSessionGroup(part) &&
+        isSessionActivityGroup(part) &&
         part.messages.some((source) => persistedMessageEntryId(source.message) === messageId)
       ) {
-        setExpansionState(expandedToolCards, "inter-session:" + part.key, true);
+        setExpansionState(expandedToolCards, "session-activity:" + part.key, true);
       }
       if (
         part.kind === "work-group" &&

@@ -103,7 +103,6 @@ describe("runHeartbeatOnce identity", () => {
         deps: {
           getReplyFromConfig: replySpy,
           slack: sendSlack,
-          getQueueSize: () => 0,
         },
       });
 
@@ -112,6 +111,9 @@ describe("runHeartbeatOnce identity", () => {
       expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
         AgentId: "historian2",
         SessionKey: "agent:historian2:global:heartbeat",
+      });
+      expect(getReplySystemEventContext(replySpy.mock.calls[0]?.[1])).toMatchObject({
+        heartbeatEventQueueSessionKey: "agent:historian2:global",
       });
       expect(sendSlack).toHaveBeenCalledWith(
         "channel:HISTORIAN",
@@ -130,6 +132,39 @@ describe("runHeartbeatOnce identity", () => {
       expect(sendSlack).toHaveBeenCalledOnce();
     });
   });
+
+  it.each([false, true])(
+    "preserves the queue of a session named heartbeat with isolation %s",
+    async (isolatedSession) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: { every: "5m", target: "none", session: "heartbeat", isolatedSession },
+            },
+          },
+          session: { store: storePath },
+        };
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: { getReplyFromConfig: replySpy },
+        });
+
+        expect(result.status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledOnce();
+        const [context, options] = replySpy.mock.calls[0]!;
+        expect(context.SessionKey).toBe(
+          isolatedSession ? "agent:main:heartbeat:heartbeat" : "agent:main:heartbeat",
+        );
+        expect(getReplySystemEventContext(options)).toMatchObject({
+          heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+        });
+      });
+    },
+  );
 
   it("keeps a global hook event owned by another agent queued for its owner", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
@@ -161,7 +196,7 @@ describe("runHeartbeatOnce identity", () => {
           source: "hook",
           intent: "immediate",
           reason: "hook:wake",
-          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
+          deps: { getReplyFromConfig: replySpy },
         });
       for (const [index, agentId] of ["alpha", "beta"].entries()) {
         expect((await run(agentId)).status).toBe("ran");
@@ -225,7 +260,6 @@ describe("runHeartbeatOnce", () => {
           deps: {
             getReplyFromConfig: replySpy,
             slack: sendSlack,
-            getQueueSize: () => 0,
             nowMs: () => 0,
           },
         });

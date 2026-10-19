@@ -101,13 +101,7 @@ type TextReplyParams = {
 };
 
 function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
-  if (reply.text?.trim()) {
-    return reply.text;
-  }
-  if (reply.spokenText?.trim()) {
-    return reply.spokenText;
-  }
-  return undefined;
+  return [reply.text, reply.spokenText].find((text) => text?.trim());
 }
 
 function createReplyDeliverer(
@@ -211,9 +205,6 @@ function createReplyDeliverer(
         if (config.thread?.id !== undefined) {
           await reportAcceptedPart(part);
         }
-        config.runtime.log?.(
-          `telegram text delivery ok chat=${config.chatId} message=${messageId}`,
-        );
         await recordMessageId(messageId);
         await replyProgress.promptContext?.accept({ messageId, text: plainText });
       },

@@ -5,6 +5,7 @@ import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { tightenPrivateDirChain } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -23,12 +24,7 @@ export async function copyNodeWorkerProjectSeedObjects(params: {
   workspaceDir: string;
   signal?: AbortSignal;
 }): Promise<boolean> {
-  const root = await fsp.realpath(params.seedsRoot).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const root = await fsp.realpath(params.seedsRoot).catch(ignoreMissingPath);
   if (!root) {
     return false;
   }
@@ -61,7 +57,7 @@ export async function copyNodeWorkerProjectSeedObjects(params: {
           return false;
         }
         const stat = await fsp.lstat(source);
-        if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+        if (!stat.isFile() && !stat.isDirectory()) {
           throw new Error("Prepared project seed contains an unsafe Git object");
         }
         bytes += stat.isFile() ? stat.size : 0;
@@ -89,11 +85,7 @@ async function readSeedDirectory(parent: string, target: string): Promise<fs.Sta
     }
     throw error;
   }
-  if (
-    stats.isSymbolicLink() ||
-    !stats.isDirectory() ||
-    path.dirname(await fsp.realpath(target)) !== parent
-  ) {
+  if (!stats.isDirectory() || path.dirname(await fsp.realpath(target)) !== parent) {
     throw new Error("INVALID_REQUEST: workspace seed path escaped its owner root");
   }
   return stats;

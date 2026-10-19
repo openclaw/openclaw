@@ -17,6 +17,7 @@ import {
 } from "../infra/installation-target-context.js";
 import { omitGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { OPENCLAW_CLI_ENV_VAR, buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -24,6 +25,7 @@ import {
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -73,6 +75,11 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "nod
 export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
+  }
+  if (typeof args.command === "string" && args.command.includes("\0")) {
+    throw new ToolInputError(
+      "Execution command must not contain NUL bytes. Remove them and retry.",
+    );
   }
   if (args.awaitResults !== undefined && typeof args.awaitResults !== "boolean") {
     throw new ToolInputError("exec awaitResults must be a boolean");
@@ -175,7 +182,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    // Periodic heartbeat and automation turns keep heartbeat delivery for their commands.
+    // Preserve conversation provenance for passive subagent completion notices.
     notifyFromConversationTurn:
       defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };
@@ -186,7 +193,8 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
     ...(defaults?.preparedRunEnvironment ??
       prepareGitHubToolEnvironment({
         config: defaults?.config ?? {},
-        agentId: defaults?.agentId ?? "main",
+        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+        agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
       })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
   };
@@ -390,6 +398,7 @@ export function resolvePreparedExecEnvironment(params: {
   storeSecretEnv?: Record<string, string>;
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
+  localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
@@ -545,20 +554,31 @@ export function resolvePreparedExecEnvironment(params: {
       }
     }
   }
-  const preparedEnv = {
+  const preparedEnv: Record<string, string> = {
     ...params.localProcessEnv,
     ...params.credentialScrubEnv,
     ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
   };
+  // Inherited Git parameters can contain credentials; keep them out of request overrides.
+  const gitPolicyEnv =
+    params.host === "gateway" && params.localGitConfigParameters
+      ? {
+          GIT_CONFIG_PARAMETERS: [
+            resolveEnvironmentValue(preparedEnv, "GIT_CONFIG_PARAMETERS") ??
+              resolveEnvironmentValue(env, "GIT_CONFIG_PARAMETERS"),
+            params.localGitConfigParameters,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        }
+      : undefined;
   // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
-  Object.assign(env, preparedEnv);
-
-  Object.assign(env, routingEnv);
+  const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
   return {
-    env,
+    env: executionEnv,
     ...(params.host === "node" && routingEnv ? { executionContext } : {}),
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
       ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }

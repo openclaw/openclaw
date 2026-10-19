@@ -565,6 +565,95 @@ describe("tool-loop-detection", () => {
     });
   });
 
+  it.each([{ queries: ["alpha", "beta"], hits: true, detector: "ping_pong" }])(
+    "blocks memory-search $detector loops with hits=$hits",
+    ({ queries, hits, detector }) => {
+      const loop = createLoop("memory_search", { query: "alpha" });
+      loop.repeat(
+        CRITICAL_THRESHOLD,
+        (index) =>
+          jsonResult({
+            results: hits
+              ? [
+                  {
+                    path: "memory/notes.md",
+                    startLine: 1,
+                    endLine: 2,
+                    score: 0.42 + index * 1e-9,
+                    vectorScore: 0.5,
+                    snippet: "status: nothing new",
+                    source: "memory",
+                  },
+                ]
+              : [],
+            provider: "none",
+            mode: "fts",
+            debug: {
+              backend: "builtin",
+              effectiveMode: "fts",
+              hits: hits ? 1 : 0,
+              managerMs: 1 + index,
+              searchMs: 3 + index,
+              toolMs: 5 + index,
+              outsideSearchMs: 2 + index,
+            },
+          }),
+        (index) => ({ query: queries[index % queries.length] }),
+      );
+      expect(loop.detect()).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector,
+      });
+    },
+  );
+
+  it.each(["unstructured"])("preserves full memory-search %s results", (kind) => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    loop.repeat(CRITICAL_THRESHOLD, (index) => ({
+      content: [{ type: "text", text: `changed result ${index}` }],
+      ...(kind === "error" ? { isError: true, details: { results: [] } } : {}),
+    }));
+    expect(loop.detect()).toMatchObject({ level: "warning" });
+  });
+
+  it.each([
+    [
+      "ordered hits",
+      (index: number) => ({
+        results:
+          index % 2 === 0
+            ? [
+                { path: "memory/a.md", snippet: "a" },
+                { path: "memory/b.md", snippet: "b" },
+              ]
+            : [
+                { path: "memory/b.md", snippet: "b" },
+                { path: "memory/a.md", snippet: "a" },
+              ],
+        debug: { backend: "builtin" },
+      }),
+    ],
+    [
+      "stable debug state",
+      (index: number) => ({
+        results: [{ path: "memory/a.md", snippet: "a" }],
+        debug: { backend: index % 2 === 0 ? "builtin" : "sqlite" },
+      }),
+    ],
+  ] as const)("does not critically block progressing memory-search %s", (_label, details) => {
+    const loop = createLoop("memory_search", { query: "alpha" });
+    loop.repeat(CRITICAL_THRESHOLD, (index) => ({
+      content: [{ type: "text", text: "ignored structured rendering" }],
+      details: details(index),
+    }));
+    expect(loop.detect()).toMatchObject({
+      stuck: true,
+      level: "warning",
+      detector: "generic_repeat",
+    });
+  });
+
   it("blocks changing-argument unknown-tool retries only at the threshold", () => {
     const loop = createLoop("exec", { command: "echo next" });
     for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD - 1; index++) {
@@ -579,6 +668,27 @@ describe("tool-loop-detection", () => {
       count: UNKNOWN_TOOL_THRESHOLD,
     });
   });
+
+  it.each(["Unknown tool: missing_a", "Unknown tool id: missing_a"])(
+    "preserves unknown-tool evidence across loop vetoes: %s",
+    (error) => {
+      const loop = createLoop("dispatch_action", { tool: "missing_a" });
+      for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD; index++) {
+        loop.fail(new Error(error));
+      }
+      loop.record(veto);
+      recordToolCallOutcome(loop.state, { toolName: "read", toolParams: {}, result: veto });
+      expect(loop.detect()).toMatchObject({
+        stuck: true,
+        detector: "unknown_tool_repeat",
+        count: UNKNOWN_TOOL_THRESHOLD,
+        message: expect.stringContaining("unavailable tool missing_a"),
+      });
+      const differentTool = { tool: "missing_b" };
+      loop.fail(new Error("Unknown tool id: missing_b"), differentTool);
+      expect(loop.detect(differentTool)).toEqual({ stuck: false });
+    },
+  );
 
   it.each([
     { outcome: "missing", count: WARNING_THRESHOLD - 1, level: "warning" },

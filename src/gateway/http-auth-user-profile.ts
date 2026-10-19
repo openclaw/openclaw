@@ -22,6 +22,10 @@ import type { GatewayAuthResult } from "./auth.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
+import {
   GatewayOperatorAccessDeniedError,
   hasGatewayOperatorAccessPolicies,
   resolveGatewayOperatorAccessAuthority,
@@ -29,15 +33,17 @@ import {
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
-import type { GatewayClient } from "./server-methods/shared-types.js";
+import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
 
 export type AuthenticatedHttpUserProfile = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  preparedSessionProfile?: GatewayClient["preparedSessionProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
+  operatorRoleActor?: GatewayOperatorRoleActor;
 };
 
 type HttpUserProfileAuthResult =
@@ -124,16 +130,25 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   req: IncomingMessage;
   res?: ServerResponse;
 }): Promise<AuthenticatedHttpUserProfile> {
-  const readAdmissionPolicy = (cfg: OpenClawConfig) => {
+  const ingress = getRemoteControlUiIngressContext(params.req);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+    const principal = ingress.resolvePrincipal();
     return {
-      // HTTP admission never consumes WebSocket identity grants.
-      auth: { ...cfg.gateway?.auth, identityScopes: undefined },
-      roles: cfg.gateway?.roles,
-      trustedProxies: cfg.gateway?.trustedProxies,
-      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
-      browserOrigin: resolveBrowserOriginPolicy({ req: params.req, cfg }),
+      authenticatedUserProfile: principal.authenticatedUserProfile,
+      operatorRolePolicy: principal.operatorRolePolicy,
+      operatorRoleActor: principal.operatorRoleActor,
+      operatorAccessAuthority: principal.operatorAccessAuthority,
     };
-  };
+  }
+  const readAdmissionPolicy = (cfg: OpenClawConfig) => ({
+    // HTTP admission never consumes WebSocket identity grants.
+    auth: { ...cfg.gateway?.auth, identityScopes: undefined },
+    roles: cfg.gateway?.roles,
+    trustedProxies: cfg.gateway?.trustedProxies,
+    allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
+    browserOrigin: resolveBrowserOriginPolicy({ req: params.req, cfg }),
+  });
   const admissionPolicy = structuredClone(readAdmissionPolicy(params.cfg));
   const assertCurrent = () => {
     if (
@@ -181,6 +196,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const syncGitHubIdentity = createAuthenticatedGitHubIdentitySync({
       authResult: params.authResult,
       authConfig: params.cfg.gateway?.auth,
+      config: params.cfg,
       requestHeaders: params.req.headers,
       assertCurrent,
     });
@@ -242,7 +258,19 @@ async function prepareHttpProfile(
   if (!authority.isCurrent()) {
     throw new Error("HTTP profile authority changed during acquisition");
   }
-  return projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority);
+  return {
+    ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),
+    ...(cfg
+      ? {
+          preparedSessionProfile: {
+            profileId: authority.profileId,
+            aliases: new Set(authority.aliases),
+            role: authority.role,
+            githubLogin: authority.githubLogin,
+          },
+        }
+      : {}),
+  };
 }
 
 /** Cookie and media disclosure retain their existing synchronous final policy check. */

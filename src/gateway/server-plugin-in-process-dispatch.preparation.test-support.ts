@@ -1,6 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
@@ -16,8 +15,10 @@ export function registerInProcessGatewayDispatchPreparationTests({
   it.each([
     { method: "agent", outcome: "current" },
     { method: "agent", outcome: "replaced" },
+    { method: "agent", outcome: "retired-factory" },
     { method: "agent.wait", outcome: "current" },
     { method: "agent.wait", outcome: "replaced" },
+    { method: "agent.wait", outcome: "retired-factory" },
   ])(
     "refreshes source authority after $method facade preparation with a $outcome Gateway",
     async ({ method, outcome }) => {
@@ -48,7 +49,7 @@ export function registerInProcessGatewayDispatchPreparationTests({
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" },
           resolveGatewayContext: () => current,
-          prepareDispatchCurrent,
+          ...(outcome === "retired-factory" ? {} : { prepareDispatchCurrent }),
         },
       );
       const result =
@@ -57,9 +58,12 @@ export function registerInProcessGatewayDispatchPreparationTests({
           : expect(pending).rejects.toThrow("current gateway instance binding");
       await entered.promise;
       expect(prepareDispatchCurrent).not.toHaveBeenCalled();
+      if (outcome === "retired-factory") {
+        current = createContext();
+      }
       release.resolve();
       await result;
-      expect(prepareDispatchCurrent).toHaveBeenCalledOnce();
+      expect(prepareDispatchCurrent).toHaveBeenCalledTimes(outcome === "retired-factory" ? 0 : 1);
       expect(startTurn).toHaveBeenCalledTimes(outcome === "current" && method === "agent" ? 1 : 0);
       expect(waitForTurn).toHaveBeenCalledTimes(
         outcome === "current" && method === "agent.wait" ? 1 : 0,
@@ -70,8 +74,6 @@ export function registerInProcessGatewayDispatchPreparationTests({
   it.each(["current", "replaced"])(
     "checks a %s Gateway after raw dispatch preparation before invoking its handler",
     async (outcome) => {
-      const context = createContext();
-      let current = context;
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const handler = vi.fn(({ respond }: GatewayRequestHandlerOptions) => {
@@ -85,15 +87,8 @@ export function registerInProcessGatewayDispatchPreparationTests({
           return { health: handler };
         },
       });
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "health",
-            scope: "operator.read",
-            owner: { kind: "core", area: "test" },
-            handler: handlers.health!,
-          },
-        ]);
+      const context = createContext([["health", "operator.read", "test", handlers.health!]]);
+      let current = context;
       const prepareDispatchCurrent = vi.fn(async () => {
         if (outcome === "replaced") {
           current = createContext();

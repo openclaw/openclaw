@@ -4,6 +4,7 @@ import type { Worker } from "node:worker_threads";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
@@ -24,7 +25,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReader from "../state/openclaw-state-read-worker.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -47,8 +47,8 @@ afterAll(async () => {
 installGatewayTestHooks();
 
 test("joins a direct history projection's accepted read before retiring the Gateway home", async () => {
+  setRuntimeConfigSnapshot({});
   const scope = { agentId: "main", sessionKey: "agent:main:fixture-history" };
-  ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
   const shared = openOpenClawStateDatabase();
   const context = createDirectChatContext();
   await initializeSessionReadContext(context);
@@ -68,13 +68,11 @@ test("joins a direct history projection's accepted read before retiring the Gate
         }
         return {
           ...transport,
-          startRead(...args) {
-            return startAwaitedReadMock(async () => {
-              const reply = await transport.startRead(...args).result;
-              entered.resolve();
-              await release.promise;
-              return reply;
-            });
+          async startRead(...args) {
+            const reply = await transport.startRead(...args);
+            entered.resolve();
+            await release.promise;
+            return reply;
           },
         };
       },
@@ -97,6 +95,8 @@ test("joins a direct history projection's accepted read before retiring the Gate
       disposing.mockRestore();
     }
   });
+  // A new identity forces a native read instead of reusing an absent-ACP receipt.
+  ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
   sessionChanges.emit(scope);
   await withTestTimeout(entered.promise, 5_000, "Projection did not retain its shared-state read");
   expect(shared.db.isOpen).toBe(true);
@@ -136,9 +136,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
       return worker;
     });
   try {
-    await expect(
-      runSqliteSessionReclamation({ plan, forceInProcess: false }),
-    ).resolves.toMatchObject({
+    await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
       kind: "lifecycle-artifacts",
       value: { removedEntries: 1 },
     });

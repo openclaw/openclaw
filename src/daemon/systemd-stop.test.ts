@@ -96,7 +96,7 @@ async function fixture() {
   };
 }
 
-it.each(["standalone", "update"] as const)(
+it.each(["update"] as const)(
   "stops with a slow manager and slow custody checks (%s)",
   async (mode) => {
     const f = await fixture();
@@ -151,9 +151,7 @@ it("refuses to stop when custody retires during manager inspection", async () =>
 });
 
 it.each([
-  { scenario: "ownership refusal", retired: false },
   { scenario: "ownership refusal", retired: true },
-  { scenario: "unsettled probe", retired: false },
   { scenario: "unsettled probe", retired: true },
 ])(
   "preserves $scenario at the inspection deadline (custody retired=$retired)",

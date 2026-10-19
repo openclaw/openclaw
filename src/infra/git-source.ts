@@ -21,6 +21,7 @@ export async function acquireGitSource(params: {
   workTimeoutMs?: number | null;
   commandEnv?: () => { baseEnv?: NodeJS.ProcessEnv; env?: NodeJS.ProcessEnv };
   cloneSeparator?: boolean;
+  cloneNoHardlinks?: boolean;
   recordCommit?: boolean;
   formatFailure?: (failure: GitSourceFailure) => string;
   cleanupOnFailure?: () => Promise<void>;
@@ -52,6 +53,9 @@ export async function acquireGitSource(params: {
   };
 
   const argv = ["git", "clone"];
+  if (params.cloneNoHardlinks) {
+    argv.push("--no-hardlinks");
+  }
   if (!params.ref || params.refMode === "shallow-branch") {
     argv.push("--depth", "1");
   }

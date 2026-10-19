@@ -35,9 +35,6 @@ export function racePromiseWithAbortSignal<T>(
     // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Callers own abort reasons, including non-Error values.
     onAbort = () => reject(abortError());
     signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
   });
   return Promise.race([run(), aborted]).finally(() => {
     signal.removeEventListener("abort", onAbort);
@@ -133,18 +130,13 @@ export async function sleepWithAbort(
     return;
   }
   await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const cleanup = () => abortSignal?.removeEventListener("abort", onAbort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
     const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      timer = null;
+      clearTimeout(timer);
       cleanup();
       reject(
         createAbortError("aborted", {
@@ -157,18 +149,9 @@ export async function sleepWithAbort(
       onAbort();
       return;
     }
-    timer = setTimeout(() => {
-      settled = true;
-      cleanup();
-      timer = null;
-      resolve();
-    }, delayMs);
     // Retry loops can stay abortable without keeping an otherwise idle process alive.
     if (options.ref === false) {
       timer.unref?.();
-    }
-    if (abortSignal?.aborted) {
-      onAbort();
     }
   });
 }

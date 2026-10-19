@@ -2,19 +2,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import * as memoryCapture from "../../hooks/bundled/session-memory/capture.js";
 import saveSessionMemory, {
@@ -28,7 +25,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { emitResetCommandHooks } from "./commands-reset-hooks.js";
@@ -385,6 +385,138 @@ describe("session hook context wiring", () => {
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
   });
 
+  it.for([
+    { kind: "new", dmScope: "main" },
+    { kind: "admitted", dmScope: "main" },
+    { kind: "existing", dmScope: "per-channel-peer" },
+  ] as const)(
+    "initializes independent first turns while a $kind session is still preparing ($dmScope)",
+    async ({ kind, dmScope }, { signal }) => {
+      const storePath = await createStorePath("independent-first-turns");
+      const key = "agent:main:dashboard:first";
+      const sessionId = "admitted-first-session";
+      await writeStore(
+        storePath,
+        kind === "new" ? {} : { [key]: { sessionId, updatedAt: Date.now() } },
+      );
+      const cfg = { session: { store: storePath, dmScope } };
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const commit = sessionAccessor.commitReplySessionInitialization;
+      vi.spyOn(sessionAccessor, "commitReplySessionInitialization").mockImplementationOnce(
+        async (params) => {
+          entered.resolve();
+          await release.promise;
+          return commit(params);
+        },
+      );
+      const first = initSessionState({
+        ctx: {
+          Body: "First turn",
+          SessionKey: key,
+          OriginatingChannel: "webchat",
+          OriginatingTo: key,
+        },
+        cfg,
+        commandAuthorized: true,
+        ...(kind === "admitted"
+          ? {
+              expectedExistingSessionId: sessionId,
+              pinExpectedExistingSession: true,
+              newlyCreatedSessionId: sessionId,
+            }
+          : {}),
+      });
+      let second: ReturnType<typeof initSessionState> | undefined;
+      try {
+        await withinTest(entered.promise, signal);
+        second = initSessionState({
+          ctx: {
+            Body: "Independent turn",
+            SessionKey: "agent:main:dashboard:second",
+            OriginatingChannel: "webchat",
+            OriginatingTo: "agent:main:dashboard:second",
+          },
+          cfg,
+          commandAuthorized: true,
+        });
+        const initialized = await withinTest(second, signal);
+        expect(initialized.sessionKey).toBe("agent:main:dashboard:second");
+        expect(initialized.isNewSession).toBe(true);
+        expect(loadSessionEntry({ storePath, sessionKey: initialized.sessionKey })?.sessionId).toBe(
+          initialized.sessionId,
+        );
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second]);
+      }
+      expect((await first).isNewSession).toBe(kind !== "existing");
+    },
+  );
+
+  it("allows a first-turn hook to admit session work without borrowing the initialization writer", async ({
+    signal,
+  }) => {
+    const storePath = await createStorePath("first-turn-hook-admission");
+    const sessionKey = "agent:main:dashboard:hook-source";
+    const completed = createDeferredCore();
+    hookRunnerMocks.runSessionStart.mockImplementation(async () => {
+      try {
+        // The plugin runtime's runWithWorkAdmission API requests this broad writer barrier.
+        const admission = await beginSessionEffect({
+          scope: storePath,
+          identities: ["agent:main:dashboard:hook-target"],
+          assertAllowed: () => {},
+        });
+        admission.release();
+        completed.resolve();
+      } catch (error) {
+        completed.reject(error);
+      }
+    });
+    const initialized = initSessionState({
+      ctx: { Body: "First turn", SessionKey: sessionKey },
+      cfg: { session: { store: storePath } },
+      commandAuthorized: true,
+    });
+    await withinTest(Promise.all([initialized, completed.promise]), signal);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
+  });
+
+  it("runs an unawaited session_start hook outside the reply turn that emitted it", async () => {
+    // The hook outlives the turn; resuming that retired admission would reject its own turn.
+    const sessionKey = "agent:main:hook-after-turn";
+    const storePath = await createStorePath("openclaw-session-hook-after-turn");
+    await writeStore(storePath, {});
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const turnSettled = createDeferred();
+    const hookAdmission = createDeferred<unknown>();
+    hookRunnerMocks.runSessionStart.mockImplementation(async (event) => {
+      await turnSettled.promise;
+      try {
+        hookAdmission.resolve(
+          await withSessionTurn(
+            { storePath, sessionKey, sessionId: event.sessionId },
+            async (operation) => operation?.key,
+          ),
+        );
+      } catch (error) {
+        hookAdmission.resolve(error);
+      }
+    });
+
+    await withSessionTurn({ storePath, sessionKey }, () =>
+      initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      }),
+    );
+    turnSettled.resolve();
+
+    await expect(hookAdmission.promise).resolves.toBe(sessionKey);
+  });
+
   it("starts the first reply lifecycle for a session created by admission without resetting it", async () => {
     const sessionKey = "agent:main:dashboard:admitted-goal";
     const sessionId = "admitted-session";
@@ -534,13 +666,14 @@ describe("session hook context wiring", () => {
       await admission.run(() =>
         parent.run(() =>
           initSessionState({
-            ctx: { Body: "/new", SessionKey: sessionKey },
+            ctx: { Body: "/reset", SessionKey: sessionKey },
             cfg: { session: { store: storePath } } as OpenClawConfig,
             commandAuthorized: true,
           }),
         ),
       );
       expect(releases).toHaveLength(3);
+      expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "reset" });
       admission.release();
       await withinTest(parent.drain(), signal);
       expect(getActiveGatewayRootWorkCount()).toBe(3);
@@ -605,52 +738,8 @@ describe("session hook context wiring", () => {
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "new" });
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  });
-
-  it("marks explicit /reset rollovers with reason reset", async () => {
-    const sessionKey = "agent:main:telegram:direct:456";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-explicit-reset",
-      sessionKey,
-      sessionId: "reset-session",
-      text: "reset me",
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/reset", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, { reason: "reset" });
-  });
-
-  it("maps custom reset trigger aliases to the new-session reason", async () => {
-    const sessionKey = "agent:main:telegram:direct:alias";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-reset-alias",
-      sessionKey,
-      sessionId: "alias-session",
-      text: "alias me",
-    });
-    const cfg = {
-      session: {
-        store: storePath,
-        resetTriggers: ["/fresh"],
-      },
-    } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/fresh", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, { reason: "new" });
   });
 
   it("marks daily stale rollovers and exposes the archived transcript path", async () => {

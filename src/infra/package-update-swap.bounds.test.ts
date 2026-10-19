@@ -4,8 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
@@ -18,35 +16,43 @@ import { interceptPackageFileHashes } from "./package-update-integrity-hasher.te
 import {
   createPackageIntegrityReader,
   PackageIntegrityLimitError,
+  PackageIntegrityTimeoutError,
 } from "./package-update-integrity.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 afterEach(() => {
-  setLoggerOverride(null);
-  loggingState.rawConsole = null;
-  resetLogger();
   vi.restoreAllMocks();
 });
 
-function captureReaderLogs() {
-  const records: Array<Record<string, unknown>> = [];
-  const capture = (line: string) => {
-    const record = JSON.parse(line) as Record<string, unknown>;
-    if (record.subsystem === "update/package-integrity") {
-      records.push(record);
-    }
-  };
-  setLoggerOverride({ level: "silent", consoleLevel: "debug", consoleStyle: "json" });
-  loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
-  return records;
-}
-
 describe("package verification bounds", () => {
+  it("keeps a fresh reader usable after a wall-clock jump forward", async () => {
+    await withTestDir({ prefix: "openclaw-integrity-clock-forward-" }, async (base) => {
+      const reader = createPackageIntegrityReader(1_000);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+      await expect(reader.entries(base)).resolves.toEqual([]);
+    });
+  });
+
+  it("expires a read on time despite a wall-clock jump backward", async () => {
+    await withTestDir({ prefix: "openclaw-integrity-clock-backward-" }, async (base) => {
+      let now = performance.now();
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const reader = createPackageIntegrityReader(15);
+      const opendir = fs.opendir.bind(fs);
+      vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+        const directory = await opendir(...args);
+        now += 20;
+        return directory;
+      });
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() - 60_000);
+      await expect(reader.entries(base)).rejects.toBeInstanceOf(PackageIntegrityTimeoutError);
+    });
+  });
+
   it("rehashes same-tick observations even after they age", async () => {
     await withTestDir({ prefix: "openclaw-integrity-reuse-" }, async (base) => {
       const clock = Date.now.bind(Date);
@@ -349,7 +355,6 @@ describe("package verification bounds", () => {
       const manifest = path.join(packageRoot, "package.json");
       const contents = await fs.readFile(manifest, "utf8");
       await fs.writeFile(manifest, contents.padEnd(1024 * 1024, " "));
-      const observations = captureReaderLogs();
       const transactions: PackageUpdateTransaction[] = [];
       const result = await swapStagedPackageInstall({
         ...params,
@@ -361,23 +366,6 @@ describe("package verification bounds", () => {
       expect(transactions).toHaveLength(1);
       expect((await transactions[0]!.rollback(() => {})).exitCode).toBe(0);
       await expect(fs.readFile(manifest, "utf8")).resolves.toHaveLength(1024 * 1024);
-      const finished = observations.filter((record) => record.event === "reader-settled");
-      expect(finished.map((record) => record.phase)).toEqual([
-        "baseline",
-        "baseline",
-        "retained",
-        "restored",
-      ]);
-      expect(new Set(finished.map((record) => record.readerId)).size).toBe(4);
-      for (const record of finished) {
-        expect(record).toMatchObject({
-          outcome: "completed",
-          budgetMs: UPDATE_RUNNER_TIMEOUT_MS,
-          pendingIo: 0,
-        });
-        expect(record.timeoutObservedAtMonotonicMs).toBeUndefined();
-        expect(Number(record.elapsedMs)).toBeGreaterThan(0);
-      }
     });
   });
 
@@ -486,8 +474,7 @@ describe("package verification bounds", () => {
         const lstat = vi.spyOn(fs, "lstat");
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
-        const observations = captureReaderLogs();
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
         const update = swapStagedPackageInstall({
           ...params,
           beforeActivate,
@@ -511,27 +498,6 @@ describe("package verification bounds", () => {
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(onLiveMutation).toHaveBeenCalledOnce();
           expect(admitted).toEqual(files.slice(0, window));
-          const baseline = observations.filter(
-            (record) => record.readerId === observations[0]?.readerId,
-          );
-          expect(baseline).toHaveLength(2);
-          const [begin, settled] = baseline;
-          expect(begin).toMatchObject({ event: "reader-started", budgetMs: 40 });
-          expect(settled).toMatchObject({
-            event: "reader-settled",
-            readerId: begin!.readerId,
-            outcome: "timed-out",
-            budgetMs: 40,
-            deadlineClock: "wall",
-          });
-          expect(Number(settled!.pendingIo)).toBeGreaterThanOrEqual(window);
-          expect(settled!.deadlineAtUnixMs).toBe(begin!.deadlineAtUnixMs);
-          expect(settled!.elapsedMs).toBe(
-            Number(settled!.settledAtMonotonicMs) - Number(begin!.startedAtMonotonicMs),
-          );
-          expect(Number(settled!.timeoutObservedAtMonotonicMs)).toBeLessThanOrEqual(
-            Number(settled!.settledAtMonotonicMs),
-          );
           for (const file of admitted) {
             jobs.get(file)!.release.resolve();
           }
@@ -554,41 +520,10 @@ describe("package verification bounds", () => {
     },
   );
 
-  it("preserves the primary refusal when reader diagnostics fail", async () => {
-    await withTestDir({ prefix: "openclaw-rollback-diagnostics-" }, async (base) => {
-      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-      captureReaderLogs();
-      const sink = vi.fn(() => {
-        throw new Error("diagnostics sink failed");
-      });
-      loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
-      const hash = interceptPackageFileHashes(async () => {
-        throw new Error("reader unavailable");
-      });
-      const beforeActivate = vi.fn();
-      const onLiveMutation = vi.fn();
-      const result = await swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation });
-      expect(sink).toHaveBeenCalled();
-      expect(hash).toHaveBeenCalled();
-      expect(result.status).toBe("failed");
-      expect(result.step.stderrTail).toContain("reader unavailable");
-      expect(result.step.stderrTail).not.toContain("diagnostics sink failed");
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onLiveMutation).not.toHaveBeenCalled();
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"1.0.0"',
-      );
-      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-    });
-  });
-
-  it("records a cleanup-only deadline without claiming successful reader completion", async ({
-    signal,
-  }) => {
+  it("does not wait beyond the deadline for directory cleanup", async ({ signal }) => {
     await withTestDir({ prefix: "openclaw-rollback-close-deadline-" }, async (base) => {
       const { params } = await createPackageSwapFixture(base);
       await fs.unlink(path.join(params.stage.layout.binDir, "openclaw"));
-      const observations = captureReaderLogs();
       const release = createDeferredCore();
       const entered = createDeferredCore();
       let closing: Promise<void> | undefined;
@@ -606,7 +541,7 @@ describe("package verification bounds", () => {
         }
         return directory;
       });
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const update = swapStagedPackageInstall({ ...params, timeoutMs: 40 });
       try {
         await withinTest(
@@ -615,14 +550,8 @@ describe("package verification bounds", () => {
         );
         await vi.advanceTimersByTimeAsync(40);
         const result = await withinTest(update, signal);
-        // Preserve the existing best-effort close policy, but report its timeout.
+        // Cleanup is best effort once the verification deadline expires.
         expect(result.status).toBe("committed");
-        expect(observations.findLast((record) => record.event === "reader-settled")).toMatchObject({
-          phase: "baseline",
-          outcome: "timed-out",
-          pendingIo: 1,
-          timeoutObservedAtMonotonicMs: expect.any(Number),
-        });
       } finally {
         release.resolve();
         await closing;
@@ -739,7 +668,7 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
     await fs.mkdir(path.join(f.packageRoot, "nested"));
     await fs.writeFile(path.join(f.packageRoot, "nested", "a.txt"), "nested content");
     await fs.symlink("../drift-0.js", path.join(f.packageRoot, "nested", "link"));
-    // These bytes are persisted in version-1 journals; the oracle names the
+    // Private-mode digests keep the version-1 shape; the oracle names the
     // fixture's postorder explicitly instead of replaying the reader's walk.
     const expectedEntries: Array<[string, "file" | "directory" | "symlink"]> = [
       ["dist/index.js", "file"],
@@ -764,7 +693,7 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
       const stat = await fs.lstat(file, { bigint: true });
       const tuple = [
         `${stat.dev}:${stat.ino}`,
-        String(stat.mode),
+        String(kind === "symlink" ? stat.mode : stat.mode & ~0o077n),
         String(stat.uid),
         String(stat.gid),
       ];

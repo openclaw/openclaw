@@ -16,7 +16,6 @@ import {
   fetchStatusWithRetry,
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
-  readBoundedJsonResponse,
   resolveOpenClawNpmPostpublishVerifier,
   runNpmViewWithRetry,
   runReleaseVerifierCommand,
@@ -1647,81 +1646,113 @@ describe("fetchStatusWithRetry", () => {
 });
 
 describe("fetchJsonWithRetry", () => {
-  it.each(["recoverable bodies", "permanent client error"])(
-    "handles %s within its retry budget",
-    async (mode) => {
-      const delays: number[] = [];
-      const delay = vi.fn(async (delayMs: number) => {
+  it.each([
+    "connection",
+    "body",
+    "rate limit",
+    "invalid JSON",
+    "client error",
+    "TLS",
+    "oversized",
+    "streamed oversize",
+  ])("recovers only transient reads: %s", async (mode) => {
+    const delays: number[] = [];
+    let requests = 0;
+    let canceled = false;
+    const result = fetchJsonWithRetry("https://clawhub.test/api/v1/package", {
+      delay: async (delayMs) => {
         delays.push(delayMs);
-      });
-      const fetchImpl =
-        mode === "recoverable bodies"
-          ? vi
-              .fn()
-              .mockResolvedValueOnce(new Response("{invalid"))
-              .mockResolvedValueOnce(
-                new Response(
-                  new ReadableStream<Uint8Array>({
-                    start(controller) {
-                      controller.error(new Error("truncated"));
-                    },
-                  }),
-                ),
-              )
-              .mockResolvedValueOnce(Response.json({ ok: true }))
-          : vi.fn(async () => new Response("denied", { status: 403 }));
-      const result = fetchJsonWithRetry("https://clawhub.test/api/v1/package", {
-        attempts: 3,
-        delay,
-        fetchImpl,
-      });
-      if (mode === "recoverable bodies") {
-        await expect(result).resolves.toEqual({ ok: true });
-        expect(fetchImpl).toHaveBeenCalledTimes(3);
-        expect(delays).toEqual([1000, 2000]);
-      } else {
-        await expect(result).rejects.toThrow("returned HTTP 403");
-        expect(fetchImpl).toHaveBeenCalledTimes(1);
-        expect(delay).not.toHaveBeenCalled();
+      },
+      fetchImpl: async () => {
+        requests += 1;
+        if (requests > 1) {
+          return Response.json({ ok: true });
+        }
+        if (mode === "connection" || mode === "TLS") {
+          throw new TypeError("fetch failed", {
+            cause: { code: mode === "TLS" ? "CERT_HAS_EXPIRED" : "ECONNRESET" },
+          });
+        }
+        if (mode === "body") {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(
+                  new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } }),
+                );
+              },
+            }),
+          );
+        }
+        if (mode === "invalid JSON") {
+          return new Response("{invalid");
+        }
+        if (mode === "streamed oversize") {
+          return new Response("x".repeat(1048577));
+        }
+        if (mode === "oversized") {
+          return new Response("{}", { headers: { "content-length": "1048577" } });
+        }
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              canceled = true;
+            },
+          }),
+          { status: mode === "client error" ? 403 : 429, headers: { "retry-after": "7" } },
+        );
+      },
+    });
+    if (["connection", "body", "rate limit"].includes(mode)) {
+      await expect(result).resolves.toEqual({ ok: true });
+      expect(requests).toBe(2);
+      expect(delays).toEqual([mode === "rate limit" ? 7000 : 1000]);
+      if (mode === "rate limit") {
+        expect(canceled).toBe(true);
       }
-    },
-  );
-});
-
-describe("readBoundedJsonResponse", () => {
-  it.each<[string, string, HeadersInit, number]>([
-    ["content length", "{}", { "content-length": "65" }, 64],
-    ["streamed bytes", '{"padding":"too-large"}', {}, 8],
-  ])("rejects oversized JSON bodies by %s", async (_label, body, headers, maxBytes) => {
-    await expect(
-      readBoundedJsonResponse(new Response(body, { headers }), "ClawHub package", maxBytes),
-    ).rejects.toThrow(`ClawHub package response body exceeded ${maxBytes} bytes`);
+    } else {
+      await expect(result).rejects.toThrow(
+        mode === "invalid JSON"
+          ? "invalid JSON"
+          : mode === "TLS"
+            ? "fetch failed"
+            : mode === "oversized" || mode === "streamed oversize"
+              ? "exceeded 1048576 bytes"
+              : "returned HTTP 403",
+      );
+      expect(requests).toBe(1);
+      expect(delays).toEqual([]);
+    }
   });
 
-  it("keeps ClawHub request timeouts active while reading JSON bodies", async () => {
+  it("retains the request deadline through a successful response's stalled body", async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(controller.signal);
     let canceled = false;
-    const abortController = new AbortController();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"partial":'));
+    try {
+      const result = fetchJsonWithRetry("https://clawhub.test/api/v1/package", {
+        fetchImpl: async (_url, init) => {
+          expect(init?.signal).toBe(controller.signal);
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(stream) {
+                stream.enqueue(new TextEncoder().encode('{"partial":'));
+                queueMicrotask(() => controller.abort(new Error("ClawHub body stopped")));
+              },
+              cancel() {
+                canceled = true;
+              },
+            }),
+          );
         },
-        cancel() {
-          canceled = true;
+        delay: async () => {
+          throw new Error("terminal abort must not retry");
         },
-      }),
-    );
-
-    const json = readBoundedJsonResponse(response, "ClawHub package", 64, {
-      signal: abortController.signal,
-    });
-
-    await new Promise((resolveDelay) => {
-      setTimeout(resolveDelay, 0);
-    });
-    abortController.abort(new Error("ClawHub body timed out"));
-
-    await expect(json).rejects.toThrow("ClawHub body timed out");
-    expect(canceled).toBe(true);
+      });
+      await expect(result).rejects.toThrow("ClawHub body stopped");
+      expect(canceled).toBe(true);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 });

@@ -1,5 +1,6 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -9,7 +10,7 @@ import {
   type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
-import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 type ReadinessResult = {
@@ -99,7 +100,6 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
-    allowPendingAgentDatabases?: boolean;
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
@@ -123,6 +123,9 @@ export function createReadinessChecker(
     if (startup.status === "draining") {
       return { ready: false, failing: ["gateway-draining"], uptimeMs };
     }
+    if (!readChildRuntimeViability().available) {
+      return { ready: false, failing: ["child-runtime"], uptimeMs };
+    }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
     if (stateDatabaseFailure) {
       cachedState = null;
@@ -133,16 +136,11 @@ export function createReadinessChecker(
         uptimeMs,
       };
     }
-    const failedAgents = agentDatabases?.filter(
-      (refusal) =>
-        deps.allowPendingAgentDatabases === false ||
-        refusal.code !== "agent-database-inspection-pending",
-    );
-    if (failedAgents?.length) {
+    if (agentDatabases?.length) {
       cachedState = null;
       return {
         ready: false,
-        failing: failedAgents.map(({ agentId }) => `agent-database:${agentId}`),
+        failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
     }

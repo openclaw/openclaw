@@ -1,14 +1,13 @@
 // Shared heartbeat runner fixtures for infra tests.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { vi } from "vitest";
+import { afterAll, vi } from "vitest";
 import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   listSessionEntriesCore,
   replaceSessionEntry,
@@ -22,18 +21,22 @@ import { resolveCronJobsStorePath } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
+
+const sandboxDirs = useSessionStoreTempDirs(afterAll, "openclaw-heartbeat-suite-");
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
 // while keeping plugin registry and environment state isolated per test.
@@ -53,6 +56,14 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
   replySpy.mockResolvedValue({ text: "ok" });
   return replySpy;
+}
+export function setHeartbeatSilentCompletion(options: InternalGetReplyOptions | undefined): void {
+  const runState = resolveReplyOperationRunState(options);
+  if (!runState) {
+    throw new Error("Expected heartbeat reply operation run state");
+  }
+  runState.replyCompletion = { expectation: "optional", outcome: "silent" };
+  options?.onDeliberateSilentTerminalReply?.();
 }
 
 /** Set the invocation's execution receipt without replacing its admission state. */
@@ -183,7 +194,7 @@ export async function withTempHeartbeatSandbox<T>(
     unsetEnvVars?: string[];
   },
 ): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
+  const tmpDir = await fs.mkdtemp(path.join(sandboxDirs.make(), options?.prefix ?? "openclaw-hb-"));
   const storePath = path.join(tmpDir, "sessions.json");
   const replySpy = createHeartbeatReplySpy();
   const envNames = new Set(["OPENCLAW_STATE_DIR", ...(options?.unsetEnvVars ?? [])]);
@@ -194,16 +205,21 @@ export async function withTempHeartbeatSandbox<T>(
     ]),
   );
   return withEnvAsync(env, async () => {
+    let initialized = false;
     try {
       await seedHeartbeatScratchForTest({ content: "- Check status\n" });
+      initialized = true;
       return await fn({ tmpDir, storePath, replySpy });
     } finally {
-      await closeOpenClawAgentDatabasesAsync(tmpDir);
+      if (initialized) {
+        await drainSessionStateForTest({ stateDir: path.join(tmpDir, "state"), rootPath: tmpDir });
+      } else {
+        // Setup can fail before a database path exists; retain the original failure cleanup.
+        await closeOpenClawAgentDatabasesAsync(tmpDir);
+        await closeStateDatabaseForTest();
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
       replySpy.mockReset();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      // A failed drain retains the sandbox for its still-owned resources.
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 }

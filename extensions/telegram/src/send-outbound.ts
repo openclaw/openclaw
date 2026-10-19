@@ -56,11 +56,9 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
   writebackAuthority: "caller" | "internal" = "caller",
 ): Promise<T> {
   return withTelegramApiContext(opts, async (context) => {
-    const { cfg, api } = context;
+    const { cfg } = context;
     const rawTarget = String(to);
-    const chatId = await resolveAndPersistChatId({
-      cfg,
-      api,
+    const chatId = await resolveAndPersistChatId(context, {
       lookupTarget: parseTelegramTarget(rawTarget).chatId,
       persistTarget: rawTarget,
       verbose: opts.verbose,
@@ -149,7 +147,7 @@ export async function prepareTelegramOutbound(params: {
   useApiErrorLogging?: boolean;
   wrapChatNotFound?: boolean;
 }): Promise<PreparedTelegramOutbound> {
-  const { cfg, api } = params.context;
+  const { cfg } = params.context;
   const rawTarget = String(params.to);
   const target = parseTelegramTarget(rawTarget);
   const threadSpec = params.thread
@@ -161,9 +159,7 @@ export async function prepareTelegramOutbound(params: {
         chatType: target.chatType,
       })
     : undefined;
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
+  const chatId = await resolveAndPersistChatId(params.context, {
     lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: params.opts.verbose,
@@ -202,7 +198,6 @@ export async function finalizeTelegramOutbound(params: {
   messageThreadId?: number;
   promptContextProjectionPlan?: TelegramSendOpts["promptContextProjectionPlan"];
   onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
-  beforeActivity?: (result: { messageId: string; chatId: string }) => void;
 }): Promise<TelegramSendResult> {
   const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
@@ -245,7 +240,6 @@ export async function finalizeTelegramOutbound(params: {
       visibleReplySent: true,
     });
   }
-  params.beforeActivity?.(resultIds);
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,

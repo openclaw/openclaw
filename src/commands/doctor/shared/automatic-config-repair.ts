@@ -4,6 +4,7 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
 import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
+import { applyMessageQueueDefaults } from "../../../config/defaults.js";
 import {
   getDeferredPluginMigrationConfigFacts,
   omitDeferredPluginMigrationConfig,
@@ -57,28 +58,29 @@ export function canPlanAutomaticConfigRepair(snapshot: ConfigFileSnapshot): bool
   );
 }
 
-function prepareAutomaticConfigRepairWrite(snapshot: ConfigFileSnapshot, config: OpenClawConfig) {
+async function prepareAutomaticConfigRepairWrite(
+  snapshot: ConfigFileSnapshot,
+  config: OpenClawConfig,
+) {
   const unsetPaths = resolveManagedUnsetPathsForWrite(undefined);
+  const topology = await prepareConfigWriteTopology({
+    snapshot,
+    nextConfig: config,
+    options: { persistCanonicalAgentRoster: true },
+    unsetPaths,
+    env: process.env,
+  });
   return stampConfigWriteMetadata(
-    applyUnsetPathsForWrite(
-      prepareConfigWriteTopology({
-        snapshot,
-        nextConfig: config,
-        options: { persistCanonicalAgentRoster: true },
-        unsetPaths,
-        env: process.env,
-      }).nextConfig,
-      unsetPaths,
-    ),
+    applyUnsetPathsForWrite(topology.nextConfig, unsetPaths),
     undefined,
     snapshot.parsed,
   );
 }
 
-function planConfigRepair(
+async function planConfigRepair(
   snapshot: ConfigFileSnapshot,
   pluginContracts: boolean,
-): AutomaticConfigRepairPlan | null {
+): Promise<AutomaticConfigRepairPlan | null> {
   if (!canPlanAutomaticConfigRepair(snapshot)) {
     return null;
   }
@@ -97,13 +99,16 @@ function planConfigRepair(
       pluginContracts,
     }),
   );
+  const migrated = preserveDeferredPluginMigrationConfig({
+    sourceConfig: snapshot.sourceConfig,
+    nextConfig: migration.next ?? snapshot.sourceConfig,
+    pending: deferredPluginMigrations ?? [],
+  });
+  // Include the Doctor default in this write so a later write does not rotate
+  // the original backup. Read-only backup projection keeps its existing shape.
   const config = inheritLegacyDefaultAgentId(
     migration.next ?? snapshot.sourceConfig,
-    preserveDeferredPluginMigrationConfig({
-      sourceConfig: snapshot.sourceConfig,
-      nextConfig: migration.next ?? snapshot.sourceConfig,
-      pending: deferredPluginMigrations ?? [],
-    }),
+    pluginContracts ? applyMessageQueueDefaults(migrated) : migrated,
   );
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     return null;
@@ -116,12 +121,15 @@ function planConfigRepair(
   const writeConfig = pluginContracts
     ? restoreDoctorConfigEnvRefs(config, prepareDoctorConfigReferenceSource(snapshot))
     : config;
-  const validation = withPluginContracts(() => {
+  const validation = await withPluginContracts(async () => {
     const validationConfig = omitDeferredPluginMigrationConfig(config, deferredPluginMigrations);
     const validated = pluginContracts
-      ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, writeConfig), {
-          deferredPluginMigrations,
-        })
+      ? validateConfigObjectWithPlugins(
+          await prepareAutomaticConfigRepairWrite(snapshot, writeConfig),
+          {
+            deferredPluginMigrations,
+          },
+        )
       : { ...validateConfigObjectRaw(validationConfig), warnings: snapshot.warnings };
     const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
       validationConfig,
@@ -138,7 +146,13 @@ function planConfigRepair(
   return {
     config,
     writeConfig,
-    changes: [...migration.changes, ...(migration.warnings ?? [])],
+    changes: [
+      ...migration.changes,
+      ...(migration.warnings ?? []),
+      ...(config === migrated
+        ? []
+        : ["Set messages.queue.allowCollaborativeSteering to false (default)."]),
+    ],
     snapshot: {
       ...snapshot,
       sourceConfig: config,
@@ -154,9 +168,9 @@ function planConfigRepair(
 }
 
 /** Admits only complete, deterministic single-file legacy migrations. */
-export function planAutomaticConfigRepair(
+export async function planAutomaticConfigRepair(
   snapshot: ConfigFileSnapshot,
-): AutomaticConfigRepairPlan | null {
+): Promise<AutomaticConfigRepairPlan | null> {
   return planConfigRepair(snapshot, true);
 }
 
@@ -164,8 +178,8 @@ export function planAutomaticConfigRepair(
  * Backup inventory and restore overlap checks need legacy roots without changing state.
  * Full plugin-contract validation belongs to Doctor's repair plan.
  */
-export function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
-  return snapshot.valid ? snapshot : planConfigRepair(snapshot, false)?.snapshot;
+export async function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
+  return snapshot.valid ? snapshot : (await planConfigRepair(snapshot, false))?.snapshot;
 }
 
 /** Commits a planned repair against the exact snapshot admitted by its caller. */
@@ -195,6 +209,9 @@ export async function commitAutomaticConfigRepair(
     writeOptions: {
       expectedConfigPath: snapshot.path,
       auditOrigin: "doctor",
+      // Writes no longer read the migration ledger. Carry the admitted pending
+      // facts so a deferred plugin's legacy settings stay preserved, not rejected.
+      deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
       // Doctor retired legacy markers; persist their canonical owners in this write.

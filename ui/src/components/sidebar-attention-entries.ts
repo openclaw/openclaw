@@ -3,7 +3,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
 import {
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,

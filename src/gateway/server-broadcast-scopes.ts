@@ -59,6 +59,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
+  "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
   "mentions.changed": [READ_SCOPE],
   "skills.changed": [READ_SCOPE],
@@ -78,6 +79,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [SESSION_READ_SCOPE],
+  "sessions.processes.changed": [SESSION_READ_SCOPE],
   "controlUi.sessionPullRequests.changed": [READ_SCOPE],
   "plugins.controlUi.changed": [READ_SCOPE],
   "mcp.app.resourceUpdated": [READ_SCOPE],
@@ -93,6 +95,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.reaction": [SESSION_READ_SCOPE],
   "session.typing": [SESSION_READ_SCOPE],
   "session.tool": [SESSION_READ_SCOPE],
+  "socket.drain": [SESSION_READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],
@@ -102,16 +105,21 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 
 const SESSION_CATALOG_INVALIDATIONS = new Set(["delete", "groups", "sharing", "profile-identity"]);
 
+/** Classify source envelopes without invoking getters, toJSON, or Proxy traps. */
+export function isPlainEventPayload(payload: unknown): payload is Record<string, unknown> {
+  if (isProxy(payload) || !isRecord(payload)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(payload);
+  return (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
+}
+
 export function isSessionReadInvalidation(
   event: string,
   payload: unknown,
   targeted: boolean,
 ): boolean {
-  if (isProxy(payload) || !isRecord(payload)) {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(payload);
-  if ((prototype !== null && prototype !== Object.prototype) || "toJSON" in payload) {
+  if (!isPlainEventPayload(payload)) {
     return false;
   }
   const fields = Object.entries(Object.getOwnPropertyDescriptors(payload));
@@ -130,11 +138,7 @@ export function isSessionReadInvalidation(
 }
 
 export function modelMetadataInvalidationFragment(payload: unknown): string | undefined {
-  if (isProxy(payload) || !isRecord(payload)) {
-    return undefined;
-  }
-  const prototype = Object.getPrototypeOf(payload);
-  if ((prototype !== null && prototype !== Object.prototype) || "toJSON" in payload) {
+  if (!isPlainEventPayload(payload)) {
     return undefined;
   }
   const keys = Reflect.ownKeys(payload);

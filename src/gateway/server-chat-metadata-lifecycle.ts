@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
@@ -31,10 +32,10 @@ export function broadcastChatMetadataChanged(
 export async function createGatewayChatMetadataLifecycle(params: {
   getConfig: () => OpenClawConfig;
   log: GatewayLogger;
+  getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
 }) {
   let context: GatewayRequestContext | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
-  let preparedModelRuntimeEventVersion = 0;
   const { createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
   const { ChatMetadataSnapshotUnavailableError } =
@@ -115,7 +116,6 @@ export async function createGatewayChatMetadataLifecycle(params: {
         if (context) {
           invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
         }
-        preparedModelRuntimeEventVersion += 1;
         if (event.phase === "invalidated") {
           // Initial catch-up may already be building an owner published before attachment.
           // Later invalidations preserve the existing replacement wait or terminal failure.
@@ -163,18 +163,22 @@ export async function createGatewayChatMetadataLifecycle(params: {
       context = next;
       let selectionConfig = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
       const unregister = await registerRefreshListeners();
-      const unregisterUsage = onSessionCostUsageUpdated((publication) => {
+      sessionCostUsageNotifications.onUpdated = (publication) => {
         broadcastChatMetadataChanged(next, {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
           commandsChanged: false,
         });
-      });
+      };
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
           const config = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
-          const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
+          const unchanged = modelSelectionPoliciesMatch(
+            selectionConfig,
+            config,
+            params.getPluginMetadataSnapshot?.(),
+          );
           selectionConfig = config;
           if (!unchanged) {
             broadcastChatMetadataChanged(next, {
@@ -186,7 +190,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       });
       publishSidecars({
         stop: async () => {
-          unregisterUsage();
+          sessionCostUsageNotifications.onUpdated = () => {};
           unregisterRolePolicy();
           unregister();
           await runtime.stop();
@@ -195,30 +199,35 @@ export async function createGatewayChatMetadataLifecycle(params: {
       // Publications that complete before listener registration would otherwise be missed.
       // During ordinary startup the owner is published after attachment, so an unavailable
       // snapshot here is expected and the publication listener performs the first refresh.
-      const eventVersion = preparedModelRuntimeEventVersion;
       await runtime.refresh().then(
         () => {
-          // A successful catch-up proves availability when publication completed before the
-          // listener was registered. Do not overwrite a newer invalidation or failure event.
-          if (preparedModelRuntimeEventVersion === eventVersion) {
-            preparedModelRuntimeState = "available";
-          }
+          preparedModelRuntimeState = "available";
         },
         (error: unknown) => {
           if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
-            // Capture reached a published owner before this later metadata build failed. Keep
-            // stable auth/skill changes able to retry unless a newer owner event says otherwise.
-            if (preparedModelRuntimeEventVersion === eventVersion) {
-              preparedModelRuntimeState = "available";
-            }
+            preparedModelRuntimeState = "available";
             params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
           }
         },
       );
     },
-    read: runtime.read,
+    read: async (readParams: Parameters<typeof runtime.read>[0]) => {
+      const { ensureGatewayPreparedModelRuntimeReady } =
+        await import("../agents/prepared-model-runtime.js");
+      readParams.assertCurrent?.();
+      await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      readParams.assertCurrent?.();
+      return await runtime.read(readParams);
+    },
     readModelsList: runtime.readModelsList,
-    readStartup: runtime.readStartup,
+    readStartup: async (readParams: Parameters<typeof runtime.readStartup>[0]) => {
+      if (readParams.readPolicy !== "ready") {
+        const { ensureGatewayPreparedModelRuntimeReady } =
+          await import("../agents/prepared-model-runtime.js");
+        await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      }
+      return await runtime.readStartup(readParams);
+    },
     refresh: runtime.refresh,
   };
 }

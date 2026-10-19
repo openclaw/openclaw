@@ -1,7 +1,7 @@
 import { CODEX_APP_SERVER_AUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderFetchUsageSnapshotContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerUsageSnapshot } from "./rate-limits.js";
 import { readCodexAppServerUsage } from "./request.js";
 
@@ -16,7 +16,9 @@ export async function fetchCodexAppServerUsageSnapshot(
   if (ctx.token !== CODEX_APP_SERVER_AUTH_MARKER) {
     return null;
   }
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
+  const appServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: readCodexPluginConfig(options.pluginConfig),
+  });
   const usage = await (options.readUsage ?? readCodexAppServerUsage)({
     timeoutMs: ctx.timeoutMs,
     signal: ctx.signal,

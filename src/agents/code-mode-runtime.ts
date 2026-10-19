@@ -1,8 +1,9 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CodeModeConfig as AuthoredCodeModeConfig } from "../config/types.tools.js";
 import { modelKey } from "../shared/model-key.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
@@ -13,14 +14,6 @@ import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
-const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
-const DEFAULT_MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024;
-const DEFAULT_MAX_PENDING_TOOL_CALLS = 16;
-const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
-const DEFAULT_SEARCH_LIMIT = 8;
-const DEFAULT_MAX_SEARCH_LIMIT = 50;
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
 export const CODE_MODE_RESUME_MARGIN_MS = 250;
 // Reserve the resume floor plus dispatch/settlement slack so a call that runs
@@ -62,20 +55,26 @@ export type CodeModeHeadlessResult =
       toolCallCount: number;
     };
 
-function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
+type CodeModeOptions = Exclude<AuthoredCodeModeConfig, boolean | "auto">;
+type CodeModeLimit = Exclude<keyof CodeModeOptions, "enabled" | "executor" | "mode">;
+
+function normalizeCodeModeRawConfig(
+  value: AuthoredCodeModeConfig | undefined,
+): CodeModeOptions | undefined {
   if (typeof value === "boolean" || value === "auto") {
     return { enabled: value };
   }
-  return isRecord(value) ? value : undefined;
+  return value;
 }
 
 function readCodeModeRawConfig(
   config?: OpenClawConfig,
   agentId?: string,
   model?: { provider: string; modelId: string },
-): Record<string, unknown> {
-  const tools = isRecord(config?.tools) ? config.tools : undefined;
-  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? { enabled: "auto" };
+): CodeModeOptions {
+  const globalRaw: CodeModeOptions = normalizeCodeModeRawConfig(config?.tools?.codeMode) ?? {
+    enabled: "auto",
+  };
   const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
   const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);
   const key = model
@@ -94,71 +93,27 @@ function readCodeModeRawConfig(
   };
 }
 
-function readEnabled(value: unknown): boolean | "auto" {
-  // Authored option-bearing objects keep their historical opt-in behavior.
-  return typeof value === "boolean" || value === "auto" ? value : false;
-}
-
-function readExecutor(value: unknown): CodeModeConfig["executor"] {
-  if (value === undefined) {
-    return "node";
-  }
-  if (value === "node" || value === "quickjs") {
-    return value;
-  }
-  throw new ToolInputError('Code Mode executor must be "node" or "quickjs".');
-}
-
-export function readPositiveInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
 export function resolveCodeModeConfig(
   config?: OpenClawConfig,
   agentId?: string,
   model?: { provider: string; modelId: string },
 ): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId, model);
-  const maxSearchLimit = clampNumber(
-    readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
-    1,
-    DEFAULT_MAX_SEARCH_LIMIT,
-  );
+  const limit = (key: CodeModeLimit, fallback: number, min: number, max: number) =>
+    clampNumber(asPositiveInteger(raw[key]) ?? fallback, min, max);
+  const maxSearchLimit = limit("maxSearchLimit", 50, 1, 50);
   return {
-    enabled: readEnabled(raw.enabled),
-    executor: readExecutor(raw.executor),
+    // Authored option-bearing objects keep their historical opt-in behavior.
+    enabled: raw.enabled ?? false,
+    executor: raw.executor ?? "node",
     mode: "only",
-    timeoutMs: clampNumber(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
-    memoryLimitBytes: clampNumber(
-      readPositiveInteger(raw.memoryLimitBytes, DEFAULT_MEMORY_LIMIT_BYTES),
-      1024 * 1024,
-      1024 * 1024 * 1024,
-    ),
-    maxOutputBytes: clampNumber(
-      readPositiveInteger(raw.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
-      1024,
-      10 * 1024 * 1024,
-    ),
-    maxSnapshotBytes: clampNumber(
-      readPositiveInteger(raw.maxSnapshotBytes, DEFAULT_MAX_SNAPSHOT_BYTES),
-      1024,
-      256 * 1024 * 1024,
-    ),
-    maxPendingToolCalls: clampNumber(
-      readPositiveInteger(raw.maxPendingToolCalls, DEFAULT_MAX_PENDING_TOOL_CALLS),
-      1,
-      MAX_CODE_MODE_PENDING_TOOL_CALLS,
-    ),
-    snapshotTtlSeconds: clampNumber(
-      readPositiveInteger(raw.snapshotTtlSeconds, DEFAULT_SNAPSHOT_TTL_SECONDS),
-      1,
-      24 * 60 * 60,
-    ),
-    searchDefaultLimit: clampNumber(
-      readPositiveInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
-      1,
-      maxSearchLimit,
-    ),
+    timeoutMs: limit("timeoutMs", 10_000, 100, 60_000),
+    memoryLimitBytes: limit("memoryLimitBytes", 64 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
+    maxOutputBytes: limit("maxOutputBytes", 64 * 1024, 1024, 10 * 1024 * 1024),
+    maxSnapshotBytes: limit("maxSnapshotBytes", 10 * 1024 * 1024, 1024, 256 * 1024 * 1024),
+    maxPendingToolCalls: limit("maxPendingToolCalls", 16, 1, MAX_CODE_MODE_PENDING_TOOL_CALLS),
+    snapshotTtlSeconds: limit("snapshotTtlSeconds", 900, 1, 24 * 60 * 60),
+    searchDefaultLimit: limit("searchDefaultLimit", 8, 1, maxSearchLimit),
     maxSearchLimit,
   };
 }

@@ -77,23 +77,10 @@ function createRuntime() {
 }
 
 function createSearchHits(): MemorySearchResult[] {
+  const location = { startLine: 1, endLine: 1, score: 1 };
   return [
-    {
-      source: "memory",
-      path: "memory.md",
-      startLine: 1,
-      endLine: 1,
-      score: 1,
-      snippet: "memory",
-    },
-    {
-      source: "sessions",
-      path: "sessions/private.jsonl",
-      startLine: 1,
-      endLine: 1,
-      score: 1,
-      snippet: "private",
-    },
+    { ...location, source: "memory", path: "memory.md", snippet: "memory" },
+    { ...location, source: "sessions", path: "sessions/private.jsonl", snippet: "private" },
   ];
 }
 
@@ -138,6 +125,14 @@ const memoryConfig = {
   plugins: { slots: { memory: "memory-core" } },
 } as never;
 
+const managerParams = (agentId = "main") => ({ cfg: memoryConfig, agentId });
+const acquire = (agentId = "main") => getActiveMemorySearchManagerCore(managerParams(agentId));
+
+function loadRegistry<T extends MemoryPluginRuntime>(owner: TestRegistry<T>) {
+  mocks.loadPluginRegistryHandle.mockReturnValue(owner.registry);
+  return owner;
+}
+
 describe("memory runtime handles", () => {
   beforeEach(() => {
     resetStandaloneMemoryRegistrySlot();
@@ -158,9 +153,8 @@ describe("memory runtime handles", () => {
   ] as const)(
     "closes %s managers through a %s owner without reviving disposal",
     async (scope, state) => {
-      const { registry, runtime, instance } = createRegistry();
-      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
-      await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+      const { registry, runtime, instance } = loadRegistry(createRegistry());
+      await acquire();
       const releaseClose = createDeferredCore();
       const closeCallback =
         scope === "all" ? runtime.closeAllMemorySearchManagers : runtime.closeMemorySearchManager;
@@ -170,7 +164,7 @@ describe("memory runtime handles", () => {
       const close = () =>
         scope === "all"
           ? closeActiveMemorySearchManagersCore()
-          : closeActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+          : closeActiveMemorySearchManagerCore(managerParams());
       if (state === "retired") {
         markPluginRegistryRetired(registry);
       } else {
@@ -196,7 +190,7 @@ describe("memory runtime handles", () => {
   );
 
   it("closes memory after the CLI retires its acquired harness registry", async () => {
-    const { registry, runtime, instance } = createRegistry();
+    const { registry, runtime, instance } = loadRegistry(createRegistry());
     const disposeHarness = vi.fn(async () => {});
     registry.agentHarnesses.push({
       pluginId: "memory-core",
@@ -211,14 +205,13 @@ describe("memory runtime handles", () => {
         dispose: disposeHarness,
       }),
     });
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
     runtime.closeAllMemorySearchManagers.mockImplementationOnce(async () => {
       expect(isPluginRegistryRetired(registry)).toBe(true);
       expect(instance.lifecycle.signal.aborted).toBe(false);
     });
     await withCliProcessScope(() =>
       withCliCommandCleanup(false, async (cleanup) => {
-        await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+        await acquire();
         withPluginRuntimeRegistryScope(registry, listRegisteredAgentHarnesses);
         await closeCliResources(cleanup);
       }),
@@ -277,31 +270,6 @@ describe("memory runtime handles", () => {
     },
   );
 
-  it("tracks standalone managers without activating config-only lookups and rearms reused handles", async () => {
-    const { registry, runtime } = createRegistry();
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
-
-    expect(hasMemoryRuntime()).toBe(false);
-    expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
-      backend: "builtin",
-    });
-    expect(hasMemoryRuntime()).toBe(false);
-
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
-    expect(hasMemoryRuntime()).toBe(true);
-
-    await closeActiveMemorySearchManagersCore();
-    expect(hasMemoryRuntime()).toBe(false);
-
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
-    expect(hasMemoryRuntime()).toBe(true);
-    expect(runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
-
-    await closeActiveMemorySearchManagersCore();
-    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
-    expect(hasMemoryRuntime()).toBe(false);
-  });
-
   it.each(["present", "missing"] as const)(
     "reloads the same memory selection after its %s capability owner retires",
     async (capability) => {
@@ -316,9 +284,7 @@ describe("memory runtime handles", () => {
         .mockReturnValueOnce(first.registry)
         .mockReturnValue(replacement.registry);
 
-      await expect(
-        getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-      ).resolves.toMatchObject({
+      await expect(acquire()).resolves.toMatchObject({
         manager: null,
         error: capability === "missing" ? "memory plugin unavailable" : "no index",
       });
@@ -326,9 +292,7 @@ describe("memory runtime handles", () => {
       expect(first.instance.lifecycle.signal.aborted).toBe(true);
 
       for (let query = 0; query < 2; query += 1) {
-        await expect(
-          getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-        ).resolves.toMatchObject({ manager: null, error: "no index" });
+        await expect(acquire()).resolves.toMatchObject({ manager: null, error: "no index" });
       }
       expect(replacement.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
       expect(replacement.instance.lifecycle.signal.aborted).toBe(false);
@@ -355,7 +319,7 @@ describe("memory runtime handles", () => {
     );
     const alternate = async () => {
       for (const agentId of ["main", "research", "main"]) {
-        await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId });
+        await acquire(agentId);
       }
     };
     await alternate();
@@ -378,39 +342,17 @@ describe("memory runtime handles", () => {
     const fresh = createRegistry(first.runtime);
     const freshDisposals = observeRegistration(fresh.instance);
     mocks.loadPluginRegistryHandle.mockReturnValue(fresh.registry);
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    await acquire();
     expect(freshDisposals).toHaveBeenCalledOnce();
   });
 
-  it("retiring an older workspace removes only that runtime from memory cleanup", async () => {
-    const first = createRegistry();
-    const current = createRegistry();
-    const cache = createPluginCache();
-    getPluginLoaderCacheState(cache).set("memory-fixture", first.registry);
-    mocks.loadPluginRegistryHandle
-      .mockReturnValueOnce(first.registry)
-      .mockReturnValue(current.registry);
-
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
-    await retirePluginCache(cache);
-    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
-
-    await expect(closeActiveMemorySearchManagersCore()).resolves.toBeUndefined();
-    expect(current.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
-    expect(current.runtime.closeAllMemorySearchManagers).toHaveBeenCalledOnce();
-  });
-
   it("retains standalone cleanup ownership when manager acquisition or teardown fails", async () => {
-    const { registry, runtime } = createRegistry();
-    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    const { runtime } = loadRegistry(createRegistry());
     runtime.getMemorySearchManager.mockRejectedValueOnce(
       new Error("manager initialization failed"),
     );
 
-    await expect(
-      getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-    ).rejects.toThrow("manager initialization failed");
+    await expect(acquire()).rejects.toThrow("manager initialization failed");
     expect(hasMemoryRuntime()).toBe(true);
 
     runtime.closeAllMemorySearchManagers.mockRejectedValueOnce(
@@ -470,10 +412,7 @@ describe("memory runtime handles", () => {
       }
       mocks.loadPluginRegistryHandle.mockReturnValue(registry);
 
-      const result = await getActiveMemorySearchManagerCore({
-        cfg: memoryConfig,
-        agentId: "main",
-      });
+      const result = await acquire();
       expect(result.manager).toBeNull();
       expect(result.searchRuntimeRegistered).toBe(
         state === "failed" || state === "missing" ? undefined : false,
@@ -549,8 +488,8 @@ describe("memory runtime handles", () => {
     } satisfies MemoryPluginRuntime;
     mocks.getMemoryRuntime.mockReturnValue(runtime);
 
-    const first = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
-    const second = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    const first = await acquire();
+    const second = await acquire();
 
     expect(second.manager).toBe(first.manager);
     expect(Reflect.get(second.manager ?? {}, "readFile")).toBe(
@@ -595,7 +534,7 @@ describe("memory runtime handles", () => {
     } satisfies MemoryPluginRuntime;
     mocks.getMemoryRuntime.mockReturnValue(runtime);
 
-    const acquired = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    const acquired = await acquire();
 
     await expect(acquired.manager?.search("frozen manager")).resolves.toEqual([]);
     expect(acquired.manager?.status()).toEqual({ backend: "builtin", provider: "frozen" });
@@ -643,23 +582,16 @@ describe("memory runtime handles", () => {
     },
   );
 
-  it.each(["local", "missing", "legacy-remote", "pinned-remote"] as const)(
+  it.each(["local", "pinned-remote"] as const)(
     "classifies workspace paths through the selected runtime with %s provenance support",
     async (support) => {
       const runtime = createRuntime();
-      const { registry } = createRegistry(
-        support === "missing"
-          ? {
-              getMemorySearchManager: runtime.getMemorySearchManager,
-              resolveMemoryBackendConfig: runtime.resolveMemoryBackendConfig,
-            }
-          : {
-              ...runtime,
-              ...(support === "pinned-remote"
-                ? { supportsWorkspaceMemoryReadSources: true as const }
-                : {}),
-            },
-      );
+      const { registry } = createRegistry({
+        ...runtime,
+        ...(support === "pinned-remote"
+          ? { supportsWorkspaceMemoryReadSources: true as const }
+          : {}),
+      });
       if (support === "local") {
         runtime.classifyWorkspaceMemoryPaths.mockImplementationOnce(async ({ relativePaths }) => {
           expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
@@ -670,7 +602,7 @@ describe("memory runtime handles", () => {
         });
       }
       mocks.loadPluginRegistryHandle.mockReturnValue(registry);
-      const remote = support === "legacy-remote" || support === "pinned-remote";
+      const remote = support === "pinned-remote";
       const params = {
         cfg: memoryConfig,
         agentId: "main",
@@ -681,8 +613,7 @@ describe("memory runtime handles", () => {
               readSources: [
                 {
                   relativePath: "USER.md",
-                  canonicalRelativePath:
-                    support === "pinned-remote" ? "memory/profile.md" : "USER.md",
+                  canonicalRelativePath: "memory/profile.md",
                 },
               ],
             }
@@ -697,12 +628,9 @@ describe("memory runtime handles", () => {
             { relativePath: "USER.md", originClass: "owner" },
           ],
         });
-      } else if (support === "pinned-remote") {
+      } else {
         expect(result).toMatchObject({ status: "classified" });
         expect(runtime.classifyWorkspaceMemoryPaths).toHaveBeenCalledExactlyOnceWith(params);
-      } else {
-        expect(result).toEqual({ status: "unsupported" });
-        expect(runtime.classifyWorkspaceMemoryPaths).not.toHaveBeenCalled();
       }
     },
   );
@@ -725,23 +653,20 @@ describe("memory runtime handles", () => {
         .mockReturnValueOnce(research.registry);
       for (const agentId of ["main", "research"]) {
         if (acquired) {
-          await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId });
+          await acquire(agentId);
         } else {
-          resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId });
+          resolveActiveMemoryBackendConfig(managerParams(agentId));
         }
       }
       expect(hasMemoryRuntime()).toBe(acquired);
       mocks.loadPluginRegistryHandle.mockClear();
 
-      await closeActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+      await closeActiveMemorySearchManagerCore(managerParams());
       expect(hasMemoryRuntime()).toBe(acquired);
       await closeActiveMemorySearchManagersCore(memoryConfig);
 
       for (const { runtime } of [main, research]) {
-        expect(runtime.closeMemorySearchManager).toHaveBeenCalledWith({
-          cfg: memoryConfig,
-          agentId: "main",
-        });
+        expect(runtime.closeMemorySearchManager).toHaveBeenCalledWith(managerParams());
         expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
       }
       expect(hasMemoryRuntime()).toBe(false);

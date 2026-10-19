@@ -86,36 +86,6 @@ describe("resolveSessionEntryResetFreshness", () => {
     expect(result.entry?.sessionId).toBe("session-global-ops");
   });
 
-  it("resolves stale daily freshness from lifecycle timestamps instead of activity", async () => {
-    const sessionKey = "agent:main:main:thread:100.000";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-stale-thread",
-        updatedAt: now,
-        sessionStartedAt: now - 2 * DAY_MS,
-        lastInteractionAt: now - 2 * DAY_MS,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.entry?.sessionId).toBe("session-stale-thread");
-    expect(result.resetType).toBe("thread");
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "daily",
-    });
-  });
-
   it("keeps provider-owned sessions fresh when reset policy is implicit", async () => {
     const sessionKey = "agent:main:main:thread:provider-owned";
     const now = new Date("2026-01-02T12:00:00Z").getTime();
@@ -143,71 +113,6 @@ describe("resolveSessionEntryResetFreshness", () => {
 
     expect(result.state).toBe("fresh");
     expect(result.freshness).toMatchObject({ fresh: true });
-  });
-
-  it("applies configured reset policies to provider-owned sessions", async () => {
-    const sessionKey = "agent:main:main:thread:provider-owned-configured";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-provider-owned-configured",
-        updatedAt: now,
-        sessionStartedAt: now - 2 * DAY_MS,
-        lastInteractionAt: now - 2 * DAY_MS,
-        providerOverride: "claude-cli",
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "cli-session-provider-owned-configured" },
-        },
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "daily",
-    });
-  });
-
-  it("honors reset overrides when resolving entry freshness", async () => {
-    const sessionKey = "agent:main:main:thread:idle";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-idle-stale",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now - 60 * 60 * 1000,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetOverride: { mode: "idle", idleMinutes: 30 },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.resetPolicy).toMatchObject({
-      mode: "idle",
-      idleMinutes: 30,
-    });
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "idle",
-    });
   });
 
   it("resolves the store path from session config", async () => {

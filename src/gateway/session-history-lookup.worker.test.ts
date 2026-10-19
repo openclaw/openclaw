@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import zlib from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
+  appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import * as archiveWorkers from "../config/sessions/session-accessor.sqlite-archive.js";
@@ -27,6 +28,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("keeps empty and reset-archive lookup results without creating a missing database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionId: "missing-lookup",
@@ -104,6 +106,7 @@ it("keeps empty and reset-archive lookup results without creating a missing data
 
 it("reads process-held incognito history by its key or explicit sentinel path", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionId: "incognito-lookup",
@@ -111,15 +114,11 @@ it("reads process-held incognito history by its key or explicit sentinel path", 
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1, incognito: true });
-    await replaceTranscriptEvents(scope, [
-      { type: "session", id: scope.sessionId },
-      {
-        type: "message",
-        id: "private",
-        parentId: null,
-        message: { role: "user", content: "Private history" },
-      },
-    ]);
+    await appendTranscriptMessage(scope, {
+      eventId: "private",
+      parentId: null,
+      message: { role: "user", content: "Private history" },
+    });
     for (const sessionKey of [scope.sessionKey, undefined]) {
       expect(
         await readSessionMessagesMatchingIdAsync({ ...scope, sessionKey }, "private"),
@@ -137,6 +136,7 @@ it("reads process-held incognito history by its key or explicit sentinel path", 
 
 it("restores cold lookup bytes and validates selected payloads off the caller thread", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const fixture = await createSessionColdStorageFixture(
       resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     );
@@ -153,7 +153,6 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
     const snapshot = vi.spyOn(projection, "withCurrentProjectionSnapshot");
     expect(await read()).toEqual(expected);
     expect(await read()).toEqual(expected);
-    expect(fixture.snapshot()).toEqual(fixture.original);
     expect(restore).toHaveBeenCalledWith(
       expect.objectContaining({
         workerData: expect.objectContaining({ operation: "cold-mutate" }),
@@ -161,6 +160,9 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
     );
     expect(decode).not.toHaveBeenCalled();
     expect(snapshot).not.toHaveBeenCalled();
+
+    // The fixture's full snapshot deliberately decodes rows on this thread.
+    expect(fixture.snapshot()).toEqual(fixture.original);
 
     // Exact reads still validate their selected payload after an external rewrite.
     fixture

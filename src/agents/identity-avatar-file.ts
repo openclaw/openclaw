@@ -31,8 +31,8 @@ type OpenedLocalAgentAvatarFile = {
   fd: number;
   stat: {
     ctimeMs: number;
-    dev: number;
-    ino: number;
+    dev: string;
+    ino: string;
     mtimeMs: number;
     size: number;
   };
@@ -101,8 +101,8 @@ function openResolvedLocalAgentAvatarFile(
       fd: opened.fd,
       stat: {
         ctimeMs: opened.stat.ctimeMs,
-        dev: opened.stat.dev,
-        ino: opened.stat.ino,
+        dev: opened.exactIdentity.dev.toString(),
+        ino: opened.exactIdentity.ino.toString(),
         mtimeMs: opened.stat.mtimeMs,
         size: opened.stat.size,
       },

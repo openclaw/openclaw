@@ -1,12 +1,13 @@
+import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { createBackupArchive, type BackupCreateOptions } from "../infra/backup-create.js";
 import { resolveBackupNamespace, type BackupRetentionOptions } from "../infra/backup-retention.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { OffsiteBackupResult } from "./backup-remote.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
-import { formatBackupCreateSummary } from "./backup-summary.js";
 
 export type BackupCommandCreateOptions = BackupCreateOptions &
   BackupRetentionOptions & {
@@ -15,7 +16,6 @@ export type BackupCommandCreateOptions = BackupCreateOptions &
     claimNamespace?: boolean;
   };
 
-/** Create a backup archive, optionally verify it, and emit text or JSON output. */
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCommandCreateOptions = {},
@@ -30,13 +30,18 @@ export async function backupCreateCommand(
   }
   let archivePath = opts.output ?? (opts.to === undefined ? process.cwd() : `storage://${opts.to}`);
   const releaseCustody = opts.dryRun ? undefined : beginLifecycleWriteCustody("backup");
+  const finished = createDeferredCore();
+  let stopArchive: (() => void) | undefined;
+  // In-process tar/gzip must stop and join before CLI shutdown releases custody.
+  const releaseExitGate = registerSignalExitGate(finished.promise, () => stopArchive?.());
   let failure: unknown;
   let namespace = opts.namespace;
   try {
     if (opts.to !== undefined) {
       namespace = resolveBackupNamespace(opts.namespace);
     }
-    const result: OffsiteBackupResult = await withCommandProcessScope(async () => {
+    const result: OffsiteBackupResult = await withCommandProcessScope(async (stop) => {
+      stopArchive = stop;
       const options = {
         ...opts,
         log: opts.log ?? (opts.json ? undefined : (message: string) => runtime.log(message)),
@@ -72,7 +77,43 @@ export async function backupCreateCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, result);
     } else {
-      runtime.log(formatBackupCreateSummary(result).join("\n"));
+      const lines = [`Backup archive: ${result.archivePath}`];
+      lines.push(`Included ${result.assets.length} path${result.assets.length === 1 ? "" : "s"}:`);
+      for (const asset of result.assets) {
+        lines.push(`- ${asset.kind}: ${asset.displayPath}`);
+      }
+      if (result.skipped.length > 0) {
+        lines.push(
+          `Skipped ${result.skipped.length} path${result.skipped.length === 1 ? "" : "s"}:`,
+        );
+        for (const entry of result.skipped) {
+          const coverage =
+            entry.reason === "covered" && entry.coveredBy ? ` by ${entry.coveredBy}` : "";
+          lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason}${coverage})`);
+        }
+      }
+      for (const link of result.externalSymbolicLinks ?? []) {
+        lines.push(
+          `External link preserved (target not copied through link): ${JSON.stringify(link.entryPath)} -> ${JSON.stringify(link.linkpath)}`,
+        );
+      }
+      if (result.dryRun) {
+        lines.push("Dry run only; archive was not written.");
+      } else {
+        lines.push(`Created ${result.archivePath}`);
+        if (result.skippedVolatileCount > 0) {
+          lines.push(
+            `Skipped ${result.skippedVolatileCount} volatile file${
+              result.skippedVolatileCount === 1 ? "" : "s"
+            } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
+          );
+        }
+        if (result.verified) {
+          lines.push("Archive verification: passed");
+        }
+      }
+      lines.push(...(result.warnings ?? []));
+      runtime.log(lines.join("\n"));
       if (result.location) {
         runtime.log(
           `Uploaded to ${result.location.name}/backups/${result.location.namespace}/${result.location.key} (${result.location.storedBytes} stored bytes).${result.localArchiveRetained ? " Local archive retained." : ""}`,
@@ -99,5 +140,7 @@ export async function backupCreateCommand(
     throw error;
   } finally {
     releaseCustody?.(failure);
+    finished.resolve();
+    releaseExitGate();
   }
 }

@@ -19,6 +19,7 @@ export const matrixConfigAdapter = {
   >({
     sectionKey: "matrix",
     listAccountIds: listMatrixAccountIds,
+    /** @deprecated Use resolveAccountAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
     resolveAccessorAccount: resolveMatrixAccountConfig,
     defaultAccountId: resolveDefaultMatrixAccountId,

@@ -26,9 +26,9 @@ export function reconcileUpdateRunCandidatesInWorker(
 ): UpdateRunReconciliationResult {
   const { candidates, selection: input, busyTimeoutMs, redactPaths } = command;
   const options = { ...stateOptions, busyTimeoutMs, redactPaths };
+  assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      assertCurrent("transaction");
       const selected = candidates.flatMap(({ record }) => {
         const current = readUpdateRunRecord(db, record.runId);
         return current ? [inspectUpdateRunReconciliation(db, current, input)] : [];
@@ -83,6 +83,7 @@ export function reconcileUpdateRunCandidatesInWorker(
         finishUpdateRunRecord(record, {
           status: "failed",
           reason: rule === LEGACY_UPDATE_RUN_EXPIRED_REASON ? rule : "abandoned",
+          nextAction: "Run `openclaw update repair` before retrying the update.",
         });
         const saved = persistRun(db, record, options);
         current[index] = saved;

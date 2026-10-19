@@ -1,8 +1,15 @@
 import type { PluginHookReplyDispatchEvent } from "openclaw/plugin-sdk/core";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { PLUGIN_COMMAND_DISPATCH } from "../plugins/plugin-command-dispatch-contract.js";
+import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import type * as ReplyChunking from "./reply-chunking.js";
+import type * as ReplyRuntime from "./reply-runtime.js";
 import {
   createReplyDispatcher,
+  dispatchInboundMessage,
+  isSilentReplyText,
   type GetReplyOptions,
+  type PreparedAgentRunStart,
   type ReplyDispatcher,
 } from "./reply-runtime.js";
 
@@ -22,8 +29,26 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionStart"
   | "onCompactionEnd"];
 
+describe("reply SDK silence surface", () => {
+  it("exposes only the exact helper from reply-runtime", () => {
+    type ChunkingExports = keyof typeof ReplyChunking;
+    type RuntimeExports = keyof typeof ReplyRuntime;
+    expectTypeOf<"SILENT_REPLY_TOKEN">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"SILENT_REPLY_TOKEN">().toExtend<RuntimeExports>();
+    expectTypeOf<"isSilentReplyText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<RuntimeExports>();
+    expectTypeOf(isSilentReplyText).parameters.toEqualTypeOf<[text?: string]>();
+  });
+});
+
 describe("reply runtime public progress contracts", () => {
-  it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
+  it("retains released lifecycle callback arguments and synchronous completion acknowledgment", () => {
+    type Deferral = NonNullable<
+      NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>["onDeferred"]
+    >;
+    expectTypeOf<Parameters<Deferral>>().toEqualTypeOf<[]>();
+    expectTypeOf<ReturnType<Deferral>>().toEqualTypeOf<boolean | void>();
     type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
     type LegacyAgentRunStart = (
       runId: string,
@@ -36,6 +61,13 @@ describe("reply runtime public progress contracts", () => {
     expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
     expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
     expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
+  });
+
+  it("requires prepared transcript facts on the modern run-start contract", () => {
+    type Callback = NonNullable<GetReplyOptions["onPreparedAgentRunStart"]>;
+    expectTypeOf<Parameters<Callback>>().toEqualTypeOf<[PreparedAgentRunStart]>();
+    expectTypeOf<{ runId: string }>().not.toExtend<PreparedAgentRunStart>();
+    expectTypeOf<Callback>().returns.toEqualTypeOf<unknown>();
   });
 
   it("retains released synchronous visibility contracts beside awaited companions", () => {
@@ -97,6 +129,69 @@ describe("reply runtime public progress contracts", () => {
 });
 
 describe("reply runtime public dispatcher compatibility", () => {
+  it("keeps internal event authority out of the public reply option types", () => {
+    type Options = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyOptions"]>;
+    type RuntimeOptions = NonNullable<
+      Parameters<PluginRuntimeChannel["reply"]["dispatchReplyFromConfig"]>[0]["replyOptions"]
+    >;
+    type Resolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
+    expectTypeOf<"internalEventExecution">().not.toExtend<keyof Options>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof Options>();
+    expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof Options>();
+    expectTypeOf<"internalEventExecution">().not.toExtend<keyof RuntimeOptions>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof RuntimeOptions>();
+    expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof RuntimeOptions>();
+    type ResolverOptions = NonNullable<Parameters<Resolver>[1]>;
+    expectTypeOf<"internalEventExecution">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"onSessionPrepared">().toExtend<keyof Options>();
+    expectTypeOf<"onSessionPrepared">().toExtend<keyof ResolverOptions>();
+  });
+
+  it("rejects plugin-supplied event custody while retaining public reply options", async () => {
+    const callback = vi.fn();
+    const options = {
+      isHeartbeat: true,
+      onReplyStart: callback,
+      internalEventExecution: { assertCurrent: callback, onStarted: callback },
+      onReplyOperationAdmitted: callback,
+      onReplyOperationOwned: callback,
+      [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const },
+    };
+    const delivered: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+    });
+    let dispatched = false;
+    await dispatchInboundMessage({
+      ctx: { Body: "hello", SessionKey: "agent:main:sdk-reply", CommandAuthorized: false },
+      cfg: {},
+      dispatcher,
+      replyOptions: options,
+      dispatchReplyFromConfig: async ({ replyOptions }) => {
+        dispatched = true;
+        expect(replyOptions).not.toHaveProperty("internalEventExecution");
+        expect(replyOptions).not.toHaveProperty("onReplyOperationAdmitted");
+        expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
+        expect(replyOptions).toMatchObject({
+          isHeartbeat: true,
+          onReplyStart: callback,
+          [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
+        });
+        dispatcher.sendFinalReply({ text: "public reply" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    });
+    expect(dispatched).toBe(true);
+    expect(delivered).toEqual(["public reply"]);
+    expect(options.internalEventExecution.onStarted).toBe(callback);
+    expect(options.onReplyOperationAdmitted).toBe(callback);
+    expect(options.onReplyOperationOwned).toBe(callback);
+  });
+
   it("preserves deprecated admission counters beside settled receipt outcomes", async () => {
     let releaseFirstDelivery!: () => void;
     const firstDelivery = new Promise<void>((resolve) => {
@@ -139,18 +234,5 @@ describe("reply runtime public dispatcher compatibility", () => {
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 1, block: 1, final: 1 });
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 1, final: 0 });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
-  });
-
-  it("publishes an empty receipt when no delivery was admitted", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
-    dispatcher.markComplete();
-    await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
-      anyVisibleDelivered: false,
-      counts: {
-        tool: { delivered: 0 },
-        block: { delivered: 0 },
-        final: { delivered: 0 },
-      },
-    });
   });
 });

@@ -22,6 +22,20 @@ export function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolea
   );
 }
 
+export function doesReloadAffectPluginCapabilities(
+  plan: GatewayReloadPlan,
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): boolean {
+  return (
+    plan.reloadPlugins ||
+    !isDeepStrictEqual(
+      resolveChannelConfigActivationFacts(previousConfig),
+      resolveChannelConfigActivationFacts(nextConfig),
+    )
+  );
+}
+
 /** Auth changes must replace prepared owners instead of advancing their config in place. */
 export function doesReloadAffectProviderAuth(
   plan: GatewayReloadPlan,
@@ -29,16 +43,12 @@ export function doesReloadAffectProviderAuth(
   nextConfig: OpenClawConfig,
 ): boolean {
   return (
-    plan.reloadPlugins ||
+    doesReloadAffectPluginCapabilities(plan, previousConfig, nextConfig) ||
     plan.changedPaths.some(isProviderAuthRelevantReloadPath) ||
     diffConfigPaths(previousConfig, nextConfig).some(isProviderAuthRelevantReloadPath) ||
     !isDeepStrictEqual(
       collectConfiguredModelRefs(previousConfig),
       collectConfiguredModelRefs(nextConfig),
-    ) ||
-    !isDeepStrictEqual(
-      resolveChannelConfigActivationFacts(previousConfig),
-      resolveChannelConfigActivationFacts(nextConfig),
     )
   );
 }
@@ -91,7 +101,7 @@ function isAuthRelevantAgentSubfield(
   );
 }
 
-function isProviderAuthRelevantReloadPath(path: string): boolean {
+export function isProviderAuthRelevantReloadPath(path: string): boolean {
   const segments = path.split(".");
   const [head = "", second, third, fourth] = segments;
   if (PROVIDER_AUTH_RELEVANT_CONFIG_ROOTS.has(head)) {

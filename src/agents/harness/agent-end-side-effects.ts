@@ -4,12 +4,17 @@ import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/sess
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import {
   scheduleSkillExperienceReview,
   scheduleUnusedWorkshopSkillArchive,
 } from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
+import {
+  completedTurnMessageAnchor,
+  type CompletedTurnMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -19,6 +24,7 @@ const log = createSubsystemLogger("agents/harness");
 
 type BaseAgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
 type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
+  [completedTurnMessageAnchor]?: CompletedTurnMessageAnchor;
   /** Exact completed-turn boundary; context loading stays off the foreground path. */
   skillExperienceReviewSource?: Pick<
     TranscriptEntryAnchor,
@@ -70,8 +76,14 @@ function runCoreAgentEndSideEffects(
       return;
     }
     if (read === "worker") {
-      const assertCurrent = captureOwnedTranscriptWriteAssertion(source);
+      const committed = params[completedTurnMessageAnchor];
+      const assertCurrent =
+        committed?.assertCurrent ?? captureOwnedTranscriptWriteAssertion(source);
       assertCurrent();
+      if (committed) {
+        schedule(committed.anchor);
+        return;
+      }
       return readActiveTranscriptEntryAnchorAsync(source)
         .then((anchor) => {
           assertCurrent();
@@ -85,8 +97,13 @@ function runCoreAgentEndSideEffects(
   }
 }
 
-/** @deprecated Use runAgentEndSideEffectsAsync; retained until the next Plugin SDK major. */
+/** @deprecated Await runAgentEndSideEffectsAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void {
+  warnPluginSdkDeprecation({
+    family: "agent-end-side-effects",
+    method: "runAgentEndSideEffects",
+    replacement: "await runAgentEndSideEffectsAsync",
+  });
   void runCoreAgentEndSideEffects(params, "native");
   runAgentHarnessAgentEndHook(params);
 }

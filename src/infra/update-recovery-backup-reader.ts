@@ -18,10 +18,11 @@ import {
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { pinDirectory, sha256File } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
+import { lstatIfExists } from "./path-existence.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
@@ -29,6 +30,7 @@ import {
   assertUpdateRecoverySealComplete,
   hasPendingUpdateRecoverySeal,
 } from "./update-recovery-capture-seal.js";
+import { canonicalEntryPath } from "./update-recovery-path.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
@@ -42,6 +44,55 @@ const updateRecoveryBackupRefSchema = z.strictObject({
 
 type UpdateRecoveryBackupRef = z.infer<typeof updateRecoveryBackupRefSchema>;
 
+/** Inspection derives evidence from the sealed original, never from today's inventory. */
+export async function withVerifiedUpdateRecoveryBackup<T>(
+  ref: UpdateRecoveryBackupRef,
+  inspect: (manifest: UpdateRecoveryBackupManifest) => Promise<T>,
+): Promise<T> {
+  return withRecoveryMetadata(ref, async ({ manifest, pin }) => {
+    if (manifest.schemaVersion !== 2) {
+      throw new Error("Preservation inspection requires a versioned recovery inventory.");
+    }
+    // Bound the projection, not the amount of retained history streamed by its owners.
+    if (manifest.entries.length > 4096) {
+      throw new Error("Preservation inspection exceeds its 4096-resource bound.");
+    }
+    const verify = async () => {
+      for (const entry of manifest.entries) {
+        if (entry.kind !== "file") {
+          continue;
+        }
+        const pathname = path.join(ref.directory, entry.archivePath);
+        if (entry.sqlite) {
+          for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+            if (await lstatIfExists(`${pathname}${suffix}`, "ENOENT")) {
+              throw new Error(
+                `Preservation requires a consolidated SQLite payload: ${entry.sourcePath}`,
+              );
+            }
+          }
+        }
+        const actual = await fileDigest(pathname);
+        if (actual.sha256 !== entry.sha256 || actual.size !== entry.size) {
+          throw new Error(`Preservation payload does not match its manifest: ${entry.sourcePath}`);
+        }
+      }
+      await pin.assertCurrent();
+    };
+    await verify();
+    const result = await inspect(manifest);
+    await verify();
+    const source = await safeRoot(ref.directory, { symlinks: "reject", hardlinks: "reject" });
+    if (
+      sha256Hex(await source.readBytes("manifest.json", { maxBytes: MAX_MANIFEST_BYTES })) !==
+      ref.manifestSha256
+    ) {
+      throw new Error("Preservation manifest changed during inspection.");
+    }
+    return result;
+  });
+}
+
 const recordedOutcomeSchema = z.strictObject({
   status: z.enum(["restored", "committed"]),
   error: z.string().max(4096).optional(),
@@ -52,17 +103,6 @@ type Outcome = {
   status: "pending" | "restored" | "committed" | "restore-failed";
   error?: string;
 };
-
-async function statOrMissing(pathname: string) {
-  try {
-    return await fs.lstat(pathname);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 async function fileDigest(pathname: string): Promise<{ size: number; sha256: string }> {
   const source = await (
@@ -80,17 +120,9 @@ async function fileDigest(pathname: string): Promise<{ size: number; sha256: str
   }
 }
 
-function canonicalEntryPath(pathname: string): string {
-  const absolute = path.resolve(pathname);
-  return path.join(
-    resolvePathViaExistingAncestorSync(path.dirname(absolute)),
-    path.basename(absolute),
-  );
-}
-
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 
-function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
+export function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> {
   const selectedStateDir = resolvePathViaExistingAncestorSync(resolveStateDir(env));
   const selectedConfigPath = canonicalEntryPath(resolveConfigPath(env));
   const scopes = new Map([[selectedStateDir, new Set([selectedConfigPath])]]);
@@ -159,6 +191,24 @@ function assertManifestLocation(
   }
 }
 
+/**
+ * The recorded locator must name the pinned directory itself, not a link to it.
+ * pinDirectory opened this exact locator, and the pin revalidates its retained
+ * exact identity, so no realpath spelling comparison is needed: Windows short
+ * (8.3) names, letter case, and symlinked ancestors spell one directory
+ * differently.
+ */
+async function assertPinnedDirectoryAt(
+  pin: Awaited<ReturnType<typeof pinDirectory>>,
+  directory: string,
+  message: string,
+): Promise<void> {
+  if (!(await fs.lstat(directory)).isDirectory()) {
+    throw new Error(message);
+  }
+  await pin.assertCurrent();
+}
+
 async function withRecoveryMetadata<T>(
   location: Omit<UpdateRecoveryBackupRef, "manifestSha256"> & { manifestSha256?: string },
   run: (state: {
@@ -180,9 +230,11 @@ async function withRecoveryMetadata<T>(
   const pin = await pinDirectory(location.directory);
   try {
     assertOwned?.();
-    if (pin.receipt.realPath !== location.directory) {
-      throw new Error("Update recovery capture changed location.");
-    }
+    await assertPinnedDirectoryAt(
+      pin,
+      location.directory,
+      "Update recovery capture changed location.",
+    );
     await assertUpdateRecoverySealComplete(location.directory);
     const source = await safeRoot(location.directory, { symlinks: "reject", hardlinks: "reject" });
     assertOwned?.();
@@ -197,7 +249,7 @@ async function withRecoveryMetadata<T>(
     const manifest = parseUpdateRecoveryBackupManifest(bytes.toString("utf8"));
     assertManifestLocation(ref, manifest);
     let outcome: RecordedOutcome | undefined;
-    const outcomeEntry = await statOrMissing(path.join(ref.directory, "outcome.json"));
+    const outcomeEntry = await lstatIfExists(path.join(ref.directory, "outcome.json"), "ENOENT");
     assertOwned?.();
     if (outcomeEntry) {
       outcome = recordedOutcomeSchema.parse(
@@ -226,9 +278,11 @@ async function fingerprintIncompleteRecoveryGeneration(directory: string): Promi
   const walk = async (current: string): Promise<void> => {
     const pin = await pinDirectory(current);
     try {
-      if (pin.receipt.realPath !== current) {
-        throw new Error("Incomplete recovery generation changed location.");
-      }
+      await assertPinnedDirectoryAt(
+        pin,
+        current,
+        "Incomplete recovery generation changed location.",
+      );
       const before = await fs.lstat(current, { bigint: true });
       observed.set(current, before);
       const source = await safeRoot(current);
@@ -298,11 +352,11 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
     const incompleteGenerations: Partial<Record<"candidate" | "prepared", string>> = {};
     for (const kind of ["candidate", "prepared"] as const) {
       const directory = path.join(ref.directory, kind);
-      if (!(await statOrMissing(directory))) {
+      if (!(await lstatIfExists(directory, "ENOENT"))) {
         continue;
       }
       await assertUpdateRecoverySealComplete(directory);
-      if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
+      if (!(await lstatIfExists(path.join(directory, "manifest.json"), "ENOENT"))) {
         // Preparation can stop before the final seal. Retain and bind all of
         // those bytes, but never label them a verified rollback generation.
         incompleteGenerations[kind] = await fingerprintIncompleteRecoveryGeneration(directory);
@@ -394,7 +448,7 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
     : [...scopes.keys()].map((stateDir) => captureDirectory(params.runId, stateDir));
   const present: string[] = [];
   for (const directory of candidates) {
-    const entry = await statOrMissing(directory);
+    const entry = await lstatIfExists(directory, "ENOENT");
     params.assertCurrent();
     if (!entry) {
       continue;
@@ -469,7 +523,7 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
         throw new Error("A terminal update capture cannot be reused as the original baseline.");
       }
       for (const kind of ["candidate", "prepared"] as const) {
-        const entry = await statOrMissing(path.join(directory, kind));
+        const entry = await lstatIfExists(path.join(directory, kind), "ENOENT");
         assertReuseCurrent();
         if (entry) {
           throw new Error("Original update capture already has later recovery generations.");
@@ -499,7 +553,7 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
   const scopes = captureScopes(process.env);
   for (const stateDir of scopes.keys()) {
     const store = resolveUpdateCaptureRoot(stateDir);
-    if (!(await statOrMissing(store))) {
+    if (!(await lstatIfExists(store, "ENOENT"))) {
       continue;
     }
     for (const captureId of await fs.readdir(store)) {
@@ -507,13 +561,15 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
         continue;
       }
       const directory = path.join(store, captureId);
-      const entry = await statOrMissing(directory);
+      const entry = await lstatIfExists(directory, "ENOENT");
       // Doctor's schema archives share this root but are not recovery captures.
       if (entry?.isFile() && /^agent-schema-.+\.tar\.gz$/u.test(captureId)) {
         continue;
       }
       const manifestPath = path.join(directory, "manifest.json");
-      const manifestEntry = entry?.isDirectory() ? await statOrMissing(manifestPath) : undefined;
+      const manifestEntry = entry?.isDirectory()
+        ? await lstatIfExists(manifestPath, "ENOENT")
+        : undefined;
       // Rehearsal scratch uses this prefix on every platform. A present manifest
       // still belongs to recovery validation, even under a scratch-like name.
       if (
@@ -552,7 +608,7 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       }
       const terminalPath = path.join(directory, "outcome.json");
       let outcome: Outcome;
-      if (await statOrMissing(terminalPath)) {
+      if (await lstatIfExists(terminalPath, "ENOENT")) {
         const terminal = recordedOutcomeSchema.parse(
           await source.readJson("outcome.json", {
             maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,

@@ -73,6 +73,110 @@ function selectValue(root: HTMLElement, selector: string, value: string) {
 setupAppBrowserTests();
 
 describe("QA Lab runner browser interactions", () => {
+  it("keeps capture actions from releasing another pending action's busy state", async () => {
+    const root = await mountRunner(createRunnerSelection());
+    const reset = Promise.withResolvers<void>();
+    httpMock.postJson.mockImplementationOnce(() => reset.promise);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      root.querySelector<HTMLButtonElement>('[data-action="reset"]')!.click();
+      root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
+      root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
+      root.querySelector<HTMLButtonElement>("[data-copy-text]")!.click();
+      root.querySelector<HTMLButtonElement>("#capture-purge-all")!.click();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(root.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.disabled).toBe(true);
+      expect(writeText).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(httpMock.postJson).toHaveBeenCalledExactlyOnceWith("/api/reset", {});
+
+      reset.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(root.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.disabled).toBe(
+        false,
+      );
+      root.querySelector<HTMLButtonElement>("[data-copy-text]")!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeText).toHaveBeenCalledOnce();
+    } finally {
+      reset.resolve();
+      confirm.mockRestore();
+    }
+  });
+
+  it("shows clipboard failures from capture startup commands", async () => {
+    const root = await mountRunner(createRunnerSelection());
+    const writeText = vi.fn().mockRejectedValue(new Error("Clipboard permission denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
+    const copy = root.querySelector<HTMLButtonElement>("[data-copy-text]")!;
+
+    copy.click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("pnpm proxy:start --port 7799");
+    expect(root.querySelector(".header-status .badge-fail")?.textContent).toBe(
+      "Clipboard permission denied",
+    );
+    expect(root.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.disabled).toBe(false);
+  });
+
+  it.each([
+    {
+      selector: "#capture-delete-selected-sessions",
+      endpoint: "/api/capture/delete-sessions",
+      body: { sessionIds: ["capture-1"] },
+    },
+    { selector: "#capture-purge-all", endpoint: "/api/capture/purge", body: {} },
+  ])(
+    "shows $endpoint failures without discarding capture selection",
+    async ({ selector, endpoint, body }) => {
+      const root = await mountRunner(createRunnerSelection());
+      const getJson = httpMock.getJson.getMockImplementation()!;
+      httpMock.getJson.mockImplementation(async (url: string) => {
+        if (url === "/api/capture/sessions") {
+          return { sessions: [{ id: "capture-1", startedAt: 0, mode: "proxy", eventCount: 0 }] };
+        }
+        if (url.startsWith("/api/capture/events?")) {
+          return { events: [] };
+        }
+        if (url.startsWith("/api/capture/coverage?")) {
+          return { coverage: null };
+        }
+        return getJson(url);
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
+      root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      httpMock.postJson.mockRejectedValueOnce(new Error("Capture deletion failed"));
+      const readsBefore = httpMock.getJson.mock.calls.length;
+      try {
+        root.querySelector<HTMLButtonElement>(selector)!.click();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(httpMock.postJson).toHaveBeenCalledExactlyOnceWith(endpoint, body);
+        expect(root.querySelector(".header-status .badge-fail")?.textContent).toBe(
+          "Capture deletion failed",
+        );
+        expect(
+          [...root.querySelector<HTMLSelectElement>("#capture-session")!.selectedOptions].map(
+            (option) => option.value,
+          ),
+        ).toEqual(["capture-1"]);
+        expect(httpMock.getJson.mock.calls).toHaveLength(readsBefore);
+        expect(root.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.disabled).toBe(
+          false,
+        );
+      } finally {
+        confirm.mockRestore();
+      }
+    },
+  );
+
   it.each([
     { shiftKey: false, expectedIds: [1, 2] },
     { shiftKey: true, expectedIds: [1, 2, 3] },
@@ -128,7 +232,6 @@ describe("QA Lab runner browser interactions", () => {
   );
 
   it.each([
-    ["fractional right clipping", 0, 0, 320, 0, 286.5625, 35.59375],
     ["left clipping", 0, 0, 320, 90, -20.5, 69.5],
     ["offset bordered scrollport", 200.25, 2, 320, 50, 500.75, 97.53125],
     ["already visible after scrolling", 0, 0, 320, 50, 100, 50],
@@ -226,36 +329,6 @@ describe("QA Lab runner browser interactions", () => {
       expect(header.isConnected).toBe(false);
       previous = next;
     }
-  });
-
-  it("defers link updates while a select is focused, then renders the latest URL", async () => {
-    const { root, setControlUiUrl } = await mountRunningControlUi(null);
-    const header = root.querySelector(".header");
-    const select = root.querySelector<HTMLSelectElement>("#conversation-kind")!;
-    expect(select.isConnected).toBe(true);
-    expect(select.disabled).toBe(false);
-    select.focus();
-    expect(document.activeElement).toBe(select);
-
-    for (const url of [
-      "http://127.0.0.1:43124/control-ui/",
-      "http://127.0.0.1:43124/control-ui/?panel=chat",
-    ]) {
-      setControlUiUrl(url);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(root.querySelector(".header")).toBe(header);
-      expect(root.querySelector(".header-link")).toBeNull();
-      expect(document.activeElement).toBe(select);
-    }
-
-    select.blur();
-    expect(document.activeElement).not.toBe(select);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(root.querySelector(".header-link")?.getAttribute("href")).toBe(
-      "http://127.0.0.1:43124/control-ui/?panel=chat",
-    );
-    expect(select.isConnected).toBe(false);
   });
 
   it("selects duplicate evidence labels independently before and after filtering", async () => {

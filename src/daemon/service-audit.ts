@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
+import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
@@ -52,6 +53,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPasswordEmbedded: "gateway-password-embedded",
   gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
   gatewayPortMismatch: "gateway-port-mismatch",
+  gatewayEgressProxyEnvEmbedded: "gateway-egress-proxy-env-embedded",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayTokenDrift: "gateway-token-drift",
@@ -185,51 +187,44 @@ function auditGatewayPassword(command: GatewayServiceCommand, issues: ServiceCon
   });
 }
 
-function auditManagedServiceEnvironment(
+function auditInlineServiceEnvironment(
   command: GatewayServiceCommand,
   issues: ServiceConfigIssue[],
+  kind: "managed" | "proxy",
   expectedManagedServiceEnvKeys?: Iterable<string>,
 ) {
   // Reinstall can migrate the managed base, but never rewrites operator drop-ins.
-  const inlineKeys = collectInlineManagedServiceEnvKeys(
-    resolveManagedGatewayServiceCommand(command),
-    expectedManagedServiceEnvKeys,
-  );
-  if (inlineKeys.length === 0) {
-    return;
-  }
-  issues.push({
-    code: SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded,
-    message: "Gateway service embeds managed environment values that should load at runtime.",
-    detail: `inline keys: ${inlineKeys.join(", ")}`,
-    environmentKeys: inlineKeys,
-    level: "recommended",
-  });
-}
-
-function auditProxyServiceEnvironment(
-  command: GatewayServiceCommand,
-  issues: ServiceConfigIssue[],
-) {
-  const inlineKeys = collectInlineServiceEnvKeys(command, SERVICE_PROXY_ENV_KEYS);
-  if (inlineKeys.length === 0) {
-    return;
-  }
-  issues.push({
-    code: SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
-    message: "Gateway service embeds proxy environment values that should not be persisted.",
-    detail: `inline keys: ${inlineKeys.join(", ")}`,
-    environmentKeys: Object.entries(command?.environment ?? {})
-      .filter(
-        ([key, value]) =>
-          value.trim() &&
-          SERVICE_PROXY_ENV_KEYS.some((proxyKey) => proxyKey === key) &&
-          hasInlineEnvironmentSource(
-            readEnvironmentValueSource(command?.environmentValueSources, key),
-          ),
+  const managed = kind === "managed";
+  const inlineKeys = managed
+    ? collectInlineManagedServiceEnvKeys(
+        resolveManagedGatewayServiceCommand(command),
+        expectedManagedServiceEnvKeys,
       )
-      .map(([key]) => key)
-      .toSorted(),
+    : collectInlineServiceEnvKeys(command, SERVICE_PROXY_ENV_KEYS);
+  if (inlineKeys.length === 0) {
+    return;
+  }
+  issues.push({
+    code: managed
+      ? SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded
+      : SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
+    message: managed
+      ? "Gateway service embeds managed environment values that should load at runtime."
+      : "Gateway service embeds proxy environment values that should not be persisted.",
+    detail: `inline keys: ${inlineKeys.join(", ")}`,
+    environmentKeys: managed
+      ? inlineKeys
+      : Object.entries(command?.environment ?? {})
+          .filter(
+            ([key, value]) =>
+              value.trim() &&
+              SERVICE_PROXY_ENV_KEYS.some((proxyKey) => proxyKey === key) &&
+              hasInlineEnvironmentSource(
+                readEnvironmentValueSource(command?.environmentValueSources, key),
+              ),
+          )
+          .map(([key]) => key)
+          .toSorted(),
     level: "recommended",
   });
 }
@@ -366,14 +361,43 @@ export async function auditGatewayServiceConfig(params: {
     );
   }
 
+  const environment = params.command?.environment ?? {};
+  const egressKeys = Object.keys(environment).filter((key) =>
+    isSecretEgressProxyEnv(environment, key, platform),
+  );
+  if (egressKeys.length > 0) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayEgressProxyEnvEmbedded,
+      message:
+        "Gateway service contains temporary secret egress proxy environment values; reinstall to remove them.",
+      environmentKeys: egressKeys,
+      level: "recommended",
+    });
+    for (const key of egressKeys) {
+      definitionDrift.push({
+        kind: "outdated",
+        key: `Environment.${key}`,
+        current: "<process-owned>",
+        expected: "<removed>",
+        sourcePath: params.command?.sourcePath,
+        message: `Gateway service Environment.${key} belongs to a temporary secret egress proxy.`,
+      });
+    }
+  }
+
   auditGatewayCommand(params.command?.programArguments, issues);
   auditGatewayServicePort({
     programArguments: params.command?.programArguments,
     issues,
     expectedPort: params.expectedPort,
   });
-  auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
-  auditProxyServiceEnvironment(params.command, issues);
+  auditInlineServiceEnvironment(
+    params.command,
+    issues,
+    "managed",
+    params.expectedManagedServiceEnvKeys,
+  );
+  auditInlineServiceEnvironment(params.command, issues, "proxy");
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayPassword(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);

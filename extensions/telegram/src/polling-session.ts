@@ -351,7 +351,7 @@ export class TelegramPollingSession {
     let stopTimedOut = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
     const { promise: forceCyclePromise, resolve: forceCycleResolve } = createDeferred();
-    const unsubscribe = worker.onMessage((message) => {
+    worker.onMessage = (message) => {
       const ackSpooledUpdate: NonNullable<typeof worker.ackSpooledUpdate> = (requestId, result) => {
         try {
           worker.ackSpooledUpdate?.(requestId, result);
@@ -397,29 +397,32 @@ export class TelegramPollingSession {
         pollState.errorCode = message.errorCode ?? null;
         return;
       }
-      if (message.type === "update") {
-        const updateIdHint = resolveTelegramUpdateId(message.update) ?? "unknown";
+      if (message.type === "updates") {
         this.opts.log(
-          `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
+          `[telegram][diag] isolated polling worker batch received queued=${message.queued}`,
         );
-        // The worker waits for this request's ACK before emitting the next update.
+        // The worker waits for the whole response's ACK before advancing its offset.
         // The committed spool enqueue is the ACK boundary; offset persistence is
         // monotonic catch-up and must not stall intake during a state-store outage.
         void (async () => {
-          const updateId = resolveTelegramUpdateId(message.update);
-          if (updateId === null) {
-            ackSpooledUpdate(message.requestId, {
-              ok: false,
-              message: "Telegram update missing numeric update_id.",
-            });
-            return;
+          let updateId = -1;
+          for (const update of message.updates) {
+            const id = resolveTelegramUpdateId(update);
+            if (id === null) {
+              ackSpooledUpdate(message.requestId, {
+                ok: false,
+                message: "Telegram update missing numeric update_id.",
+              });
+              return;
+            }
+            updateId = Math.max(updateId, id);
           }
           try {
-            await ingressMonitor.admit(message.update);
-            this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
+            await ingressMonitor.admitBatch(message.updates);
+            this.opts.log(`[telegram][diag] isolated polling batch spooled updateId=${updateId}`);
           } catch (err: unknown) {
             this.opts.log(
-              `[telegram] isolated polling update spool failed updateId=${updateIdHint}: ${formatErrorMessage(err)}`,
+              `[telegram] isolated polling batch spool failed updateId=${updateId}: ${formatErrorMessage(err)}`,
             );
             ackSpooledUpdate(message.requestId, {
               ok: false,
@@ -445,19 +448,12 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesActivity();
         ingressMonitor.requestDrain();
       }
-    });
+    };
     const stopOnAbort = () => {
       abortMedia();
       void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
-    // Fail closed when the spool stops making progress: keeping any claim live would
-    // prevent a healthy process from recovering a wedged drain.
-    const stopBot = () => {
-      return Promise.resolve(bot.stop())
-        .then(() => undefined)
-        .catch(() => undefined);
-    };
     const clearForceCycleTimer = () => {
       if (!forceCycleTimer) {
         return;
@@ -562,7 +558,7 @@ export class TelegramPollingSession {
     } finally {
       clearInterval(watchdog);
       clearForceCycleTimer();
-      unsubscribe();
+      worker.onMessage = undefined;
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       // End media work before waiting for durable handlers so every interrupted claim can retry.
       abortMedia();
@@ -570,7 +566,13 @@ export class TelegramPollingSession {
       await waitForGracefulStop(() => ingressMonitor.stop());
       // Accepted replay writes and introductions keep ownership after transport grace expires.
       await ingressMonitor.waitForDeferredClaims();
-      await waitForGracefulStop(stopBot);
+      // Fail closed when the spool stops making progress: keeping any claim live would
+      // prevent a healthy process from recovering a wedged drain.
+      await waitForGracefulStop(() =>
+        Promise.resolve(bot.stop())
+          .then(() => undefined)
+          .catch(() => undefined),
+      );
     }
   }
 }

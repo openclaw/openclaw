@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
+import { buildCodeModeCatalogPrompt } from "../code-mode.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -39,7 +40,13 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
   catalogRef?: ToolSearchCatalogRef;
   catalogEntries?: readonly ToolSearchCatalogEntry[];
   codeModeControlsEnabled: boolean;
-  toolSearchPrompt?: { config?: OpenClawConfig; contextTokenBudget?: number };
+  catalogPrompt?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    contextTokenBudget?: number;
+    toolSearchDirectoryLean?: boolean;
+  };
 }) {
   const baselineTools = [...params.tools];
   const currentCatalog = params.catalogRef?.current;
@@ -92,11 +99,19 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       return {
         tools,
         toolSchemaDirectoryPrompt:
-          catalogReachable && params.toolSearchPrompt
-            ? buildToolSchemaDirectoryPrompt(
-                { config: params.toolSearchPrompt.config, catalogRef: catalog.ref },
-                { contextTokenBudget: params.toolSearchPrompt.contextTokenBudget },
-              )
+          catalogReachable && params.catalogPrompt
+            ? params.codeModeControlsEnabled
+              ? buildCodeModeCatalogPrompt(
+                  { ...params.catalogPrompt, catalogRef: catalog.ref },
+                  catalog.ref.current?.entries ?? [],
+                )
+              : buildToolSchemaDirectoryPrompt(
+                  { ...params.catalogPrompt, catalogRef: catalog.ref },
+                  {
+                    contextTokenBudget: params.catalogPrompt.contextTokenBudget,
+                    toolSearchDirectoryLean: params.catalogPrompt.toolSearchDirectoryLean,
+                  },
+                )
             : undefined,
         callableToolNames: normalizeUniqueStringEntries([
           ...tools.map((tool) => tool.name),

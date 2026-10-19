@@ -1,9 +1,9 @@
 // Agents directory tests cover agent-scoped skill directory discovery.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setTestEnvValue } from "../../test-utils/env.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -11,10 +11,6 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
-
-vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillRoots: () => [],
-}));
 
 const tempDirs = createTempDirTracker();
 
@@ -25,6 +21,7 @@ async function buildSkillsPrompt(
 ): Promise<string> {
   return (
     await buildSkillSnapshot(workspaceDir, {
+      config: { plugins: { enabled: false } },
       managedSkillsDir: managedDir,
       bundledSkillsDir: bundledDir,
     })
@@ -80,7 +77,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Workspace version",
     });
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    await refreshSkillsDiscovery({ workspaceDir });
 
     const prompt2 = await buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Workspace version");
@@ -112,7 +109,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Project agents version",
     });
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    await refreshSkillsDiscovery({ workspaceDir });
 
     const prompt2 = await buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Project agents version");

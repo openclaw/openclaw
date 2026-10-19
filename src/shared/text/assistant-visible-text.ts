@@ -1,486 +1,70 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  consumeLineBreak,
-  skipHorizontalWhitespace,
-  skipWhitespace,
-} from "../../../packages/tool-call-repair/src/grammar.js";
-import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
-import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
+  projectPlainTextToolCallBlocks,
+  stripPlainTextToolCallBlocks,
+} from "../../../packages/tool-call-repair/src/index.js";
+import { escapeRegExp } from "../regexp.js";
+import {
+  findCodeRegions,
+  isInsideCode,
+  projectLinesOutsideCode,
+  stripLinesOutsideCode,
+} from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   leadingEmptyLinesTextFilter,
   trimTextFilter,
   type TextFilter,
 } from "./text-projection.js";
+import { toolCallXmlTextFilter } from "./tool-call-xml.js";
+
+export { stripToolCallXmlTags, toolCallXmlTextFilter } from "./tool-call-xml.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
-const INTERNAL_TRACE_LINE_QUICK_RE =
-  /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)/i;
-const INTERNAL_TRACE_LINE_RE =
-  /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
-// Keep historical tool-warning traces out of replayed prose, including the older
-// "(agent) failed" shape. Current warnings use plain tool labels and remain visible.
-const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
-  /^(?:>\s*)?⚠️\s*🛠️\s+(?:(?:Exec|Bash)\s+failed(?:(?:\s+\(exit\s+-?\d+\))|(?:\s*:[^\r\n]*))?|\S[^\r\n]*\s+\(agent\)`{0,2}\s+failed(?:\s*:[^\r\n]*)?)\s*$/i;
-const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
-  /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
-const INTERNAL_CHANNEL_TRACE_LINE_RE =
-  /^(?:>\s*)?(?:tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)\s*[:=]/i;
-
-/**
- * Strip XML-style tool call tags that models sometimes emit as plain text.
- * This stateful pass hides content from an opening tag through the matching
- * closing tag, or to end-of-string if the stream was truncated mid-tag.
- */
-const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:antml:)?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke|parameter)\b/i;
-const TOOL_CALL_TAG_NAMES = new Set([
-  "tool_call",
-  "tool_result",
-  "function_call",
-  "function_calls",
-  "function_response",
-  "function",
-  "tool_calls",
-  "antml:invoke",
-  "antml:parameter",
+const traceIconHeads = ["📊", "🛠️", "📖", "📝", "🔍", "🔎", "⚙️"].flatMap((icon) => [
+  [icon],
+  ["⚠️", icon],
 ]);
-const TOOL_CALL_JSON_PAYLOAD_START_RE =
-  /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
-const TOOL_CALL_XML_PAYLOAD_START_RE =
-  /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
-const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
-
-type ToolCallPayloadKind = "json" | "xml" | null;
-
-function createQuotedStringScanner(text: string, start: number): (end: number) => boolean {
-  let quoteChar: "'" | '"' | null = null;
-  let isEscaped = false;
-  // Candidate closing tags share one monotonic scan through their payload.
-  let cursor = start;
-  return (end) => {
-    for (; cursor < end; cursor += 1) {
-      const char = text[cursor];
-      if (quoteChar === null) {
-        if (char === '"' || char === "'") {
-          quoteChar = char;
-        }
-      } else if (isEscaped) {
-        isEscaped = false;
-      } else if (char === "\\") {
-        isEscaped = true;
-      } else if (char === quoteChar) {
-        quoteChar = null;
-      }
-    }
-    return quoteChar !== null;
-  };
-}
-
-interface ParsedToolCallTag {
-  contentStart: number;
-  end: number;
-  isClose: boolean;
-  isSelfClosing: boolean;
-  tagName: string;
-  isTruncated: boolean;
-}
-
-// Match only the tag head; quote-aware scanning owns the close boundary.
-const XML_TAG_HEAD_RE = /<\s*(?:(\/)\s*)?([A-Za-z_:][A-Za-z0-9_.:-]*)(?=$|[\s/>])/y;
-
-function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
-  XML_TAG_HEAD_RE.lastIndex = start;
-  const match = XML_TAG_HEAD_RE.exec(text);
-  if (!match) {
-    return null;
-  }
-  const contentStart = XML_TAG_HEAD_RE.lastIndex;
-  const isClose = match[1] === "/";
-  const closeIndex = findTagCloseIndex(text, contentStart);
-  const isTruncated = closeIndex === -1;
-  return {
-    contentStart,
-    end: isTruncated ? text.length : closeIndex + 1,
-    isClose,
-    isSelfClosing: !isTruncated && !isClose && /\/\s*$/.test(text.slice(contentStart, closeIndex)),
-    tagName: normalizeLowercaseStringOrEmpty(match[2]),
-    isTruncated,
-  };
-}
-
-function findTagCloseIndex(text: string, start: number): number {
-  const isInsideQuote = createQuotedStringScanner(text, start);
-  for (let idx = start; idx < text.length; idx += 1) {
-    const char = text[idx];
-    if ((char === "<" || char === ">") && !isInsideQuote(idx)) {
-      return char === ">" ? idx : -1;
-    }
-  }
-  return -1;
-}
-
-function detectToolCallPayloadKind(text: string, start: number): ToolCallPayloadKind {
-  const rest = text.slice(start);
-  if (TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest)) {
-    return "json";
-  }
-  if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
-    return "xml";
-  }
-  return null;
-}
-
-function startsWithNestedJsonToolCallPayload(text: string, start: number): boolean {
-  if (!NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE.test(text.slice(start))) {
-    return false;
-  }
-  const nestedTag = parseToolCallTagAt(text, skipWhitespace(text, start));
-  if (
-    !nestedTag ||
-    nestedTag.isClose ||
-    nestedTag.isSelfClosing ||
-    nestedTag.isTruncated ||
-    (nestedTag.tagName !== "function_call" && nestedTag.tagName !== "tool_call")
-  ) {
-    return false;
-  }
-  return TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(nestedTag.end));
-}
-
-function isLikelyStandaloneFunctionToolCall(
-  text: string,
-  tagStart: number,
-  tag: ParsedToolCallTag,
-): boolean {
-  if (tag.tagName !== "function" || tag.isClose || tag.isSelfClosing || tag.isTruncated) {
-    return false;
-  }
-
-  if (!/\bname\s*=/.test(text.slice(tag.contentStart, tag.end))) {
-    return false;
-  }
-
-  let idx = tagStart - 1;
-  while (idx >= 0 && (text[idx] === " " || text[idx] === "\t")) {
-    idx -= 1;
-  }
-
-  return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text.charAt(idx));
-}
-
-function isAdjacentToStrippedToolCallBlock(
-  text: string,
-  tagStart: number,
-  lastStrippedBlockEnd: number | null,
-): boolean {
-  if (lastStrippedBlockEnd === null || lastStrippedBlockEnd > tagStart) {
-    return false;
-  }
-  for (let idx = lastStrippedBlockEnd; idx < tagStart; idx += 1) {
-    if (text[idx] !== " " && text[idx] !== "\t" && text[idx] !== "\n" && text[idx] !== "\r") {
-      return false;
-    }
-  }
-  return true;
-}
-
-function findMatchingToolCallCloseIndex(text: string, start: number, tagName: string): number {
-  for (let idx = start; idx < text.length; idx += 1) {
-    if (text[idx] !== "<") {
-      continue;
-    }
-    const tag = parseToolCallTagAt(text, idx);
-    if (!tag) {
-      continue;
-    }
-    if (tag.isClose && tag.tagName === tagName && !tag.isTruncated) {
-      return idx;
-    }
-    idx = Math.max(idx, tag.end - 1);
-  }
-  return -1;
-}
-
-function findAdjacentOpeningToolCallTag(
-  text: string,
-  start: number,
-  tagName: string,
-): ParsedToolCallTag | null {
-  const tag = parseToolCallTagAt(text, skipWhitespace(text, start));
-  if (!tag || tag.isClose || tag.tagName !== tagName) {
-    return null;
-  }
-  return tag;
-}
-
-function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
-  const tag = parseXmlTagAt(text, start);
-  return tag && TOOL_CALL_TAG_NAMES.has(tag.tagName) ? tag : null;
-}
-
-function scanXmlTags(text: string, codeRegions: ReturnType<typeof findCodeRegions>) {
-  type Tag = ParsedToolCallTag & { start: number; hasMatchingClose: boolean };
-  const tags: Tag[] = [];
-  const openTags = new Map<string, Tag[]>();
-  for (let start = text.indexOf("<"); start !== -1; start = text.indexOf("<", start + 1)) {
-    if (isInsideCode(start, codeRegions)) {
-      continue;
-    }
-    const parsed = parseXmlTagAt(text, start);
-    if (!parsed || parsed.isTruncated) {
-      continue;
-    }
-    const tag: Tag = { ...parsed, start, hasMatchingClose: false };
-    tags.push(tag);
-    const parents = openTags.get(tag.tagName);
-    if (tag.isClose) {
-      const opening = parents?.pop();
-      if (opening) {
-        opening.hasMatchingClose = true;
-      }
-    } else if (!tag.isSelfClosing) {
-      if (parents) {
-        parents.push(tag);
-      } else {
-        openTags.set(tag.tagName, [tag]);
-      }
-    }
-    start = tag.end - 1;
-  }
-  return tags;
-}
-
-function isDanglingFunctionParameterParent(text: string, tag: ParsedToolCallTag): boolean {
-  if (tag.tagName !== "function" || !/\bname\s*=/.test(text.slice(tag.contentStart, tag.end))) {
-    return false;
-  }
-  const nextTag = parseXmlTagAt(text, skipWhitespace(text, tag.end));
-  return nextTag?.tagName === "parameter" && !nextTag.isClose;
-}
-
-function trimImmediateLineBreakBefore(text: string, start: number, end: number): number {
-  if (end > start && text[end - 1] === "\n") {
-    return end - (end - 2 >= start && text[end - 2] === "\r" ? 2 : 1);
-  }
-  return end > start && text[end - 1] === "\r" ? end - 1 : end;
-}
-
-function isLineStartAt(text: string, start: number): boolean {
-  let cursor = start - 1;
-  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
-    cursor -= 1;
-  }
-  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
-}
-
-function isLineEndAfter(text: string, end: number): boolean {
-  const cursor = skipHorizontalWhitespace(text, end);
-  return cursor >= text.length || text[cursor] === "\n" || text[cursor] === "\r";
-}
-
-function unwrapStandaloneParameterTags(text: string): string {
-  if (!/<\s*\/?\s*parameter\b/i.test(text)) {
-    return text;
-  }
-
-  const codeRegions = findCodeRegions(text);
-  const openTags: Array<{ name: string; unwrap: boolean; trimBoundaryLineBreaks: boolean }> = [];
-  let result = "";
-  let lastIndex = 0;
-
-  for (const tag of scanXmlTags(text, codeRegions)) {
-    const idx = tag.start;
-
-    if (tag.isClose) {
-      const openIndex = openTags.findLastIndex((entry) => entry.name === tag.tagName);
-      if (openIndex !== -1) {
-        const opening = expectDefined(openTags[openIndex], "open tags entry at open index");
-        if (opening.unwrap) {
-          const contentEnd =
-            opening.trimBoundaryLineBreaks &&
-            isLineStartAt(text, idx) &&
-            isLineEndAfter(text, tag.end)
-              ? trimImmediateLineBreakBefore(text, lastIndex, idx)
-              : idx;
-          result += text.slice(lastIndex, contentEnd);
-          lastIndex = tag.end;
-        }
-        openTags.splice(openIndex);
-      }
-    } else if (tag.isSelfClosing) {
-      if (tag.tagName === "parameter" && openTags.length === 0) {
-        result += text.slice(lastIndex, idx);
-        lastIndex = tag.end;
-      }
-    } else if (tag.hasMatchingClose || isDanglingFunctionParameterParent(text, tag)) {
-      const unwrap = tag.tagName === "parameter" && openTags.length === 0;
-      let trimBoundaryLineBreaks = false;
-      if (unwrap) {
-        result += text.slice(lastIndex, idx);
-        lastIndex = tag.end;
-        const contentStart = isLineStartAt(text, idx) ? consumeLineBreak(text, lastIndex) : null;
-        if (contentStart !== null) {
-          lastIndex = contentStart;
-          trimBoundaryLineBreaks = true;
-        }
-      }
-      openTags.push({ name: tag.tagName, unwrap, trimBoundaryLineBreaks });
-    }
-  }
-
-  return result + text.slice(lastIndex);
-}
-
-export function stripToolCallXmlTags(
-  input: string,
-  options: {
-    stripFunctionCallsXmlPayloads?: boolean;
-    stripFunctionResponseAfterPluralToolCalls?: boolean;
-  } = {},
-): string {
-  const text = input;
-  if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
-    return text;
-  }
-
-  const codeRegions = findCodeRegions(text);
-  let result = "";
-  let lastIndex = 0;
-  let isInsidePayloadQuote: ((end: number) => boolean) | undefined;
-  let toolCallBlockStart = 0;
-  let toolCallBlockTagName: string | null = null;
-  let lastStrippedToolCallBlockEnd: number | null = null;
-  const visibleTagBalance = new Map<string, number>();
-
-  for (let idx = 0; idx < text.length; idx += 1) {
-    if (text[idx] !== "<") {
-      continue;
-    }
-    if (toolCallBlockTagName === null && isInsideCode(idx, codeRegions)) {
-      continue;
-    }
-
-    const tag = parseToolCallTagAt(text, idx);
-    if (!tag) {
-      continue;
-    }
-
-    if (toolCallBlockTagName === null) {
-      result += text.slice(lastIndex, idx);
-      if (tag.isClose) {
-        if (tag.isTruncated) {
-          const preserveEnd = tag.contentStart;
-          result += text.slice(idx, preserveEnd);
-          lastIndex = preserveEnd;
-          idx = Math.max(idx, preserveEnd - 1);
-          continue;
-        }
-        const balance = visibleTagBalance.get(tag.tagName) ?? 0;
-        if (balance > 0) {
-          result += text.slice(idx, tag.end);
-          visibleTagBalance.set(tag.tagName, balance - 1);
-        }
-        lastIndex = tag.end;
-        idx = Math.max(idx, tag.end - 1);
-        continue;
-      }
-      if (tag.isSelfClosing) {
-        lastStrippedToolCallBlockEnd = tag.end;
-        lastIndex = tag.end;
-        idx = Math.max(idx, tag.end - 1);
-        continue;
-      }
-      const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
-      const isPluralToolCallWrapper =
-        tag.tagName === "function_calls" || tag.tagName === "tool_calls";
-      const matchingCloseStart = isPluralToolCallWrapper
-        ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
-        : -1;
-      const matchingCloseTag =
-        matchingCloseStart === -1 ? null : parseToolCallTagAt(text, matchingCloseStart);
-      const shouldStripPluralWrapperBeforeResponse =
-        options.stripFunctionResponseAfterPluralToolCalls === true &&
-        isPluralToolCallWrapper &&
-        matchingCloseTag !== null &&
-        findAdjacentOpeningToolCallTag(text, matchingCloseTag.end, "function_response") !== null;
-      const shouldDetectXmlPayload =
-        tag.tagName === "tool_call" ||
-        tag.tagName === "function" ||
-        tag.tagName === "antml:invoke" ||
-        ((options.stripFunctionCallsXmlPayloads === true ||
-          shouldStripPluralWrapperBeforeResponse) &&
-          isPluralToolCallWrapper);
-      const payloadKind = shouldDetectXmlPayload
-        ? detectToolCallPayloadKind(text, payloadStart)
-        : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
-          ? "json"
-          : null;
-      const shouldStripStandaloneFunction =
-        tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
-      const functionResponseCloseStart =
-        tag.tagName === "function_response"
-          ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
-          : -1;
-      const shouldStripStandaloneResult =
-        tag.tagName === "function_response" &&
-        ((isLineStartAt(text, idx) && isLineEndAfter(text, tag.end)) ||
-          isAdjacentToStrippedToolCallBlock(text, idx, lastStrippedToolCallBlockEnd) ||
-          (functionResponseCloseStart !== -1 &&
-            isLineStartAt(result, result.length) &&
-            isLineEndAfter(text, tag.end)));
-      if ((payloadKind && shouldStripStandaloneFunction) || shouldStripStandaloneResult) {
-        isInsidePayloadQuote =
-          payloadKind === "json" ||
-          (payloadKind === "xml" && startsWithNestedJsonToolCallPayload(text, payloadStart))
-            ? createQuotedStringScanner(text, tag.end)
-            : undefined;
-        toolCallBlockStart = idx;
-        toolCallBlockTagName = tag.tagName;
-        if (tag.isTruncated) {
-          lastIndex = text.length;
-          break;
-        }
-      } else {
-        const preserveEnd = tag.isTruncated ? tag.contentStart : tag.end;
-        result += text.slice(idx, preserveEnd);
-        if (!tag.isTruncated) {
-          visibleTagBalance.set(tag.tagName, (visibleTagBalance.get(tag.tagName) ?? 0) + 1);
-        }
-        lastIndex = preserveEnd;
-        idx = Math.max(idx, preserveEnd - 1);
-        continue;
-      }
-    } else if (
-      tag.isClose &&
-      (tag.tagName === toolCallBlockTagName ||
-        (toolCallBlockTagName === "tool_result" && tag.tagName === "tool_call")) &&
-      !isInsidePayloadQuote?.(idx)
-    ) {
-      isInsidePayloadQuote = undefined;
-      toolCallBlockTagName = null;
-      lastStrippedToolCallBlockEnd = tag.end;
-    }
-
-    lastIndex = tag.end;
-    idx = Math.max(idx, tag.end - 1);
-  }
-
-  if (toolCallBlockTagName === null) {
-    result += text.slice(lastIndex);
-  } else if (toolCallBlockTagName === "function") {
-    result += text.slice(toolCallBlockStart);
-  }
-
-  return unwrapStandaloneParameterTags(result);
-}
+const traceChannelHeads = ["tool call", "tool result", "function call"].flatMap((name) =>
+  ["", "-", "_", " "].flatMap((separator) =>
+    [":", "="].map((delimiter) => [name.replace(" ", separator), delimiter]),
+  ),
+);
+// Literal head parts, separated by optional whitespace, own both batch and stream activation.
+const traceLineRules = [
+  {
+    heads: traceIconHeads,
+    body: /\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/,
+  },
+  {
+    // Historical warnings include the older "(agent) failed" shape.
+    heads: [["⚠️", "🛠️"]],
+    body: /\s+(?:(?:Exec|Bash)\s+failed(?:(?:\s+\(exit\s+-?\d+\))|(?:\s*:[^\r\n]*))?|\S[^\r\n]*\s+\(agent\)`{0,2}\s+failed(?:\s*:[^\r\n]*)?)\s*$/,
+  },
+  {
+    heads: [["🛠️"]],
+    body: /\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/,
+  },
+  { heads: traceChannelHeads, body: /(?:)/ },
+];
+const INTERNAL_TRACE_LINE_RE = new RegExp(
+  `^(?:>\\s*)?(?:${traceLineRules
+    .map(
+      ({ heads, body }) =>
+        `(?:${heads.map((parts) => parts.map(escapeRegExp).join("\\s*")).join("|")})${body.source}`,
+    )
+    .join("|")})`,
+  "i",
+);
+const traceLineHeads = traceLineRules.flatMap(({ heads }) =>
+  heads.flatMap((parts) => [parts, [">", ...parts]]),
+);
 
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
@@ -578,19 +162,19 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
     const isResult = openMatch[1]?.toUpperCase() === "RESULT";
     const closeRe = isResult ? /\[\s*\/\s*TOOL_RESULT\s*\]/gi : /\[\s*\/\s*TOOL_CALL\s*\]/gi;
     closeRe.lastIndex = payloadStart;
-    const closeMatch = closeRe.exec(text);
-    const closeStart =
-      closeMatch && !isInsideCode(closeMatch.index, codeRegions) ? closeMatch.index : -1;
-    const payload = text.slice(payloadStart, closeStart >= 0 ? closeStart : text.length);
-    if (
-      !(isResult
-        ? isLegacyBracketToolResultPayload(payload)
-        : isLegacyBracketToolCallPayload(payload))
-    ) {
+    let closeMatch = closeRe.exec(text);
+    while (closeMatch && isInsideCode(closeMatch.index, codeRegions)) {
+      closeMatch = closeRe.exec(text);
+    }
+    const payload = text.slice(payloadStart, closeMatch?.index);
+    const isToolPayload = isResult
+      ? isLegacyBracketToolResultPayload(payload)
+      : isLegacyBracketToolCallPayload(payload);
+    if (!isToolPayload) {
       continue;
     }
     result += text.slice(cursor, openStart);
-    cursor = closeStart >= 0 ? closeStart + (closeMatch?.[0].length ?? 0) : text.length;
+    cursor = closeMatch ? closeMatch.index + closeMatch[0].length : text.length;
     if (cursor === text.length) {
       break;
     }
@@ -636,19 +220,7 @@ function stripRelevantMemoriesTags(text: string): string {
 }
 
 function stripAssistantInternalTraceLines(text: string): string {
-  if (!text || !INTERNAL_TRACE_LINE_QUICK_RE.test(text)) {
-    return text;
-  }
-
-  return stripLinesOutsideCode(text, (line) => {
-    const trimmed = line.trim();
-    return (
-      INTERNAL_TRACE_LINE_RE.test(trimmed) ||
-      INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE.test(trimmed) ||
-      INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE.test(trimmed) ||
-      INTERNAL_CHANNEL_TRACE_LINE_RE.test(trimmed)
-    );
-  });
+  return stripLinesOutsideCode(text, (line) => INTERNAL_TRACE_LINE_RE.test(line.trim()));
 }
 
 export type AssistantVisibleTextSanitizerProfile =
@@ -659,6 +231,10 @@ export type AssistantVisibleTextSanitizerProfile =
   | "tool-progress";
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
+
+function stripInvisibleAssistantText(text: string): string {
+  return /^[\p{White_Space}\p{Default_Ignorable_Code_Point}]*$/u.test(text) ? "" : text;
+}
 
 export function assistantVisibleTextFilters(
   profile: AssistantVisibleTextSanitizerProfile,
@@ -678,16 +254,17 @@ export function assistantVisibleTextFilters(
       : options?.preserveTrailingWhitespace
         ? "start"
         : "both";
+  const stripReasoning = (text: string) =>
+    stripReasoningTagsFromText(text, {
+      mode: preserve ? "preserve" : "strict",
+      scope: profile === "final-answer-delivery" ? "leading" : "all",
+      trim: preserveCodeIndentation ? "none" : trim,
+      // An unfinished stream cannot use terminal malformed-output recovery.
+      recoverUnclosed: !streaming,
+    });
   const reasoning: TextFilter = {
-    activationTokens: ["<"],
-    transform: (text) =>
-      stripReasoningTagsFromText(text, {
-        mode: preserve ? "preserve" : "strict",
-        scope: profile === "final-answer-delivery" ? "leading" : "all",
-        trim: preserveCodeIndentation ? "none" : trim,
-        // An unfinished stream cannot use terminal malformed-output recovery.
-        recoverUnclosed: !streaming,
-      }),
+    transform: stripReasoning,
+    create: () => createConditionalTextProjector(stripReasoning, createReasoningTagProbe()),
   };
   const filters: TextFilter[] = [
     ...(!preserve ? [minimaxToolCallTextFilter] : []),
@@ -696,11 +273,14 @@ export function assistantVisibleTextFilters(
       transform: stripRelevantMemoriesTags,
       activationTokens: ["relevant-memories", "relevant_memories"],
     },
-    toolCallXmlTextFilter({
-      stripFunctionCallsXmlPayloads: profile === "tool-progress",
-      stripFunctionResponseAfterPluralToolCalls:
-        profile === "delivery" || profile === "final-answer-delivery",
-    }),
+    toolCallXmlTextFilter(
+      {
+        stripFunctionCallsXmlPayloads: profile === "tool-progress",
+        stripFunctionResponseAfterPluralToolCalls:
+          profile === "delivery" || profile === "final-answer-delivery",
+      },
+      streaming,
+    ),
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
     legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
@@ -713,6 +293,29 @@ export function assistantVisibleTextFilters(
   }
   filters.push(
     preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
+    {
+      transform: stripInvisibleAssistantText,
+      create: () => {
+        let visible = false;
+        let trailingHighSurrogate = "";
+        return createConditionalTextProjector(
+          () => "",
+          (input) => {
+            if (!visible) {
+              const appended = trailingHighSurrogate + (input.delta ?? input.text);
+              // A split supplementary character cannot permanently establish visibility yet.
+              trailingHighSurrogate = /[\uD800-\uDBFF]$/.test(appended) ? appended.slice(-1) : "";
+              visible = Boolean(
+                stripInvisibleAssistantText(
+                  trailingHighSurrogate ? appended.slice(0, -1) : appended,
+                ),
+              );
+            }
+            return !visible;
+          },
+        );
+      },
+    },
   );
   profileFilters.set(key, filters);
   return filters;
@@ -725,15 +328,6 @@ export const minimaxToolCallTextFilter: TextFilter = {
   activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
 };
 
-export function toolCallXmlTextFilter(
-  options: Parameters<typeof stripToolCallXmlTags>[1] = {},
-): TextFilter {
-  return {
-    transform: (text) => stripToolCallXmlTags(text, options),
-    activationTokens: ["<"],
-  };
-}
-
 export const legacyBracketToolCallTextFilter: TextFilter = {
   transform: stripLegacyBracketToolCallBlocks,
   activationTokens: ["TOOL_CALL", "TOOL_RESULT"],
@@ -741,13 +335,71 @@ export const legacyBracketToolCallTextFilter: TextFilter = {
 
 export const assistantTraceTextFilter: TextFilter = {
   transform: stripAssistantInternalTraceLines,
-  activationTokens: ["tool", "function", "📊", "🛠", "📖", "📝", "🔍", "🔎", "⚙"],
+  create: createAssistantTraceProjector,
 };
+
+function createAssistantTraceProjector() {
+  let active = false;
+  const resetLine = () => traceLineHeads.map((parts) => ({ parts, part: 0, offset: 0 }));
+  let candidates = resetLine();
+  return createConditionalTextProjector(
+    stripAssistantInternalTraceLines,
+    (input) => {
+      if (active) {
+        return true;
+      }
+      const appended = input.delta ?? input.text;
+      for (let at = 0; at < appended.length; at++) {
+        const char = appended.charAt(at).toLowerCase();
+        if (char === "\n") {
+          candidates = resetLine();
+          continue;
+        }
+        const whitespace = /\s/.test(char);
+        candidates = candidates.filter((candidate) => {
+          if (candidate.offset === 0 && whitespace) {
+            return true;
+          }
+          if (candidate.parts[candidate.part]?.charAt(candidate.offset) !== char) {
+            return false;
+          }
+          candidate.offset++;
+          if (candidate.offset === candidate.parts[candidate.part]?.length) {
+            candidate.part++;
+            candidate.offset = 0;
+            active ||= candidate.part === candidate.parts.length;
+          }
+          return true;
+        });
+        // The canonical transform owns code protection and corrections after activation.
+        if (active) {
+          return true;
+        }
+        if (candidates.length === 0) {
+          const newline = appended.indexOf("\n", at + 1);
+          if (newline === -1) {
+            break;
+          }
+          at = newline - 1;
+        }
+      }
+      return false;
+    },
+    (text, retainStart) =>
+      projectLinesOutsideCode(
+        text,
+        (line) => INTERNAL_TRACE_LINE_RE.test(line.trim()),
+        retainStart,
+      ),
+  );
+}
 
 export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
     stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
-  activationTokens: ["[", "<function=", "to="],
+  checkpoint: (text, settleBefore) =>
+    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions, settleBefore }),
+  activationTokens: ["{", "<parameter=", "<function=", "to="],
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(
@@ -768,11 +420,6 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
-}
-
-/** Sanitizes text already marked as final-answer prose by the agent runtime. */
-export function sanitizeAssistantFinalAnswerText(text: string): string {
-  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
 }
 
 /**

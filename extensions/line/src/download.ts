@@ -1,7 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaStream } from "openclaw/plugin-sdk/media-store";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 
 type DownloadResult = Pick<
@@ -73,9 +72,7 @@ async function* lineResponseBodyChunks(
     if (!completed) {
       await reader.cancel(signal.aborted ? signal.reason : undefined).catch(() => undefined);
     }
-    try {
-      reader.releaseLock();
-    } catch {}
+    reader.releaseLock();
   }
 }
 
@@ -192,7 +189,6 @@ export async function downloadLineMedia(
       throw err;
     }
     options?.signal?.throwIfAborted();
-    logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
 
     return {
       path: saved.path,

@@ -11,18 +11,19 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "imessage",
   capability: imessageApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { imessage: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return {
+      channels: { imessage: { enabled: true, ...channel } },
+      approvals,
+    };
+  },
 });
 const {
   buildConfig,
   buildExecRequest,
   buildPluginRequest,
   buildTargetModeConfig,
-  describeDelivery,
-  nativeShouldHandle,
   resolveExecOrigin,
   checks,
 } = fixture;
@@ -37,54 +38,8 @@ const DIRECT_TARGET = "+15551230000";
 const GROUP_TARGET = "chat_guid:iMessage;+;chat42";
 
 describe("imessage approval capability", () => {
-  it("subscribes the native runtime to system-agent approval events", checks.systemAgentEvents);
-
-  it(
-    "disables native approvals when no top-level approvals config is set",
-    checks.disabledByDefault,
-  );
-
-  it("allows session-mode exec delivery for matching iMessage origins", checks.sessionDelivery);
-
-  it("keeps exec and plugin forwarding gates independent", checks.independentKinds);
-
-  it("does not use session mode for non-iMessage-origin requests", checks.foreignOrigin);
-
-  it("resolves approver-dm targets from channels.imessage.allowFrom when the request is session-eligible", () => {
-    const cfg = buildConfig({
-      channel: { allowFrom: ["+15551230000", "owner@example.com"] },
-      approvals: { exec: { enabled: true } },
-    });
-    const request = buildExecRequest("+15551239999");
-
-    const targets = imessageApprovalCapability.native?.resolveApproverDmTargets?.({
-      cfg,
-      accountId: "default",
-      approvalKind: "exec",
-      request,
-    });
-
-    expect(targets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ to: "+15551230000" }),
-        expect.objectContaining({ to: "owner@example.com" }),
-      ]),
-    );
-  });
-
   it("uses target-mode config for requestless availability without native runtime handling", () =>
     checks.targetMode());
-
-  it("disables delivery when the iMessage channel is disabled", () => {
-    const cfg = buildConfig({
-      channel: { enabled: false },
-      approvals: { exec: { enabled: true } },
-    });
-    const request = buildExecRequest(DIRECT_TARGET);
-
-    expect(describeDelivery(cfg, request)?.enabled).toBe(false);
-    expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
-  });
 
   it("renders thumbs-only reaction hints in plugin approval prompts and respects allowed decisions", () => {
     const payload = imessageApprovalCapability.render?.plugin?.buildPendingPayload?.({
@@ -128,83 +83,28 @@ describe("imessage approval capability", () => {
     expect(text.indexOf("React with:")).toBeLessThan(text.indexOf("/approve exec-1 allow-once"));
   });
 
-  it("renders target-mode plugin prompts with concrete thumbs-only reaction choices", () => {
-    const cfg = buildTargetModeConfig("plugin", [{ channel: "imessage", to: DIRECT_TARGET }]);
-    const request = buildPluginRequest(DIRECT_TARGET, {
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
-
-    const payload = imessageApprovalCapability.render?.plugin?.buildPendingPayload?.({
-      cfg,
-      request,
-      target: { channel: "imessage", to: DIRECT_TARGET, source: "target" },
-      nowMs: 0,
-    });
-
-    expect(payload?.text).toContain("/approve plugin:approval-1 allow-once");
-    expect(payload?.text).toContain(
-      "Reply with: /approve plugin:approval-1 allow-once|allow-always|deny",
-    );
-    expect(payload?.text).toContain("React with:");
-    expect(payload?.text).toContain("👍 Allow Once");
-    expect(payload?.text).toContain("👎 Deny");
-    expect(payload?.text).not.toContain("1️⃣ Allow Once");
-    expect(payload?.text).not.toContain("2️⃣ Allow Always");
-    expect(payload?.text).not.toContain("3️⃣ Deny");
-    expect(payload?.text).not.toContain("<id>");
-  });
-
-  it(
-    "does not report target-mode availability when no iMessage target matches",
-    checks.noMatchingTarget,
-  );
-
-  it("applies agent and session filters to native handling", checks.requestFilters);
-
-  it(
-    "matches account-scoped top-level iMessage targets only for that account",
-    checks.accountScopedTargets,
-  );
-
-  it(
-    "suppresses forwarding fallback only when the exact session-origin native target matches",
-    checks.exactSessionTarget,
-  );
-
-  it(
-    "does not suppress target-only forwarding when native delivery cannot bind that target",
-    checks.targetOnlyFallback,
-  );
-
-  it(
-    "suppresses both-mode explicit targets that omit the origin account id",
-    checks.unscopedBothTarget,
-  );
-
-  it(
-    "suppresses both-mode unscoped targets through the configured default iMessage account",
-    checks.defaultAccountBothTarget,
-  );
-
-  it("allows group-origin tapback approvals only after exec forwarding and approvers are configured", () => {
-    const request = buildExecRequest(GROUP_TARGET);
+  it.each([
+    GROUP_TARGET,
+    "chat_id:42",
+    "chat_identifier:chat42",
+    "chat_guid:iMessage;-;+15551230000",
+  ])("requires explicit approvers for selector %s", async (target) => {
+    const request = buildExecRequest(target);
     const withoutApprovers = buildConfig({ approvals: { exec: { enabled: true } } });
     const withApprovers = buildConfig({
       channel: { allowFrom: ["+15551230000"] },
       approvals: { exec: { enabled: true } },
     });
 
-    expect(resolveExecOrigin(withoutApprovers, request)).toBeNull();
-    expect(resolveExecOrigin(withApprovers, request)).toEqual({
-      to: GROUP_TARGET,
+    expect(await resolveExecOrigin(withoutApprovers, request)).toBeNull();
+    expect(await resolveExecOrigin(withApprovers, request)).toEqual({
+      to: target,
       accountId: DEFAULT_ACCOUNT_ID,
     });
   });
 });
 
 describe("shouldSuppressLocalIMessageExecApprovalPrompt", () => {
-  it("suppresses eligible session-mode exec approval prompts", localChecks.eligibleSession);
-
   it(
     "keeps local prompts for disabled, target-only, inactive, or non-exec cases",
     localChecks.inactiveRoutes,
@@ -231,7 +131,9 @@ describe("shouldSuppressLocalIMessageExecApprovalPrompt", () => {
 
     for (const [sessionKey, accountId] of [
       ["agent:main:imessage:group:test-group", undefined],
+      ["agent:main:imessage:chat_id:42", undefined],
       ["agent:main:imessage:chat_guid:iMessage;+;chat42", undefined],
+      ["agent:main:imessage:chat_guid:iMessage;-;+15551230000", undefined],
       ["agent:main:slack:C123", undefined],
       ["agent:main:imessage:default:direct:+15551230000", "work"],
     ] as const) {

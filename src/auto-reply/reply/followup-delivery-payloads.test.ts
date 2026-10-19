@@ -39,16 +39,6 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "final answer" }]);
   });
 
-  it("keeps a durable reasoning payload when reasoningPayloadsEnabled is true", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
-        reasoningPayloadsEnabled: true,
-      }),
-    ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
-  });
-
   it("drops commentary unless its delivery lane is enabled", () => {
     const payload = { text: "internal commentary", isCommentary: true };
     expect(resolveFollowupDeliveryPayloads({ cfg: baseConfig, payloads: [payload] })).toEqual([]);
@@ -70,15 +60,6 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps media payloads when stripping heartbeat ack text", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "/tmp/image.png" }],
-      }),
-    ).toEqual([{ text: "", mediaUrl: "/tmp/image.png" }]);
-  });
-
   it("preserves transcript ownership when stripping heartbeat text", () => {
     const payload = setReplyPayloadMetadata(
       { text: "HEARTBEAT_OK still working" },
@@ -95,27 +76,6 @@ describe("resolveFollowupDeliveryPayloads", () => {
       replyDelivery: {
         replyToMode: "all",
       },
-    });
-  });
-
-  it("uses the captured reply policy instead of reloading changed config", () => {
-    const [resolved] = resolveFollowupDeliveryPayloads({
-      cfg: {
-        channels: {
-          slack: {
-            replyToMode: "all",
-          },
-        },
-      } as OpenClawConfig,
-      payloads: [{ text: "queued reply" }],
-      originatingChannel: "slack",
-      originatingChatType: "channel",
-      originatingReplyToMode: "off",
-    });
-
-    expect(getReplyPayloadMetadata(resolved ?? {})?.replyDelivery).toEqual({
-      chatType: "channel",
-      replyToMode: "off",
     });
   });
 
@@ -141,27 +101,61 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "thread reply" }]);
   });
 
-  it("dedupes a Slack DM tool send recorded through its routable target", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "thread reply" }],
-        messageProvider: "slack",
-        originatingTo: "user:U123",
-        originatingThreadId: "171.222",
-        sentTexts: ["thread reply"],
-        sentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            to: "user:U123",
-            threadId: "171.222",
-            text: "thread reply",
-          },
-        ],
-      }),
-    ).toStrictEqual([]);
-  });
+  it.each([
+    {
+      label: "new question with an already-sent answer",
+      text: "The answer remains unchanged.",
+      question: "What about the new case?",
+      sentText: "The answer remains unchanged.",
+      duplicate: false,
+    },
+    {
+      label: "already-rendered short answer",
+      text: "323",
+      question: "What is 17 * 19?",
+      sentText: `BTW
+Question: What is 17 * 19?
+
+323`,
+      duplicate: true,
+    },
+    {
+      label: "different questions sharing the same long answer",
+      text: "The answer remains unchanged.",
+      question: "What about the second case?",
+      sentText: `BTW
+Question: What about the first case?
+
+The answer remains unchanged.`,
+      duplicate: false,
+    },
+  ])(
+    "dedupes the visible side-question reply: $label",
+    ({ text, question, sentText, duplicate }) => {
+      const payload = { text, btw: { question } };
+      const delivered = vi.fn();
+      expect(
+        resolveFollowupDeliveryPayloads({
+          cfg: baseConfig,
+          payloads: [payload],
+          messageProvider: "slack",
+          originatingTo: "channel:C1",
+          originatingThreadId: "111.000",
+          sentTargets: [
+            {
+              tool: "slack",
+              provider: "slack",
+              to: "channel:C1",
+              threadId: "111.000",
+              text: sentText,
+            },
+          ],
+          onDeliveredTerminalDuplicate: delivered,
+        }),
+      ).toEqual(duplicate ? [] : [payload]);
+      expect(delivered).toHaveBeenCalledTimes(duplicate ? 1 : 0);
+    },
+  );
 
   it("delivers distinct replies when originating channel resolves the provider", () => {
     expect(

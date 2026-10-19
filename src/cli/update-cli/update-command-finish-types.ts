@@ -39,3 +39,11 @@ export type FinishUpdateParams = UpdateRestartParams & {
   activationConfig?: import("./update-command-config-snapshot.js").UpdateConfigSnapshot;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
 };
+
+export type FinishUpdateOptions = {
+  candidateRuntime?: boolean;
+  /** Set by the candidate after it adopts restart and terminal reporting. */
+  adoptedFinalization?: true;
+  onGatewayStartAttempted?: () => void;
+  beforeFinalization?: () => Promise<void>;
+};

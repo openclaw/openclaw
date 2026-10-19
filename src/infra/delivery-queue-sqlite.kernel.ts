@@ -1,6 +1,11 @@
 // Connection-bound delivery queue operations shared by standalone and compound owners.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { chunkItems } from "../utils/chunk-items.js";
+import {
+  failedDeliveryQueueHealthAdmission,
+  oldestDeliveryQueueMediaStageAdmission,
+} from "./delivery-queue-cache.js";
 import {
   bindDeliveryQueueEntry,
   deliveryQueueEntriesQuery,
@@ -23,6 +28,9 @@ import {
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./outbound/delivery-queue-namespaces.js";
+import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 export type DeliveryQueueStoredStatus = DeliveryQueueDatabase["delivery_queue_entries"]["status"];
@@ -52,7 +60,6 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
   params: {
     expireBeforeMs: number;
     queueNames: readonly string[];
-    stagingQueueName: string;
   },
 ): {
   entries: DeliveryQueueEntryState[];
@@ -65,21 +72,28 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
         database.db,
         getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
           .deleteFrom("delivery_queue_entries")
-          .where("queue_name", "=", params.stagingQueueName)
+          .where("queue_name", "=", DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME)
           .where("status", "=", "pending")
           .where("enqueued_at", "<=", params.expireBeforeMs),
       );
-      const read = (queueNames: readonly string[]) =>
-        executeSqliteQuerySync(
-          database.db,
-          deliveryQueueEntriesQuery(database, queueNames, "unfinished")
-            .orderBy("enqueued_at", "asc")
-            .orderBy("id", "asc"),
-        ).rows;
-      return {
-        entryRows: read(params.queueNames),
-        stagingRows: read([params.stagingQueueName]),
-      };
+      const rows = executeSqliteQuerySync(
+        database.db,
+        deliveryQueueEntriesQuery(
+          database,
+          [...params.queueNames, DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME],
+          "unfinished",
+        )
+          .select("queue_name")
+          .orderBy("enqueued_at", "asc")
+          .orderBy("id", "asc"),
+      ).rows;
+      const oldest = rows.find((row) => row.queue_name === DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME);
+      publishSqliteDatabaseAdmission(
+        database.db,
+        oldestDeliveryQueueMediaStageAdmission,
+        oldest ? sqliteNumber(oldest.enqueued_at) : null,
+      );
+      return rows;
     },
     {
       databaseLabel: "openclaw-state",
@@ -87,8 +101,12 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
     },
   );
   return {
-    entries: inflateDeliveryQueueRows(snapshot.entryRows),
-    stagingEntries: inflateDeliveryQueueRows(snapshot.stagingRows),
+    entries: inflateDeliveryQueueRows(
+      snapshot.filter((row) => row.queue_name !== DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME),
+    ),
+    stagingEntries: inflateDeliveryQueueRows(
+      snapshot.filter((row) => row.queue_name === DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME),
+    ),
   };
 }
 
@@ -170,11 +188,7 @@ function selectDeliveryQueueEntryOwners(
       ).rows;
     };
     // Bound parameter counts while retaining one transaction across the complete batch.
-    const rows = readChunk(uniqueIds.slice(0, 500));
-    for (let offset = 500; offset < uniqueIds.length; offset += 500) {
-      rows.push(...readChunk(uniqueIds.slice(offset, offset + 500)));
-    }
-    return rows;
+    return chunkItems(uniqueIds, 500).flatMap(readChunk);
   };
   let rows = readExact();
   let pruned = false;
@@ -383,9 +397,11 @@ export function countFailedDeliveryQueueEntriesInDatabase(database: OpenClawStat
       .groupBy("queue_name")
       .orderBy("queue_name", "asc"),
   ).rows;
-  return rows.map(({ oldestFailedAt, ...row }) =>
+  const health = rows.map(({ oldestFailedAt, ...row }) =>
     oldestFailedAt == null ? row : Object.assign(row, { oldestFailedAt }),
   );
+  publishSqliteDatabaseAdmission(database.db, failedDeliveryQueueHealthAdmission, health);
+  return health;
 }
 
 export function countPendingDeliveryQueueEntriesInDatabase(
@@ -407,11 +423,7 @@ export function countPendingDeliveryQueueEntriesInDatabase(
 export function pruneExpiredDeliveryQueueTombstonesInDatabase(
   database: OpenClawStateDatabase,
 ): void {
-  runSqliteImmediateTransactionSync(
-    database.db,
-    () => pruneDeliveryQueueTombstoneAges(database.db, Date.now()),
-    { databaseLabel: "openclaw-state", operationLabel: "expire delivery queue tombstones" },
-  );
+  pruneDeliveryQueueTombstoneAges(database.db, Date.now());
 }
 
 export type TerminalizePendingDeliveryQueueEntryParams = {

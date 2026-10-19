@@ -1,4 +1,3 @@
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -17,7 +16,6 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
-  hasProviderRequestSizeCeiling,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "./failover-error.js";
@@ -64,7 +62,10 @@ import {
   shouldDiscardDeferredSessionSuspension,
   throwFallbackFailureSummary,
 } from "./model-fallback-attempt.js";
-import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import {
+  preferContextFitFallbackCandidates,
+  resolveModelCandidateChain,
+} from "./model-fallback-candidates.js";
 import {
   markProbeAttempt,
   resolveCooldownDecision,
@@ -115,6 +116,7 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
     attempt: Parameters<ModelFallbackErrorHandler>[0],
   ) => boolean | Promise<boolean>;
   mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
+  /** The attempt owner admits its runtime and selects credentials. */
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -170,7 +172,7 @@ async function runWithModelFallbackInternal<T>(
     manifestPlugins: params.manifestPlugins,
   });
   const operatorModelPolicy = operatorAuthority?.modelPolicy;
-  const candidates = operatorModelPolicy
+  let candidates = operatorModelPolicy
     ? plannedCandidates.filter(operatorModelPolicy.allows)
     : plannedCandidates;
   if (operatorModelPolicy && candidates.length === 0) {
@@ -185,7 +187,7 @@ async function runWithModelFallbackInternal<T>(
       ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
-    ? authRuntime.ensureAuthProfileStore(params.agentDir, {
+    ? await authRuntime.ensureAuthProfileStoreAsync(params.agentDir, {
         profileId: userLockedAuthProfileId,
         externalCli: externalCliDiscoveryScoped({
           config: params.cfg,
@@ -253,9 +255,8 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
-  const runAttribution = { sessionId: params.sessionId, lane: params.lane };
+  const runAttribution = { runId: params.runId, sessionId: params.sessionId, lane: params.lane };
   const runObs = {
-    runId: params.runId,
     ...runAttribution,
     requestedProvider: params.provider,
     requestedModel: params.model,
@@ -288,6 +289,7 @@ async function runWithModelFallbackInternal<T>(
       sessionKey: params.sessionKey,
       resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
       prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
+      skipAuthProfileRuntime: params.skipAuthProfileRuntime,
       ...candidate,
     });
     const isPrimary = candidate.routeOrigin === "requested";
@@ -533,13 +535,6 @@ async function runWithModelFallbackInternal<T>(
         await observeCandidateDecision("candidate_succeeded", {
           previousAttempts: attempts,
         });
-        const notFoundAttempt =
-          i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
-        if (notFoundAttempt) {
-          log.warn(
-            `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
-          );
-        }
       }
       return attemptRun.success;
     }
@@ -611,19 +606,19 @@ async function runWithModelFallbackInternal<T>(
         cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
       }
     }
-    // Compaction owns context overflow; provider request ceilings can use another quota.
-    const errMessage = formatErrorMessage(err);
-    if (isLikelyContextOverflowError(errMessage) && !hasProviderRequestSizeCeiling(err)) {
-      throw err;
-    }
     if (isMissingAgentHarnessError(err)) {
       throw err;
     }
+    const failoverContext = { ...candidateRef, ...runAttribution };
     const normalized =
-      coerceToFailoverError(err, {
-        ...candidateRef,
-        ...runAttribution,
-      }) ?? err;
+      coerceToFailoverError(err, failoverContext) ??
+      (isLikelyContextOverflowError(formatErrorMessage(err))
+        ? new FailoverError(formatErrorMessage(err), {
+            reason: "context_overflow",
+            ...failoverContext,
+            cause: err,
+          })
+        : err);
 
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
@@ -687,6 +682,12 @@ async function runWithModelFallbackInternal<T>(
     if (isKnownFailover && normalized.reason === "tls_certificate") {
       tlsFailedProviders.add(candidate.provider);
     }
+    candidates = preferContextFitFallbackCandidates({
+      candidates,
+      failedIndex: i,
+      error: normalized,
+      cfg: params.cfg,
+    });
     const failedNextCandidateIndex = resolveNextFallbackCandidateIndex({
       candidates,
       currentIndex: i,
@@ -731,7 +732,7 @@ async function runWithModelFallbackInternal<T>(
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
-    soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+    soonestCooldownExpiry: await resolveFallbackSoonestCooldownExpiry({
       authRuntime,
       userLockedAuthProfileId,
       agentDir: params.agentDir,

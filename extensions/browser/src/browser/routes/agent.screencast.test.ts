@@ -4,7 +4,7 @@ import {
   clearBrowserScreencastTokens,
   consumeBrowserScreencastToken,
 } from "../screencast/tokens.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRouteContext } from "../server-context.js";
 import {
   getOrCreateProfileRuntime,
   getProfileLifecycle,
@@ -22,6 +22,16 @@ vi.mock("../pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => null,
 }));
 
+function requesterFixture() {
+  const connection = new AbortController();
+  const requester = {
+    invalidated: false,
+    signal: connection.signal,
+    isCurrent: () => !requester.invalidated && !connection.signal.aborted,
+  };
+  return { connection, requester };
+}
+
 function setup(options: { existingSession?: boolean; url?: string; listedUrl?: string } = {}) {
   const profile = makeBrowserProfile(options.existingSession ? { driver: "existing-session" } : {});
   const state = makeBrowserServerState({
@@ -31,19 +41,16 @@ function setup(options: { existingSession?: boolean; url?: string; listedUrl?: s
   const runtime = getOrCreateProfileRuntime(state, profile);
   const tab = {
     targetId: "resolved-tab",
-    title: "Example",
     url: options.url ?? "https://example.com/",
-    type: "page",
   };
   const ensureTabAvailable = vi.fn(async () => tab);
-  const profileCtx = {
-    profile,
-    ensureTabAvailable,
-    listTabs: async () => [{ ...tab, url: options.listedUrl ?? tab.url }],
-  } as unknown as ProfileContext;
   const ctx = {
     state: () => state,
-    forProfile: () => profileCtx,
+    forProfile: () => ({
+      profile,
+      ensureTabAvailable,
+      listTabs: async () => [{ ...tab, url: options.listedUrl ?? tab.url }],
+    }),
   } as unknown as BrowserRouteContext;
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentScreencastRoutes(app, ctx);
@@ -68,34 +75,20 @@ describe("browser screencast mint route", () => {
     pw.available = true;
   });
 
-  afterEach(() => {
-    clearBrowserScreencastTokens();
-  });
+  afterEach(clearBrowserScreencastTokens);
 
   it.each([
     { when: "before request", abort: true },
     { when: "during tab resolution", abort: false },
   ])("rejects a requester invalidated $when (socket closed: $abort)", async ({ when, abort }) => {
-    const connection = new AbortController();
-    const requester = {
-      invalidated: false,
-      signal: connection.signal,
-      isCurrent: () => !requester.invalidated && !connection.signal.aborted,
-    };
-    const revoke = () => {
-      if (abort) {
-        connection.abort();
-      } else {
-        requester.invalidated = true;
-      }
-    };
+    const { connection, requester } = requesterFixture();
     const { request, ensureTabAvailable } = setup();
     if (when === "before request") {
-      revoke();
+      connection.abort();
     } else {
       const resolveTab = ensureTabAvailable.getMockImplementation()!;
       ensureTabAvailable.mockImplementationOnce(async () => {
-        revoke();
+        requester.invalidated = true;
         return await resolveTab();
       });
     }
@@ -107,12 +100,7 @@ describe("browser screencast mint route", () => {
   });
 
   it.each(["socket close", "invalidation"])("binds a minted token to requester %s", async (end) => {
-    const connection = new AbortController();
-    const requester = {
-      invalidated: false,
-      signal: connection.signal,
-      isCurrent: () => !requester.invalidated && !connection.signal.aborted,
-    };
+    const { connection, requester } = requesterFixture();
     const { request } = setup();
     const response = await request({}, requester);
     const token = (response.body as { token: string }).token;
@@ -131,9 +119,7 @@ describe("browser screencast mint route", () => {
     { existingSession: false, playwright: false, reason: "playwright" },
   ])("reports $reason as unsupported", async ({ existingSession, playwright, reason }) => {
     pw.available = playwright;
-    const { request } = setup({ existingSession });
-    const response = await request();
-
+    const response = await setup({ existingSession }).request();
     expect(response.statusCode).toBe(501);
     expect(response.body).toMatchObject({
       error: expect.any(String),
@@ -177,14 +163,12 @@ describe("browser screencast mint route", () => {
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).resolves.toBeUndefined();
     state.resolved.ssrfPolicy = { allowPrivateNetwork: false };
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).rejects.toThrow();
-    getProfileLifecycle(runtime).generation += 1;
+    getProfileLifecycle(runtime).controller.abort();
     expect(() => token.assertCurrent()).toThrow("superseded");
   });
 
   it("blocks minting for a disallowed current tab through the shared route guard", async () => {
-    const { request } = setup({ url: "http://127.0.0.1/private" });
-    const response = await request();
-
+    const response = await setup({ url: "http://127.0.0.1/private" }).request();
     expect(response.statusCode).toBe(400);
     expect(response.body).toMatchObject({ reason: "navigation_blocked" });
     expect(response.body).not.toHaveProperty("token");
@@ -208,9 +192,7 @@ describe("browser screencast mint route", () => {
   );
 
   it("redacts a newly blocked listed URL in the mint response", async () => {
-    const { request } = setup({ listedUrl: "http://127.0.0.1/private" });
-    const response = await request();
-
+    const response = await setup({ listedUrl: "http://127.0.0.1/private" }).request();
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({ token: expect.any(String), url: undefined });
   });

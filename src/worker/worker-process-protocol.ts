@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchPlan } from "./launch-descriptor.js";
@@ -17,12 +18,22 @@ export type WorkerProcessInput = ReturnType<typeof parseWorkerProcessRequest>;
 export function buildWorkerProcessTurn<T extends WorkerLaunchPlan>(
   descriptor: T,
   idleRetention = false,
+  canonicalWorkspace = false,
+  processChanges = false,
 ) {
   return {
     type: "turn" as const,
     turnId: descriptor.assignment.turnId,
     descriptor,
     ...(idleRetention ? { idleRetention: true as const } : {}),
+    ...(canonicalWorkspace ? { canonicalWorkspace: true as const } : {}),
+    // Both sides must opt in: older supervisors reject unknown stdout frames.
+    ...(processChanges &&
+    descriptor.admission.handshake.protocolFeatures.includes(
+      NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE,
+    )
+      ? { processChanges: true as const }
+      : {}),
   };
 }
 
@@ -31,10 +42,12 @@ export function measureWorkerProcessTurnBytes(
   idleRetention = false,
 ): number {
   // The node supplies the endpoint privately. Replace only its JSON null placeholder
-  // with the parser-owned bound; the managed envelope is the sender's exact shape.
+  // with the parser-owned bound and reserve the node-owned feature markers.
   return (
     Buffer.byteLength(
-      JSON.stringify(buildWorkerProcessTurn({ ...plan, connectionEndpoint: null }, idleRetention)),
+      JSON.stringify(
+        buildWorkerProcessTurn({ ...plan, connectionEndpoint: null }, idleRetention, true, true),
+      ),
     ) -
     "null".length +
     WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES
@@ -62,7 +75,7 @@ const RuntimeResultSchema = z.union([
   workerProtocolObject({ status: z.literal("completed"), ...TranscriptResultFields }),
   workerProtocolObject({
     status: z.literal("failed"),
-    reason: z.literal("turn-failed"),
+    reason: z.enum(["turn-failed", "node-lost"]),
     ...TranscriptResultFields,
   }),
 ]);
@@ -80,10 +93,13 @@ const ProcessResultSchema = workerProtocolObject({
 }).refine(
   ({ result, retainWorker, retention }) =>
     (retention === undefined || retainWorker) &&
-    (!retainWorker || result.status === "completed" || result.status === "failed"),
+    (!retainWorker ||
+      result.status === "completed" ||
+      (result.status === "failed" && result.reason === "turn-failed")),
 );
 const ProcessMessageSchema = z.union([
   WorkerProcessObservationResultSchema,
+  workerProtocolObject({ type: z.literal("processes-changed") }),
   ProcessResultSchema,
   workerProtocolObject({
     type: z.literal("idle-ready"),
@@ -113,14 +129,25 @@ export function parseWorkerProcessRequest(value: unknown) {
   }
   if (
     value.type === "turn" &&
-    hasExactOwnKeys(value, ["type", "turnId", "descriptor"], ["idleRetention"]) &&
-    (value.idleRetention === undefined || value.idleRetention === true)
+    hasExactOwnKeys(
+      value,
+      ["type", "turnId", "descriptor"],
+      ["idleRetention", "canonicalWorkspace", "processChanges"],
+    ) &&
+    (value.idleRetention === undefined || value.idleRetention === true) &&
+    (value.canonicalWorkspace === undefined || value.canonicalWorkspace === true) &&
+    (value.processChanges === undefined || value.processChanges === true)
   ) {
     const descriptor = parseWorkerLaunchDescriptor(value.descriptor);
     if (descriptor.assignment.turnId !== value.turnId) {
       throw new Error("managed worker request disagrees with its assigned turn");
     }
-    return buildWorkerProcessTurn(descriptor, value.idleRetention === true);
+    return buildWorkerProcessTurn(
+      descriptor,
+      value.idleRetention === true,
+      value.canonicalWorkspace === true,
+      value.processChanges === true,
+    );
   }
   throw new Error("invalid managed worker request");
 }

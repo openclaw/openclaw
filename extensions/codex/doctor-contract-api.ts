@@ -199,6 +199,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "codex-native-task-assignments",
     label: "Codex native pending assignments",
+    sqliteOnly: { family: "state" },
     collectBackupResources: async (params) =>
       (
         await import("./src/migration/native-task-assignments.js")
@@ -211,6 +212,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       (
         await import("./src/migration/native-task-assignments.js")
       ).codexNativeTaskAssignmentMigration.migrateLegacyState(params),
+  },
+  {
+    id: "codex-native-assignment-repair",
+    label: "Codex native pending assignment repair",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    collectBackupResources: () => [],
+    detectLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.migrateLegacyState(params),
   },
   codexOrphanedSessionBindingMigration,
 ];

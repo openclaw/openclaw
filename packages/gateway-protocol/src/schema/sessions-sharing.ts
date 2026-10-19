@@ -4,6 +4,7 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SessionCreatedActorSchema } from "./sessions.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** A selectable sharing identity is a created actor with a durable id. */
 export const SessionSharingIdentitySchema = closedObject({
@@ -19,10 +20,10 @@ export {
   type SessionVisibility,
 } from "./sessions-sharing-values.js";
 
-export const SessionSharingActionSchema = Type.Union([
-  Type.Literal("visibility"),
-  Type.Literal("member-added"),
-  Type.Literal("member-removed"),
+export const SessionSharingActionSchema = stringLiteralUnion([
+  "visibility",
+  "member-added",
+  "member-removed",
 ]);
 
 const SessionSharingTargetParamsSchema = {

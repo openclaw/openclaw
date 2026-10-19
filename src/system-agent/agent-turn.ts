@@ -7,14 +7,6 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "../agents/prepared-model-runtime.errors.js";
-import {
-  AGENT_RUN_SUPERSEDED_STOP_REASON,
-  isAgentRunSupersededAbortReason,
-} from "../agents/run-termination.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -26,12 +18,15 @@ import { buildSystemAgentSystemPrompt } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import {
+  systemAgentRuntimeFailureGuidance,
+  systemAgentTerminalFailureGuidance,
+} from "./inference-run-errors.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 /**
@@ -91,18 +86,6 @@ export function createSystemAgentSession(
     proposalRef: {},
   };
 }
-
-type SystemAgentRunCliAgent = (
-  params: Parameters<typeof import("../agents/cli-runner.js").runCliAgent>[0] & {
-    systemAgentTool?: import("../agents/tools/system-agent-tool.js").SystemAgentToolOptions;
-  },
-) => ReturnType<typeof import("../agents/cli-runner.js").runCliAgent>;
-
-type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
-  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
-  runCliAgent?: SystemAgentRunCliAgent;
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-};
 
 export async function cleanupSystemAgentSession(session: SystemAgentSession): Promise<void> {
   delete session.cliSession;
@@ -244,12 +227,11 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
  * output failures are typed so callers may try another inference path without
  * mistaking the failure for deterministic setup authority.
  */
-async function runSystemAgentTurnWithDeps(
+export async function runSystemAgentTurn(
   params: SystemAgentTurnParams,
-  deps: SystemAgentTurnDeps = {},
 ): Promise<SystemAgentTurnReply | null> {
   const binding = params.session.verifiedInference;
-  const plan = await requireSystemAgentInferenceRoute(binding, deps, "agent-turn", () =>
+  const plan = await requireSystemAgentInferenceRoute(binding, undefined, "agent-turn", () =>
     clearFailedSystemAgentSessionState(params.session),
   );
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
@@ -311,6 +293,7 @@ async function runSystemAgentTurnWithDeps(
     runId,
     messageChannel: "openclaw",
     messageProvider: "openclaw",
+    terminalReplyExpectation: "result-required" as const,
     disableTrajectory: true,
   };
   // Directives are per-turn: the tool records at most one interactive handoff
@@ -341,14 +324,16 @@ async function runSystemAgentTurnWithDeps(
       if (!previousBinding) {
         delete params.session.cliSession;
       }
-      const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
+      const { runCliAgent: runCli } = await import("../agents/cli-runner.js");
       const stopToolStateMirror = await mirrorSystemAgentToolStateFromEvents({
         runId,
         proposalRef: params.session.proposalRef,
         directiveRef,
       });
       try {
-        result = await runCli({
+        const cliParams: Parameters<typeof runCli>[0] & {
+          systemAgentTool: typeof systemAgentTool;
+        } = {
           ...shared,
           extraSystemPromptStatic: systemPrompt,
           systemAgentTool,
@@ -357,7 +342,8 @@ async function runSystemAgentTurnWithDeps(
           runtimePolicySessionKey: policySessionKey,
           disableCliLiveSession: true,
           cleanupCliLiveSessionOnRunEnd: true,
-        });
+        };
+        result = await runCli(cliParams);
       } finally {
         stopToolStateMirror();
       }
@@ -376,8 +362,7 @@ async function runSystemAgentTurnWithDeps(
       // An intervening embedded turn cannot be represented in the CLI's native
       // transcript. A later CLI route must reseed instead of reviving stale context.
       delete params.session.cliSession;
-      const runEmbedded =
-        deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
+      const { runEmbeddedAgent: runEmbedded } = await import("../agents/embedded-agent.js");
       result = await runEmbedded({
         ...shared,
         lane: CommandLane.SystemAgentInference,
@@ -395,12 +380,7 @@ async function runSystemAgentTurnWithDeps(
     // Failed runs can retain partial text; it must not publish a reply or a tool directive.
     const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
-      failureGuidance =
-        result.meta?.stopReason === "timeout" || result.meta?.timeoutPhase
-          ? "timeout"
-          : result.meta?.stopReason === AGENT_RUN_SUPERSEDED_STOP_REASON
-            ? "superseded"
-            : "retry";
+      failureGuidance = systemAgentTerminalFailureGuidance(result);
       throw new Error(terminalError);
     }
     failureGuidance = "route-changed";
@@ -409,7 +389,7 @@ async function runSystemAgentTurnWithDeps(
     }
     // A completed model turn is still untrusted until the exact route owner is
     // revalidated. This also rejects directives produced while config changed.
-    const currentRoute = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
+    const currentRoute = await resolveSystemAgentVerifiedInferenceRoute(binding);
     if (!currentRoute) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
@@ -427,24 +407,9 @@ async function runSystemAgentTurnWithDeps(
     // before rejecting. Neither is safe to arm or resume on a later attempt.
     const failures =
       error instanceof SystemAgentInferenceUnavailableError ? [...error.failures] : [error];
-    const guidance =
-      isAgentRunSupersededAbortReason(error) ||
-      error instanceof PreparedModelRuntimePublicationSupersededError
-        ? "superseded"
-        : error instanceof PreparedModelRuntimeOwnerNotPublishedError
-          ? "runtime-unavailable"
-          : failureGuidance;
+    const guidance = systemAgentRuntimeFailureGuidance(error) ?? failureGuidance;
     return throwSystemAgentInferenceUnavailable({ session: params.session, failures, guidance });
   } finally {
     preparedRunAdmission.close();
   }
-}
-
-export const runSystemAgentTurn: SystemAgentTurnRunner = (params) =>
-  runSystemAgentTurnWithDeps(params);
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.systemAgentTurnTestApi")] = {
-    runSystemAgentTurnWithDeps,
-  };
 }

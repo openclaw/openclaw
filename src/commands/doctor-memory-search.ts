@@ -18,6 +18,8 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
@@ -27,9 +29,10 @@ import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import { getMissingLocalMemoryEmbeddingProviderMessage } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
-  resolveManifestOwnerBasePolicyBlock,
-  type ManifestOwnerBasePolicyBlockReason,
-} from "../plugins/manifest-owner-policy.js";
+  OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  OPENAI_COMPATIBLE_MODEL_APIS,
+} from "../plugins/embedding-provider-config.js";
+import { resolveManifestOwnerBasePolicyBlock } from "../plugins/manifest-owner-policy.js";
 import {
   getActiveMemoryProviderCore,
   resolveActiveMemoryBackendConfig,
@@ -63,8 +66,6 @@ const MEMORY_EMBEDDING_PROVIDER_AUTH_IDS = new Map([
   ["mistral", "mistral"],
   ["bedrock", "amazon-bedrock"],
 ]);
-const OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
 function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfig): boolean {
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
@@ -81,7 +82,7 @@ function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfi
 
 function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfig): boolean {
   const normalizedProviderId = normalizeProviderId(providerId);
-  if (normalizedProviderId === OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER) {
+  if (normalizedProviderId === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID) {
     return true;
   }
   if (MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.has(normalizedProviderId)) {
@@ -92,10 +93,7 @@ function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfi
     return false;
   }
   const api = normalizeProviderId(providerConfig.api ?? "");
-  if (
-    api === OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER ||
-    OPENAI_COMPATIBLE_MODEL_APIS.has(api)
-  ) {
+  if (api === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID || OPENAI_COMPATIBLE_MODEL_APIS.has(api)) {
     return true;
   }
   return !api && Boolean(normalizeOptionalString(providerConfig.baseUrl));
@@ -145,6 +143,7 @@ function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig) {
 
 type MemorySearchHealthPath =
   | "memory.search.provider"
+  | "memory.search.sources"
   | "plugins.slots.memory"
   | "memory.search.remote.baseUrl"
   | "memory.search.model";
@@ -165,17 +164,15 @@ function inspectRememberAcrossConversationsHealth(params: {
     return false;
   }
   const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
-  const activeMemoryAvailable = conversationRecallSupport.available;
-  if (!activeMemoryAvailable) {
+  if (!conversationRecallSupport.available) {
     params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memory.search.rememberAcrossConversations to false.`,
     );
-  }
-  if (activeMemoryAvailable && !conversationRecallSupport.providerSupported) {
+  } else if (!conversationRecallSupport.providerSupported) {
     params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but the current memory provider does not support protected private transcript recall. Set memory.search.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
     );
-  } else if (activeMemoryAvailable && !conversationRecallSupport.memorySearchAllowed) {
+  } else if (!conversationRecallSupport.memorySearchAllowed) {
     params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memory.search.rememberAcrossConversations to false.`,
     );
@@ -189,6 +186,7 @@ type MemorySearchHealthOptions = {
   gatewayMemoryProbe?: Pick<GatewayMemoryProbe, "checked" | "ready"> & Partial<GatewayMemoryProbe>;
   includeWorkspaceMemoryHealth?: boolean;
   skipAuthProfileResolution?: boolean;
+  allowExecSecretRefs?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -209,6 +207,7 @@ export async function collectMemorySearchHealthFindings(
       env: ctx.env,
       includeWorkspaceMemoryHealth: false,
       skipAuthProfileResolution: true,
+      allowExecSecretRefs: ctx.allowExecSecretRefs === true,
       gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
     },
     ({ finding }) => {
@@ -326,8 +325,19 @@ async function inspectMemorySearchHealthForAgent(
     let status = "unavailable";
     let detail = "provider unavailable";
     try {
+      const { resolvedConfig, diagnostics, hadUnresolvedTargets } =
+        await resolveCommandSecretRefsViaGateway({
+          config: cfg,
+          commandName: "doctor",
+          targetIds: getMemoryEmbeddingCommandSecretTargetIds(cfg),
+          mode: "read_only_status",
+          allowLocalExecSecretRefs: opts.allowExecSecretRefs === true,
+        });
+      if (hadUnresolvedTargets) {
+        throw new Error(diagnostics.join("\n"));
+      }
       const acquired = await getActiveMemoryProviderCore({
-        cfg,
+        cfg: resolvedConfig,
         agentId,
         purpose: "status",
         context: {
@@ -375,6 +385,14 @@ async function inspectMemorySearchHealthForAgent(
     report("No active memory plugin is registered for the current config.", "plugins.slots.memory");
     return;
   }
+  if (resolved.sessionSourceExcluded) {
+    report(
+      `Memory search for agent "${agentId}" requests the "sessions" source, but session indexing is disabled. Set memory.search.experimental.sessionMemory to true for this agent, or enable memory.search.rememberAcrossConversations for private cross-conversation recall.`,
+      "memory.search.sources",
+      false,
+      true,
+    );
+  }
   if (provider === "none") {
     return;
   }
@@ -415,19 +433,13 @@ async function inspectMemorySearchHealthForAgent(
       .map(({ owner }) => owner);
     const policyArtifacts =
       eligibleOwners.length > 0 ? loadProviderPolicyArtifacts(eligibleOwners) : null;
-    let installedOwner: (typeof installedOwners)[number];
-    let ownerPolicyBlock: ManifestOwnerBasePolicyBlockReason | null;
-    if (policyArtifacts) {
-      installedOwner = policyArtifacts.owner;
-      ownerPolicyBlock = null;
-    } else {
-      const blockedOwner = ownerPolicies.find(({ policyBlock }) => policyBlock);
-      if (!blockedOwner) {
-        throw new Error(`Unable to resolve the installed provider owner for "${provider}".`);
-      }
-      installedOwner = blockedOwner.owner;
-      ownerPolicyBlock = blockedOwner.policyBlock;
+    const selectedPolicy = policyArtifacts
+      ? { owner: policyArtifacts.owner, policyBlock: null }
+      : ownerPolicies.find(({ policyBlock }) => policyBlock);
+    if (!selectedPolicy) {
+      throw new Error(`Unable to resolve the installed provider owner for "${provider}".`);
     }
+    const { owner: installedOwner, policyBlock: ownerPolicyBlock } = selectedPolicy;
     const providerPolicy = policyArtifacts?.surface;
     const inspectSetup = ownerPolicyBlock
       ? undefined
@@ -561,15 +573,15 @@ async function inspectMemorySearchHealthForAgent(
   report(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
-      `Semantic recall will not work without a valid API key.`,
+      "Without working primary or fallback embeddings, memory sync stops for explicitly configured providers or existing vector indexes; new and changed memory files are not indexed.",
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
       `- Set ${envVar} in your environment`,
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-      `- To disable: ${formatCliCommand("openclaw config set memory.search.enabled false")}`,
+      `- For keyword-only recall without a key, set memory.search.provider to "none" for this agent (including any agent override), then run ${formatCliCommand(`openclaw memory index --force --agent ${agentId}`)}`,
       "",
-      `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+      `Then rerun: ${formatCliCommand("openclaw doctor")}`,
     ].join("\n"),
   );
 }

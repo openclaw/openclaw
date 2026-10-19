@@ -189,7 +189,8 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   // the process-owned generation; full snapshots cover narrower loads, while
   // scoped snapshots must match exactly to protect activation boundaries.
   const currentMetadataSnapshot =
-    options.installRecords === undefined &&
+    options.metadataSnapshot ??
+    (options.installRecords === undefined &&
     trustNormalized.loadPaths === normalized.loadPaths &&
     !shouldResolveRawConfigEnvVars &&
     (options.env === undefined || options.env === process.env)
@@ -206,13 +207,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
               pluginIds: onlyPluginIds,
             })
           : undefined))
-      : undefined;
-  const preparedInstallRecords =
-    currentMetadataSnapshot &&
-    (options.manifestRegistry === undefined ||
-      options.manifestRegistry === currentMetadataSnapshot.manifestRegistry)
-      ? extractPluginInstallRecordsFromInstalledPluginIndex(currentMetadataSnapshot.index)
-      : undefined;
+      : undefined);
+  // Manifest projections select plugins; the prepared inventory still owns their install ledger.
+  const preparedInstallRecords = currentMetadataSnapshot
+    ? extractPluginInstallRecordsFromInstalledPluginIndex(currentMetadataSnapshot.index)
+    : undefined;
   const installRecords = {
     ...(options.installRecords ??
       preparedInstallRecords ??
@@ -257,6 +256,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     ]),
   );
   const cacheIdentity = {
+    metadataSnapshot: resolveRuntimeBindingCacheId(currentMetadataSnapshot),
     roots,
     devSourceRoot,
     plugins: {

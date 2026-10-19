@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
+import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { inspectCronJobsReadOnly } from "../../../cron/store/read-only.js";
@@ -11,11 +12,14 @@ import {
   deleteCronJobRowInDatabase,
   loadCronRows,
   resolveCronJobGrantDefinitionGenerationFloor,
+  resolveCronJobGrantDefinitionRevision,
   rowToCronJob,
   upsertCronJobRow,
 } from "../../../cron/store/row-codec.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
+import { migrateCronInferenceStandingGrantReferences } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
 import { createVerifiedSqliteSnapshot } from "../../../infra/sqlite-snapshot.js";
 import type { PluginDoctorRepairAuthority } from "../../../infra/state-migrations.types.js";
@@ -25,6 +29,7 @@ import type {
   PluginDoctorCronJob,
 } from "../../../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
@@ -42,6 +47,13 @@ export async function inspectCronJobOwnersForDoctor(scope: DoctorCronScope, stor
   );
 }
 
+export function resolveStoredCronJobOwner(job: Record<string, unknown> | undefined) {
+  return tryResolveCronJobEffectiveAgentId({
+    agentId: normalizeOptionalString(job?.agentId),
+    sessionKey: normalizeOptionalString(job?.sessionKey),
+  });
+}
+
 /** Pins only ownerless definitions, retaining every other authored and runtime field. */
 export async function repairLegacyCronJobOwnersForDoctor(
   scope: DoctorCronScope,
@@ -56,12 +68,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
   const changes: Array<{ jobId: string; agentId: string; definition: string }> = [];
   for (const row of rows) {
     const job = safeParseJsonRecord(row.job_json);
-    if (
-      tryResolveCronJobEffectiveAgentId({
-        agentId: normalizeOptionalString(job?.agentId),
-        sessionKey: normalizeOptionalString(job?.sessionKey),
-      })
-    ) {
+    if (resolveStoredCronJobOwner(job)) {
       continue;
     }
     if (!job) {
@@ -117,8 +124,18 @@ export async function repairLegacyCronJobOwnersForDoctor(
 export async function inspectCronJobsForDoctor(
   scope: DoctorCronScope,
 ): Promise<PluginDoctorCronInventory> {
+  // Doctor admits live authority reads only after its offline backup boundary.
+  // Borrow that owner instead of allocating another disposable snapshot and worker.
+  const databasePath = resolveOpenClawStateSqlitePath(scope.env);
+  if (!existsSync(databasePath)) {
+    return { jobs: [] };
+  }
+  const reused = withMaintenanceOpenClawStateDatabaseReadOnly(
+    ({ db }) => inspectCronRowsForDoctor(db),
+    databasePath,
+  );
   return {
-    jobs: await inspectCronJobsReadOnly(scope.env),
+    jobs: reused.reused ? reused.value : await inspectCronJobsReadOnly(scope.env),
   };
 }
 
@@ -129,6 +146,86 @@ function definitionEvidence(jobs: readonly PluginDoctorCronJob[]) {
     sortOrder,
     definitionJson,
   }));
+}
+
+/** Only adds an inference restriction; retains authored fields, runtime state and approval terms. */
+export async function repairCronInferenceBindingsForDoctor(
+  scope: DoctorCronScope,
+  authority: PluginDoctorRepairAuthority,
+  inventory: PluginDoctorCronInventory,
+  changes: readonly { job: PluginDoctorCronJob; binding: CronInferenceBinding }[],
+): Promise<{ changed: number; backupPath?: string }> {
+  authority.assertCurrent();
+  if (changes.length === 0) {
+    return { changed: 0 };
+  }
+  const expected = definitionEvidence(inventory.jobs);
+  const selected = new Set<string>();
+  for (const { job } of changes) {
+    const key = JSON.stringify([job.storeKey, job.id]);
+    if (
+      selected.has(key) ||
+      !inventory.jobs.some((row) => isDeepStrictEqual(row, job)) ||
+      !job.definition ||
+      job.definition.inferenceBinding !== undefined
+    ) {
+      throw new Error("Inference migration requires distinct inspected legacy cron definitions.");
+    }
+    selected.add(key);
+  }
+  const backupPath = await commitCronDoctorRepair(scope, authority, {
+    assertRowsUnchanged(db) {
+      if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
+        throw new Error(
+          "Cron definitions changed during inference migration; inspect again before retrying.",
+        );
+      }
+    },
+    write(db) {
+      for (const { job, binding } of changes) {
+        const row = loadCronRows(db, job.storeKey, new Set([job.id]), {
+          includeGrantDefinitionProjection: true,
+        })[0];
+        const previous = row && rowToCronJob(row, job.definition!);
+        if (!row || !previous) {
+          throw new Error(`Cannot migrate cron inference account for ${job.id}.`);
+        }
+        const next = { ...previous, inferenceBinding: binding };
+        const validProjection =
+          row.grant_definition_revision === resolveCronJobGrantDefinitionRevision(previous) &&
+          row.grant_definition_updated_at === row.updated_at;
+        if (
+          validProjection &&
+          typeof row.grant_definition_generation === "number" &&
+          inventory.jobs.filter((entry) => entry.id === job.id).length === 1
+        ) {
+          migrateCronInferenceStandingGrantReferences(
+            db,
+            previous,
+            next,
+            row.grant_definition_generation,
+          );
+        }
+        executeSqliteQuerySync(
+          db,
+          getCronStoreKysely(db)
+            .updateTable("cron_jobs")
+            .set({
+              job_json: JSON.stringify({ ...job.definition, inferenceBinding: binding }),
+              ...(validProjection
+                ? { grant_definition_revision: resolveCronJobGrantDefinitionRevision(next) }
+                : {}),
+            })
+            .where("store_key", "=", job.storeKey)
+            .where("job_id", "=", job.id),
+        );
+      }
+      for (const storeKey of new Set(changes.map(({ job }) => job.storeKey))) {
+        deferSqlitePostCommitPublication(db, () => noteCronJobsStoreCommit(storeKey));
+      }
+    },
+  });
+  return { changed: changes.length, backupPath };
 }
 
 /** One host-owned repair transaction; plugins choose rows, never database paths or SQL. */
@@ -196,7 +293,7 @@ export async function backupCronStoreForDoctor(
   scope: DoctorCronScope,
   repair: {
     assertCurrent: () => void;
-    assertRowsUnchanged: (db: DatabaseSync) => void;
+    assertRowsUnchanged: (db: EngineConnection) => void;
   },
 ): Promise<string> {
   repair.assertCurrent();
@@ -219,8 +316,8 @@ async function commitCronDoctorRepair(
   scope: DoctorCronScope,
   authority: PluginDoctorRepairAuthority,
   repair: {
-    assertRowsUnchanged: (db: DatabaseSync) => void;
-    write: (db: DatabaseSync) => void;
+    assertRowsUnchanged: (db: EngineConnection) => void;
+    write: (db: EngineConnection) => void;
   },
 ): Promise<string> {
   const backupPath = await backupCronStoreForDoctor(scope, {

@@ -1,10 +1,6 @@
 import type { ConversationsRepliesResponse, WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
@@ -37,20 +33,6 @@ type SlackThreadStarterCacheEntry = {
 const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarterCacheEntry>();
 const THREAD_STARTER_CACHE_TTL_MS = 6 * 60 * 60_000;
 const THREAD_STARTER_CACHE_MAX = 2000;
-
-function evictThreadStarterCache(): void {
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined) {
-    THREAD_STARTER_CACHE.clear();
-    return;
-  }
-  for (const [cacheKey, entry] of THREAD_STARTER_CACHE.entries()) {
-    if (asDateTimestampMs(entry.expiresAt) === undefined || entry.expiresAt <= now) {
-      THREAD_STARTER_CACHE.delete(cacheKey);
-    }
-  }
-  pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
-}
 
 function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
   return `[attached: ${formatSlackFileReferenceList(files)}]`;
@@ -132,7 +114,6 @@ export async function resolveSlackThreadStarter(params: {
   workspaceScope: { accountId: string; teamId: string };
   refresh?: boolean;
 }): Promise<SlackThreadStarter | null> {
-  evictThreadStarterCache();
   const cacheKey = JSON.stringify([
     params.workspaceScope.accountId,
     params.workspaceScope.teamId,
@@ -140,12 +121,8 @@ export async function resolveSlackThreadStarter(params: {
     params.threadTs,
   ]);
   const cached = THREAD_STARTER_CACHE.get(cacheKey);
-  if (cached && !params.refresh) {
-    const now = asDateTimestampMs(Date.now());
-    if (now !== undefined && cached.expiresAt > now) {
-      return cached.value;
-    }
-    THREAD_STARTER_CACHE.delete(cacheKey);
+  if (cached && !params.refresh && cached.expiresAt > Date.now()) {
+    return cached.value;
   }
   if (params.refresh) {
     THREAD_STARTER_CACHE.delete(cacheKey);
@@ -170,17 +147,12 @@ export async function resolveSlackThreadStarter(params: {
       ts: message.ts,
       files,
     };
-    const expiresAt = resolveExpiresAtMsFromDurationMs(THREAD_STARTER_CACHE_TTL_MS);
-    if (expiresAt !== undefined) {
-      if (THREAD_STARTER_CACHE.has(cacheKey)) {
-        THREAD_STARTER_CACHE.delete(cacheKey);
-      }
-      THREAD_STARTER_CACHE.set(cacheKey, {
-        value: starter,
-        expiresAt,
-      });
-      evictThreadStarterCache();
-    }
+    THREAD_STARTER_CACHE.delete(cacheKey);
+    THREAD_STARTER_CACHE.set(cacheKey, {
+      value: starter,
+      expiresAt: Date.now() + THREAD_STARTER_CACHE_TTL_MS,
+    });
+    pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
     return starter;
   } catch (err) {
     logVerbose(
@@ -193,6 +165,17 @@ export async function resolveSlackThreadStarter(params: {
 type SlackRepliesPageMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
 const SLACK_THREAD_HISTORY_MAX_PAGES = 3;
+
+function toSlackHistoryMessage(message: SlackRepliesPageMessage, text: string | undefined) {
+  return {
+    text: text ?? formatSlackFilePlaceholder(message.files),
+    userId: message.user,
+    botId: message.bot_id,
+    ts: message.ts,
+    files: message.files,
+    attachments: message.attachments,
+  };
+}
 
 /**
  * Fetches the most recent messages in a Slack thread (excluding the current message).
@@ -282,14 +265,7 @@ export async function resolveSlackThreadHistory(params: {
       return [];
     }
 
-    return retained.map(([message, text]) => ({
-      text: text ?? formatSlackFilePlaceholder(message.files),
-      userId: message.user,
-      botId: message.bot_id,
-      ts: message.ts,
-      files: message.files,
-      attachments: message.attachments,
-    }));
+    return retained.map(([message, text]) => toSlackHistoryMessage(message, text));
   } catch (err) {
     params.assertCurrent?.();
     params.onOmission?.(formatErrorMessage(err));
@@ -346,14 +322,7 @@ export async function resolveSlackChannelHistory(params: {
       if (!text && !message.files?.length) {
         continue;
       }
-      messages.push({
-        text: text ?? formatSlackFilePlaceholder(message.files),
-        userId: message.user,
-        botId: message.bot_id,
-        ts: message.ts,
-        files: message.files,
-        attachments: message.attachments,
-      });
+      messages.push(toSlackHistoryMessage(message, text));
     }
     cursor = response.response_metadata?.next_cursor?.trim() || undefined;
     if (!cursor || scanned >= params.limit) {

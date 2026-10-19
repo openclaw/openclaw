@@ -7,7 +7,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
+import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { resolveChannelMessageToolMediaSourceParamKeysAsync } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root } from "../../infra/fs-safe.js";
@@ -20,6 +21,10 @@ import {
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromBuffer } from "../../media/outbound-attachment.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
@@ -150,7 +155,7 @@ function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): st
   return [...new Set([...BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS, ...(extraParamKeys ?? [])])];
 }
 
-export function resolveExtraActionMediaSourceParamKeys(params: {
+type ExtraActionMediaSourceParams = {
   cfg: OpenClawConfig;
   action?: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -161,12 +166,16 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
   agentId?: string | null;
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
-}): string[] {
+};
+
+export async function resolveExtraActionMediaSourceParamKeysAsync(
+  params: ExtraActionMediaSourceParams,
+): Promise<string[]> {
   if (!hasPotentialPluginActionParam(params.args)) {
     // Standard send params never need bundled action metadata discovery.
     return [];
   }
-  return resolveChannelMessageToolMediaSourceParamKeys(params);
+  return resolveChannelMessageToolMediaSourceParamKeysAsync(params);
 }
 
 export function collectActionMediaSourceHints(
@@ -187,6 +196,36 @@ export function collectActionMediaSourceHints(
       (source) => source.value,
     ),
   );
+}
+
+/** Local references need the checkout; remote and already-managed media keep their own lifetimes. */
+export async function waitForLocalMessageMedia(params: {
+  sources: readonly string[];
+  workspaceReadiness?: AgentWorkspaceReadiness;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const readiness = params.workspaceReadiness;
+  if (
+    !readiness ||
+    !params.sources.some((source) => {
+      const reference = classifyMediaReferenceSource(normalizeMediaReferenceSource(source.trim()));
+      return (
+        !reference.hasUnsupportedScheme &&
+        !reference.isHttpUrl &&
+        !reference.isDataUrl &&
+        !reference.isMediaStoreUrl
+      );
+    })
+  ) {
+    return;
+  }
+  params.assertCurrent?.();
+  readiness.assertCurrent();
+  await readiness.waitUntilReady();
+  params.abortSignal?.throwIfAborted();
+  params.assertCurrent?.();
+  readiness.assertCurrent();
 }
 
 function resolveAttachmentMaxBytes(params: {
@@ -385,6 +424,10 @@ export async function hydrateAttachmentParamsForAction(params: {
   if (params.action === "send") {
     const { args, preserveSendBuffer } = params;
     if (hasExplicitSendMediaSource(args, params.extraParamKeys)) {
+      const contentType = readAttachmentContentType(args);
+      if (contentType) {
+        args.contentType = contentType;
+      }
       delete args.buffer;
       return;
     }

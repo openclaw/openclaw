@@ -45,7 +45,6 @@ export class GatewayBoardProvider implements BoardProvider {
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
   private readonly loadErrorSignal = new ValueSignal<string | null>(null);
   private readonly eventStream = new EventStream<BoardCommandEvent>();
-  private client: BoardGatewayClient;
   private readonly retiredClients = new WeakSet<BoardGatewayClient>();
   private clientGeneration = 0;
   private unsubscribe: (() => void) | undefined;
@@ -54,7 +53,6 @@ export class GatewayBoardProvider implements BoardProvider {
   private userRefreshRequested = false;
   private readonly changedWidgets = new Set<string>();
   private stateGeneration = 0;
-  private connected = false;
   private wakeRetryDelay: (() => void) | undefined;
   private readonly appViews = new BoardMcpAppViewCache();
   private disposed = false;
@@ -62,16 +60,14 @@ export class GatewayBoardProvider implements BoardProvider {
 
   constructor(
     private readonly session: BoardGetParams,
-    client: BoardGatewayClient,
-    connected = true,
+    private client: BoardGatewayClient,
+    private connected = true,
   ) {
     this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(this.sessionKey));
     this.snapshot$ = this.snapshotSignal;
     this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
-    this.client = client;
-    this.connected = connected;
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -114,7 +110,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.snapshotLoaded = false;
     this.setLoadError(null);
     this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -273,7 +269,8 @@ export class GatewayBoardProvider implements BoardProvider {
     return result;
   }
 
-  private subscribe(client: BoardGatewayClient): void {
+  private attachGatewayEvents(client: BoardGatewayClient): void {
+    // Gateway event subscriptions return teardown; this is not a native DOM listener.
     this.unsubscribe = client.addEventListener((event) => {
       if (this.disposed || client !== this.client) {
         return;
@@ -408,8 +405,8 @@ export class GatewayBoardProvider implements BoardProvider {
         }
         if (
           error instanceof GatewayProtocolRequestError &&
-          error.gatewayCode === "UNAVAILABLE" &&
-          !error.retryable
+          (error.gatewayCode === "FORBIDDEN" ||
+            (error.gatewayCode === "UNAVAILABLE" && !error.retryable))
         ) {
           // A definitive rejection consumes this refresh. Only a newer event,
           // connection generation, or explicit refresh can request another one.

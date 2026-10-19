@@ -3,21 +3,26 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDirectChatContext } from "../gateway/server-chat.agent-events.test-helpers.js";
 import { readPreparedServerMethodModelCatalogs } from "../gateway/server-methods/optional-model-catalog.js";
+import { sessionCreateHandlers } from "../gateway/server-methods/sessions-create.js";
 import {
   identifiedClient,
   listSessions,
   requestContext,
 } from "../gateway/server-methods/sessions-read-cache.test-support.js";
+import type { GatewayClient, RespondFn } from "../gateway/server-methods/types.js";
 import { readPreparedGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { bindSessionRowProjection } from "../gateway/session-row-projection-access.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../gateway/session-row-projection.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   recordRuntimeAuthMaterialization,
@@ -32,6 +37,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  markPreparedModelRuntimeSnapshotsStale,
   publishPreparedModelRuntimeSnapshot,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -41,6 +47,7 @@ import { registerPreparedModelRuntimePublicationListener } from "./prepared-mode
 const fixture = usePreparedModelRuntimeHarness(
   { label: "catalog-publication-rows", scenario: "minimal" },
   () => {
+    vi.useRealTimers();
     projection?.dispose();
     projection = undefined;
     vi.restoreAllMocks();
@@ -177,6 +184,182 @@ beforeEach(() => {
 });
 
 describe("catalog publication session rows", () => {
+  it.each([
+    { selection: "explicit", superseded: false, stop: undefined },
+    { selection: "configured", superseded: false, stop: undefined },
+    { selection: "explicit", superseded: true, stop: undefined },
+    { selection: "explicit", superseded: false, stop: "deadline" },
+    { selection: "explicit", superseded: false, stop: "connection" },
+  ])(
+    "creates only with current native activation ($selection, superseded=$superseded, stop=$stop)",
+    async ({ selection, superseded, stop }) => {
+      const initial: OpenClawConfig = {
+        agents: {
+          entries: { default: {} },
+          defaults: { model: "custom/synthetic-model" },
+        },
+      };
+      mocks.configuredAgentIds = ["default"];
+      await refreshPreparedModelRuntimeSnapshots(initial, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      const previous = getPreparedModelRuntimeSnapshot(fixture.agentInput("default", initial))!;
+      const config: OpenClawConfig = {
+        ...initial,
+        plugins: { entries: { "synthetic-native": { enabled: true } } },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://synthetic.example.test/v1",
+              models: [
+                {
+                  id: model.id,
+                  name: model.name,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32_000,
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          ...initial.agents,
+          defaults: {
+            ...initial.agents?.defaults,
+            models: { "custom/synthetic-model": { agentRuntime: { id: "synthetic-native" } } },
+          },
+        },
+      };
+      let ready = false;
+      const nativeEntered = createDeferred();
+      const nativeRelease = createDeferred();
+      const loadNative = vi.fn(async () => {
+        nativeEntered.resolve();
+        if (stop) {
+          await nativeRelease.promise;
+        }
+        ready = true;
+        if (superseded) {
+          markPreparedModelRuntimeSnapshotsStale();
+        }
+        return [{ ...model, nativeRuntime: "synthetic-native" }];
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "synthetic-native",
+        source: "fixture",
+        harness: {
+          id: "synthetic-native",
+          label: "Synthetic native runtime",
+          authBootstrap: "harness",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          loadModelCatalog: loadNative,
+          readModelCatalogReadiness: () => (ready ? { accountType: "apiKey" } : undefined),
+        },
+      });
+      mocks.authStorage.getAll.mockReturnValue({});
+      mocks.modelRegistry.fork.mockImplementation((authStorage) => ({
+        ...mocks.modelRegistry,
+        authStorage,
+      }));
+      mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+      mocks.resolveNativeModelPrimary.mockReturnValue("custom/synthetic-model");
+      await fixture.state.writeConfig(config);
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      expect(previous.isCurrent()).toBe(false);
+      expect(loadNative).not.toHaveBeenCalled();
+      const context = createDirectChatContext({ getRuntimeConfig: () => config });
+      context.readPreparedGatewayModelCatalog = () =>
+        readPreparedGatewayModelCatalog({ agentId: "default", getConfig: () => config });
+      const connection = new AbortController();
+      const client: GatewayClient = {
+        connectionSignal: connection.signal,
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          role: "operator",
+          scopes: ["operator.admin"],
+          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+        },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "synthetic-native",
+            activation: { onAgentHarnesses: ["synthetic-native"] },
+          },
+        ],
+      });
+      const create = sessionCreateHandlers["sessions.create"]!;
+      for (let index = 0; index < (superseded || stop ? 1 : 2); index++) {
+        const key = `agent:default:dashboard:native-activation-${selection}-${index}`;
+        const respond = vi.fn<RespondFn>();
+        if (stop) {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+        }
+        const creation = withPluginRuntimeGenerationScope(
+          { pluginRegistry: registry, metadataSnapshot },
+          () =>
+            create({
+              req: { type: "req", id: key, method: "sessions.create" },
+              params: {
+                key,
+                agentId: "default",
+                model: "custom/synthetic-model",
+                ...(selection === "explicit" ? { agentRuntime: "synthetic-native" } : {}),
+              },
+              client,
+              context,
+              respond,
+              isWebchatConnect: () => true,
+            }),
+        );
+        if (stop) {
+          try {
+            await nativeEntered.promise;
+            if (stop === "deadline") {
+              await vi.advanceTimersByTimeAsync(20_000);
+            } else {
+              connection.abort();
+            }
+            await creation;
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+            );
+          } finally {
+            nativeRelease.resolve();
+            vi.useRealTimers();
+          }
+          await loadNative.mock.results[0]?.value;
+        } else if (superseded) {
+          await expect(creation).rejects.toThrow(
+            "prepared model runtime publication was superseded",
+          );
+        } else {
+          await creation;
+          expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
+        }
+        const entry = loadSessionEntry({ agentId: "default", sessionKey: key });
+        if (superseded || stop) {
+          expect(entry).toBeUndefined();
+        } else {
+          expect(entry).toMatchObject({ agentRuntimeOverride: "synthetic-native" });
+        }
+      }
+      expect(loadNative).toHaveBeenCalledOnce();
+    },
+  );
+
   it("keeps configured API facts through native observations", async () => {
     const loadModelCatalog = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
     const registry = createEmptyPluginRegistry();
@@ -237,8 +420,9 @@ describe("catalog publication session rows", () => {
       const completed = await owner.loadFullModelCatalog!({ changedOnly: true });
       expect(completed.entries).toMatchObject([model]);
       expect(owner.readFullModelCatalog?.()).toBe(completed);
-      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
-      expect(changes).not.toContain(true);
+      // Without provider inventory, a changed-only pass acquires the full catalog.
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
+      changes.length = 0;
       for (let observation = 0; observation < 2; observation += 1) {
         const unchanged = await owner.loadNativeModelCatalog!({
           provider: model.provider,
@@ -267,7 +451,7 @@ describe("catalog publication session rows", () => {
         contextWindow: 32_000,
       });
       expect(selected.routeVariants).toContainEqual(expect.objectContaining(nativeModel));
-      expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
       expect(changes).toContain(true);
     } finally {
       unsubscribe();

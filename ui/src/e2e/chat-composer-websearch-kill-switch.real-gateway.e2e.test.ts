@@ -7,6 +7,11 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../../scripts/lib/local-build-metadata-paths.mts";
+import { createConfigIO } from "../../../src/config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.ts";
 import type { SessionToolOverrides } from "../../../src/config/sessions/session-tool-overrides.ts";
 import {
@@ -14,8 +19,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -127,32 +131,29 @@ function observeRequests(page: Page) {
 
 async function settleSelection(page: Page) {
   // Observe a rendered frame, then a read on this same real Gateway connection.
-  await page.evaluate(async () => {
+  await evaluateControlUiContext(page, async (context) => {
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
-    };
-    await app.runtime.context.gateway.snapshot.client.request("health", {});
+    await context.gateway.snapshot.client!.request("health", {});
   });
 }
 
 async function openMenu(page: Page, selector = ".agent-chat__input") {
   const composer = page.locator(selector);
   await composer.waitFor();
-  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-  if (!(await menu.evaluate((node) => (node as HTMLElement & { open: boolean }).open))) {
+  const menu = composer.locator(".agent-chat__capability-menu");
+  if (!(await menu.evaluate((node) => node.hasAttribute("open")))) {
     await composer.getByRole("button", { name: "Add attachment" }).click();
   }
-  const webSearch = menu.locator('wa-dropdown-item[value="toggle-web-search"]');
+  const webSearch = menu.locator('.oc-menu-item[data-value="toggle-web-search"]');
   await webSearch.waitFor();
   await expect.poll(() => tooltipTitleText(webSearch)).not.toBe("Loading…");
   return { composer, menu, webSearch };
 }
 
 function checked(item: Locator) {
-  return item.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked);
+  return item.evaluate((node) => node.getAttribute("aria-checked") === "true");
 }
 
 async function presentation(item: Locator) {
@@ -165,11 +166,7 @@ async function presentation(item: Locator) {
 
 async function forceSelection(item: Locator) {
   await item.evaluate((element) => {
-    const menu = element.closest("wa-dropdown");
-    if (!menu) {
-      throw new Error("Capability row has no dropdown owner");
-    }
-    menu.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: element } }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   });
 }
 
@@ -224,22 +221,31 @@ for (const globallyEnabled of [false, true]) {
       instance = owner;
       try {
         expect((await owner.entrypoint())[0]).toMatch(/^dist\/index\.m?js$/u);
-        for (const scenario of scenarios) {
-          // A persisted legacy true is read directly; current sessions.patch normalizes it away.
-          const entry = await upsertSessionEntryCore(
-            {
-              agentId: "main",
-              sessionKey: `agent:main:websearch-${scenario.name}`,
-              env: owner.env,
-            },
-            {
-              sessionId: `websearch-${scenario.name}`,
-              updatedAt: Date.now(),
-              label: `Synthetic web search ${scenario.name}`,
-              toolOverrides: scenario.overrides,
-            },
-          );
-          expect(entry?.toolOverrides).toEqual(scenario.overrides);
+        const config = await createConfigIO({
+          env: owner.env,
+          configPath: owner.state.configPath,
+        }).loadConfigAsync();
+        setRuntimeConfigSnapshot(config);
+        try {
+          for (const scenario of scenarios) {
+            // A persisted legacy true is read directly; current sessions.patch normalizes it away.
+            const entry = await upsertSessionEntryCore(
+              {
+                agentId: "main",
+                sessionKey: `agent:main:websearch-${scenario.name}`,
+                env: owner.env,
+              },
+              {
+                sessionId: `websearch-${scenario.name}`,
+                updatedAt: Date.now(),
+                label: `Synthetic web search ${scenario.name}`,
+                toolOverrides: scenario.overrides,
+              },
+            );
+            expect(entry?.toolOverrides).toEqual(scenario.overrides);
+          }
+        } finally {
+          clearRuntimeConfigSnapshot();
         }
         await owner.startGateway();
         return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
@@ -272,9 +278,6 @@ for (const globallyEnabled of [false, true]) {
             ...(capture ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
           },
           async ({ page }) => {
-            await page.context().addInitScript((key) => {
-              localStorage.setItem(key, JSON.stringify({ dismissedAtMs: Date.now() }));
-            }, COMMUNITY_INVITE_KEY);
             const traffic = observeRequests(page);
             const observed = {
               stage,

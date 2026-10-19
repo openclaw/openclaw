@@ -185,7 +185,7 @@ export async function createCanvasDocument(
     ? normalizeCanvasDocumentId(input.id)
     : `cv_${randomUUID().replaceAll("-", "")}`;
   const rootDir = path.join(resolveCanvasDocumentsDir(options?.stateDir), id);
-  await fs.rm(rootDir, { recursive: true, force: true }).catch(() => undefined);
+  await fs.rm(rootDir, { recursive: true, force: true });
   await fs.mkdir(rootDir, { recursive: true });
   const root = await fsRoot(rootDir);
   await root.write("index.html", input.html);

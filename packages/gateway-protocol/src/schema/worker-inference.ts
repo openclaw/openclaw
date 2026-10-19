@@ -242,6 +242,9 @@ const WorkerInferenceTerminalErrorSchema = closedObject({
   reason: WorkerInferenceErrorReasonSchema,
   message: Type.String({ minLength: 1, maxLength: 256 }),
   usage: Type.Optional(WorkerTranscriptUsageSchema),
+  retryAfterMs: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]),
+  ),
 });
 
 const WorkerInferenceTerminalOutcomeSchema = Type.Union([

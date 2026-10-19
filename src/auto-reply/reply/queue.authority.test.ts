@@ -18,12 +18,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
-  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
@@ -67,6 +66,70 @@ function createOperatorAuthority() {
 }
 
 describe("followup queue authority", () => {
+  it.each(["collect", "overflow"] as const)(
+    "keeps restart-restricted input separate through a %s drain",
+    async (mode) => {
+      const q = createQueueCase({ mode: "collect", cap: mode === "overflow" ? 1 : 50 });
+      const admissionConfigs = [{ tools: { deny: ["write"] } }, { tools: { deny: ["exec"] } }];
+      for (const restricted of [true, false]) {
+        const run = createRun({
+          prompt: restricted ? "interrupted task" : "new task",
+          originatingChannel: "webchat",
+        });
+        run.readAdmissionConfig = () => admissionConfigs[restricted ? 0 : 1]!;
+        if (restricted) {
+          run.forceRestartSafeTools = true;
+          run.forceCodeModeTools = true;
+        }
+        q.add(run);
+      }
+      try {
+        q.start();
+        await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
+        expect(q.calls).toHaveLength(2);
+        expect(q.calls.map((run) => run.readAdmissionConfig?.())).toEqual(admissionConfigs);
+        expect(q.calls[0]?.prompt).toContain("interrupted task");
+        expect(q.calls[0]?.prompt).not.toContain("new task");
+        expect(q.calls[0]).toMatchObject({
+          forceRestartSafeTools: true,
+          forceCodeModeTools: true,
+        });
+        expect(q.calls[1]?.prompt).toContain("new task");
+        expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
+        expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
+      } finally {
+        clearFollowupQueue(q.key);
+      }
+    },
+  );
+
+  it("keeps different original requesters in separate collected turns on the same route", async () => {
+    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+    for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
+      const run = createRun({
+        prompt: `${senderId} request ${index}`,
+        originatingChannel: "telegram",
+        originatingTo: "shared-chat",
+      });
+      run.run.senderId = "shared-receiver";
+      run.run.requesterOrigin = {
+        sessionKey: "agent:research:telegram:group:requesters",
+        messageProvider: "telegram",
+        senderId,
+      };
+      q.add(run);
+    }
+    q.start();
+    await q.done.promise;
+    expect(q.calls).toHaveLength(2);
+    expect(q.calls[0]?.prompt).toContain("alice request 0");
+    expect(q.calls[0]?.prompt).not.toContain("bob request");
+    expect(q.calls[1]?.prompt).toContain("bob request 1");
+    expect(q.calls[1]?.prompt).toContain("bob request 2");
+    expect(q.calls[1]?.prompt).not.toContain("alice request");
+    expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
+  });
+
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);
     const conversationToolPolicy = {
@@ -96,12 +159,13 @@ describe("followup queue authority", () => {
       expect(q.calls).toHaveLength(2);
       const observed = [];
       for (const queued of q.calls) {
-        const params = await buildEmbeddedRunBaseParams({
+        const params = await buildEmbeddedRunExecutionParams({
           run: queued.run,
           provider: "openai",
           model: "gpt-test",
           runId: `queued-${observed.length}`,
-          authProfile: {},
+          sessionCtx: {},
+          hasRepliedRef: undefined,
         });
         const policy = resolveRequesterToolPolicies({
           config: params.config,
@@ -140,7 +204,7 @@ describe("followup queue authority", () => {
         },
       ]);
     } finally {
-      clearFollowupQueueForTest(q.key);
+      clearFollowupQueue(q.key);
     }
   });
 
@@ -229,83 +293,110 @@ describe("followup queue authority", () => {
     }
   });
 
-  it("keeps original grant revocation effective after collect retires an older client cancel", async () => {
-    const key = "test-collect-operator-revocation";
-    const source = createOperatorAuthority();
-    const firstCancel = new AbortController();
-    const secondCancel = new AbortController();
-    const effects: string[] = [];
-    const observations: boolean[] = [];
-    try {
-      for (const [index, abortSignal] of [firstCancel.signal, secondCancel.signal].entries()) {
-        enqueueFollowupRun(
-          key,
-          {
-            ...createRun({ prompt: `request ${index}` }),
-            operatorAuthority: source.authority,
-            abortSignal,
-          },
-          createQueueSettings(),
-        );
-      }
-      source.releaseRequest();
-      scheduleFollowupDrain(key, async (run) => {
-        const prepared = prepareChannelRunAdmission({
-          cfg: {},
-          runId: "collected-operator-revocation",
-          agentId: "agent",
-          ingressKind: "channel",
-          boundary: "auto-reply.agent-runner",
-          operatorAuthority: run.operatorAuthority,
-        });
-        try {
-          await admitFollowupRunLifecycle(run);
-          const context = await prepared.admit("embedded");
-          const assertCurrent = resolveAdmittedRunActiveAssertion(context)!;
-          firstCancel.abort();
-          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
-          assertCurrent();
-          effects.push("before revocation");
-          await Promise.resolve();
-          source.controller.abort();
-          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
-          try {
-            assertCurrent();
-            effects.push("after revocation");
-          } catch {
-            // The real admitted-run guard must reject before the modeled effect.
-          }
-        } finally {
-          prepared.close();
-          completeFollowupRunLifecycle(run);
-        }
-      });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(observations).toEqual([false, true]);
-      expect(effects).toEqual(["before revocation"]);
-      expect(source.references()).toBe(0);
-    } finally {
-      clearFollowupQueue(key);
-    }
-  });
-
-  it.each(["old", "new", "summarize"] as const)(
-    "releases original source holds exactly once across %s overflow and queue clearing",
-    (dropPolicy) => {
-      const key = `test-operator-overflow-${dropPolicy}`;
+  it.for(["older client", "latest client", "operator grant"] as const)(
+    "honors %s cancellation ownership after collect admission",
+    async (cancellation, { signal }) => {
+      const key = `test-collect-operator-revocation-${cancellation}`;
       const source = createOperatorAuthority();
+      const firstCancel = new AbortController();
+      const secondCancel = new AbortController();
+      const done = createDeferredCore();
+      const effects: string[] = [];
       try {
-        for (let index = 0; index < 5; index += 1) {
+        for (const [index, abortSignal] of [firstCancel.signal, secondCancel.signal].entries()) {
           enqueueFollowupRun(
             key,
-            { ...createRun({ prompt: `request ${index}` }), operatorAuthority: source.authority },
-            createQueueSettings({ cap: 1, dropPolicy }),
+            {
+              ...createRun({ prompt: `request ${index}` }),
+              operatorAuthority: source.authority,
+              abortSignal,
+            },
+            createQueueSettings(),
           );
         }
         source.releaseRequest();
+        scheduleFollowupDrain(key, async (run) => {
+          const abortSignal = resolveFollowupAbortSignal(run);
+          const prepared = prepareChannelRunAdmission({
+            cfg: {},
+            runId: "collected-operator-revocation",
+            agentId: "agent",
+            ingressKind: "channel",
+            boundary: "auto-reply.agent-runner",
+            operatorAuthority: run.operatorAuthority,
+          });
+          try {
+            await admitFollowupRunLifecycle(run);
+            const context = await prepared.admit("embedded");
+            const assertCurrent = resolveAdmittedRunActiveAssertion(context)!;
+            const performEffect = (label: string) => {
+              assertCurrent();
+              abortSignal?.throwIfAborted();
+              effects.push(label);
+            };
+            performEffect("before cancellation");
+            const controller =
+              cancellation === "operator grant"
+                ? source.controller
+                : cancellation === "older client"
+                  ? firstCancel
+                  : secondCancel;
+            controller.abort();
+            if (cancellation === "older client") {
+              expect(abortSignal?.aborted).toBe(false);
+              performEffect("after older client cancellation");
+              source.controller.abort();
+            }
+            expect(abortSignal?.aborted).toBe(true);
+            if (cancellation !== "latest client") {
+              // Original grant revocation still applies after an older client is retired.
+              expect(assertCurrent).toThrow();
+            }
+            expect(() => performEffect("after cancellation")).toThrow();
+          } catch (error) {
+            done.reject(error);
+          } finally {
+            prepared.close();
+            completeFollowupRunLifecycle(run);
+            done.resolve();
+          }
+        });
+        await withinTest(done.promise, signal);
+        expect(effects).toEqual(
+          cancellation === "older client"
+            ? ["before cancellation", "after older client cancellation"]
+            : ["before cancellation"],
+        );
+        expect(source.references()).toBe(0);
+      } finally {
+        clearFollowupQueue(key);
+      }
+    },
+  );
+
+  it.each(["old", "new", "summarize"] as const)(
+    "releases original source holds exactly once across %s overflow and queue clearing",
+    async (dropPolicy) => {
+      const key = `test-operator-overflow-${dropPolicy}`;
+      const source = createOperatorAuthority();
+      const runs: ReturnType<typeof createRun>[] = [];
+      try {
+        for (let index = 0; index < 5; index += 1) {
+          const run = createRun({ prompt: "request " + index });
+          run.operatorAuthority = source.authority;
+          runs.push(run);
+          enqueueFollowupRun(key, run, createQueueSettings({ cap: 1, dropPolicy }));
+        }
+        source.releaseRequest();
+        await Promise.all(
+          runs
+            .filter((run) => run.controllerInput?.custody.completed)
+            .map((run) => run.controllerInput!.settlement.promise),
+        );
         expect(source.references()).toBe(dropPolicy === "summarize" ? 3 : 1);
         clearFollowupQueue(key);
         clearFollowupQueue(key);
+        await Promise.all(runs.map((run) => run.controllerInput!.settlement.promise));
         expect(source.references()).toBe(0);
       } finally {
         clearFollowupQueue(key);
@@ -322,8 +413,8 @@ describe("followup queue authority", () => {
     const recovery = resolveStrandedReplyRecovery({
       base: parent,
       payloads: [],
-      finalText:
-        "This answer must reach the original conversation. It contains enough detail to require the existing one-shot delivery recovery.",
+      finalText: "The answer is ready.",
+      terminalReply: { disposition: "visible", text: "The answer is ready." },
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
@@ -338,6 +429,7 @@ describe("followup queue authority", () => {
     try {
       enqueueFollowupRun(key, recovery.run, createQueueSettings());
       completeFollowupRunLifecycle(parent);
+      await parent.controllerInput!.settlement.promise;
       expect(source.references()).toBe(1);
       scheduleFollowupDrain(key, async (run) => {
         try {
@@ -496,17 +588,21 @@ describe("followup queue authority", () => {
   }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:collect-policy";
-      const firstStore = state.statePath("collect-first.sqlite");
-      const secondStore = state.statePath("collect-second.sqlite");
+      const policySessionKey = "agent:policy:collect-policy";
+      const firstStore = state.statePath("collect-main.sqlite");
+      const secondStore = state.statePath("collect-policy.sqlite");
+      const storeTemplate = state.statePath("collect-{agentId}.sqlite");
       for (const storePath of [firstStore, secondStore]) {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey, storePath, env: state.env },
+          { agentId: "policy", sessionKey: policySessionKey, storePath, env: state.env },
           { sessionId: "collect-policy", updatedAt: 1, sandboxMode: "off" },
         );
       }
       // Settle setup owners before observing reads, including their WAL maintenance.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-      const sources = [firstStore, secondStore].map((storePath, index) => {
+      // Both executions belong to main's physical store. Independent policy lookup
+      // resolves the template for the policy agent, retaining the second-store wait.
+      const sources = [firstStore, storeTemplate].map((storePath, index) => {
         const run = createRun({
           prompt: `policy selection ${index}`,
           originatingChannel: "webchat",
@@ -514,13 +610,13 @@ describe("followup queue authority", () => {
         Object.assign(run.run, {
           agentId: "main",
           sessionKey,
-          runtimePolicySessionKey: sessionKey,
+          runtimePolicySessionKey: policySessionKey,
           senderIsOwner: true,
           gatewayUiCommandTarget: { connId: "shared-browser", profileId: "viewer" },
           clientCaps: ["ui-commands"],
           config: {
             session: { store: storePath },
-            agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+            agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {}, policy: {} } },
             tools: {
               sandbox: { tools: { allow: ["*"], deny: index === 0 ? ["screen", "theme"] : [] } },
             },
@@ -575,7 +671,7 @@ describe("followup queue authority", () => {
             .prepare(
               "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
             )
-            .run(sessionKey);
+            .run(policySessionKey);
         } finally {
           foreign.close();
         }

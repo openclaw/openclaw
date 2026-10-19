@@ -1,18 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { statIfExists } from "../infra/path-existence.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 
 const DEFAULT_CLI_OUTPUT_TEMP_PREFIX = ".openclaw-media-output";
 
 async function resolveExistingOutputMode(filePath: string): Promise<number | undefined> {
-  try {
-    return (await fs.stat(filePath)).mode & 0o7777;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
+  const stat = await statIfExists(filePath);
+  return stat === undefined ? undefined : stat.mode & 0o7777;
 }
 
 /** Publish a CLI-owned file only after its sibling temp write completes. */

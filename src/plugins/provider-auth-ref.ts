@@ -149,7 +149,7 @@ async function promptProviderSecretRefForSetup(params: {
   defaultFilePointer: string;
   copy?: SecretRefSetupPromptCopy;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ ref: SecretRef; resolvedValue: string }> {
+}): Promise<{ ref: SecretRef; resolvedValue: string } | undefined> {
   const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
     ([, provider]) =>
       provider?.source === "file" || provider?.source === "exec" || provider?.source === "store",
@@ -160,7 +160,7 @@ async function promptProviderSecretRefForSetup(params: {
         "No file/exec/store secret providers are configured yet. Add one under secrets.providers, or select a built-in source.",
       "No providers configured",
     );
-    throw new Error("retry");
+    return undefined;
   }
 
   const defaultProvider = resolveDefaultSecretProviderAlias(params.config, "file", {
@@ -193,61 +193,51 @@ async function promptProviderSecretRefForSetup(params: {
       `Provider "${selectedProvider}" is not a file/exec/store provider.`,
       "Invalid provider",
     );
-    throw new Error("retry");
+    return undefined;
   }
 
-  const idPrompt =
+  const idInput =
     providerEntry.source === "file"
-      ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
+      ? {
+          message: "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)",
+          initialValue: providerEntry.mode === "singleValue" ? "value" : params.defaultFilePointer,
+          placeholder: "/providers/openai/apiKey",
+          validate: (candidate: string) =>
+            providerEntry.mode === "singleValue"
+              ? candidate === "value"
+                ? undefined
+                : 'singleValue mode expects id "value".'
+              : isValidFileSecretRefId(candidate)
+                ? undefined
+                : 'Use an absolute JSON pointer like "/providers/openai/apiKey".',
+        }
       : providerEntry.source === "store"
-        ? "Secret store name"
-        : "Secret id for the exec provider";
-  const idDefault =
-    providerEntry.source === "file"
-      ? providerEntry.mode === "singleValue"
-        ? "value"
-        : params.defaultFilePointer
-      : providerEntry.source === "store"
-        ? (resolveDefaultProviderEnvVar(params.provider, params.config) ?? "")
-        : `${params.provider}/apiKey`;
+        ? {
+            message: "Secret store name",
+            initialValue: resolveDefaultProviderEnvVar(params.provider, params.config) ?? "",
+            placeholder: "OPENAI_API_KEY",
+            validate: (candidate: string) =>
+              isValidEnvSecretRefId(candidate)
+                ? undefined
+                : 'Use a store name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).',
+          }
+        : {
+            message: "Secret id for the exec provider",
+            initialValue: `${params.provider}/apiKey`,
+            placeholder: "openai/api-key",
+            validate: (candidate: string) =>
+              isValidExecSecretRefId(candidate)
+                ? undefined
+                : formatExecSecretRefIdValidationMessage(),
+          };
   const idRaw = await params.prompter.text({
-    message: idPrompt,
-    initialValue: idDefault,
-    placeholder:
-      providerEntry.source === "file"
-        ? "/providers/openai/apiKey"
-        : providerEntry.source === "store"
-          ? "OPENAI_API_KEY"
-          : "openai/api-key",
+    ...idInput,
     validate: (value) => {
       const candidate = value.trim();
-      if (!candidate) {
-        return "Secret id cannot be empty.";
-      }
-      if (
-        providerEntry.source === "file" &&
-        providerEntry.mode !== "singleValue" &&
-        !isValidFileSecretRefId(candidate)
-      ) {
-        return 'Use an absolute JSON pointer like "/providers/openai/apiKey".';
-      }
-      if (
-        providerEntry.source === "file" &&
-        providerEntry.mode === "singleValue" &&
-        candidate !== "value"
-      ) {
-        return 'singleValue mode expects id "value".';
-      }
-      if (providerEntry.source === "exec" && !isValidExecSecretRefId(candidate)) {
-        return formatExecSecretRefIdValidationMessage();
-      }
-      if (providerEntry.source === "store" && !isValidEnvSecretRefId(candidate)) {
-        return 'Use a store name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).';
-      }
-      return undefined;
+      return candidate ? idInput.validate(candidate) : "Secret id cannot be empty.";
     },
   });
-  const id = normalizeStringifiedOptionalString(idRaw) || idDefault;
+  const id = normalizeStringifiedOptionalString(idRaw) || idInput.initialValue;
   const ref: SecretRef = {
     source: providerEntry.source,
     provider: selectedProvider,
@@ -275,7 +265,7 @@ async function promptProviderSecretRefForSetup(params: {
       ].join("\n"),
       "Reference check failed",
     );
-    throw new Error("retry", { cause: error });
+    return undefined;
   }
 }
 
@@ -355,16 +345,12 @@ export async function promptSecretRefForSetup(params: {
       return { ref, resolvedValue };
     }
 
-    try {
-      return await promptProviderSecretRefForSetup({
-        ...params,
-        defaultFilePointer,
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === "retry") {
-        continue;
-      }
-      throw error;
+    const result = await promptProviderSecretRefForSetup({
+      ...params,
+      defaultFilePointer,
+    });
+    if (result) {
+      return result;
     }
   }
 }

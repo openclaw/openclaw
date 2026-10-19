@@ -46,6 +46,7 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.gateway.buildNativeControlUiConnectAuth
 import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
@@ -188,7 +189,6 @@ private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
 private const val CRON_JOBS_PAGE_SIZE = 200
 private const val CRON_JOBS_MAX_PAGES = 100
 private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
-private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val USAGE_INCOMPLETE_RETRY_DELAY_MS = 5_000L
 private const val USAGE_INCOMPLETE_RETRY_LIMIT = 3
 private const val OperatorAdminScope = "operator.admin"
@@ -3513,7 +3513,11 @@ class NodeRuntime internal constructor(
 
   internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
-  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
+  fun setTalkModeEnabled(value: Boolean): Unit =
+    setVoiceCaptureMode(
+      if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off,
+      disposition = if (value) TalkSessionCloseDisposition.Detach else TalkSessionCloseDisposition.Abort,
+    )
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -3965,6 +3969,7 @@ class NodeRuntime internal constructor(
   private fun setVoiceCaptureMode(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
+    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
     var ownershipEpoch = 0L
@@ -3984,7 +3989,7 @@ class NodeRuntime internal constructor(
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false
-            talkMode.stopAllCapture()
+            talkMode.stopAllCapture(disposition = disposition)
             stopVoicePlayback()
             micCapture.setMicEnabled(false)
             if (persistManualMic) {
@@ -5328,8 +5333,17 @@ class NodeRuntime internal constructor(
       applyVoiceWakeWords(payloadJson)
     }
     if (operatorConnected && (event == "config.changed" || event == "chat.metadata.changed")) {
-      refreshModelCatalog()
-      refreshProviderModels()
+      val change = if (event == "chat.metadata.changed") parseJsonParamsObject(payloadJson) else null
+      val changedAgentId = change.nonBlankString("agentId")
+      val affectsSelectedAgent = changedAgentId == null || selectedChatAgentId == null || changedAgentId.equals(selectedChatAgentId, ignoreCase = true)
+      // Usage publications do not change catalogs; retain auth and selection invalidation.
+      if (
+        change.boolean("modelSelectionChanged") ||
+        (affectsSelectedAgent && (change?.get("modelCatalogChanged") != JsonPrimitive(false) || change.boolean("authChanged")))
+      ) {
+        refreshModelCatalog()
+        refreshProviderModels()
+      }
     }
     if (event == "config.changed" || event == GatewayEvent.UsersPrefsChanged.rawValue) {
       // Config changes invalidate the snapshot; profile changes are targeted by
@@ -6531,10 +6545,7 @@ class NodeRuntime internal constructor(
           nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
         )
 
-      val jobs =
-        requireNotNull((1..CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS).firstNotNullOfOrNull { requestCronJobsSnapshot(gatewayScope) }) {
-          "Gateway cron jobs changed repeatedly while loading."
-        }
+      val jobs = requestCronJobsSnapshot(gatewayScope)
       val sortedJobs =
         jobs.sortedWith(
           compareBy<GatewayCronJobSummary> { it.nextRunAtMs == null }
@@ -6558,12 +6569,9 @@ class NodeRuntime internal constructor(
 
   private suspend fun requestCronJobsSnapshot(
     gatewayScope: GatewayDataScope,
-  ): List<GatewayCronJobSummary>? {
+  ): List<GatewayCronJobSummary> {
     val jobs = mutableListOf<GatewayCronJobSummary>()
-    val jobIds = mutableSetOf<String>()
     var offset = 0
-    var expectedTotal: Long? = null
-    var expectedSnapshotRevision: String? = null
     repeat(CRON_JOBS_MAX_PAGES) {
       val listParams =
         buildJsonObject {
@@ -6585,29 +6593,12 @@ class NodeRuntime internal constructor(
       require(total in 0L..CRON_JOBS_MAX_COUNT.toLong()) {
         "Gateway returned an invalid cron jobs total."
       }
-      if (expectedTotal != null && total != expectedTotal) return null
-      val snapshotRevision =
-        (listRoot?.get("snapshotRevision") as? JsonPrimitive)
-          ?.contentOrNull
-          ?.trim()
-          ?.takeIf { it.isNotEmpty() }
-      // A captured total distinguishes the first page from legacy pages without a revision.
-      if (expectedTotal != null && snapshotRevision != expectedSnapshotRevision) return null
-      expectedTotal = total
-      expectedSnapshotRevision = snapshotRevision
-      for (job in pageJobs) {
-        // Offset pages are separately locked by the Gateway. A mutation between
-        // calls can shift a boundary; discard the partial snapshot and retry.
-        if (!jobIds.add(job.id)) return null
-      }
       jobs += pageJobs
       require(jobs.size <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
-      require(total >= jobs.size.toLong()) {
-        "Gateway returned an invalid cron jobs total."
-      }
       val nextOffset =
         nextCronJobsPageOffset(listRoot, offset, rawJobs?.size ?: 0)
-          ?: return jobs.takeIf { it.size.toLong() == expectedTotal }
+          // Paging is best effort when jobs change mid-refresh; the next refresh picks up omissions.
+          ?: return jobs.distinctBy { it.id }
       require(nextOffset <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
       offset = nextOffset
     }

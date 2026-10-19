@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -28,28 +29,37 @@ const result = {
     toolOutput: { source: "provider-response", modelInput: "unverified" },
   },
 };
+const toolCall = (args: Record<string, unknown>) => ({
+  type: "toolCall",
+  id: "output-call",
+  name: "exec",
+  arguments: args,
+});
 const history = prepareChatHistoryFixture([
   { role: "user", content: "Inspect the complete command output.", timestamp },
   {
     role: "assistant",
     timestamp: timestamp + 1,
     __openclaw: { id: "output-request" },
-    content: [
-      {
-        type: "toolCall",
-        id: "output-call",
-        name: "exec",
-        arguments: { command: "printf 'capture output'", title: "Capture command output" },
-      },
-    ],
+    content: [toolCall({ command: "printf 'capture output'", title: "Capture command output" })],
   },
   {
     ...result,
-    content: [{ type: "text", text: fullOutput.slice(0, 8_000) }],
+    content: [{ type: "text", text: fullOutput.slice(0, 2_000) }],
     __openclaw: { ...result["__openclaw"], truncated: true, reason: "display-cap" },
   },
   { role: "assistant", content: "Output is ready for inspection.", timestamp: timestamp + 3 },
 ]);
+const capture = (page: Page, dir: string, name: string) =>
+  page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
+async function expandGroups(page: Page, reply: string) {
+  await page.getByText(reply, { exact: true }).waitFor();
+  for (const group of await page
+    .locator('.chat-activity-group__summary[aria-expanded="false"]')
+    .all()) {
+    await group.click();
+  }
+}
 
 suite.define(() => {
   it("renders native Code Mode results without transport envelopes", async () => {
@@ -89,14 +99,7 @@ suite.define(() => {
               {
                 role: "assistant",
                 timestamp: timestamp + 1,
-                content: [
-                  {
-                    type: "toolCall",
-                    id: "output-call",
-                    name: "exec",
-                    arguments: { input: source },
-                  },
-                ],
+                content: [toolCall({ input: source })],
               },
               nativeResult,
               { role: "assistant", content: "The service is running.", timestamp: timestamp + 3 },
@@ -105,18 +108,10 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await page.getByText("The service is running.", { exact: true }).waitFor();
-        for (const group of await page
-          .locator('.chat-activity-group__summary[aria-expanded="false"]')
-          .all()) {
-          await group.click();
-        }
+        await expandGroups(page, "The service is running.");
         const row = page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first();
         await row.click();
-        await page.screenshot({
-          path: path.join(artifacts, "01-expanded.png"),
-          animations: "disabled",
-        });
+        await capture(page, artifacts, "01-expanded");
         expect(await page.locator(".chat-tool-msg-summary").textContent()).toContain(
           "run JavaScript",
         );
@@ -134,19 +129,11 @@ suite.define(() => {
         await body.getByRole("button", { name: "Raw details", exact: true }).click();
         expect(await body.locator(".chat-tool-card__raw-body code").textContent()).toBe(rawOutput);
         await page.reload();
-        await page.getByText("The service is running.", { exact: true }).waitFor();
-        for (const group of await page
-          .locator('.chat-activity-group__summary[aria-expanded="false"]')
-          .all()) {
-          await group.click();
-        }
+        await expandGroups(page, "The service is running.");
         await page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first().click();
         expect(await body.locator(".chat-tool-card__outcome").textContent()).toBe("Completed");
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.screenshot({
-          path: path.join(artifacts, "02-mobile-reloaded.png"),
-          animations: "disabled",
-        });
+        await capture(page, artifacts, "02-mobile-reloaded");
         expect(await visibleOutput.textContent()).toContain('"state": "running"');
       },
     );
@@ -167,11 +154,7 @@ suite.define(() => {
           },
         });
         const expandOutput = async () => {
-          await page.getByText("Output is ready for inspection.", { exact: true }).waitFor();
-          const groups = page.locator('.chat-activity-group__summary[aria-expanded="false"]');
-          for (const group of await groups.all()) {
-            await group.click();
-          }
+          await expandGroups(page, "Output is ready for inspection.");
           const row = page.locator(".chat-tool-msg-summary", { hasText: "Capture command output" });
           await row.waitFor();
           if ((await row.getAttribute("aria-expanded")) !== "true") {
@@ -180,12 +163,16 @@ suite.define(() => {
         };
         await page.goto(suite.server.baseUrl + "chat");
         await expandOutput();
-        // This capture precedes the new control assertion, so the same test also
-        // retains an honest pre-fix screenshot when run against the baseline.
-        await page.screenshot({
-          path: path.join(artifacts, "01-output-preview.png"),
-          animations: "disabled",
-        });
+        await capture(page, artifacts, "01-output-preview");
+        const historyRequests = (await gateway.getRequests()).filter(
+          (request) => request.method === "chat.history" || request.method === "chat.startup",
+        );
+        expect(historyRequests.length).toBeGreaterThan(0);
+        expect(
+          historyRequests.every(
+            (request) => asOptionalRecord(request.params)?.toolResultMaxChars === 2_000,
+          ),
+        ).toBe(true);
         expect(await page.locator(".chat-tool-msg-body").textContent()).not.toContain("TAIL:");
         await page.getByRole("button", { name: "Show full output", exact: true }).click();
         const request = await gateway.waitForRequest("chat.message.get");
@@ -198,10 +185,7 @@ suite.define(() => {
         expect(await page.locator("openclaw-chat-tool-output").textContent()).not.toContain(
           "Captured before context processing",
         );
-        await page.screenshot({
-          path: path.join(artifacts, "02-full-output.png"),
-          animations: "disabled",
-        });
+        await capture(page, artifacts, "02-full-output");
         await page.getByRole("button", { name: "Copy available output", exact: true }).click();
         await expect
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -215,20 +199,14 @@ suite.define(() => {
         await page.locator("openclaw-chat-tool-output").evaluate((element) => {
           element.scrollTop = element.scrollHeight;
         });
-        await page.screenshot({
-          path: path.join(artifacts, "03-full-output-tail.png"),
-          animations: "disabled",
-        });
+        await capture(page, artifacts, "03-full-output-tail");
 
         await page.reload();
         await expandOutput();
         await page.getByRole("button", { name: "Show full output", exact: true }).click();
         await expect.poll(() => output.textContent()).toBe(fullOutput);
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.screenshot({
-          path: path.join(artifacts, "04-reloaded-mobile.png"),
-          animations: "disabled",
-        });
+        await capture(page, artifacts, "04-reloaded-mobile");
       },
     );
   });

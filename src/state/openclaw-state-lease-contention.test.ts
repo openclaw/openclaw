@@ -32,7 +32,8 @@ it.each([
           },
         };
       };
-      let writer = ending === "cleanup" ? undefined : takeWriter();
+      const cleanup = ending === "cleanup";
+      let writer = cleanup ? undefined : takeWriter();
       const controller = new AbortController();
       let entered = 0;
       let cleanupRelease: Promise<void> | undefined;
@@ -61,7 +62,7 @@ it.each([
           async (lease) => {
             entered += 1;
             lease.assertOwned();
-            if (ending === "cleanup") {
+            if (cleanup) {
               vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
               writer = takeWriter();
               cleanupRelease = yieldImmediate().then(() => writer?.release());
@@ -89,7 +90,7 @@ it.each([
           await cleanupRelease;
           expect(entered).toBe(1);
         }
-        expect(retry).toHaveBeenCalledTimes(ending === "timeout" || ending === "cleanup" ? 0 : 1);
+        expect(retry).toHaveBeenCalledTimes(ending === "timeout" || cleanup ? 0 : 1);
         expect(
           database.db
             .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")

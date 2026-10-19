@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/client";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -499,23 +499,16 @@ export async function leaseMcpAppModelContextForSessionTurn(params: {
     return undefined;
   }
   const modelContext = leases.flatMap((lease) => lease.modelContext);
+  const applyToLeases = (operation: "assertCurrent" | "commit" | "rollback") => () => {
+    for (const lease of leases) {
+      lease[operation]();
+    }
+  };
   return {
     project: (imageOffset: number) => projectMcpAppModelContextInput(modelContext, imageOffset),
-    assertCurrent: () => {
-      for (const lease of leases) {
-        lease.assertCurrent();
-      }
-    },
-    commit: () => {
-      for (const lease of leases) {
-        lease.commit();
-      }
-    },
-    rollback: () => {
-      for (const lease of leases) {
-        lease.rollback();
-      }
-    },
+    assertCurrent: applyToLeases("assertCurrent"),
+    commit: applyToLeases("commit"),
+    rollback: applyToLeases("rollback"),
   };
 }
 
@@ -544,7 +537,7 @@ export function acquireMcpAppViewRequest(
   return () => {
     if (!released) {
       released = true;
-      view.activeRequests = Math.max(0, view.activeRequests - 1);
+      view.activeRequests -= 1;
     }
   };
 }

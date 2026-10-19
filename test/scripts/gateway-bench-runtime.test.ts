@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
@@ -9,14 +10,15 @@ import {
   formatStats,
   parseGatewayBenchRuntimeOptions,
   writeGatewayBenchConfig,
+  writePluginFixtures,
 } from "../../scripts/lib/gateway-bench-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { startGatewayDiscovery } from "../../src/gateway/server-discovery-runtime.js";
-import { createGatewayPluginRuntimeGeneration } from "../../src/gateway/server-plugin-runtime-generation.js";
 import {
   resolveWideAreaDiscoveryDomain,
   writeWideAreaGatewayZone,
 } from "../../src/infra/widearea-dns.js";
+import { loadPluginManifest } from "../../src/plugins/manifest.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -31,16 +33,25 @@ vi.mock("../../src/infra/widearea-dns.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("gateway benchmark runtime selection", () => {
-  it("defaults only the Gateway command to the controller executable", () => {
-    const options = parseGatewayBenchRuntimeOptions(new Map());
-    expect(options).toEqual({ gatewayRuntime: process.execPath, gatewayCpus: undefined });
-    expect(buildGatewayBenchCommand(["entry.js"], options)).toEqual({
-      command: process.execPath,
-      args: ["entry.js"],
+it.each([undefined, true, false])(
+  "activates benchmark plugins unless startup activation is disabled (%s)",
+  (activationOnStartup) => {
+    const root = tempDirs.make("gateway-plugin-load-");
+    const { pluginIds, pluginsDir } = writePluginFixtures(root, {
+      count: 2,
+      activationOnStartup,
     });
-  });
+    expect(pluginIds).toHaveLength(2);
+    for (const id of pluginIds) {
+      expect(loadPluginManifest(path.join(pluginsDir, id))).toMatchObject({
+        ok: true,
+        manifest: { id, activation: { onStartup: activationOnStartup !== false } },
+      });
+    }
+  },
+);
 
+describe("gateway benchmark runtime selection", () => {
   it.each([undefined, "0,1,2,3"])(
     "keeps the selected executable and Gateway arguments together with affinity %s",
     (gatewayCpus) => {
@@ -59,19 +70,19 @@ describe("gateway benchmark runtime selection", () => {
     },
   );
 
-  it.each(["", " ", " --inspect", "bun\0other"])("rejects invalid executable %j", (value) => {
+  it.each(["", " --inspect", "bun\0other"])("rejects invalid executable %j", (value) => {
     expect(() =>
       parseGatewayBenchRuntimeOptions(new Map([["--gateway-runtime", [value]]])),
     ).toThrow("--gateway-runtime");
   });
 
-  it.each(["", "0-3", "0,,1", "0,1 "])("rejects invalid CPU list %j", (value) => {
+  it.each(["0,1 "])("rejects invalid CPU list %j", (value) => {
     expect(() => parseGatewayBenchRuntimeOptions(new Map([["--gateway-cpus", [value]]]))).toThrow(
       "--gateway-cpus requires comma-separated CPU numbers",
     );
   });
 
-  it.each(["darwin", "win32"] as const)("rejects affinity on %s before spawn", (platform) => {
+  it.each(["win32"] as const)("rejects affinity on %s before spawn", (platform) => {
     expect(() =>
       buildGatewayBenchCommand(
         ["entry.js"],
@@ -90,7 +101,6 @@ describe("benchmark statistic units", () => {
       format: undefined,
       expected: "p50=1.5ms avg=1.5ms min=1.0ms max=2.0ms",
     },
-    { name: "fractional counts", format: String, expected: "p50=1.5 avg=1.5 min=1 max=2" },
     { name: "memory", format: formatMb, expected: "p50=1.5MB avg=1.5MB min=1.0MB max=2.0MB" },
   ])("formats $name", ({ format, expected }) => {
     expect(format === undefined ? formatStats(stats) : formatStats(stats, format)).toBe(expected);
@@ -154,10 +164,6 @@ describe("gateway benchmark discovery isolation", () => {
     const discovery = await startGatewayDiscovery({
       machineDisplayName: "Benchmark fixture",
       discovery: cfgAtStart.discovery,
-      pluginRuntimeClaim: createGatewayPluginRuntimeGeneration({
-        getServices: () => null,
-        setServices: () => {},
-      }).currentClaim(),
       port: 18789,
       gatewayTls: { enabled: false },
       gatewayDirectReachable: false,

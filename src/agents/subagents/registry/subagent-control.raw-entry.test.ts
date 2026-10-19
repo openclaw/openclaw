@@ -5,33 +5,60 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { enqueueFollowupRun } from "../../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
-import {
-  clearFollowupQueue,
-  getExistingFollowupQueue,
-} from "../../../auto-reply/reply/queue/state.js";
+import { clearSessionQueues } from "../../../auto-reply/reply/queue/cleanup.js";
+import { getExistingFollowupQueue } from "../../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { clearCommandLane, enqueueCommandInLane } from "../../../process/command-queue.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { registerChatAbortController } from "../../../gateway/chat-abort.js";
+import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
+import {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../../sessions/session-controller.lifecycle.js";
+import {
+  reserveSessionControllerSource,
+  trackSessionControllerSourceWork,
+} from "../../../sessions/session-controller.mailbox.js";
+import {
+  markReplyOperationExecutionStarted,
+  recordOperationBackendRunId,
+} from "../../../sessions/session-controller.state.js";
 import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
-import { resolveEmbeddedSessionLane } from "../../embedded-agent-runner/lanes.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  createDurableSessionsSendTestRun,
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "../../openclaw-tools.sessions-steering.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "../../tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { captureSubagentCompletionReply } from "../announce/subagent-announce-output.js";
+import {
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
+} from "./subagent-control-native.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
-import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { getSubagentRunByRunId } from "./subagent-registry.test-helpers.js";
+import { addSubagentRunForTests, getSubagentRunByRunId } from "./subagent-registry.test-helpers.js";
 
 vi.mock("./subagent-registry-run-manager.js", { spy: true });
 
@@ -65,6 +92,7 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     { agentId: owner, storePath: childStorePath, sessionKey: "global" },
     {
       sessionId: childId,
+      lifecycleRevision: `${childId}-revision`,
       updatedAt: Date.now(),
       spawnedBy: parentKey,
       parentSessionKey: parentKey,
@@ -107,7 +135,7 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     watch: true,
     timeoutSeconds: 0,
   });
-  expect(sent.details).toMatchObject({ status: "accepted", watched: true });
+  expect(sent.details).toMatchObject({ status: "accepted", watched: false });
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0]).toMatchObject({ agentId: owner, sessionKey: "global" });
   expect.soft(getSubagentRunByRunId("watched-global-run")).toMatchObject({
@@ -122,33 +150,57 @@ it("cancelling a watched main/global child preserves the other agent's work", as
 
   const foreignAbort = vi.fn();
   const foreignHandle = createEmbeddedRunHandle({ runId: "foreign-run", abort: foreignAbort });
-  setActiveEmbeddedRun(foreignId, foreignHandle, "global", undefined, foreignAgent);
+  attachActiveEmbeddedRun(
+    foreignId,
+    foreignHandle,
+    "global",
+    foreignStorePath,
+    undefined,
+    foreignAgent,
+  );
   const followup = createQueueTestRun({ prompt: "Other agent's queued followup" });
   Object.assign(followup.run, {
     agentId: foreignAgent,
     sessionKey: "global",
     sessionId: foreignId,
+    config: cfg,
+  });
+  const foreignTarget = captureSessionTarget({
+    storeScope: foreignStorePath,
+    sessionKey: "global",
+    agentId: foreignAgent,
+    incarnation: foreignId,
   });
   enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
-  const lane = resolveEmbeddedSessionLane("global");
-  const entered = createDeferred();
-  const release = createDeferred();
-  const blocker = enqueueCommandInLane(lane, async () => {
-    entered.resolve();
-    await release.promise;
+  const childTarget = captureSessionTarget({
+    storeScope: childStorePath,
+    sessionKey: "global",
+    agentId: owner,
+    incarnation: childId,
   });
-  await entered.promise;
-  const foreignCommand = enqueueCommandInLane(lane, async () => "foreign command survived", {
-    sessionTarget: { agentId: foreignAgent, sessionKey: "global", sessionId: foreignId },
+  const childSource = registerChatAbortController({
+    target: childTarget,
+    runId: "watched-global-run",
+    sessionKey: "global",
+    sessionId: childId,
+    kind: "agent",
+    timeoutMs: 60_000,
   });
-  const childCommand = enqueueCommandInLane(lane, async () => "child must not start", {
-    sessionTarget: { agentId: owner, sessionKey: "global", sessionId: childId },
-  });
+  const foreignTurn = vi.fn(async () => "foreign command survived");
+  const childTurn = vi.fn(async () => "unrelated child turn survived");
+  const foreignCommand = withSessionTurn(
+    { sessionKey: "global", sessionId: foreignId, target: foreignTarget },
+    foreignTurn,
+  );
+  const childCommand = withSessionTurn(
+    { sessionKey: "global", sessionId: childId, target: childTarget },
+    childTurn,
+  );
   const outcome = Promise.allSettled([foreignCommand, childCommand]);
   const interruptChild = vi.fn(() => childAdmission.release());
-  const childAdmission = await beginSessionWorkAdmission({
-    scope: childStorePath,
-    identities: ["global", childId],
+  const childAdmission = await beginSessionEffect({
+    target: childTarget,
+    sourceInput: childSource.entry!.input,
     assertAllowed: () => {},
     onInterrupt: interruptChild,
   });
@@ -161,18 +213,22 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     expect(cancelled.details).toMatchObject({ found: true, killed: true });
     expect(interruptChild).toHaveBeenCalledOnce();
     expect(
-      loadSessionEntry({ agentId: owner, storePath: childStorePath, sessionKey: "global" }),
-    ).toMatchObject({ abortedLastRun: true, status: "killed" });
+      loadSessionEntry({ agentId: owner, storePath: childStorePath, sessionKey: "global" })
+        ?.abortedLastRun,
+    ).not.toBe(true);
     expect.soft(foreignAbort).not.toHaveBeenCalled();
-    expect.soft(getExistingFollowupQueue("global")?.items.includes(followup) ?? false).toBe(true);
-    release.resolve();
-    await blocker;
+    expect
+      .soft(getExistingFollowupQueue("global", foreignTarget)?.items.includes(followup) ?? false)
+      .toBe(true);
+    expect(childSource.controller.signal.aborted).toBe(true);
+    expect(foreignTurn).not.toHaveBeenCalled();
+    clearSessionQueues(["global"], foreignTarget, [followup.controllerInput!]);
+    await detachActiveEmbeddedRun(foreignId, foreignHandle, "global");
     const [foreignResult, childResult] = await outcome;
     expect.soft(foreignResult).toEqual({ status: "fulfilled", value: "foreign command survived" });
-    expect(childResult).toMatchObject({
-      status: "rejected",
-      reason: { name: "CommandLaneClearedError" },
-    });
+    expect(foreignTurn).toHaveBeenCalledOnce();
+    expect(childResult).toEqual({ status: "fulfilled", value: "unrelated child turn survived" });
+    expect(childTurn).toHaveBeenCalledOnce();
     expect
       .soft(
         loadSessionEntry({
@@ -184,11 +240,11 @@ it("cancelling a watched main/global child preserves the other agent's work", as
       .not.toBe(true);
   } finally {
     childAdmission.release();
-    release.resolve();
-    clearCommandLane(lane);
-    clearFollowupQueue("global");
-    clearActiveEmbeddedRun(foreignId, foreignHandle, "global");
-    await Promise.allSettled([blocker, outcome]);
+    childSource.cleanup();
+    clearSessionQueues(["global"], childTarget);
+    clearSessionQueues(["global"], foreignTarget);
+    await detachActiveEmbeddedRun(foreignId, foreignHandle, "global");
+    await outcome;
   }
 });
 
@@ -224,6 +280,7 @@ async function prepareWatchedRawChildren() {
       { agentId, storePath, sessionKey: "global" },
       {
         sessionId: `${agentId}-global`,
+        lifecycleRevision: `${agentId}-global-revision`,
         updatedAt: Date.now(),
         spawnedBy: parentKey,
         parentSessionKey: parentKey,
@@ -280,7 +337,15 @@ it.each([
     for (const [agentId, { storePath }] of children) {
       await appendTranscriptMessage(
         { agentId, storePath, sessionKey: "global", sessionId: `${agentId}-global` },
-        { message: { role: "assistant", content: `${agentId}'s partial result` } },
+        {
+          message: {
+            role: "assistant",
+            content: `${agentId}'s partial result`,
+            phase: "final",
+            stopReason: "stop",
+            __openclaw: { runId: agentId === "main" ? "main-1" : "research-2" },
+          },
+        },
       );
     }
     const entry = getSubagentRunByRunId(runId)!;
@@ -298,11 +363,23 @@ it.each([
         updatedAt: Date.now(),
       });
     }
-    terminal.resolve({ status: "timeout", startedAt: entry.createdAt, endedAt: Date.now() });
+    // A timeout without producer reply metadata must read this child's own transcript.
+    terminal.resolve({
+      status: "timeout",
+      startedAt: entry.createdAt,
+      endedAt: Date.now(),
+    });
     const waitIndex = waits.mock.calls.findIndex(([waitingRunId]) => waitingRunId === runId);
     expect(waitIndex).toBeGreaterThanOrEqual(0);
     await waits.mock.results[waitIndex]!.value;
     await fixture.settle();
+    expect(fixture.capture).toHaveBeenCalledWith(
+      "global",
+      expect.objectContaining({
+        outcome: expect.objectContaining({ status: "timeout" }),
+        sessionTarget: expect.objectContaining({ agentId: owner, sessionId: `${owner}-global` }),
+      }),
+    );
     expect(getSubagentRunByRunId(runId)).toMatchObject({
       childAgentId: owner,
       execution: { status: "terminal", outcome: { status: "timeout" } },
@@ -324,16 +401,32 @@ it("numbers watched raw children independently and keeps their completion owner"
   const { children, send } = await prepareWatchedRawChildren();
   expect.soft(getSubagentRunByRunId("main-1")?.generation).toBe(1);
   expect.soft(getSubagentRunByRunId("research-2")?.generation).toBe(1);
-  const { storePath } = children.get("main")!;
+  const { storePath, parentKey } = children.get("main")!;
   const scope = { agentId: "main", storePath, sessionKey: "global" };
   const entry = loadSessionEntry(scope)!;
-  // Retained completion custody also permits followups after the spawn link changes.
-  await replaceSessionEntry(scope, { ...entry, spawnedBy: "agent:main:dashboard:other" });
-  expect((await send("main", "main-next-turn")).details).toMatchObject({ status: "accepted" });
+  const otherParentKey = "agent:main:dashboard:other";
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: otherParentKey,
+    defaultSessionId: "main-other-parent",
+  });
+  // Retained completion custody survives a valid spawn-link change, not a missing ancestor.
+  await replaceSessionEntry(scope, {
+    ...entry,
+    spawnedBy: otherParentKey,
+    parentSessionKey: otherParentKey,
+    parentSessionId: "main-other-parent",
+  });
+  const sent = await send("main", "main-next-turn");
+  expect(sent.details, JSON.stringify(sent.details)).toMatchObject({ status: "accepted" });
   expect(getSubagentRunByRunId("main-3")).toMatchObject({
     childAgentId: "main",
     generation: 2,
+    requesterAgentId: "main",
+    requesterSessionKey: parentKey,
     requesterTurnRunId: "main-next-turn",
+    completionRequesterSessionId: "main-parent",
   });
   expect(getSubagentRunByRunId("research-2")).toMatchObject({
     generation: 1,
@@ -343,19 +436,58 @@ it("numbers watched raw children independently and keeps their completion owner"
 });
 
 it("steers its watched raw child while another agent has a newer row", async () => {
-  const { send } = await prepareWatchedRawChildren();
-  const queueMessage = vi.fn(async () => {});
-  const handle = createEmbeddedRunHandle({ runId: "main-1", queueMessage });
-  setActiveEmbeddedRun("main-global", handle, "global", undefined, "main");
+  const { cfg, children, send } = await prepareWatchedRawChildren();
+  const caller = createSessionsSendTestCaller(children.get("main")!.parentKey);
+  const { handle, queueMessage } = createDurableSessionsSendTestRun("main-1");
+  const close = await setSessionsSendTestActiveRun(
+    "main-global",
+    handle,
+    "global",
+    caller.sessionKey,
+    cfg,
+  );
   try {
-    expect((await send("main", "main-turn", "steer")).details).toMatchObject({
+    const sent = await withoutGatewayToolCallerIdentity(() =>
+      withGatewayToolCallerIdentity(caller, () => send("main", "main-turn", "steer")),
+    );
+    expect(sent.details, JSON.stringify(sent.details)).toMatchObject({
       status: "accepted",
+      targetDisposition: "steered",
     });
     expect(queueMessage).toHaveBeenCalledOnce();
+    expect(
+      await loadTranscriptEvents({
+        agentId: "main",
+        storePath: children.get("main")!.storePath,
+        sessionKey: "global",
+        sessionId: "main-global",
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Continue main"),
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: children.get("main")!.parentKey,
+            sourceTool: "sessions_send",
+          },
+          __openclaw: { steerTargetRunId: "main-1", requesterOrigin: caller.requesterOrigin },
+        }),
+      }),
+    );
+    expect(
+      await loadTranscriptEvents({
+        agentId: "research",
+        storePath: children.get("research")!.storePath,
+        sessionKey: "global",
+        sessionId: "research-global",
+      }),
+    ).toEqual([]);
     expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");
     expect(getSubagentRunByRunId("research-2")?.requesterTurnRunId).toBe("research-turn");
   } finally {
-    clearActiveEmbeddedRun("main-global", handle, "global");
+    await close();
   }
 });
 
@@ -369,6 +501,96 @@ it("cancels its selected raw child while another agent has a newer watched row",
   expect(result.details).toMatchObject({ found: true, killed: true });
   expect(getSubagentRunByRunId("research-2")?.execution.endedAt).toBeUndefined();
 });
+
+it.each(["main-3", "main-4"])(
+  "cancels queued followup %s while the active run and other followup complete",
+  async (cancelledRunId) => {
+    const { cfg, children, send } = await prepareWatchedRawChildren();
+    const { storePath, parentKey } = children.get("main")!;
+    const target = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "global",
+      agentId: "main",
+      incarnation: "main-global",
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const interrupted = vi.fn(() => release.resolve());
+    const reserve = (runId: string) =>
+      reserveSessionControllerSource("global", {
+        target,
+        protocolRunId: runId,
+        policy: { mode: "followup" },
+      });
+    const turn = { target, sessionKey: "global", sessionId: "main-global", agentId: "main" };
+    const activeInput = reserve("main-1");
+    const active = withSessionTurn(
+      { ...turn, controllerInput: activeInput },
+      async (operation, signal) => {
+        recordOperationBackendRunId(operation!, "main-1");
+        const admission = await beginSessionEffect({
+          target,
+          sourceInput: activeInput,
+          assertAllowed: () => {},
+          onInterrupt: interrupted,
+        });
+        entered.resolve();
+        try {
+          await release.promise;
+          signal.throwIfAborted();
+          return "active completed";
+        } finally {
+          admission.release();
+        }
+      },
+    );
+    await awaitGateBeforeSettlement(entered.promise, active, "Active turn did not start");
+    const completed: string[] = [];
+    const followups: Promise<string>[] = [];
+    try {
+      for (const runId of ["main-3", "main-4"]) {
+        expect((await send("main", "main-turn")).details).toMatchObject({
+          status: "accepted",
+          runId,
+        });
+        followups.push(
+          withSessionTurn({ ...turn, controllerInput: reserve(runId) }, async () => {
+            completed.push(runId);
+            return runId;
+          }),
+        );
+      }
+      const outcomes = Promise.allSettled(followups);
+      const sessionBefore = loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" });
+      const cancelled = await createSubagentsTool({
+        config: cfg,
+        agentId: "main",
+        agentSessionKey: parentKey,
+      }).execute("cancel", { action: "cancel", runId: cancelledRunId });
+      expect(cancelled.details).toMatchObject({ found: true, killed: true });
+      expect(interrupted).not.toHaveBeenCalled();
+      expect(activeInput.abortSignal.aborted).toBe(false);
+      expect(completed).toEqual([]);
+      expect(loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" })).toEqual(
+        sessionBefore,
+      );
+      release.resolve();
+      await expect(active).resolves.toBe("active completed");
+      const survivor = cancelledRunId === "main-3" ? "main-4" : "main-3";
+      expect(await outcomes).toMatchObject(
+        cancelledRunId === "main-3"
+          ? [{ status: "rejected" }, { status: "fulfilled", value: survivor }]
+          : [{ status: "fulfilled", value: survivor }, { status: "rejected" }],
+      );
+      expect(completed).toEqual([survivor]);
+      expect(getSubagentRunByRunId(cancelledRunId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+      expect(getSubagentRunByRunId(survivor)?.execution.endedAt).toBeUndefined();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([active, ...followups]);
+    }
+  },
+);
 
 it("keeps a watched registration current while the other raw owner commits", async () => {
   const { send } = await prepareWatchedRawChildren();
@@ -417,8 +639,8 @@ it("keeps a watched registration current while the other raw owner commits", asy
   });
 });
 
-it.each(["admin", "bulk"] as const)(
-  "%s cancellation keeps legacy raw children separated by requester agent",
+it.each(["admin", "bulk", "tool"] as const)(
+  "%s cancellation refuses retained raw children without guessing their owner",
   async (action) => {
     const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
@@ -436,7 +658,7 @@ it.each(["admin", "bulk"] as const)(
     };
     setRuntimeConfigSnapshot(cfg);
     for (const owner of ["research", "main"]) {
-      await registerSubagentRun({
+      await addSubagentRunForTests({
         runId: `${owner}-legacy`,
         childSessionKey: "global",
         requesterSessionKey: `agent:${owner}:main`,
@@ -444,32 +666,345 @@ it.each(["admin", "bulk"] as const)(
         requesterDisplayKey: owner,
         task: `${owner} work`,
         cleanup: "keep",
+        childSessionIdentity: { sessionId: "legacy-global" },
       });
     }
     const research = getSubagentRunByRunId("research-legacy")!;
     expect(research.childAgentId).toBeUndefined();
     expect(getSubagentRunByRunId("main-legacy")?.childAgentId).toBeUndefined();
+    const before = structuredClone(research);
+    const sessionBefore = loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" });
+    const followup = createQueueTestRun({ prompt: "Retained queued followup" });
+    Object.assign(followup.run, {
+      agentId: "research",
+      sessionKey: "global",
+      sessionId: "legacy-global",
+      config: cfg,
+    });
+    const target = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "global",
+      agentId: "research",
+      incarnation: "legacy-global",
+    });
+    enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
 
-    if (action === "admin") {
-      const result = await killSubagentRunAdmin({ cfg, sessionKey: "global", agentId: "research" });
-      expect(result).not.toHaveProperty("error");
-      expect(result).toMatchObject({ found: true, killed: true, runId: "research-legacy" });
-    } else {
-      const result = await killAllControlledSubagentRuns({
-        cfg,
-        controller: {
-          controllerSessionKey: "agent:research:main",
-          controllerAgentId: "research",
-          callerSessionKey: "agent:research:main",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
-        runs: [research],
-      });
-      expect(result).not.toHaveProperty("error");
-      expect(result).toMatchObject({ status: "ok", killed: 1 });
+    try {
+      if (action === "admin") {
+        const result = await killSubagentRunAdmin({
+          cfg,
+          sessionKey: "global",
+          agentId: "research",
+          expectedRunId: "research-legacy",
+        });
+        expect(result).toMatchObject({
+          found: true,
+          killed: false,
+          runId: "research-legacy",
+          cascadeKilled: 0,
+        });
+        expect(result).toHaveProperty(
+          "error",
+          expect.stringContaining("owning agent is unresolved"),
+        );
+      } else if (action === "tool") {
+        const result = await createSubagentsTool({
+          config: cfg,
+          agentId: "research",
+          agentSessionKey: "agent:research:main",
+        }).execute("cancel", { action: "cancel", runId: "research-legacy" });
+        expect(result.details).toMatchObject({
+          found: true,
+          killed: false,
+          cascadeKilled: 0,
+          error: expect.stringContaining("owning agent is unresolved"),
+        });
+      } else {
+        const result = await killAllControlledSubagentRuns({
+          cfg,
+          controller: {
+            controllerSessionKey: "agent:research:main",
+            controllerAgentId: "research",
+            callerSessionKey: "agent:research:main",
+            callerIsSubagent: false,
+            controlScope: "children",
+          },
+          runs: [research],
+        });
+        expect(result).toMatchObject({
+          status: "error",
+          killed: 0,
+          failed: 1,
+          error: expect.stringContaining("owning agent is unresolved"),
+        });
+      }
+      expect(getSubagentRunByRunId("research-legacy")).toEqual(before);
+      expect(getSubagentRunByRunId("main-legacy")?.execution.endedAt).toBeUndefined();
+      expect(loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" })).toEqual(
+        sessionBefore,
+      );
+      expect(getExistingFollowupQueue("global", target)?.items).toContain(followup);
+      expect(fixture.cleanup).not.toHaveBeenCalled();
+      expect(fixture.gateway).not.toHaveBeenCalled();
+    } finally {
+      clearSessionQueues(["global"], target);
     }
-    expect(getSubagentRunByRunId("research-legacy")?.execution.endedAt).toBeTypeOf("number");
-    expect(getSubagentRunByRunId("main-legacy")?.execution.endedAt).toBeUndefined();
+  },
+);
+
+it.each([
+  { sessionKey: "global", childAgentId: "main", bindNativeRun: true },
+  { sessionKey: "agent:main:subagent:legacy", childAgentId: undefined, bindNativeRun: false },
+])(
+  "cancels only the legacy task on $sessionKey despite a newer owned incarnation (native=$bindNativeRun)",
+  async ({ sessionKey, childAgentId, bindNativeRun }) => {
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      sessionKey,
+      agentId: "main",
+      defaultSessionId: "replacement",
+    });
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    await addSubagentRunForTests({
+      runId: "unbound-incarnation",
+      childSessionKey: sessionKey,
+      childAgentId,
+      requesterSessionKey: "agent:main:main",
+      childSessionIdentity: undefined,
+      generation: 1,
+    });
+    const sessionBefore = loadSessionEntry({ agentId: "main", storePath, sessionKey });
+    expect(sessionBefore).toBeDefined();
+    await addSubagentRunForTests({
+      runId: "next-incarnation",
+      childSessionKey: sessionKey,
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:main",
+      childSessionIdentity: sessionBefore,
+      generation: 2,
+    });
+    const legacyRun = getSubagentRunByRunId("unbound-incarnation")!;
+    const nextBefore = structuredClone(getSubagentRunByRunId("next-incarnation"));
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const nativeRun = registerChatAbortController({
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId: "main",
+        incarnation: "original-session",
+      }),
+      runId: legacyRun.runId,
+      sessionKey,
+      sessionId: "original-session",
+      kind: "agent",
+      timeoutMs: 60_000,
+    });
+    const successorRun = registerChatAbortController({
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId: "main",
+        incarnation: sessionBefore!.sessionId,
+      }),
+      runId: "next-incarnation",
+      sessionKey,
+      sessionId: sessionBefore!.sessionId,
+      kind: "agent",
+      timeoutMs: 60_000,
+    });
+    const nativeReleased = createDeferred();
+    const nativeEntered = createDeferred();
+    nativeRun.controller.signal.addEventListener("abort", () => nativeReleased.resolve(), {
+      once: true,
+    });
+    const nativeExecution = withSessionTurn(
+      {
+        sessionKey,
+        sessionId: "original-session",
+        agentId: "main",
+        storePath,
+        controllerInput: nativeRun.entry!.input,
+      },
+      async (operation) => {
+        if (!operation) {
+          throw new Error("Native source did not claim a session operation");
+        }
+        markReplyOperationExecutionStarted(operation);
+        nativeEntered.resolve();
+        try {
+          await nativeReleased.promise;
+        } finally {
+          nativeRun.cleanup();
+        }
+      },
+    );
+    trackSessionControllerSourceWork(nativeRun.entry!.input, nativeExecution);
+    await awaitGateBeforeSettlement(
+      nativeEntered.promise,
+      nativeExecution,
+      "Native source did not begin execution",
+    );
+    if (bindNativeRun) {
+      bindGatewayContextResolver(legacyRun, () => context);
+    }
+    const followup = createQueueTestRun({ prompt: "Successor's queued followup" });
+    Object.assign(followup.run, {
+      agentId: "main",
+      sessionKey,
+      sessionId: sessionBefore!.sessionId,
+      config: cfg,
+    });
+    const target = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      agentId: "main",
+      incarnation: sessionBefore!.sessionId,
+    });
+    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
+    fixture.worker.mockClear();
+    try {
+      expect(
+        await killSubagentRunAdmin({
+          cfg,
+          sessionKey,
+          agentId: "main",
+          expectedRunId: "unbound-incarnation",
+          expectedGeneration: 2,
+        }),
+      ).toEqual({ found: false, killed: false });
+      expect(getSubagentRunByRunId("unbound-incarnation")?.execution.status).toBe("running");
+      expect(
+        await killSubagentRunAdmin({
+          cfg,
+          sessionKey,
+          agentId: "main",
+          expectedRunId: "unbound-incarnation",
+        }),
+      ).toMatchObject({
+        found: true,
+        killed: true,
+        runId: "unbound-incarnation",
+        cascadeKilled: 0,
+      });
+      expect(getSubagentRunByRunId("unbound-incarnation")).toMatchObject({
+        childSessionIdentity: undefined,
+        endedReason: SUBAGENT_ENDED_REASON_KILLED,
+        execution: { status: "terminal", suppressSessionEffects: true },
+      });
+      expect(nativeRun.controller.signal.aborted).toBe(true);
+      expect(successorRun.controller.signal.aborted).toBe(false);
+      expect(getSubagentRunByRunId("next-incarnation")).toEqual(nextBefore);
+      expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(sessionBefore);
+      expect(getExistingFollowupQueue(sessionKey, target)?.items).toContain(followup);
+      expect(fixture.cleanup).not.toHaveBeenCalled();
+      expect(fixture.gateway).not.toHaveBeenCalled();
+      expect(fixture.capture).not.toHaveBeenCalled();
+      expect(fixture.announce).not.toHaveBeenCalled();
+      expect(fixture.wake).not.toHaveBeenCalled();
+    } finally {
+      clearGatewayContextResolver(legacyRun);
+      nativeReleased.resolve();
+      await nativeExecution;
+      nativeRun.cleanup();
+      successorRun.cleanup();
+      clearSessionQueues([sessionKey], target);
+    }
+  },
+);
+
+it.each(["registration", "execution target"] as const)(
+  "limits cancellation when the %s omitted the current session's lifecycle revision",
+  async (identitySource) => {
+    const sessionKey = "agent:main:subagent:revision-reused-id";
+    const sessionId = "reused-session-id";
+    const runId = "revision-fenced-run";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      sessionKey,
+      agentId: "main",
+      defaultSessionId: sessionId,
+    });
+    const scope = { agentId: "main", storePath, sessionKey };
+    const lifecycleRevision = "successor-revision";
+    await addSubagentRunForTests({
+      runId,
+      childSessionKey: sessionKey,
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:main",
+      childSessionIdentity: {
+        sessionId,
+        lifecycleRevision: identitySource === "registration" ? undefined : lifecycleRevision,
+      },
+      execution: {
+        status: "running",
+        ...(identitySource === "execution target"
+          ? { transcriptTarget: { agentId: "main", sessionKey, sessionId, storePath } }
+          : {}),
+      },
+    });
+    await replaceSessionEntry(scope, {
+      ...loadSessionEntry(scope)!,
+      lifecycleRevision,
+    });
+    const before = structuredClone(getSubagentRunByRunId(runId));
+    const sessionBefore = loadSessionEntry(scope);
+    const abort = vi.fn();
+    const handle = createEmbeddedRunHandle({ runId, abort });
+    abort.mockImplementation(() => detachActiveEmbeddedRun(sessionId, handle, sessionKey));
+    attachActiveEmbeddedRun(sessionId, handle, sessionKey, storePath, undefined, "main");
+    const followup = createQueueTestRun({ prompt: "Successor's queued followup" });
+    Object.assign(followup.run, {
+      agentId: "main",
+      sessionKey,
+      sessionId,
+      config: { session: { store: storePath } },
+    });
+    const target = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      agentId: "main",
+      incarnation: sessionBefore!.sessionId,
+    });
+    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
+    fixture.worker.mockClear();
+    try {
+      expect(
+        await killSubagentRunAdmin({
+          cfg: { session: { store: storePath } },
+          sessionKey,
+          agentId: "main",
+          expectedRunId: runId,
+        }),
+      ).toMatchObject({
+        found: true,
+        killed: identitySource === "registration",
+        runId,
+        cascadeKilled: 0,
+        ...(identitySource === "execution target"
+          ? { error: expect.stringContaining("session changed during cancellation preparation") }
+          : {}),
+      });
+      if (identitySource === "registration") {
+        expect(getSubagentRunByRunId(runId)).toMatchObject({
+          childSessionIdentity: { sessionId, lifecycleRevision: undefined },
+          endedReason: SUBAGENT_ENDED_REASON_KILLED,
+          execution: { status: "terminal", suppressSessionEffects: true },
+        });
+      } else {
+        expect(getSubagentRunByRunId(runId)).toEqual(before);
+        expect(fixture.worker).not.toHaveBeenCalled();
+      }
+      expect(loadSessionEntry(scope)).toEqual(sessionBefore);
+      expect(getExistingFollowupQueue(sessionKey, target)?.items).toContain(followup);
+      expect(abort).toHaveBeenCalledTimes(identitySource === "registration" ? 1 : 0);
+      expect(fixture.cleanup).not.toHaveBeenCalled();
+      expect(fixture.gateway).not.toHaveBeenCalled();
+      expect(fixture.capture).not.toHaveBeenCalled();
+      expect(fixture.announce).not.toHaveBeenCalled();
+      expect(fixture.wake).not.toHaveBeenCalled();
+    } finally {
+      await detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+      clearSessionQueues([sessionKey], target);
+    }
   },
 );

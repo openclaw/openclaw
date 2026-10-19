@@ -1,9 +1,63 @@
+import type { Stats } from "node:fs";
 import path from "node:path";
-import { expect, it, type Mock, type vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { expect, type vi, type Mock } from "vitest";
 import type {
   AgentDeletionJournalCleanupPath,
   AgentDeletionJournalEntry,
 } from "../../state/agent-deletion-journal.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
+
+export { expectRecordFields };
+
+export type MockAgentEntry = {
+  id: string;
+  identity?: Partial<Record<"name" | "theme" | "emoji" | "avatar", string>>;
+} & Partial<Record<"name" | "workspace" | "agentDir" | "model", string>>;
+
+export type MockConfig = {
+  agents?: {
+    entries?: Record<string, Omit<MockAgentEntry, "id">>;
+  };
+};
+
+export function agentConfig(
+  entries: Record<string, Omit<MockAgentEntry, "id">>,
+  defaults?: Record<string, unknown>,
+) {
+  return { agents: { entries, ...(defaults ? { defaults } : {}) } };
+}
+
+export function getAgentList(cfg: unknown): MockAgentEntry[] {
+  return Object.entries((cfg as MockConfig | undefined)?.agents?.entries ?? {}).map(([id, entry]) =>
+    Object.assign({}, entry, { id }),
+  );
+}
+
+export function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
+  const config = (cfg as MockConfig | undefined) ?? {};
+  const params = (opts as Partial<Omit<MockAgentEntry, "id" | "model">> & {
+    agentId?: string;
+    model?: string | null;
+  }) ?? { agentId: "" };
+  const agentId = params.agentId ?? "";
+  const base = config.agents?.entries?.[agentId];
+  const nextEntry: Omit<MockAgentEntry, "id"> = {
+    ...base,
+    ...(params.name ? { name: params.name } : {}),
+    ...(params.workspace ? { workspace: params.workspace } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.identity ? { identity: { ...base?.identity, ...params.identity } } : {}),
+  };
+  if (params.model === null) {
+    delete nextEntry.model;
+  }
+  return {
+    ...config,
+    agents: { ...config.agents, entries: { ...config.agents?.entries, [agentId]: nextEntry } },
+  };
+}
 
 export function cleanupPath(
   pathname: string,
@@ -23,14 +77,10 @@ export function cleanupPath(
   };
 }
 
-export function createEnoentError() {
-  return createErrnoError("ENOENT");
-}
+export const createEnoentError = () => createErrnoError("ENOENT");
 
 export function createErrnoError(code: string) {
-  const err = new Error(code) as NodeJS.ErrnoException;
-  err.code = code;
-  return err;
+  return Object.assign(new Error(code), { code });
 }
 
 export function deletionJournal(
@@ -44,6 +94,7 @@ export function deletionJournal(
     sessionsDir: "/journal/sessions",
     createdAt: 1,
     cleanupCompleted: false,
+    phase: "retiring",
     deleteFiles: true,
     databasePaths: [],
     cleanupPaths: [],
@@ -51,98 +102,28 @@ export function deletionJournal(
   };
 }
 
-export function registerAgentCreationCommitTests(fixture: {
-  create: (params: Record<string, unknown>) => {
-    respond: ReturnType<typeof vi.fn>;
-    promise: void | Promise<void>;
-  };
-  configuredConfig: () => unknown;
-  ensureAgentWorkspace: Mock;
-  resolveAgentWorkspaceDir: Mock;
-  writeConfigFile: Mock;
-  hasDeletedAgentDatabases: Mock<() => boolean>;
-  reviveAgentDatabases: Mock<(agentIds: readonly string[]) => Promise<void>>;
-  logGatewayWarn: Mock;
-}) {
-  it("creates a new agent successfully", async () => {
-    const { respond, promise } = fixture.create({
-      name: "Test Agent",
-      workspace: "/home/user/agents/test",
-    });
-    await promise;
-
-    expectRespondOk(respond, { ok: true, agentId: "test-agent", name: "Test Agent" });
-    expect(fixture.ensureAgentWorkspace).toHaveBeenCalled();
-    expect(fixture.writeConfigFile).toHaveBeenCalled();
-    expect(fixture.reviveAgentDatabases).not.toHaveBeenCalled();
-  });
-
-  it("defaults an omitted workspace", async () => {
-    const { respond, promise } = fixture.create({ name: "Test Agent" });
-    await promise;
-
-    expect(fixture.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "test-agent");
-    expectRespondOk(respond, {
-      ok: true,
-      agentId: "test-agent",
-      workspace: "/resolved/workspace/test-agent",
-    });
-  });
-
-  it("reports committed creation when deleted database reader revival fails", async () => {
-    fixture.hasDeletedAgentDatabases.mockReturnValue(true);
-    fixture.reviveAgentDatabases.mockRejectedValueOnce(new Error("worker acknowledgement failed"));
-    const { respond, promise } = fixture.create({ name: "Test Agent" });
-
-    await promise;
-
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    expect(fixture.configuredConfig()).toMatchObject({
-      agents: { entries: { "test-agent": { name: "Test Agent" } } },
-    });
-    expect(fixture.writeConfigFile).toHaveBeenCalledExactlyOnceWith(fixture.configuredConfig());
-    expect(fixture.reviveAgentDatabases).toHaveBeenCalledExactlyOnceWith(["test-agent"]);
-    expect(fixture.logGatewayWarn).toHaveBeenCalledExactlyOnceWith(
-      "agent config committed; worker reader revival will reconcile at next task: worker acknowledgement failed",
-    );
-  });
+export function expectUncalled(...callbacks: unknown[]) {
+  for (const callback of callbacks) {
+    expect(callback).not.toHaveBeenCalled();
+  }
 }
 
-export function makeFileStat(params?: {
-  size?: number;
-  mtimeMs?: number;
-  dev?: number;
-  ino?: number;
-  nlink?: number;
-}): import("node:fs").Stats {
+export function makeFileStat(
+  params: Partial<Pick<Stats, "size" | "mtimeMs" | "dev" | "ino" | "nlink">> = {},
+): Stats {
   return {
     isFile: () => true,
     isSymbolicLink: () => false,
-    size: params?.size ?? 10,
-    mtimeMs: params?.mtimeMs ?? 1234,
-    dev: params?.dev ?? 1,
-    ino: params?.ino ?? 1,
-    nlink: params?.nlink ?? 1,
-  } as unknown as import("node:fs").Stats;
-}
-
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
+    size: params.size ?? 10,
+    mtimeMs: params.mtimeMs ?? 1234,
+    dev: params.dev ?? 1,
+    ino: params.ino ?? 1,
+    nlink: params.nlink ?? 1,
+  } as unknown as Stats;
 }
 
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
+  return expectDefined(mock.mock.calls[callIndex], `Expected mock call ${callIndex}`)[argIndex];
 }
 
 export function expectRespondOk(
@@ -155,24 +136,46 @@ export function expectRespondOk(
   return payload;
 }
 
+export function expectPendingDeletion(
+  respond: ReturnType<typeof vi.fn>,
+  expected: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    expect.objectContaining(expected),
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("deletion cleanup is still pending"),
+    }),
+  );
+  return expectRecordFields(mockCallArg(respond, 0, 1), expected);
+}
+
 export function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: string) {
   expect(mockCallArg(respond)).toBe(false);
   expect(mockCallArg(respond, 0, 1)).toBeUndefined();
   const error = expectRecordFields(mockCallArg(respond, 0, 2), {});
-  expectStringContaining(error.message, text);
+  expect(error.message).toEqual(expect.stringContaining(text));
   return error;
 }
 
-export function firstRespondResult(respond: ReturnType<typeof vi.fn>): unknown {
-  return mockCallArg(respond, 0, 1);
-}
-
-export function expectStringContaining(value: unknown, text: string) {
-  expect(typeof value).toBe("string");
-  expect(value as string).toContain(text);
-}
-
-export function expectStringNotContaining(value: unknown, text: string) {
-  expect(typeof value).toBe("string");
-  expect(value as string).not.toContain(text);
+export function createTrashAssertions(
+  movePathToTrash: Mock<(pathname?: string) => Promise<string>>,
+) {
+  return {
+    expectTrashedWithinParent: (pathname: string, declaredPath = pathname): void => {
+      expect(movePathToTrash).toHaveBeenCalledWith(
+        pathname,
+        expect.objectContaining({
+          allowedRoots: expect.arrayContaining([path.dirname(declaredPath)]),
+        }),
+      );
+    },
+    expectNotTrashed: (...paths: string[]): void => {
+      const targets = movePathToTrash.mock.calls.map(([target]) => target);
+      for (const pathname of paths) {
+        expect(targets).not.toContain(pathname);
+      }
+    },
+  };
 }

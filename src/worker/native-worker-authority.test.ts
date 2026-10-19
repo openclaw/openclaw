@@ -7,7 +7,7 @@ import {
   testWorkerLaunchInput,
   TEST_WORKER_ENDPOINT,
 } from "../node-host/node-worker-supervisor.test-support.js";
-import { completeWorkerLaunchDescriptor, buildWorkerConnectParams } from "./launch-descriptor.js";
+import { parseWorkerLaunchDescriptor, buildWorkerConnectParams } from "./launch-descriptor.js";
 import type { NativeInferenceStartup } from "./native-inference-startup.js";
 import * as connections from "./worker-connection.js";
 import type { WorkerConnectionState } from "./worker-connection.js";
@@ -38,10 +38,10 @@ afterEach(() => {
 
 function fixture(native = true) {
   const root = tempDirs.make("native-admission-authority-");
-  const descriptor = completeWorkerLaunchDescriptor(
-    testWorkerLaunchInput(root, "authority-turn").descriptor,
-    TEST_WORKER_ENDPOINT,
-  );
+  const descriptor = parseWorkerLaunchDescriptor({
+    ...testWorkerLaunchInput(root, "authority-turn").descriptor,
+    connectionEndpoint: TEST_WORKER_ENDPOINT,
+  });
   if (native) {
     descriptor.assignment.inference = "runtime-local";
   }
@@ -123,11 +123,11 @@ describe("native turn admission lifetime", () => {
     } finally {
       embedded.release.resolve();
     }
-    expect(await running).toBeInstanceOf(Error);
+    expect(await running).toMatchObject({ status: "failed", reason: "node-lost" });
     expect(embedded.run).not.toHaveBeenCalled();
   });
   it.each(["connecting", "admitting", "reconnecting", "stopped"] as const)(
-    "rejects native departure to %s even if readmission follows",
+    "reports node loss on native departure to %s even if readmission follows",
     async (kind) => {
       const f = fixture();
       f.start.mockImplementation(async () => {
@@ -136,7 +136,7 @@ describe("native turn admission lifetime", () => {
         f.emit({ kind: "ready", hello: f.hello });
         return f.hello;
       });
-      await expect(f.run()).rejects.toThrow();
+      await expect(f.run()).resolves.toMatchObject({ status: "failed", reason: "node-lost" });
       expect(embedded.run).not.toHaveBeenCalled();
     },
   );

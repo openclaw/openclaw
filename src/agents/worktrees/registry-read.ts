@@ -1,12 +1,11 @@
-import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../../state/openclaw-state-db-readonly.js";
+import type { RegisteredStateReadCommand } from "../../state/openclaw-state-read-operation-registry.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import {
-  SessionWorktreeSourceChangedError,
-  SessionWorktreeLifecycleError,
-  WorktreeRemovalContentionError,
-  WorktreeRemovalLockError,
-} from "./errors.js";
+import { registryAuthorityChanged } from "./errors.js";
 import type { WorktreeRegistryListOptions } from "./registry-read.kernel.js";
 import {
   captureWorktreeRegistryAuthority,
@@ -27,45 +26,20 @@ import type {
 
 type RowGuardKind = WorktreeRegistryPredicate["kind"] | "lifecycle" | "publication";
 
-function registryAuthorityChanged(kind: RowGuardKind): Error {
-  switch (kind) {
-    case "publication":
-      return new SessionWorktreeSourceChangedError("GitHub publication worktree authority changed");
-    case "snapshot-retirement":
-      return new Error("Worktree snapshot retirement identity changed");
-    case "exact-snapshot":
-      return new Error(
-        "Exact-state recovery owner or lifecycle changed; source and snapshot preserved",
-      );
-    case "exact-owner":
-      return new Error("Worktree exact-state owner or lifecycle changed; checkout preserved");
-    case "activity":
-      return new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
-    case "session-owner":
-      return new SessionWorktreeLifecycleError(
-        "Session worktree ownership changed; retry cleanup.",
-        "owner-mismatch",
-      );
-    case "source-record":
-      return new SessionWorktreeSourceChangedError(
-        "Accepted managed source changed during preparation",
-      );
-    case "source-owner":
-      return new SessionWorktreeSourceChangedError(
-        "Spawn parent managed worktree changed; retry from its current session",
-      );
-    case "projection":
-      return new Error("Managed projection owner changed during settlement");
-    case "record":
-      return new Error(
-        "Worktree registry changed during recovery; remaining source and original snapshot preserved",
-      );
-    default:
-      return new WorktreeRemovalContentionError(
-        "busy",
-        "Worktree owner or binding changed; checkout preserved",
-      );
-  }
+export async function readWorktreeRegistryCommand<
+  Command extends Extract<RegisteredStateReadCommand, { type: `worktrees.${string}` }>,
+>(
+  context: OpenClawStateWorkerContext,
+  command: Command,
+  signal?: AbortSignal,
+): ReturnType<typeof executeExistingOpenClawStateRead<Command>> {
+  const reply = await executeExistingOpenClawStateRead<Command>(
+    { env: context.environment, path: context.admission.databasePath },
+    command,
+    { context, current: true, signal },
+  );
+  context.admission.assertCurrent();
+  return reply;
 }
 
 function predicateFields(kind: RowGuardKind): readonly WorktreeRegistryField[] {
@@ -182,7 +156,7 @@ export async function prepareWorktreeRegistryGuard(
   context: OpenClawStateWorkerContext,
   authority: WorktreeWorkerAuthority,
 ): Promise<() => void> {
-  const predicates = structuredClone(authority.predicates ?? []);
+  const predicates = authority.predicates ?? [];
   const assertCaller = authority.assertCurrent;
   const generations = predicates.map((predicate) => ({
     kind: predicate.kind,
@@ -217,19 +191,20 @@ export async function readLiveRegistryWorktreeByOwner(
   ownerKind: ManagedWorktreeOwnerKind,
   ownerId: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.findLiveByOwner",
-    input: { ownerKind, ownerId },
-  });
+  return (
+    await readWorktreeRegistryCommand(context, {
+      type: "worktrees.findLiveByOwner",
+      input: { ownerKind, ownerId },
+    })
+  )?.value;
 }
 
 export async function readRegistryWorktree(
   context: OpenClawStateWorkerContext,
   id: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, { type: "worktrees.get", input: { id } });
+  return (await readWorktreeRegistryCommand(context, { type: "worktrees.get", input: { id } }))
+    ?.value;
 }
 
 export async function readSessionWorktreeBinding(
@@ -237,22 +212,24 @@ export async function readSessionWorktreeBinding(
   boundId: string | undefined,
   ownerId: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.sessionBinding",
-    input: { boundId, ownerId },
-  });
+  return (
+    await readWorktreeRegistryCommand(context, {
+      type: "worktrees.sessionBinding",
+      input: { boundId, ownerId },
+    })
+  )?.value;
 }
 
 export async function readLiveRegistryWorktreeByPath(
   context: OpenClawStateWorkerContext,
   path: string,
 ): Promise<ManagedWorktreeRecord | undefined> {
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.findLiveByPath",
-    input: { path },
-  });
+  return (
+    await readWorktreeRegistryCommand(context, {
+      type: "worktrees.findLiveByPath",
+      input: { path },
+    })
+  )?.value;
 }
 
 /** Resolve the exact target before lock admission without borrowing Gateway-thread SQLite. */
@@ -287,52 +264,54 @@ export async function readRegistryWorktrees(
   options: WorktreeRegistryListOptions = {},
   context: OpenClawStateWorkerContext = captureWorktreeRunEndContext(env),
 ): Promise<ManagedWorktreeRecord[]> {
-  const input = { liveOnly: options.liveOnly };
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, { type: "worktrees.list", input });
+  return (
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: options }))
+      ?.value ?? []
+  );
 }
 
 export async function readLiveRegistryWorktreeIds(env: NodeJS.ProcessEnv): Promise<string[]> {
   const context = captureWorktreeRunEndContext(env);
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, { type: "worktrees.liveIds", input: undefined });
+  return (
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.liveIds", input: undefined }))
+      ?.value ?? []
+  );
 }
 
 export async function getRegistryWorktreeProvisionedPaths(
   env: NodeJS.ProcessEnv,
   id: string,
 ): Promise<string[] | undefined> {
-  const context = captureWorktreeRunEndContext(env);
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.provisionedPaths",
-    input: { id },
-  });
+  return (
+    await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
+      type: "worktrees.provisionedPaths",
+      input: { id },
+    })
+  )?.value;
 }
 
 export async function getRegistryWorktreeProvisionedState(
   env: NodeJS.ProcessEnv,
   id: string,
 ): Promise<ProvisionedFileState[] | undefined> {
-  const context = captureWorktreeRunEndContext(env);
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.provisionedState",
-    input: { id },
-  });
+  return (
+    await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
+      type: "worktrees.provisionedState",
+      input: { id },
+    })
+  )?.value;
 }
 
 export async function getRegistryWorktreeProvisionedChunk(
   env: NodeJS.ProcessEnv,
   params: { worktreeId: string; path: string; chunkIndex: number },
 ): Promise<Uint8Array | undefined> {
-  const context = captureWorktreeRunEndContext(env);
-  const input = { ...params };
-  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "worktrees.provisionedChunk",
-    input,
-  });
+  return (
+    await readWorktreeRegistryCommand(captureWorktreeRunEndContext(env), {
+      type: "worktrees.provisionedChunk",
+      input: params,
+    })
+  )?.value;
 }
 
 export async function readWorktreeCleanupState(env: NodeJS.ProcessEnv) {
@@ -341,29 +320,40 @@ export async function readWorktreeCleanupState(env: NodeJS.ProcessEnv) {
     { type: "worktrees.cleanupState" },
     { current: true },
   );
-  if (!reply) {
-    return { records: [], leases: { liveScopes: [], staleScopes: [] } };
-  }
-  if (!reply.ok || reply.type !== "worktrees.cleanupState") {
-    throw new Error("Worktree cleanup state read failed");
-  }
-  return reply;
+  return reply ?? { records: [], leases: { liveScopes: [], staleScopes: [] } };
 }
 
 /** Foreign CLI inspection never admits a writer or repairs lifecycle state. */
 export async function readExistingRegistryWorktrees(env: NodeJS.ProcessEnv, signal?: AbortSignal) {
   const context = captureOpenClawStateReadWorkerContext({ env });
-  const reply = await executeExistingOpenClawStateRead(
-    { env, path: context.admission.databasePath },
-    { type: "worktrees.list" },
-    { context, current: true, signal },
+  return (
+    (await readWorktreeRegistryCommand(context, { type: "worktrees.list", input: {} }, signal))
+      ?.value ?? []
   );
-  context.admission.assertCurrent();
-  if (!reply) {
-    return [];
-  }
-  if (!reply.ok || reply.type !== "worktrees.list") {
-    throw new Error("Worktree registry inspection failed");
-  }
-  return reply.records;
+}
+
+/** Discovery keeps pending publication and live rows in one SQLite or PostgreSQL snapshot. */
+export async function readExistingWorktreePaths(env: NodeJS.ProcessEnv): Promise<string[]> {
+  return withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      // Current/live reads leave discovery snapshots and can miss a slot as it publishes.
+      const [live, pending] = await Promise.all([
+        executeExistingOpenClawStateRead(
+          { env },
+          { type: "worktrees.livePaths", input: undefined },
+        ),
+        executeExistingOpenClawStateRead(
+          { env },
+          { type: "worktrees.pendingSlots", input: undefined },
+        ),
+      ]);
+      return [
+        ...new Set([
+          ...(live?.value ?? []),
+          ...(pending?.records ?? []).map(({ record }) => record.path),
+        ]),
+      ];
+    },
+    { env },
+  );
 }

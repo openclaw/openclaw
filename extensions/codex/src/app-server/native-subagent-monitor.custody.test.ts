@@ -121,7 +121,8 @@ describe("native assignment completion custody", () => {
         completionScope: createCompletionScope("agent:main:original"),
         agentId: "main",
         claimDirectChild,
-        assertCurrent: () => {
+        assertCurrentAsync: async () => {
+          await Promise.resolve();
           if (!current) {
             throw new Error("Caller registration is no longer current");
           }
@@ -233,8 +234,6 @@ describe("native assignment completion custody", () => {
       runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: false, path: "none" });
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
         recoveryPollDelaysMs: [],
-        completionDeliveryRetryDelaysMs: [1],
-        completionDeliveryMaxRetries: 1,
       });
       try {
         const owner = await registerParent(monitor);
@@ -260,10 +259,16 @@ describe("native assignment completion custody", () => {
             delivered: true,
             path: "direct",
           });
-          await vi.advanceTimersByTimeAsync(1);
+          await vi.advanceTimersByTimeAsync(5_000);
         } else {
-          await vi.advanceTimersByTimeAsync(1);
-          expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
+          let attempts = 1;
+          for (const delayMs of [5_000, 15_000, 30_000, 60_000, 120_000, 300_000]) {
+            await vi.advanceTimersByTimeAsync(delayMs - 1);
+            expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(attempts);
+            expect(first.live()).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(++attempts);
+          }
         }
         expect(first.live()).toHaveLength(0);
       } finally {
@@ -355,13 +360,10 @@ describe("native completion custody and host recovery", () => {
         path: "none",
         recoveryBlocked: true,
       });
-      monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        completionDeliveryRetryDelaysMs: [10],
-        completionDeliveryMaxRetries: 1,
-      });
+      monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       await registerDetachedChild(client, monitor);
       await client.notify(nativeCompletionNotification());
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(530_000);
       expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
       const successorRuntime = createRuntime();
       successor = new CodexNativeSubagentMonitor(successorClient as never, successorRuntime);
@@ -388,21 +390,18 @@ describe("native completion custody and host recovery", () => {
         path: "none",
         recoveryPending: true,
       });
-      monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        completionDeliveryRetryDelaysMs: [10],
-        completionDeliveryMaxRetries: 1,
-      });
+      monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       await registerDetachedChild(client, monitor);
       await client.notify(nativeCompletionNotification());
-      await vi.advanceTimersByTimeAsync(50);
-      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(6);
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(8);
       runtime.deliverAgentHarnessCompletion.mockResolvedValue({
         delivered: true,
         path: "direct",
       });
-      await vi.advanceTimersByTimeAsync(10);
-      await vi.advanceTimersByTimeAsync(50);
-      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(7);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(530_000);
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(9);
     } finally {
       await monitor?.dispose();
       client.close();
@@ -515,6 +514,7 @@ async function createSubmissionFixture() {
         throw new Error("Submission binding changed.");
       }
     },
+    assertCurrentAsync: async () => submissionStore.assertCurrent(),
     read: () => bindingStore.readNativeSubagentSubmissions(identity, owner),
     record: (receipt, guard) =>
       bindingStore.mutate(
@@ -610,7 +610,7 @@ async function createSubmissionFixture() {
       }),
     );
     await parent.unregister();
-    expect(submissionStore.read()).toHaveLength(1);
+    expect(await submissionStore.read()).toHaveLength(1);
     expect(holds).toEqual({ client: 0, parent: 0, child: 0 });
   };
   return {
@@ -630,7 +630,7 @@ it("stops observing opaque receipts when existing warm subscriptions expire", as
   const { client, runtime, holds, consume, submissionStore, unsubscribe } = fixture;
   vi.useFakeTimers({ shouldClearNativeTimers: true });
   await fixture.submit("815dc55d-2d19-4bfe-9fd3-038ce4d6aada");
-  const receipt = structuredClone(submissionStore.read());
+  const receipt = structuredClone(await submissionStore.read());
   const reads = () =>
     client.request.mock.calls.filter(([method]) => method === "thread/read").length;
   // The existing client-runtime owner expires unprotected subscriptions after 30 minutes.
@@ -647,11 +647,11 @@ it("stops observing opaque receipts when existing warm subscriptions expire", as
   await vi.advanceTimersByTimeAsync(300_000);
   expect(reads()).toBe(readsAtExpiry);
   expect(holds).toEqual({ client: 0, parent: 0, child: 0 });
-  expect(submissionStore.read()).toEqual(receipt);
+  expect(await submissionStore.read()).toEqual(receipt);
   expect(consume).not.toHaveBeenCalled();
   expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
   await client.notify(turnStartedNotification(receipt[0]!.submissionId));
-  expect(submissionStore.read()).toEqual(receipt);
+  expect(await submissionStore.read()).toEqual(receipt);
   expect(holds).toEqual({ client: 0, parent: 0, child: 0 });
 });
 
@@ -663,7 +663,7 @@ it("admits a delayed exact start under warm backing and retains its completion o
   await fixture.submit("turn-b");
   await client.notify(turnStartedNotification("turn-b"));
   const runId = "codex-thread:child-thread:turn:turn-b";
-  expect(submissionStore.read()).toHaveLength(1);
+  expect(await submissionStore.read()).toHaveLength(1);
   expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true);
   expect(holds.client).toBe(1);
   expect(holds.parent).toBe(1);
@@ -677,7 +677,7 @@ it("admits a delayed exact start under warm backing and retains its completion o
       items: [{ id: "b", type: "agentMessage", text: "result B" }],
     }),
   );
-  await vi.waitFor(() => expect(submissionStore.read()).toEqual([]));
+  await vi.waitFor(async () => expect(await submissionStore.read()).toEqual([]));
   expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ childSessionKey: runId, result: "result B" }),
   );
@@ -828,7 +828,8 @@ describe("Codex native transient predecessor anchor", () => {
       let parentRegistered = true;
       const submissionStore = {
         assertCurrent: () => {},
-        read: () => [...receipts.values()],
+        assertCurrentAsync: async () => {},
+        read: async () => [...receipts.values()],
         record: vi.fn<CodexNativeSubagentSubmissionStore["record"]>(async (receipt, guard) => {
           guard();
           ownerStatesAtRecord.push(parentRegistered);
@@ -903,7 +904,8 @@ describe("Codex native transient predecessor anchor", () => {
     let recordCompletion: Promise<boolean> | undefined;
     const submissionStore = {
       assertCurrent: () => {},
-      read: () => [...receipts.values()],
+      assertCurrentAsync: async () => {},
+      read: async () => [...receipts.values()],
       record: vi.fn<CodexNativeSubagentSubmissionStore["record"]>((receipt, guard) => {
         recordCompletion = (async () => {
           recordEntered.resolve();

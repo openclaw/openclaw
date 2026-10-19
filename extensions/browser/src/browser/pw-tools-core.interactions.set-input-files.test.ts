@@ -17,7 +17,7 @@ vi.mock("./paths.js", () => ({ resolveStrictExistingUploadPaths }));
 vi.mock("node:fs/promises", () => ({ default: { readFile, stat } }));
 vi.mock("openclaw/plugin-sdk/media-mime", () => ({ detectMime }));
 const { setFileChooserFilesViaPlaywright, setInputFilesViaPlaywright } =
-  await import("./pw-tools-core.interactions.js");
+  await import("./pw-tools-core.interactions.content.js");
 const session = getPwToolsCoreSessionMocks();
 const canonical = "/private/tmp/openclaw/uploads/ok.txt";
 const paths = ["/tmp/openclaw/uploads/ok.txt"];
@@ -100,6 +100,28 @@ describe("upload handoff", () => {
     ).rejects.toThrow("Cannot set buffer larger than 50Mb");
     expect(readFile).not.toHaveBeenCalled();
     expect(setInputFiles).not.toHaveBeenCalled();
+  });
+
+  it.each([47, 48, 50])("keeps extension path handoff for a %i MiB upload", async (mib) => {
+    stat.mockResolvedValueOnce({ size: mib * 1024 * 1024 });
+    await upload({
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      ssrfPolicy: {},
+    });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([canonical], nativeOptions);
+  });
+
+  it("sends extension uploads below the relay bound as bytes", async () => {
+    stat.mockResolvedValue({ size: 46 * 1024 * 1024, mtimeMs: payload.lastModifiedMs });
+    await upload({
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      ssrfPolicy: {},
+    });
+    expect(readFile).toHaveBeenCalledWith(canonical);
+    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([payload], nativeOptions);
   });
 
   it("keeps guarded local-filesystem uploads as paths inside the policy guard", async () => {

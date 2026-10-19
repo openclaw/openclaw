@@ -1,9 +1,10 @@
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
+  createChannelNativeOriginTargetResolverAsync,
   resolveApprovalRequestSessionConversation,
+  type ExecApprovalSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -18,14 +19,6 @@ import {
   isDiscordExecApprovalClientEnabled,
 } from "./exec-approvals.js";
 
-function shouldHandleCapabilityRequest({
-  cfg,
-  accountId,
-  request,
-}: Parameters<typeof shouldHandleDiscordApprovalRequest>[0]) {
-  return shouldHandleDiscordApprovalRequest({ cfg, accountId, request });
-}
-
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
   if (!sessionKey) {
     return null;
@@ -33,11 +26,7 @@ function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "gro
   // DM session keys use the `direct` peer kind in the normalized form
   // (`agent:<id>:discord[:account]:direct:<userId>`); legacy keys may still use
   // `dm`. Treat both as the same logical kind for downstream comparisons.
-  const match = sessionKey.match(/discord:(?:[^:]+:)?(channel|group|dm|direct):/);
-  if (!match) {
-    return null;
-  }
-  const raw = match[1];
+  const raw = sessionKey.match(/discord:(?:[^:]+:)?(channel|group|dm|direct):/)?.[1];
   if (raw === "direct") {
     return "dm";
   }
@@ -76,9 +65,30 @@ function createDiscordOriginTargetResolver() {
       channel: "discord",
       bundledFallback: false,
     });
-  return createChannelNativeOriginTargetResolver({
+  const resolveSessionOrigin = (
+    request: Parameters<typeof resolveConversation>[0],
+    sessionTarget?: ExecApprovalSessionTarget,
+  ) => {
+    const sessionConversation = resolveConversation(request);
+    const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
+    if (sessionKind === "dm") {
+      return null;
+    }
+    const to = normalizeDiscordOriginChannelId(
+      sessionTarget ? sessionTarget.to : sessionConversation?.id,
+    );
+    return to
+      ? {
+          to,
+          threadId:
+            (sessionTarget ? normalizeDiscordThreadId(sessionTarget.threadId) : undefined) ??
+            normalizeDiscordThreadId(sessionConversation?.threadId),
+        }
+      : null;
+  };
+  return createChannelNativeOriginTargetResolverAsync({
     channel: "discord",
-    shouldHandleRequest: shouldHandleCapabilityRequest,
+    shouldHandleRequest: shouldHandleDiscordApprovalRequest,
     resolveTurnSourceTarget: (request) => {
       const sessionConversation = resolveConversation(request);
       const sessionKind = extractDiscordSessionKind(
@@ -98,41 +108,13 @@ function createDiscordOriginTargetResolver() {
         ? { to: turnSourceTo, threadId }
         : null;
     },
-    resolveSessionTarget: (sessionTarget, request) => {
-      const sessionConversation = resolveConversation(request);
-      const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
-      if (sessionKind === "dm") {
-        return null;
-      }
-      const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
-      return targetTo
-        ? {
-            to: targetTo,
-            threadId:
-              normalizeDiscordThreadId(sessionTarget.threadId) ??
-              normalizeDiscordThreadId(sessionConversation?.threadId),
-          }
-        : null;
-    },
-    resolveFallbackTarget: (request) => {
-      const sessionConversation = resolveConversation(request);
-      const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
-      if (sessionKind === "dm") {
-        return null;
-      }
-      const fallbackChannelId = normalizeDiscordOriginChannelId(sessionConversation?.id);
-      return fallbackChannelId
-        ? {
-            to: fallbackChannelId,
-            threadId: normalizeDiscordThreadId(sessionConversation?.threadId),
-          }
-        : null;
-    },
+    resolveSessionTarget: (sessionTarget, request) => resolveSessionOrigin(request, sessionTarget),
+    resolveFallbackTarget: (request) => resolveSessionOrigin(request),
   });
 }
 
 function createDiscordApprovalCapability() {
-  return createApproverRestrictedNativeApprovalCapability({
+  return createApproverRestrictedNativeApprovalCapabilityAsync({
     channel: "discord",
     channelLabel: "Discord",
     describeExecApprovalSetup: ({
@@ -149,22 +131,22 @@ function createDiscordApprovalCapability() {
       getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0,
     isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
       isDiscordExecApprovalApprover({ cfg, accountId, senderId }),
-    isNativeDeliveryEnabled: ({ cfg, accountId }) =>
+    isNativeDeliveryEnabled: async ({ cfg, accountId }) =>
       isDiscordExecApprovalClientEnabled({ cfg, accountId }),
     resolveNativeDeliveryMode: ({ cfg, accountId }) =>
       resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ?? "dm",
     resolveOriginTarget: createDiscordOriginTargetResolver(),
-    resolveApproverDmTargets: createChannelApproverDmTargetResolver({
-      shouldHandleRequest: shouldHandleCapabilityRequest,
+    resolveApproverDmTargets: createChannelApproverDmTargetResolverAsync({
+      shouldHandleRequest: shouldHandleDiscordApprovalRequest,
       resolveApprovers: ({ cfg, accountId }) => getDiscordExecApprovalApprovers({ cfg, accountId }),
       mapApprover: (approver) => ({ to: approver }),
     }),
     notifyOriginWhenDmOnly: true,
-    nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) => isDiscordExecApprovalClientEnabled({ cfg, accountId }),
-      shouldHandle: shouldHandleCapabilityRequest,
+      shouldHandle: shouldHandleDiscordApprovalRequest,
       load: async () =>
         (await import("./approval-handler.runtime.js")).discordApprovalNativeRuntime,
     }),

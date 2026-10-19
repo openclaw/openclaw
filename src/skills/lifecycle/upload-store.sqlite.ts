@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -9,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -56,7 +56,7 @@ function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
 }
 
 export function deleteSkillUploadState(
-  db: DatabaseSync,
+  db: EngineConnection,
   kysely: Kysely<SkillUploadDatabase>,
   uploadId: string,
 ): void {
@@ -106,7 +106,7 @@ export function deleteOwnedSkillUpload(
 }
 
 export function hasLiveSkillUploadInstallLease(
-  db: DatabaseSync,
+  db: EngineConnection,
   kysely: Kysely<SkillUploadDatabase>,
   uploadId: string,
   nowMs: number,
@@ -125,7 +125,7 @@ export function hasLiveSkillUploadInstallLease(
 }
 
 export function deleteExpiredSkillUploadUnlessLeasedInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { uploadId: string; nowMs: number },
 ): "active" | "deleted" | "leased" | "missing" {
   const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
@@ -197,8 +197,16 @@ export function requireUploadMetadata(
   options: OpenClawStateDatabaseOptions,
 ): SkillUploadMetadataRow {
   const { database, kysely } = openSkillUploadDatabase(options);
+  return requireUploadMetadataInDatabase(database.db, kysely, uploadId);
+}
+
+export function requireUploadMetadataInDatabase(
+  db: EngineConnection,
+  kysely: Kysely<SkillUploadDatabase>,
+  uploadId: string,
+): SkillUploadMetadataRow {
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    db,
     selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
   );
   if (!row) {

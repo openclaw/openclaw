@@ -25,10 +25,7 @@ export type WhatsAppSendKind =
   | "sticker"
   | "text";
 
-type WhatsAppSendKey = Omit<
-  Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,
-  "id"
-> & {
+type WhatsAppSendKey = Pick<WAMessageKey, "fromMe" | "participant" | "remoteJid"> & {
   id: string;
 };
 
@@ -333,13 +330,13 @@ export function rememberWhatsAppPartialSend(params: {
     kind: resolveWhatsAppReceiptKind(params.kind),
     results: receiptSources,
   });
-  const accepted = requireWhatsAppAcceptedSendResult({
+  const accepted: WhatsAppSendResult = {
     kind: params.kind,
     messageId,
     receipt,
     keys: acceptedIds.map((id) => ({ id })),
     providerAccepted: true,
-  });
+  };
   activityAccountedWhatsAppSendResults.add(accepted);
   params.results.push(accepted);
   return true;

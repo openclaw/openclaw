@@ -1,5 +1,5 @@
-import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { captureGatewaySessionControllerWork } from "../../sessions/session-controller.lifecycle.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
@@ -14,7 +14,7 @@ type DevicePlacementDemandSources = {
 
 function captureDemand(sources: DevicePlacementDemandSources) {
   const gatewayContext = sources.resolveGatewayContext();
-  const admissions = captureGatewaySessionWorkAdmissions(sources.resolveGatewayContext);
+  const admissions = captureGatewaySessionControllerWork(sources.resolveGatewayContext);
   const targets = new Set<string>();
   if (gatewayContext) {
     for (const identities of admissions.targets.values()) {
@@ -28,10 +28,11 @@ function captureDemand(sources: DevicePlacementDemandSources) {
 
 function projectDemand(
   sources: DevicePlacementDemandSources,
-  admissions: ReturnType<typeof captureGatewaySessionWorkAdmissions>,
+  admissions: ReturnType<typeof captureGatewaySessionControllerWork>,
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>,
   excludeSessionId?: string,
 ): ReadonlyMap<string, number> {
+  const config = sources.resolveGatewayContext()?.getRuntimeConfig();
   const demand = new Map<string, number>();
   const countedEnvironments = new Set<string>();
   for (const [scope, identities] of admissions.targets) {
@@ -39,6 +40,7 @@ function projectDemand(
       const placement = placements.get(identity);
       if (
         !placement ||
+        scope !== resolveSessionStorePathForScope(placement, config) ||
         placement.sessionId === excludeSessionId ||
         placement.state !== "active" ||
         placement.executionMode !== "worker-turn" ||
@@ -49,15 +51,6 @@ function projectDemand(
           sessionId: placement.sessionId,
         })
       ) {
-        continue;
-      }
-      const session = loadExactSessionEntryReadOnly({
-        storePath: scope,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        projection: "list",
-      });
-      if (session?.entry.sessionId !== placement.sessionId) {
         continue;
       }
       const environment = sources.environments.get(placement.environmentId);

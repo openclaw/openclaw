@@ -4,11 +4,13 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { readWorktreeCleanupState } from "./registry-read.js";
-import { hasLiveWorktreeRunLeaseRow, insertRegistryWorktree } from "./registry.js";
+import { insertRegistryWorktree } from "./registry.js";
 import { readWorktreeRunLeaseStateInDatabase, worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
+import { hasLiveWorktreeRunLease as hasLiveWorktreeRunLeaseRow } from "./run-lease.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -52,7 +54,7 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
       { env },
     );
   }
-  const { db } = stateDatabase.openOpenClawStateDatabase({ env });
+  const db = requireNativeSqliteDatabase(stateDatabase.openOpenClawStateDatabase({ env }).db);
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
   const deadPid = vi
     .spyOn(pidAlive, "isPidDefinitelyDead")

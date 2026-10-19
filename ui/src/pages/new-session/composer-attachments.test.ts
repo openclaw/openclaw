@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render, nothing } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
+import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
+import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 afterEach(() => {
@@ -32,34 +34,54 @@ it.each(["owner", "tile"] as const)(
       () => redraw(),
       () => {},
     );
-    const textareaController = new NewSessionComposerTextareaController();
+    const composerTextarea = createNewSessionComposerTextarea();
     const modelControl = new NewSessionModelControl(() => {});
-    const redraw = () =>
-      render(
-        renderNewSessionDraftComposer({
-          agentId: "main",
-          attachmentDraft,
-          canSubmit: attachmentDraft.reads.pendingReads === 0,
-          context: undefined,
-          draftOwnerKey: "attachments",
-          isCatalogTarget: true,
-          message: "Keep this draft",
-          modelControl,
-          requiresModifier: false,
-          requestUpdate: redraw,
-          submitting: false,
-          textareaController,
-          onInput: () => {},
-          onSubmit: () => {},
-        }),
+    const currentOptions = (): NewSessionComposerOptions => ({
+      agentId: "main",
+      attachmentDraft,
+      canSubmit: attachmentDraft.reads.pendingReads === 0,
+      context: undefined,
+      draftOwnerKey: "attachments",
+      isCatalogTarget: true,
+      message: "Keep this draft",
+      modelControl,
+      requiresModifier: false,
+      onChange: redraw,
+      submitting: false,
+      onInput: () => {},
+      onSubmit: () => {},
+    });
+    let update: (options: NewSessionComposerOptions) => void;
+    const redraw = () => {
+      update(currentOptions());
+      flush();
+    };
+    const mounted = mountSolid(
+      () => {
+        const [options, setOptions] = createSignal(currentOptions());
+        update = setOptions;
+        return createComponent(NewSessionComposer, {
+          get options() {
+            return options();
+          },
+        });
+      },
+      {
         container,
-      );
+        wrapper: (props) =>
+          createComponent(NewSessionComposerTextareaContext, {
+            value: composerTextarea,
+            get children() {
+              return props.children;
+            },
+          }),
+      },
+    );
     onTestFinished(() => {
       attachmentDraft.reset();
-      textareaController.disconnect();
-      render(nothing, container);
+      composerTextarea.disconnect();
+      mounted.unmount();
     });
-    redraw();
     const composer = expectDefined(
       container.querySelector(".new-session-page__composer"),
       "new-session composer",
@@ -76,6 +98,9 @@ it.each(["owner", "tile"] as const)(
     expect(status()?.textContent).toContain("Preparing 3 attachments");
     expect(status()?.classList.contains("sr-only")).toBe(true);
     expect(status()?.querySelector(".btn__spinner")).toBeNull();
+    await waitForFast(() =>
+      expect(container.querySelectorAll(".chat-attachment-thumb")).toHaveLength(3),
+    );
     const tiles = [...container.querySelectorAll(".chat-attachment-thumb")];
     expect(tiles).toHaveLength(3);
     expect(tiles.every((tile) => tile.getAttribute("aria-busy") === "true")).toBe(true);

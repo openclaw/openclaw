@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "./host/openclaw-runtime-kysely.js";
+import type { EngineConnection } from "./host/openclaw-runtime-sqlite.js";
+import { createSqliteSchemaEnsurer } from "./host/openclaw-runtime-sqlite.js";
 
 export type MemoryEntryOrigin = {
   entryKey: string;
@@ -26,8 +27,8 @@ type MemoryEntryOriginRow = {
 
 type MemoryOriginDatabase = { memory_entry_origins: MemoryEntryOriginRow };
 
-export function ensureMemoryEntryOriginsSchema(db: DatabaseSync): void {
-  db.exec(`CREATE TABLE IF NOT EXISTS memory_entry_origins (
+export const ensureMemoryEntryOriginsSchema = createSqliteSchemaEnsurer(
+  () => `CREATE TABLE IF NOT EXISTS memory_entry_origins (
     entry_key TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -35,8 +36,9 @@ export function ensureMemoryEntryOriginsSchema(db: DatabaseSync): void {
     origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
     observed_at INTEGER NOT NULL,
     PRIMARY KEY (entry_key, agent_id, session_id)
-  ) STRICT`);
-}
+  ) STRICT, WITHOUT ROWID`,
+  { tables: ["memory_entry_origins"] },
+);
 
 function readOrigin(row: MemoryEntryOriginRow): MemoryEntryOrigin {
   return {
@@ -50,7 +52,7 @@ function readOrigin(row: MemoryEntryOriginRow): MemoryEntryOrigin {
 }
 
 export function readMemoryEntryOriginsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { agentId: string; sessionIds?: readonly string[]; entryKeys?: readonly string[] },
 ): MemoryEntryOrigin[] {
   const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);
@@ -72,7 +74,7 @@ export function readMemoryEntryOriginsInDatabase(
 
 /** The caller owns schema admission and the synchronous transaction. */
 export function recordMemoryEntryOriginsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { agentId: string; origins: readonly MemoryEntryOrigin[]; entryKey?: string },
 ): MemoryEntryOrigin[] {
   const kysely = getNodeSqliteKysely<MemoryOriginDatabase>(db);

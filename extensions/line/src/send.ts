@@ -6,6 +6,7 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   readProviderJsonResponse,
@@ -17,6 +18,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction, normalizeLineMessage } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
+import { normalizeLineMessagingTarget } from "./messaging-target.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
 import { applyLineQuoteToken, withoutLineQuoteTokens } from "./quote-tokens.js";
@@ -55,19 +57,10 @@ const LINE_LOCATION_LABEL_LIMIT = 100;
 // delivery, while rejected responses keep their status with prefix-only diagnostics.
 const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
-// Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
+// Completion order also orders expiry; evict the oldest fetch on overflow.
 function rememberLineIdentity<T>(cache: LineIdentityCache<T>, key: string, value: T): void {
-  const entry = { value, fetchedAt: Date.now() };
   cache.values.delete(key);
-  cache.values.set(key, entry);
-  if (cache.values.size <= PROFILE_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  for (const [cachedKey, cached] of cache.values) {
-    if (entry.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
-      cache.values.delete(cachedKey);
-    }
-  }
+  cache.values.set(key, { value, fetchedAt: Date.now() });
   pruneMapToMaxSize(cache.values, PROFILE_CACHE_MAX_ENTRIES);
 }
 
@@ -103,7 +96,6 @@ interface LineSendOpts {
   cfg: OpenClawConfig;
   channelAccessToken?: string;
   accountId?: string;
-  verbose?: boolean;
   mediaUrl?: string;
   mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
@@ -121,16 +113,10 @@ type LinePushOpts = Pick<
   | "cfg"
   | "channelAccessToken"
   | "accountId"
-  | "verbose"
   | "quoteToken"
   | "authorize"
   | "assertDirectAdapterHandoff"
 >;
-
-interface LinePushBehavior {
-  errorContext?: string;
-  verboseMessage?: (chatId: string, messageCount: number) => string;
-}
 
 function resolveLineProviderMessageIds(
   response: messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse,
@@ -154,17 +140,7 @@ function resolveLineProviderMessageIds(
 }
 
 function normalizeTarget(to: string): string {
-  const trimmed = to.trim();
-  if (!trimmed) {
-    throw new Error("Recipient is required for LINE sends");
-  }
-
-  const normalized = trimmed
-    .replace(/^line:group:/i, "")
-    .replace(/^line:room:/i, "")
-    .replace(/^line:user:/i, "")
-    .replace(/^line:/i, "");
-
+  const normalized = normalizeLineMessagingTarget(to);
   if (!normalized) {
     throw new Error("Recipient is required for LINE sends");
   }
@@ -280,11 +256,14 @@ async function postLineProviderMessages(
     const body = await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES).catch(
       () => "",
     );
+    // A proxy or LINE-compatible endpoint can reflect the request's Authorization
+    // token in the error body; mask it before the error reaches logs or diagnostics.
+    const redactedBody = redactToolPayloadText(body);
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      body,
+      body: redactedBody,
     });
   }
 
@@ -319,21 +298,6 @@ export function createLocationMessage(location: LineLocation): LocationMessage |
     latitude: location.latitude,
     longitude: location.longitude,
   };
-}
-
-function logLineHttpError(err: unknown, context: string): void {
-  if (!err || typeof err !== "object") {
-    return;
-  }
-  const { status, statusText, body } = err as {
-    status?: number;
-    statusText?: string;
-    body?: string;
-  };
-  if (typeof body === "string") {
-    const summary = status ? `${status} ${statusText ?? ""}`.trim() : "unknown status";
-    logVerbose(`line: ${context} failed (${summary}): ${body}`);
-  }
 }
 
 function recordLineOutboundActivity(
@@ -380,7 +344,6 @@ async function pushLineMessages(
   to: string,
   messages: Message[],
   opts: LinePushOpts,
-  behavior: LinePushBehavior = {},
 ): Promise<LineSendResult> {
   if (messages.length === 0) {
     throw new Error("Message must be non-empty for LINE sends");
@@ -395,29 +358,23 @@ async function pushLineMessages(
   // an attempt that was accepted before its outcome reached us.
   const retryKey = randomUUID();
 
-  const response = await runLinePushWithRetries(async () => {
-    try {
-      return await sendLineProviderMessages(
+  const response = await runLinePushWithRetries(
+    () =>
+      sendLineProviderMessages(
         "push",
         token,
         { to: chatId, messages: normalizedMessages },
         retryKey,
         opts.authorize,
         opts.assertDirectAdapterHandoff,
-      );
-    } catch (err) {
-      if (behavior.errorContext) {
-        logLineHttpError(err, behavior.errorContext);
-      }
-      throw err;
-    }
-  }, "line:push");
+      ),
+    "line:push",
+  );
   const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
   const result: LineSendResult = {
     messageId,
     chatId,
     receipt: createLineSendReceipt({
-      messageId,
       messageIds,
       chatId,
       kind: resolveLineReceiptKind(messages),
@@ -426,13 +383,6 @@ async function pushLineMessages(
   };
 
   recordLineOutboundActivity(account.accountId, { messageIds, receipt: result.receipt });
-
-  if (opts.verbose) {
-    const logMessage =
-      behavior.verboseMessage?.(chatId, messages.length) ??
-      `line: pushed ${messages.length} messages to ${chatId}`;
-    logVerbose(logMessage);
-  }
 
   return result;
 }
@@ -465,9 +415,7 @@ export async function pushMessageLine(
     messages.push({ type: "text", text: text.trim() });
   }
 
-  return pushLineMessages(chatId, messages, opts, {
-    verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,
-  });
+  return pushLineMessages(chatId, messages, opts);
 }
 
 export async function replyMessageLine(
@@ -489,9 +437,6 @@ export async function replyMessageLine(
   );
   const { messageIds } = resolveLineProviderMessageIds(response, "reply");
   recordLineOutboundActivity(account.accountId, { messageIds });
-  if (opts.verbose) {
-    logVerbose(`line: replied with ${messages.length} messages`);
-  }
 }
 
 export async function pushMessagesLine(
@@ -499,9 +444,7 @@ export async function pushMessagesLine(
   messages: Message[],
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, messages, opts, {
-    errorContext: "push message",
-  });
+  return pushLineMessages(to, messages, opts);
 }
 
 export function createFlexMessage(
@@ -520,9 +463,7 @@ export async function pushLocationMessage(
   location: LineLocation,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, [createLocationMessage(location)], opts, {
-    verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
-  });
+  return pushLineMessages(to, [createLocationMessage(location)], opts);
 }
 
 export async function pushFlexMessage(
@@ -531,10 +472,7 @@ export async function pushFlexMessage(
   contents: FlexContainer,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, [createFlexMessage(altText, contents)], opts, {
-    errorContext: "push flex message",
-    verboseMessage: (chatId) => `line: pushed flex message to ${chatId}`,
-  });
+  return pushLineMessages(to, [createFlexMessage(altText, contents)], opts);
 }
 
 export async function pushTemplateMessage(
@@ -542,9 +480,7 @@ export async function pushTemplateMessage(
   template: TemplateMessage,
   opts: LinePushOpts,
 ): Promise<LineSendResult> {
-  return pushLineMessages(to, [template], opts, {
-    verboseMessage: (chatId) => `line: pushed template message to ${chatId}`,
-  });
+  return pushLineMessages(to, [template], opts);
 }
 
 export async function pushTextMessageWithQuickReplies(
@@ -557,31 +493,30 @@ export async function pushTextMessageWithQuickReplies(
     to,
     [{ type: "text", text, quickReply: createQuickReplyItems(quickReplyLabels) }],
     opts,
-    { verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}` },
   );
 }
 
 export function createQuickReplyItems(labels: string[]): QuickReply {
-  const items: QuickReplyItem[] = labels.slice(0, 13).map((label) => ({
-    type: "action",
-    action: messageAction(label, label),
-  }));
+  const items: QuickReplyItem[] = labels
+    .map((label) => label.trim())
+    .filter(Boolean)
+    .slice(0, 13)
+    .map((label) => ({
+      type: "action",
+      action: messageAction(label, label),
+    }));
   return { items };
 }
 
-export async function showLoadingAnimation(
-  chatId: string,
-  opts: LineClientOpts & { loadingSeconds?: number },
-): Promise<void> {
+export async function showLoadingAnimation(chatId: string, opts: LineClientOpts): Promise<void> {
   const { token } = resolveLineMessagingAccount(opts);
   const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
 
   try {
     await client.showLoadingAnimation({
       chatId: normalizeTarget(chatId),
-      loadingSeconds: opts.loadingSeconds ?? 20,
+      loadingSeconds: 20,
     });
-    logVerbose(`line: showing loading animation to ${chatId}`);
   } catch (err) {
     logVerbose(`line: loading animation failed (non-fatal): ${String(err)}`);
   }

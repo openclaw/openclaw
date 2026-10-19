@@ -1,7 +1,4 @@
-import {
-  ensureSystemPromptCacheBoundary,
-  splitSystemPromptRelocatableBoundary,
-} from "@openclaw/ai/internal/shared";
+import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -10,7 +7,6 @@ import {
 } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
-import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
@@ -22,7 +18,6 @@ import {
   activateMcpLoopbackClientGrantCapture,
   bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
@@ -50,10 +45,8 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   readRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -66,7 +59,7 @@ import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-ref
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
-import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -95,21 +88,24 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
-import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
+import {
+  resolvePromptBuildHookResult,
+  type ResolvedPromptBuildHookResult,
+} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -127,7 +123,7 @@ import {
 } from "./bundle-mcp-claude.js";
 import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { runCliCleanup } from "./cleanup.js";
+import { runCliCleanup, sequenceCliCleanups } from "./cleanup.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
@@ -140,14 +136,16 @@ import {
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
+import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
+import { runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   composeCliPromptContext,
-  prependCliSessionDriftUserContext,
+  createCliCurrentPromptRenderer,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
@@ -160,7 +158,7 @@ import {
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
-import { bindCliQuestionAnswerAuthority, prepareCliReplyToolAuthority } from "./tool-authority.js";
+import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
@@ -182,17 +180,8 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
-  if (!inputParams.sessionManager && inputParams.sessionTarget) {
-    const { restoreSessionColdTranscript } =
-      await import("../../config/sessions/session-cold-storage.js");
-    await restoreSessionColdTranscript(inputParams.sessionTarget);
-  }
-  // Fallbacks may already have admitted this user turn; recover only prior history.
-  return runWithSessionTranscriptReadFence(
-    inputParams.sessionManager
-      ? undefined
-      : inputParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-    () => prepareCliRunContextWithinReadFence(inputParams),
+  return runWithCliPreparationSource(inputParams, () =>
+    prepareCliRunContextWithinReadFence(inputParams),
   );
 }
 
@@ -251,16 +240,15 @@ async function prepareCliRunContextWithinReadFence(
     agentId: sessionOwner,
     config: workspaceConfig,
   });
-  const resolvedWorkspace = workspaceResolution.workspaceDir;
+  const workspaceDir = workspaceResolution.workspaceDir;
   const redactedSessionId = redactRunIdentifier(params.sessionId);
   const redactedSessionKey = redactRunIdentifier(params.sessionKey);
-  const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+  const redactedWorkspace = redactRunIdentifier(workspaceDir);
   if (workspaceResolution.usedFallback) {
     cliBackendLog.warn(
       `[workspace-fallback] caller=runCliAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
     );
   }
-  const workspaceDir = resolvedWorkspace;
   const suppliedSessionKey = params.sessionKey?.trim();
   if (suppliedSessionKey) {
     // Native questions and MCP tools share explicit aliases; absent native keys stay sessionless.
@@ -276,7 +264,7 @@ async function prepareCliRunContextWithinReadFence(
   // Every prompt/history read must observe prior deferred rewrites. Caller-owned
   // memory remains independent of durable work sharing its correlation key.
   if (!params.isolatedCompletion && !isControlOperation && !params.sessionManager) {
-    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
+    await waitForSessionMaintenance(params.sessionKey ?? params.sessionId);
   }
   const policySessionKey = params.runtimePolicySessionKey ?? params.sessionKey;
   // Capture the requester before admission replaces agentId with the execution owner.
@@ -304,26 +292,30 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved.resolveExecutionArgs !== undefined) ||
       (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
         backendResolved.prepareExecution !== undefined));
-  // Native callbacks retain the original caller cap, before translation clears toolsAllow.
-  // Reply-owned runs already have the richer admission snapshot; never reconstruct that one.
-  const questionOperation = params.toolAuthorityFingerprint ? params.replyOperation : undefined;
-  const questionSessionKey = params.sessionKey ?? params.sessionId;
-  const questionAbortSignal = params.abortSignal;
-  const assertQuestionSourceCurrent = params.assertCurrent;
-  const questionSnapshot = questionOperation
-    ? undefined
-    : prepareCliReplyToolAuthority(params, {
-        agentId: workspaceResolution.agentId,
-        workspaceDir,
-        cwd,
-      });
-  const toolPolicy = resolveCliRuntimeToolPolicy({
+  using callerToolAuthorityResources = new DisposableStack();
+  const callerToolAuthority = callerToolAuthorityResources.use(
+    captureCliRunToolAuthority(params, {
+      agentId: workspaceResolution.agentId,
+      workspaceDir,
+      cwd,
+    }),
+  );
+  const finishPreparation = (prepared: PreparedCliRunContext): PreparedCliRunContext => {
+    const resources = callerToolAuthorityResources.move();
+    prepared.preparedBackend.cleanup = sequenceCliCleanups(prepared.preparedBackend.cleanup, () =>
+      resources.dispose(),
+    );
+    return prepared;
+  };
+  const toolPolicy = await resolveCliRuntimeToolPolicy({
     params,
     policySessionKey,
     policyAgentId,
     backendId: backendResolved.id,
     bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
+    projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
+    sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
     skipsTurnPreparation,
   });
@@ -378,10 +370,10 @@ async function prepareCliRunContextWithinReadFence(
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
   let authStore: AuthProfileStore | undefined;
   let resolvedProfileAuth: ResolvedProviderAuth | undefined;
-  const loadScopedAuthStore = (options: { profileId?: string; readOnly?: boolean } = {}) => {
+  const loadScopedAuthStore = (options: { profileId?: string } = {}) => {
     params.assertCurrent?.();
-    return loadAuthProfileStoreForRuntime(agentDir, {
-      readOnly: options.readOnly ?? true,
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, {
+      readOnly: true,
       profileId: options.profileId,
       externalCli: externalCliDiscoveryForProviderAuth({
         cfg: params.config,
@@ -391,12 +383,12 @@ async function prepareCliRunContextWithinReadFence(
     });
   };
   if (effectiveAuthProfileId) {
-    authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
+    authStore = await loadScopedAuthStore({ profileId: effectiveAuthProfileId });
   } else if (
     backendResolved.autoSelectAuthProfile !== false &&
     (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
   ) {
-    authStore = loadScopedAuthStore();
+    authStore = await loadScopedAuthStore();
     effectiveAuthProfileId =
       resolveAuthProfileOrder({
         cfg: params.config,
@@ -429,6 +421,13 @@ async function prepareCliRunContextWithinReadFence(
   if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
+  } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
+    const refusal = new Error(
+      "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+    );
+    // Another model would only bypass the operator's account choice.
+    recordModelFallbackStop(refusal);
+    throw refusal;
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&
@@ -452,10 +451,10 @@ async function prepareCliRunContextWithinReadFence(
         agentDir,
       });
     };
-    const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
+    const selectedAuthStore = await loadScopedAuthStore({ profileId: authProfileId });
     const resolvedAuth = await resolveApiKeyForProfile({
       cfg: params.config,
-      store: writableAuthStore,
+      store: selectedAuthStore,
       profileId: authProfileId,
       agentDir,
       // Claude's selected profile is an account boundary. Never refresh or
@@ -463,23 +462,16 @@ async function prepareCliRunContextWithinReadFence(
       ...(backendAuthPolicy?.strictSelectedProfile ? { allowProfileFallback: false } : {}),
     });
     params.assertCurrent?.();
-    if (!resolvedAuth && backendAuthPolicy?.strictSelectedProfile) {
+    if (backendAuthPolicy.strictSelectedProfile && resolvedAuth?.profileId !== authProfileId) {
       throw profileResolutionError(
-        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-      );
-    }
-    if (
-      resolvedAuth &&
-      backendAuthPolicy?.strictSelectedProfile &&
-      resolvedAuth.profileId !== authProfileId
-    ) {
-      throw profileResolutionError(
-        writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
-        resolvedAuth.profileId,
+        resolvedAuth?.provider ??
+          selectedAuthStore.profiles[authProfileId]?.provider ??
+          params.provider,
+        resolvedAuth?.profileId,
       );
     }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
+    authStore = await loadScopedAuthStore({ profileId: resolvedAuthProfileId });
     authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
     if (
       backendAuthPolicy?.strictSelectedProfile &&
@@ -527,10 +519,8 @@ async function prepareCliRunContextWithinReadFence(
     : params.sourceReplyDeliveryMode;
   const hasBindingMessageToolPolicy =
     bindingSourceReplyDeliveryMode !== undefined ||
-    (hasCliSessionBindingFacts
-      ? bindingFacts.requireExplicitMessageTarget !== undefined ||
-        bindingRequireExplicitMessageTarget
-      : params.requireExplicitMessageTarget !== undefined || bindingRequireExplicitMessageTarget);
+    bindingRequireExplicitMessageTarget ||
+    (bindingFacts ?? params).requireExplicitMessageTarget !== undefined;
   const messageToolPolicyHash = hasBindingMessageToolPolicy
     ? hashCliSessionText(
         JSON.stringify({
@@ -551,72 +541,17 @@ async function prepareCliRunContextWithinReadFence(
       modelId: normalizedCatalogModel,
       contextWindow: params.contextWindow,
     }) ?? normalizedCatalogModel;
-  const questionRoute = { provider: modelProvider, model: modelId };
-  const questionFingerprint = questionOperation
-    ? await questionOperation.bindToolAuthorityRouteAsync(questionRoute)
-    : await questionSnapshot?.fingerprintAsync(questionRoute);
-  if (questionOperation) {
+  const {
+    fingerprint: questionFingerprint,
+    bindQuestionAnswerAuthority,
+    bindQuestionAnswerAuthorityForSession,
+  } = await callerToolAuthority.bindQuestions({ provider: modelProvider, model: modelId }, () =>
+    readRunOperatorAuthority(params),
+  );
+  if (callerToolAuthority.hasReplyOperation) {
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }
-  const bindQuestionAnswerAuthorityForSession = bindCliQuestionAnswerAuthority({
-    operation: questionOperation,
-    snapshot: questionSnapshot,
-    route: questionRoute,
-    fingerprint: questionFingerprint,
-    readSource: () => readRunOperatorAuthority(params),
-    assertSourceCurrent: assertQuestionSourceCurrent,
-    signal: questionAbortSignal,
-  });
-  const bindQuestionAnswerAuthority: NonNullable<
-    PreparedCliRunContext["bindQuestionAnswerAuthority"]
-  > = (assertActive) => bindQuestionAnswerAuthorityForSession(questionSessionKey, assertActive);
   const modelDisplay = `${params.provider}/${modelId}`;
-  let openClawHistoryMessages: unknown[] | undefined;
-  const loadOpenClawHistoryMessages = async () => {
-    openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params);
-    return openClawHistoryMessages;
-  };
-  const promptBuildHookContext = {
-    runId: params.runId,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir,
-    modelProviderId: params.provider,
-    modelId,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-  };
-  const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
-  const promptBuildHookResult = await (async () => {
-    if (skipsTurnPreparation) {
-      return undefined;
-    }
-    try {
-      return await resolvePromptBuildHookResult({
-        config: runConfig,
-        prompt: params.prompt,
-        messages: await loadOpenClawHistoryMessages(),
-        hookCtx: promptBuildHookContext,
-        hookRunner: promptBuildHookRunner,
-      });
-    } catch (error) {
-      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-      return undefined;
-    }
-  })();
-  const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
-    promptBuildHookResult?.toolsAllow,
-    {
-      forceMessageTool: messageToolOwnsVisibleReply({
-        sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
-      }),
-    },
-  );
-  const promptBuildRestrictsTools =
-    promptBuildToolsAllow !== undefined &&
-    !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
   const isClaudeCli = isClaudeCliBackendId(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
@@ -624,24 +559,21 @@ async function prepareCliRunContextWithinReadFence(
     : normalizedCatalogModel;
   // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
   // a canonical id. Resolve both identities and keep the safest owned limit.
-  const contextModelIds = [
-    requestedContextModelId,
-    ...(normalizedContextModelId !== requestedContextModelId ? [normalizedContextModelId] : []),
-  ];
-  const resolveContextModelTokens = (contextModelId: string) =>
-    resolveContextTokensForModel({
-      cfg: params.config,
-      provider: params.provider,
-      modelProvider: backendResolved.modelProvider,
-      model: contextModelId,
-      modelContextWindow: params.modelContextWindow,
-      modelContextTokens: params.modelContextTokens,
-      allowAsyncLoad: false,
-      // A same-name API model may have a different native window from this CLI runtime.
-      allowUnscopedModelLookup: false,
-    });
+  const contextModelIds = uniqueStrings([requestedContextModelId, normalizedContextModelId]);
   const contextTokenCandidates = contextModelIds
-    .map((contextModelId) => resolveContextModelTokens(contextModelId))
+    .map((model) =>
+      resolveContextTokensForModel({
+        cfg: params.config,
+        provider: params.provider,
+        modelProvider: backendResolved.modelProvider,
+        model,
+        modelContextWindow: params.modelContextWindow,
+        modelContextTokens: params.modelContextTokens,
+        allowAsyncLoad: false,
+        // A same-name API model may have a different native window from this CLI runtime.
+        allowUnscopedModelLookup: false,
+      }),
+    )
     .filter((tokens) => tokens !== undefined);
   let modelContextTokens = contextTokenCandidates.length
     ? Math.min(...contextTokenCandidates)
@@ -689,6 +621,46 @@ async function prepareCliRunContextWithinReadFence(
     resolvedContextWindowInfo.tokens > modelContextTokens
       ? { tokens: modelContextTokens, source: "model" as const }
       : resolvedContextWindowInfo;
+  let openClawHistoryMessages: unknown[] | undefined;
+  const promptBuildHookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir,
+    modelProviderId: params.provider,
+    modelId,
+    contextTokenBudget: contextWindowInfo.tokens,
+    trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
+    ...buildAgentHookContextChannelFields(params),
+  };
+  const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
+  let promptBuildHookResult: ResolvedPromptBuildHookResult | undefined;
+  if (!skipsTurnPreparation) {
+    try {
+      promptBuildHookResult = await resolvePromptBuildHookResult({
+        config: runConfig,
+        prompt: params.prompt,
+        messages: (openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params)),
+        hookCtx: promptBuildHookContext,
+        hookRunner: promptBuildHookRunner,
+      });
+    } catch (error) {
+      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
+    }
+  }
+  const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
+    promptBuildHookResult?.toolsAllow,
+    {
+      forceMessageTool: messageToolOwnsVisibleReply({
+        sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+      }),
+    },
+  );
+  const promptBuildRestrictsTools =
+    promptBuildToolsAllow !== undefined &&
+    !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
   const autoReseedHistoryChars = isClaudeCli
     ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
     : undefined;
@@ -736,9 +708,9 @@ async function prepareCliRunContextWithinReadFence(
           trigger: params.trigger,
           sessionKey: params.sessionKey,
           isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-          isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
+          isCanonicalWorkspace: canonicalWorkspace === workspaceDir,
           effectiveWorkspace: workspaceDir,
-          resolvedWorkspace,
+          resolvedWorkspace: workspaceDir,
           hasBootstrapFileAccess,
         });
   const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
@@ -823,7 +795,7 @@ async function prepareCliRunContextWithinReadFence(
   const mcpToolAuth = mcpContextBase
     ? {
         ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
-        store: authStore ?? loadScopedAuthStore(),
+        store: authStore ?? (await loadScopedAuthStore()),
       }
     : undefined;
   params.assertCurrent?.();
@@ -916,7 +888,7 @@ async function prepareCliRunContextWithinReadFence(
       return await promptBuildHookRunner.runAuthorizedPromptBuild(
         {
           prompt: params.prompt,
-          messages: await loadOpenClawHistoryMessages(),
+          messages: (openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params)),
         },
         promptBuildHookContext,
         {
@@ -938,6 +910,10 @@ async function prepareCliRunContextWithinReadFence(
     promptTools.flatMap((tool) =>
       tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
     ),
+  );
+  const sessionEventSourcePolicy = callerToolAuthority.finalizeSessionEventSourcePolicy(
+    params,
+    promptBuildToolsAllow,
   );
   const { mcpGrant, projectNativeToolAuthority, exclusiveTools } = mcp.prepareCliMcpGrant(params, {
     context: mcpContextBase,
@@ -965,10 +941,11 @@ async function prepareCliRunContextWithinReadFence(
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
-    const mcpClientGrant =
+    const mcpClient =
       mcpLoopbackRuntime && mcpGrant
-        ? mintMcpLoopbackClientGrant({
+        ? await mintCliMcpClientGrant({ ...params, config: runConfig }, sessionAgentId, {
             ...mcpGrant,
+            sessionEventSourcePolicy,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
             bindQuestionAnswerAuthority: (assertActive) =>
               bindQuestionAnswerAuthorityForSession(mcpGrant.context.sessionKey, assertActive),
@@ -976,6 +953,10 @@ async function prepareCliRunContextWithinReadFence(
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
+    const mcpClientGrant = mcpClient?.grant;
+    // The grant's cleanup also releases the memory audience leased for this turn.
+    const cleanupMcpClientGrant = mcpClient?.cleanup;
+    cleanupPreparedResources = cleanupMcpClientGrant;
     const bindMcpClientGrantAdmission = (
       admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]>,
     ) => {
@@ -1072,17 +1053,6 @@ async function prepareCliRunContextWithinReadFence(
             };
           })()
         : undefined;
-    let mcpClientGrantRevoked = false;
-    const cleanupMcpClientGrant = mcpClientGrant
-      ? async () => {
-          if (mcpClientGrantRevoked) {
-            return;
-          }
-          mcpClientGrantRevoked = true;
-          revokeMcpLoopbackClientGrant(mcpClientGrant.token);
-        }
-      : undefined;
-    cleanupPreparedResources = cleanupMcpClientGrant;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
       ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined;
@@ -1090,7 +1060,7 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const nativeMcpCapabilityProfile = mcp.resolveCliNativeMcpPolicy(params, {
+    const nativeMcpCapabilityProfile = await mcp.resolveCliNativeMcpPolicy(params, {
       config: runConfig,
       policySessionKey,
       policyAgentId,
@@ -1137,16 +1107,10 @@ async function prepareCliRunContextWithinReadFence(
           }
         : {}),
     });
-    const cleanupPreparedBackend =
-      preparedBackend.cleanup || cleanupMcpClientGrant
-        ? async () => {
-            try {
-              await preparedBackend.cleanup?.();
-            } finally {
-              await cleanupMcpClientGrant?.();
-            }
-          }
-        : undefined;
+    const cleanupPreparedBackend = sequenceCliCleanups(
+      preparedBackend.cleanup && (() => preparedBackend.cleanup?.()),
+      cleanupMcpClientGrant,
+    );
     cleanupPreparedResources = cleanupPreparedBackend;
     const prepareExecutionContext = {
       config: params.config,
@@ -1161,24 +1125,23 @@ async function prepareCliRunContextWithinReadFence(
       executionMode,
       toolAvailability: params.cliToolAvailability,
       env: preparedBackend.env,
+      // Bundled owners may project this through a native per-process system-prompt
+      // channel. Keep it private so exact isolated inference does not expand the SDK.
+      ...(params.isolatedCompletion
+        ? {
+            isolatedCompletionCwd: cwd,
+            isolatedCompletionModelId: normalizedModel,
+            isolatedCompletionPrompt: params.prompt,
+            isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
+          }
+        : {}),
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
-    const privatePrepareExecutionContext = params.isolatedCompletion
-      ? {
-          ...prepareExecutionContext,
-          // Bundled owners may project this through a native per-process system-prompt
-          // channel. Keep it private so exact isolated inference does not expand the SDK.
-          isolatedCompletionCwd: cwd,
-          isolatedCompletionModelId: normalizedModel,
-          isolatedCompletionPrompt: params.prompt,
-          isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
-        }
-      : prepareExecutionContext;
     try {
       params.assertCurrent?.();
       // Only bundled backends receive this private credential bridge.
       const backendPrepareContext = backendAuthPolicy
-        ? { ...privatePrepareExecutionContext, authCredential }
-        : privatePrepareExecutionContext;
+        ? { ...prepareExecutionContext, authCredential }
+        : prepareExecutionContext;
       preparedExecution =
         (await backendResolved.prepareExecution?.(backendPrepareContext)) ?? undefined;
     } catch (error) {
@@ -1196,23 +1159,14 @@ async function prepareCliRunContextWithinReadFence(
       throw error;
     }
     const pluginExecutionConsumer = retainCliPluginExecutionConsumer(preparedExecution?.execute);
-    const preparedBackendCleanup =
-      cleanupPreparedBackend || preparedExecution?.cleanup || pluginExecutionConsumer
-        ? async () => {
-            try {
-              const cleanupExecution = () => preparedExecution?.cleanup?.();
-              await (pluginExecutionConsumer
-                ? pluginExecutionConsumer.run(cleanupExecution)
-                : cleanupExecution());
-            } finally {
-              try {
-                await cleanupPreparedBackend?.();
-              } finally {
-                pluginExecutionConsumer?.release();
-              }
-            }
-          }
-        : undefined;
+    const cleanupExecution = () => preparedExecution?.cleanup?.();
+    const preparedBackendCleanup = sequenceCliCleanups(
+      pluginExecutionConsumer
+        ? () => pluginExecutionConsumer.run(cleanupExecution)
+        : preparedExecution?.cleanup && cleanupExecution,
+      cleanupPreparedBackend,
+      pluginExecutionConsumer && (() => pluginExecutionConsumer.release()),
+    );
     cleanupPreparedResources = preparedBackendCleanup;
     params.assertCurrent?.();
     if (params.isolatedCompletion && preparedExecution?.isolatedCompletionEnforced !== true) {
@@ -1240,7 +1194,7 @@ async function prepareCliRunContextWithinReadFence(
       skipLocalCredential: skipLocalCredentialEpoch,
     });
     const authBindingFingerprint = params.onSuccessfulAuthBinding
-      ? resolveCliAuthBindingFingerprint({
+      ? await resolveCliAuthBindingFingerprint({
           provider: params.provider,
           config: runConfig,
           agentDir,
@@ -1278,19 +1232,17 @@ async function prepareCliRunContextWithinReadFence(
             return claudeSkillsPlugin.cleanup;
           }
         : undefined;
-    const preparedCleanup =
+    const preparedCleanup = sequenceCliCleanups(
       preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
         ? async () => {
-            try {
-              if (!claudeSkillsPluginClaimed) {
-                await claudeSkillsPlugin.cleanup();
-              }
-            } finally {
-              await preparedBackendCleanup?.();
+            if (!claudeSkillsPluginClaimed) {
+              await claudeSkillsPlugin.cleanup();
             }
           }
-        : undefined;
-    cleanupPreparedResources = preparedCleanup ?? preparedBackendCleanup;
+        : undefined,
+      preparedBackendCleanup,
+    );
+    cleanupPreparedResources = preparedCleanup;
     const preparedBackendClearEnv = [
       ...(preparedBackend.backend.clearEnv ?? []),
       ...(preparedExecution?.clearEnv ?? []),
@@ -1445,17 +1397,15 @@ async function prepareCliRunContextWithinReadFence(
             sessionKey: params.sessionKey?.trim() || params.sessionId,
           });
     assertSkillsCurrent();
-    const systemPromptSkillsPrompt = preparedSkills.prompt;
-    const runtimeChannel = skipsTurnPreparation
-      ? undefined
-      : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = skipsTurnPreparation
-      ? undefined
-      : collectRuntimeChannelCapabilities({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        });
+    const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
+      resolveRuntimeChannelPromptContext({
+        cfg: params.config,
+        channel: skipsTurnPreparation
+          ? undefined
+          : (params.messageChannel ?? params.messageProvider),
+        accountId: params.agentAccountId,
+        requester: params,
+      });
     const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
     const builtSystemPrompt = isControlOperation
       ? ""
@@ -1463,6 +1413,7 @@ async function prepareCliRunContextWithinReadFence(
         ? extraSystemPrompt
         : await prepareCliSystemPrompt({
             preparedTtsPreferences: params.preparedTtsPreferences,
+            preparedSessionEntry: params.sessionEntry,
             requesterProfileId,
             workspaceDir,
             cwd,
@@ -1474,10 +1425,12 @@ async function prepareCliRunContextWithinReadFence(
             runtimeChannel,
             runtimeChatType,
             runtimeCapabilities,
+            customInlineButtonHint,
+            messageToolHints,
             ownerNumbers: params.ownerNumbers,
             docsPath: openClawReferences.docsPath ?? undefined,
             sourcePath: openClawReferences.sourcePath ?? undefined,
-            skillsPrompt: systemPromptSkillsPrompt,
+            skillsPrompt: preparedSkills.prompt,
             tools: promptTools,
             contextFiles,
             bootstrapMode,
@@ -1496,13 +1449,14 @@ async function prepareCliRunContextWithinReadFence(
           modelDisplay,
           agentId: sessionAgentId,
           systemPrompt: builtSystemPrompt,
+          openClawMcpToolNames: systemAgentMcpConfig
+            ? ["openclaw"]
+            : bundleMcpEnabled
+              ? projectedTools.map((tool) => tool.name)
+              : [],
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
-    const turnRuntimeFacts =
-      params.runtimeFactsInTurn && !skipsTurnPreparation
-        ? splitSystemPromptRelocatableBoundary(transformedSystemPrompt)
-        : undefined;
-    let systemPrompt = turnRuntimeFacts?.remainingPrompt ?? transformedSystemPrompt;
+    let systemPrompt = transformedSystemPrompt;
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
@@ -1512,20 +1466,22 @@ async function prepareCliRunContextWithinReadFence(
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
     const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
     // Native compatibility and transcript account ownership are independent gates.
+    // A session-less backend starts every turn fresh, so the account-owned transcript is
+    // its only continuity; the backend's raw-reseed opt-in still decides delivery.
     const rawTranscriptReseedReason = !historyAllowed
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
-        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
+        : (invalidatedReason ?? (ignoreCliSessionCandidate ? "stateless" : "missing-transcript"));
     const sessionPromptContext =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
         : await loadCliSessionPromptContext({
-            abortSignal: params.abortSignal,
-            sessionManager: params.sessionManager,
-            sessionTarget: params.sessionTarget,
+            ...params,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
+            nativeSessionId: reusableCliSessionId,
+            tools: promptTools,
           });
     const effectiveReplyGuidance =
       skipsTurnPreparation || params.isolatedCompletion
@@ -1538,6 +1494,8 @@ async function prepareCliRunContextWithinReadFence(
     const finalizedTranscriptPrompt =
       (params.finalizePromptForResolvedTools ||
         sessionPromptContext?.durableContext ||
+        sessionPromptContext?.sessionGapContext ||
+        sessionPromptContext?.preservedTurnsContext ||
         effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt
@@ -1553,6 +1511,7 @@ async function prepareCliRunContextWithinReadFence(
     if (!isControlOperation && params.skillsSnapshot?.librarySelections?.length) {
       preparedPrompt = remapSkillReferencePaths(preparedPrompt, preparedSkills.usagePaths);
     }
+    let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
       ({
         prompt: preparedPrompt,
@@ -1560,9 +1519,12 @@ async function prepareCliRunContextWithinReadFence(
         promptContext,
         promptForHooks,
       } = await prepareCliTurnPromptContext({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
         prompt: preparedPrompt,
         systemPrompt,
         privateContext: executionTarget.kind === "plugin",
+        backendId: backendResolved.id,
+        runtimeFactsInTurn: params.runtimeFactsInTurn,
         deliveryGuidance: effectiveReplyGuidance,
         hookResult: promptBuildHookResult,
         prependContext: [
@@ -1579,30 +1541,14 @@ async function prepareCliRunContextWithinReadFence(
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
         runtimeContextFragments: params.runtimeContextFragments,
-        context: [
-          turnRuntimeFacts?.relocatable,
-          promptBuildHookResult?.appendContext,
-          authorizedPromptBuildResult?.appendContext,
-        ],
+        // Caller-owned memory cannot grant access to persisted interrupted inputs.
+        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
+        context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-    }
-    let historyPromptCurrentTurn = preparedPrompt;
-    if (!skipsTurnPreparation) {
-      const currentInboundContext = prependCliSessionDriftUserContext(
-        params.currentInboundContext,
-        reusableCliSession,
-      );
-      const renderCurrentPrompt = (prompt: string, preferResumableText = false) =>
-        annotateInterSessionPromptText(
-          buildCurrentInboundPrompt({
-            context: currentInboundContext,
-            prompt,
-            preferResumableText,
-          }),
-          params.inputProvenance,
-        );
+      const notes = { ...sessionPromptContext, writer: cliHistoryWriter };
+      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession, notes);
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
       historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);
@@ -1657,7 +1603,7 @@ async function prepareCliRunContextWithinReadFence(
       sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
       injectedWorkspaceFiles: bootstrapInjectionStats,
-      skillsPrompt: systemPromptSkillsPrompt,
+      skillsPrompt: preparedSkills.prompt,
       tools: promptTools,
       currentTurn: {
         ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
@@ -1670,6 +1616,7 @@ async function prepareCliRunContextWithinReadFence(
     const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,
+      sessionEventSourcePolicy,
       effectiveAuthProfileId,
       ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,
@@ -1708,18 +1655,19 @@ async function prepareCliRunContextWithinReadFence(
       cwdHash,
       ...(bundleMcpEnabled ? { mcpDeliveryCapture: true as const } : {}),
     });
-    const admitFinalParams = () =>
-      admitCliRunParams(
+    const admitFinalParams = async () => {
+      const preparedParams = await admitCliRunParams(
         {
           ...params,
           config: runConfig,
           prompt: preparedPrompt,
+          // History and runtime context may mention images already delivered to the native session.
+          imagePrompt: params.imagePrompt ?? params.prompt,
           transcriptPrompt: finalizedTranscriptPrompt,
           ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
         },
         workspaceResolution.agentId,
       );
-    const bindPreparedParams = (preparedParams: PreparedCliRunContext["params"]) => {
       bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
       if (!isControlOperation) {
         recordAdmittedModelRoutingDecision({
@@ -1739,11 +1687,11 @@ async function prepareCliRunContextWithinReadFence(
           fallbackReason: params.modelRoutingProvenance?.fallbackReason,
         });
       }
+      return preparedParams;
     };
     if (skipsTurnPreparation) {
       const preparedParams = await admitFinalParams();
-      bindPreparedParams(preparedParams);
-      return { ...buildPreparedContext(preparedParams), hadSessionFile: false };
+      return finishPreparation({ ...buildPreparedContext(preparedParams), hadSessionFile: false });
     }
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
@@ -1772,31 +1720,26 @@ async function prepareCliRunContextWithinReadFence(
         workspaceDir,
       });
       resolvedContextEngine = ownedEngine;
-      const previousCleanup = cleanupPreparedResources;
       const disposalHolds = new Set<Promise<void>>();
       deferContextEngineDisposalUntil = (promise: Promise<void>) => {
         disposalHolds.add(promise);
         void promise.finally(() => disposalHolds.delete(promise)).catch(() => {});
       };
-      cleanupPreparedResources = async () => {
-        try {
-          if (disposalHolds.size > 0) {
-            // Queued maintenance may need this foreground turn to release its lane first.
-            void trackDisposal(async () => {
-              await Promise.allSettled(disposalHolds);
-              await runCliCleanup(params, "cli-context-engine-release", async () => {
-                await ownedEngine.dispose?.();
-              });
-            }).catch((error: unknown) => {
-              cliBackendLog.warn(`CLI context engine cleanup failed: ${String(error)}`);
+      cleanupPreparedResources = sequenceCliCleanups(async () => {
+        if (disposalHolds.size > 0) {
+          // Queued maintenance may need this foreground turn to release its lane first.
+          void trackDisposal(async () => {
+            await Promise.allSettled(disposalHolds);
+            await runCliCleanup(params, "cli-context-engine-release", async () => {
+              await ownedEngine.dispose?.();
             });
-          } else {
-            await ownedEngine.dispose?.();
-          }
-        } finally {
-          await previousCleanup?.();
+          }).catch((error: unknown) => {
+            cliBackendLog.warn(`CLI context engine cleanup failed: ${String(error)}`);
+          });
+        } else {
+          await ownedEngine.dispose?.();
         }
-      };
+      }, cleanupPreparedResources);
       preparedBackendFinal.cleanup = cleanupPreparedResources;
     }
     const contextEngine =
@@ -1809,9 +1752,7 @@ async function prepareCliRunContextWithinReadFence(
       });
     }
     const hadSessionFile = await hasCliSessionTranscript(params);
-    const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     let preparedParams = await admitFinalParams();
-    bindPreparedParams(preparedParams);
 
     const note = await claimHeartbeatContextForUserRun({
       ...preparedParams,
@@ -1839,7 +1780,7 @@ async function prepareCliRunContextWithinReadFence(
         }
       }
     }
-    return {
+    return finishPreparation({
       ...buildPreparedContext(preparedParams),
       ...(managedClaudeLiveSessionGeneration
         ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
@@ -1847,11 +1788,11 @@ async function prepareCliRunContextWithinReadFence(
       hadSessionFile,
       contextEngine,
       deferContextEngineDisposalUntil,
-      contextEngineTurnPrompt,
+      contextEngineTurnPrompt: params.transcriptPrompt ?? params.prompt,
       ...(promptContext ? { promptContext, promptForHooks } : {}),
       ...(nodeSkillWorkshop ? { nodeSkillWorkshop } : {}),
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
-    };
+    });
   } catch (err) {
     try {
       await runCliCleanup(params, "cli-prepare-failure", async () => {

@@ -15,7 +15,7 @@ When audio understanding is enabled (or auto-detected), OpenClaw:
 
 1. Locates the first audio attachment (local path or URL) and downloads it if needed.
 2. Enforces `maxBytes` before sending to each model entry.
-3. Runs the first eligible model entry in order (provider or CLI); if an entry fails or skips (size/timeout), the next entry is tried.
+3. Runs the first eligible model entry in order (provider or CLI); if an entry fails or skips (size/timeout), the next entry is tried. A provider that returns an empty transcript for audio without detected speech is skipped, not failed; a batch response missing a required transcript field in any channel is still a failure. A Deepgram Flux stream that closes cleanly after flushing audio without any turns also represents silence.
 4. On success, replaces `Body` with an `[Audio]` block and sets `{{Transcript}}`.
 
 When transcription succeeds, `CommandBody`/`RawBody` are also set to the transcript so slash commands still work. With `--verbose`, logs show when transcription runs and when it replaces the body.
@@ -153,7 +153,7 @@ installation, run them once for that agent.
 
 The `profile` field is not required when OpenClaw can unambiguously select a
 compatible API-key profile, but it is strongly recommended. Explicit selection
-keeps audio routing deterministic if another OpenAI API-key profile exists now or
+keeps audio routing fixed if another OpenAI API-key profile exists now or
 is added later. The auth order still keeps the OAuth profile first for ordinary
 provider resolution.
 
@@ -304,7 +304,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 ## Gotchas
 
 - Scope rules use first-match-wins; `chatType` is normalized to `direct`, `group`, or `channel`.
-- Ensure your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
+- Check that your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
 - Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
 - For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.

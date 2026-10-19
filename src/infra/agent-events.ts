@@ -1,4 +1,3 @@
-// Stores and broadcasts agent lifecycle and streaming events.
 import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -26,6 +25,7 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
 import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
+import { captureAgentRunTerminalPersistence } from "./agent-run-terminal-writes.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 export type {
@@ -37,10 +37,15 @@ export type {
   AgentEventStream,
 } from "./agent-events.types.js";
 
-type AgentEventListener = (evt: AgentEventRuntimePayload) => void;
+type AgentEventListener = (
+  evt: AgentEventRuntimePayload,
+  isDeliveryCurrent?: () => boolean,
+) => void;
+type CaptureAgentEventDelivery = (evt: AgentEventRuntimePayload) => () => boolean;
 type AgentEventRegistration = {
   readonly listener: AgentEventListener;
   readonly id: number;
+  readonly captureDelivery?: CaptureAgentEventDelivery;
 };
 type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
 
@@ -50,7 +55,6 @@ type AgentEventState = {
   listeners: AgentEventListeners;
   runListeners: Map<string, AgentEventListeners>;
   nextListenerId: number;
-  listenerRevision: number;
   auditListeners: Set<(evt: AgentEventPayload) => void>;
   lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
@@ -72,7 +76,6 @@ function getAgentEventState(): AgentEventState {
     listeners: new Map(),
     runListeners: new Map(),
     nextListenerId: 0,
-    listenerRevision: 0,
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
   }));
 }
@@ -110,20 +113,25 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
 }
 
 type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
+type AgentTerminalEventReservation = {
+  publish: (data: AgentTerminalEventData) => void;
+  release: () => void;
+};
 
 /** Reserves client terminal publication without advancing execution settlement. */
 export function reserveAgentTerminalEvent(
   identity: Omit<AgentEventPayload, "seq" | "ts" | "stream" | "data">,
-): (data: AgentTerminalEventData) => void {
+): AgentTerminalEventReservation {
   const { runId } = identity;
   const context = getAgentRunContext(runId);
+  const terminalPersistence = captureAgentRunTerminalPersistence(runId);
   return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
     if (context) {
       recordAgentEventRouting(runId, context);
     }
     const resolved = resolveAgentEventRouting(identity);
     if (!resolved) {
-      return () => {};
+      return { publish: () => {}, release: () => {} };
     }
     const state = getAgentEventState();
     const runState = resolved.routing?.eventState ?? state.runs.get(runId) ?? { seq: 0 };
@@ -135,18 +143,32 @@ export function reserveAgentTerminalEvent(
     const storage = getAgentEventExecutionContext();
     const scope = storage.getStore()!;
     let pending = true;
-    return (data: AgentTerminalEventData) => {
-      if (pending) {
+    return {
+      publish: (data: AgentTerminalEventData) => {
+        if (pending) {
+          pending = false;
+          storage.run(scope, () =>
+            dispatchAgentEvent(
+              { ...identity, stream: "lifecycle", data },
+              undefined,
+              undefined,
+              publication,
+              undefined,
+              undefined,
+              terminalPersistence,
+            ),
+          );
+        }
+      },
+      release: () => {
+        if (!pending) {
+          return;
+        }
         pending = false;
-        storage.run(scope, () =>
-          dispatchAgentEvent(
-            { ...identity, stream: "lifecycle", data },
-            undefined,
-            undefined,
-            publication,
-          ),
-        );
-      }
+        if (runState.terminalPublication === publication) {
+          delete runState.terminalPublication;
+        }
+      },
     };
   });
 }
@@ -401,6 +423,7 @@ function enrichAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): AgentEventRuntimePayload | undefined {
   const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
   if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
@@ -513,6 +536,14 @@ function enrichAgentEvent(
     });
   }
   Object.defineProperties(enriched, {
+    terminalPersistence: {
+      value:
+        terminalPersistence ??
+        (event.stream === "lifecycle" && isDefinitiveRunLifecycle({ phase: data.phase, data })
+          ? captureAgentRunTerminalPersistence(event.runId, context ?? capturedOwner)
+          : undefined),
+      enumerable: false,
+    },
     assistantSource: { value: assistantSource, enumerable: false },
     assistantProjection: { value: assistantProjection, enumerable: false },
   });
@@ -545,46 +576,6 @@ function enrichAgentEvent(
   return enriched;
 }
 
-function* iterateAgentEventListeners(
-  state: AgentEventState,
-  enriched: AgentEventRuntimePayload,
-): Generator<AgentEventListener, void> {
-  let lastId = -1;
-  let revision = -1;
-  let runId: string | undefined;
-  let globalRegistrations: MapIterator<AgentEventRegistration> | undefined;
-  let runRegistrations: MapIterator<AgentEventRegistration> | undefined;
-  let global: AgentEventRegistration | undefined;
-  let scoped: AgentEventRegistration | undefined;
-  while (true) {
-    const currentRunId = enriched.runId;
-    // Recheck even after the last yield: the original live Set sees additions,
-    // deletions, and re-additions made by a callback. Each nested emit owns its cursor.
-    if (revision !== state.listenerRevision || runId !== currentRunId) {
-      revision = state.listenerRevision;
-      runId = currentRunId;
-      // Registration IDs follow Map insertion order. Restart both cursors when
-      // a callback mutates registration or selects a different run cohort.
-      globalRegistrations = state.listeners.values();
-      runRegistrations = state.runListeners.get(runId)?.values();
-      global = globalRegistrations.next().value;
-      scoped = runRegistrations?.next().value;
-    }
-    while (global && global.id <= lastId) {
-      global = globalRegistrations?.next().value;
-    }
-    while (scoped && scoped.id <= lastId) {
-      scoped = runRegistrations?.next().value;
-    }
-    const next = global && (!scoped || global.id <= scoped.id) ? global : scoped;
-    if (!next) {
-      return;
-    }
-    lastId = next.id;
-    yield next.listener;
-  }
-}
-
 function dispatchAgentEvent(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   claimId?: string,
@@ -592,6 +583,7 @@ function dispatchAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): boolean {
   const state = getAgentEventState();
   const enriched = enrichAgentEvent(
@@ -602,11 +594,46 @@ function dispatchAgentEvent(
     reservedPublication,
     assistantSource,
     assistantProjection,
+    terminalPersistence,
   );
   if (!enriched) {
     return false;
   }
-  notifyListeners(iterateAgentEventListeners(state, enriched), enriched);
+  // New subscriptions start with the next event, even when a listener emits recursively.
+  const runListeners = state.runListeners.get(enriched.runId);
+  const registrations = [...state.listeners.values(), ...(runListeners?.values() ?? [])].toSorted(
+    (left, right) => left.id - right.id,
+  );
+  const deliveries = new Map<AgentEventRegistration, () => boolean>();
+  // Capture registrations before callbacks can replace them. New subscriptions
+  // during this emission have no captured delivery authority until the next event.
+  for (const registration of registrations) {
+    try {
+      if (registration.captureDelivery) {
+        deliveries.set(registration, registration.captureDelivery(enriched));
+      }
+    } catch {
+      // A failed capture must not prevent delivery to other registrations.
+    }
+  }
+  for (const registration of registrations) {
+    try {
+      if (
+        state.listeners.get(registration.listener) !== registration &&
+        runListeners?.get(registration.listener) !== registration
+      ) {
+        continue;
+      }
+      const isDeliveryCurrent = deliveries.get(registration);
+      if (!registration.captureDelivery) {
+        registration.listener(enriched);
+      } else if (isDeliveryCurrent?.()) {
+        registration.listener(enriched, isDeliveryCurrent);
+      }
+    } catch {
+      // Match ordinary listener delivery: isolate each subscriber's failure.
+    }
+  }
   return true;
 }
 
@@ -636,8 +663,9 @@ export function emitAgentRunOutputTokens(params: {
   runId: string;
   lifecycleGeneration: string;
   outputTokens: number;
+  usageReport?: { state: "available" | "unavailable" };
   sessionKey?: string;
-}): { outputTokens: number } | undefined {
+}): { outputTokens: number; usageReport?: { state: "available" | "unavailable" } } | undefined {
   return recordAgentRunOutputTokens({
     ...params,
     emit: (data) =>
@@ -659,16 +687,16 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
 export function emitAgentEventForOwner(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   claimId: string,
-) {
-  dispatchAgentEvent(event, claimId);
+): boolean {
+  return dispatchAgentEvent(event, claimId);
 }
 
 /** Emits only while the exact run-context record captured by its producer remains current. */
 export function emitAgentEventForRunContext(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   context: AgentRunContext,
-) {
-  dispatchAgentEvent(event, undefined, context);
+): boolean {
+  return dispatchAgentEvent(event, undefined, context);
 }
 
 /** Emits run metadata only to the Gateway-owned durable audit projection. */
@@ -692,8 +720,11 @@ export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
 }
 
 /** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
-export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) => void) {
-  return registerAgentEventListener(listener);
+export function onAgentRuntimeEvent(
+  listener: AgentEventListener,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
+  return registerAgentEventListener(listener, undefined, captureDelivery);
 }
 
 /**
@@ -705,21 +736,22 @@ export function onAgentEventForRun(runId: string, listener: (evt: AgentEventPayl
   return registerAgentEventListener(listener, runId);
 }
 
-function registerAgentEventListener(listener: AgentEventListener, runId?: string) {
+function registerAgentEventListener(
+  listener: AgentEventListener,
+  runId?: string,
+  captureDelivery?: CaptureAgentEventDelivery,
+) {
   const state = getAgentEventState();
   const bucket: AgentEventListeners =
     runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
   if (!bucket.has(listener)) {
-    bucket.set(listener, { listener, id: state.nextListenerId++ });
+    bucket.set(listener, { listener, id: state.nextListenerId++, captureDelivery });
     if (runId !== undefined) {
       state.runListeners.set(runId, bucket);
     }
-    state.listenerRevision++;
   }
   return () => {
-    if (bucket.delete(listener)) {
-      state.listenerRevision++;
-    }
+    bucket.delete(listener);
     // Only reclaim the bucket this handle registered into; a later subscriber
     // for the same run may already have installed a replacement.
     if (runId !== undefined && bucket.size === 0 && state.runListeners.get(runId) === bucket) {
@@ -745,7 +777,5 @@ export function resetAgentEventsForTest(options?: { preserveListeners?: boolean 
     }
     state.runListeners.clear();
     state.auditListeners.clear();
-    // Do not reuse IDs: an active dispatch resumes strictly after its last yield.
-    state.listenerRevision++;
   }
 }

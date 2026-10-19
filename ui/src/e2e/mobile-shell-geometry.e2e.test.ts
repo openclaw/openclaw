@@ -1,91 +1,79 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  closeChatDetails,
+  openChatDetails,
+  openDetailsPullRequests,
+} from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
+const sessionKey = "agent:main:main";
+function viewportScenario(
+  name: string,
+  width: number,
+  height: number,
+  insets?: [top: number, bottom: number, left: number, right: number],
+  largeUnit = false,
+  mobile = true,
+) {
+  return { name, width, height, mobile, largeUnit, insets };
+}
 const scenarios = [
-  {
-    name: "standalone-large-unit-contract",
-    width: 402,
-    height: 874,
-    mobile: true,
-    standalone: true,
-    top: 62,
-    bottom: 34,
-    largeUnit: true,
-  },
-  { name: "desktop-zero", width: 1440, height: 900, mobile: false },
-  { name: "phone-zero", width: 390, height: 844, mobile: true },
-  { name: "landscape-zero", width: 844, height: 390, mobile: true },
-  { name: "compact-landscape", width: 560, height: 390, mobile: true },
-  { name: "standalone-zero-contract", width: 390, height: 844, mobile: true, standalone: true },
-  {
-    name: "standalone-insets-contract",
-    width: 390,
-    height: 844,
-    mobile: true,
-    standalone: true,
-    top: 48,
-    bottom: 30,
-  },
-  {
-    name: "standalone-landscape-contract",
-    width: 844,
-    height: 390,
-    mobile: true,
-    standalone: true,
-    bottom: 20,
-    left: 48,
-    right: 48,
-  },
+  viewportScenario("standalone-large-unit-contract", 402, 874, [62, 34, 0, 0], true),
+  viewportScenario("desktop-zero", 1440, 900, undefined, false, false),
+  viewportScenario("phone-zero", 390, 844),
+  viewportScenario("landscape-zero", 844, 390),
+  viewportScenario("compact-landscape", 560, 390),
+  viewportScenario("standalone-zero-contract", 390, 844, [0, 0, 0, 0]),
+  viewportScenario("standalone-insets-contract", 390, 844, [48, 30, 0, 0]),
+  viewportScenario("standalone-landscape-contract", 844, 390, [0, 20, 48, 48]),
 ];
 
-async function activateStandaloneStyles(page: Page, largeUnitDifference = 0) {
-  // Fault injection, not an iPhone measurement: CSS viewport units may exceed
-  // the native-scale visible viewport even when layoutHeight == visualHeight.
-  // The previous short-layout fixture assumed the extra lvh region was visible;
-  // neither viewport API (nor a physical screen size) establishes that premise.
-  await page.evaluate(async (difference) => {
-    const visit = (rules: CSSRuleList) => {
-      for (const rule of rules) {
-        if (rule instanceof CSSMediaRule) {
-          rule.media.mediaText = rule.conditionText.replaceAll(
-            "(display-mode: standalone)",
-            "(min-width: 0px)",
-          );
-        }
-        if (difference && rule instanceof CSSStyleRule) {
-          const base = rule.style.getPropertyValue("--shell-viewport-base");
-          if (base === "100lvh" || base === "100dvh") {
-            rule.style.setProperty(
-              "--shell-viewport-base",
-              "calc(" + base + " + " + difference + "px)",
+async function activateStandaloneStyles(page: Page, largeUnitDifference = 0, shortCanvas = false) {
+  // Fault injection, not an iPhone measurement: viewport units may exceed the visible viewport.
+  await page.evaluate(
+    async ({ difference, shortCanvas: short }) => {
+      const visit = (rules: CSSRuleList) => {
+        for (const rule of rules) {
+          if (rule instanceof CSSMediaRule) {
+            rule.media.mediaText = rule.conditionText.replaceAll(
+              "(display-mode: standalone)",
+              "(min-width: 0px)",
             );
           }
+          if ((difference || short) && rule instanceof CSSStyleRule) {
+            const base = rule.style.getPropertyValue("--shell-viewport-base");
+            if (base === "100lvh" || base === "100dvh") {
+              rule.style.setProperty(
+                "--shell-viewport-base",
+                `calc(${base} ${short && base === "100dvh" ? "-" : "+"} ${short ? 62 : difference}px)`,
+              );
+            }
+          }
+          if (rule instanceof CSSGroupingRule) {
+            visit(rule.cssRules);
+          }
         }
-        if (rule instanceof CSSGroupingRule) {
-          visit(rule.cssRules);
-        }
+      };
+      for (const sheet of document.styleSheets) {
+        visit(sheet.cssRules);
       }
-    };
-    for (const sheet of document.styleSheets) {
-      visit(sheet.cssRules);
-    }
-    window.dispatchEvent(new Event("resize"));
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    });
-  }, largeUnitDifference);
+      window.dispatchEvent(new Event("resize"));
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    },
+    { difference: largeUnitDifference, shortCanvas },
+  );
 }
 
 async function expectReachableAction(
@@ -98,54 +86,39 @@ async function expectReachableAction(
   const bounds = await action.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(visibleBottom);
+  const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
   if (mobile) {
-    // Compact Send uses the 36px primary target; Chat's existing Stop variant
-    // uses the 32px quiet target. Model/effort retain their independent 44px targets.
+    // Compact Send is 36px, Stop 32px; model/effort retain independent 44px targets.
     const compact = await page
       .locator(".agent-chat__input")
       .evaluate((element) => element.getBoundingClientRect().width <= 560);
     const targetSize = compact && label === "Send message" ? 36 : 32;
-    expect(bounds!.width).toBe(targetSize);
-    expect(bounds!.height).toBe(targetSize);
+    expect([bounds!.width, bounds!.height]).toEqual([targetSize, targetSize]);
     for (const picker of await page
       .locator(".chat-controls__model-trigger, .chat-controls__effort-trigger")
       .all()) {
       if (compact && (await picker.isVisible())) {
         const box = await picker.boundingBox();
-        expect(box!.width).toBeGreaterThanOrEqual(44);
-        expect(box!.height).toBeGreaterThanOrEqual(44);
+        expect(Math.min(box!.width, box!.height)).toBeGreaterThanOrEqual(44);
       }
     }
   }
   expect(
-    await action.evaluate((element) => {
-      const box = element.getBoundingClientRect();
-      return element.contains(
-        document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
-      );
-    }),
+    await action.evaluate(
+      (element, center) => element.contains(document.elementFromPoint(center.x, center.y)),
+      point,
+    ),
   ).toBe(true);
-  return { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
+  return point;
 }
 
-async function expectEditableDraft(
-  page: Page,
-  visibleBottom: number,
-  artifacts: string,
-  mobile: boolean,
-) {
-  const context = page.locator(".chat-footer__context");
-  const contextBox = (await context.boundingBox())!;
-  expect(contextBox.height).toBeGreaterThanOrEqual(20);
-  // The progress summary owns wheel-to-expand; scroll the context gutter instead.
-  await page.mouse.move(contextBox.x + contextBox.width - 2, contextBox.y + contextBox.height / 2);
-  await page.mouse.wheel(0, 1000);
-  await expect
-    .poll(() => context.evaluate((element) => element.scrollTop + element.clientHeight))
-    .toBe(await context.evaluate((element) => element.scrollHeight));
-
-  await page.mouse.wheel(0, -1000);
-  await expect.poll(() => context.evaluate((element) => element.scrollTop)).toBe(0);
+async function expectEditableDraft(page: Page, visibleBottom: number, mobile: boolean) {
+  // Dense queue/context reachability belongs to chat-footer.e2e.test.ts; this tests the editor.
+  await expect(
+    page.locator(
+      ".chat-details:popover-open, .chat-footer__context .session-progress-card, .chat-footer__context .chat-prs",
+    ),
+  ).toHaveCount(0);
   const textarea = page.locator(".agent-chat__composer-combobox textarea");
   const measure = () =>
     textarea.evaluate((editor: HTMLTextAreaElement) => {
@@ -162,13 +135,9 @@ async function expectEditableDraft(
         top: box.top,
         bottom: box.bottom,
         conversationTop: conversation.top,
-        inputMinHeight: getComputedStyle(editor.closest(".agent-chat__input")!).minHeight,
-        clientHeight: editor.clientHeight,
-        scrollHeight: editor.scrollHeight,
+        availableHeight: editor.clientHeight - paddingTop - paddingBottom,
         scrollTop: editor.scrollTop,
         line,
-        paddingTop,
-        paddingBottom,
         lineTop,
         lineBottom: lineTop + line,
         reachable:
@@ -179,9 +148,7 @@ async function expectEditableDraft(
 
   expect(before.top).toBeGreaterThanOrEqual(before.conversationTop);
   expect(before.bottom).toBeLessThanOrEqual(visibleBottom);
-  expect(before.clientHeight - before.paddingTop - before.paddingBottom).toBeGreaterThanOrEqual(
-    before.line,
-  );
+  expect(before.availableHeight).toBeGreaterThanOrEqual(before.line);
   expect(before.reachable).toBe(true);
   const box = (await textarea.boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -192,21 +159,13 @@ async function expectEditableDraft(
   await page.keyboard.type(" typed");
   await expect(textarea).toHaveValue("First line\nSecond line\nThird line\nLast line typed");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
-  // Native caret scrolling reveals the glyphs, not necessarily all line leading.
-  // Scroll the draft itself to prove the complete last reading line is reachable.
+  // Scroll the complete line into view; native caret scrolling may show only its glyphs.
   await page.mouse.wheel(0, 1000);
   await expect
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
     .toBe(await textarea.evaluate((editor) => editor.scrollHeight));
   const last = await measure();
-  await page.screenshot({
-    path: path.join(artifacts, "short-editor-typing.png"),
-    animations: "disabled",
-  });
-
   expect(last.scrollTop).toBeGreaterThan(0);
-  expect(last.lineTop).toBeGreaterThanOrEqual(Math.max(last.top, last.conversationTop));
-  expect(last.lineBottom).toBeLessThanOrEqual(Math.min(last.bottom, visibleBottom));
   await expectReachableAction(page, "Send message", visibleBottom, mobile);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await page.keyboard.type("Edited ");
@@ -214,13 +173,11 @@ async function expectEditableDraft(
   await page.mouse.wheel(0, -1000);
   await expect.poll(() => textarea.evaluate((editor) => editor.scrollTop)).toBe(0);
   const first = await measure();
-  expect(first.lineTop).toBeGreaterThanOrEqual(Math.max(first.top, first.conversationTop));
-  expect(first.lineBottom).toBeLessThanOrEqual(Math.min(first.bottom, visibleBottom));
+  for (const reading of [last, first]) {
+    expect(reading.lineTop).toBeGreaterThanOrEqual(Math.max(reading.top, reading.conversationTop));
+    expect(reading.lineBottom).toBeLessThanOrEqual(Math.min(reading.bottom, visibleBottom));
+  }
   await expect(textarea).toHaveValue("Edited First line\nSecond line\nThird line\nLast line typed");
-  await writeFile(
-    path.join(artifacts, "short-editor.json"),
-    JSON.stringify({ contextBox, before, last, first }, null, 2),
-  );
   await textarea.fill("");
 }
 
@@ -232,22 +189,19 @@ async function geometry(page: Page) {
       if (!el) {
         return null;
       }
-      const { left, right, top, bottom, width, height } = el.getBoundingClientRect();
-      return { left, right, top, bottom, width, height };
+      const { left, right, top, bottom } = el.getBoundingClientRect();
+      return { left, right, top, bottom };
     };
     return {
       shell: rect(".shell")!,
-      body: rect("body")!,
       composer: rect(".agent-chat__composer-shell")!,
       thread: rect(".chat-thread-inner"),
       footer: rect(".chat-footer"),
-      context: rect(".chat-footer__context"),
-      progress: rect(".session-progress-card--composer"),
-      header: rect(".chat-pane__header"),
+      details: rect(".chat-details:popover-open"),
+      conversation: rect(".chat-main__conversation-frame"),
       scrollWidth: document.documentElement.scrollWidth,
       layoutHeight: document.documentElement.clientHeight,
       visualHeight: window.visualViewport?.height,
-      canvas: getComputedStyle(document.documentElement).getPropertyValue("--shell-canvas-height"),
     };
   });
 }
@@ -292,29 +246,7 @@ suite.define(() => {
           await installMockGateway(page);
           await page.goto(suite.server.baseUrl + "new");
           await expect(page.locator(".new-session-page__message")).toBeVisible();
-          await activateStandaloneStyles(page);
-          await page.evaluate(() => {
-            const visit = (rules: CSSRuleList) => {
-              for (const rule of rules) {
-                if (rule instanceof CSSStyleRule) {
-                  const base = rule.style.getPropertyValue("--shell-viewport-base");
-                  if (base === "100dvh") {
-                    rule.style.setProperty("--shell-viewport-base", "calc(100dvh - 62px)");
-                  }
-                  if (base === "100lvh") {
-                    rule.style.setProperty("--shell-viewport-base", "calc(100lvh + 62px)");
-                  }
-                }
-                if (rule instanceof CSSGroupingRule) {
-                  visit(rule.cssRules);
-                }
-              }
-            };
-            for (const sheet of document.styleSheets) {
-              visit(sheet.cssRules);
-            }
-            window.dispatchEvent(new Event("resize"));
-          });
+          await activateStandaloneStyles(page, 0, true);
           const frame = await geometry(page);
           expect(frame.shell.bottom).toBe(812);
           expect(frame.composer.bottom).toBeLessThanOrEqual(812);
@@ -324,23 +256,24 @@ suite.define(() => {
   );
 
   it.each(scenarios)("keeps $name routes and controls in one usable canvas", async (scenario) => {
-    const { name, width, height, mobile } = scenario;
-    const top = scenario.top ?? 0;
-    const bottom = scenario.bottom ?? 0;
-    const left = scenario.left ?? 0;
-    const right = scenario.right ?? 0;
-    const artifacts = createControlUiE2eArtifactDir(name);
+    const { name, width, height, mobile, largeUnit, insets } = scenario;
+    const [top = 0, bottom = 0, left = 0, right = 0] = insets ?? [];
+    const standalone = insets !== undefined;
     await suite.withPage(
       { viewport: { width, height }, hasTouch: mobile, isMobile: mobile, colorScheme: "dark" },
       async ({ page, context }) => {
+        const reach = (label: string, visibleBottom: number) =>
+          expectReachableAction(page, label, visibleBottom, mobile);
         await page.clock.setFixedTime(new Date("2026-09-20T16:50:10Z"));
         await page.emulateMedia({ reducedMotion: "reduce" });
-        if (scenario.standalone) {
+        if (standalone) {
           const cdp = await context.newCDPSession(page);
           await cdp.send("Emulation.setSafeAreaInsetsOverride", {
             insets: { top, bottom, left, right },
           });
         }
+        const assistantText =
+          "The transcript and composer should share a comfortable reading column.";
         const gateway = await installMockGateway(page, {
           featureMethods: [
             ...defaultControlUiFeatureMethods,
@@ -348,41 +281,56 @@ suite.define(() => {
             "controlUi.sessionPullRequests.subscribe",
           ],
           methodResponses: { "controlUi.sessionPullRequests.subscribe": { subscribed: true } },
-          assistantName: "OpenClaw",
           workspace: "/workspace/example",
-          historyMessages: [
-            {
-              role: "user",
-              content: "Please check the mobile layout.",
-              timestamp: 1_789_923_000_000,
-            },
-            {
-              role: "assistant",
-              content: "The transcript and composer should share a comfortable reading column.",
-              timestamp: 1_789_923_001_000,
-            },
-          ],
+          historyMessages: ["Please check the mobile layout.", assistantText].map(
+            (content, index) => ({
+              role: index ? "assistant" : "user",
+              content,
+              timestamp: 1_789_923_000_000 + index * 1_000,
+            }),
+          ),
         });
         await page.goto(suite.server.baseUrl + "new");
         await expect(page.locator(".new-session-page__message")).toBeVisible();
-        if (scenario.standalone) {
-          await activateStandaloneStyles(page, scenario.largeUnit ? top : 0);
+        if (standalone) {
+          await activateStandaloneStyles(page, largeUnit ? top : 0);
         }
         const fresh = await geometry(page);
-        await page.screenshot({ path: path.join(artifacts, "new.png"), animations: "disabled" });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         await expect(textarea).toBeVisible();
-        await page
-          .getByText("The transcript and composer should share a comfortable reading column.")
-          .waitFor();
-        if (scenario.standalone) {
-          await activateStandaloneStyles(page, scenario.largeUnit ? top : 0);
+        await page.getByText(assistantText).waitFor();
+        if (standalone) {
+          await activateStandaloneStyles(page, largeUnit ? top : 0);
         }
-        await waitForWatchedSessionKey(gateway, "agent:main:main");
+        const firstMessage = page.locator(".chat-group.user").first();
+        const bubble = firstMessage.locator(".chat-bubble").first();
+        const details = page.locator(".chat-pane__layout-trigger");
+        await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
+          animations: "disabled",
+        });
+        await (mobile ? bubble.tap() : bubble.hover());
+        const actions = firstMessage.locator(".chat-group-footer-actions");
+        await expect(actions.locator(".chat-copy-btn")).toBeVisible();
+        await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
+          animations: "disabled",
+        });
+        const detailsBox = (await details.boundingBox())!;
+        const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
+        for (const box of transcriptBoxes) {
+          expect(
+            box &&
+              (detailsBox.x + detailsBox.width <= box.x ||
+                box.x + box.width <= detailsBox.x ||
+                detailsBox.y + detailsBox.height <= box.y ||
+                box.y + box.height <= detailsBox.y),
+            `${name}: Header controls must clear the first message and its actions`,
+          ).toBe(true);
+        }
+        await waitForWatchedSessionKey(gateway, sessionKey);
         await gateway.emitGatewayEvent("controlUi.sessionPullRequests.changed", {
           sessions: {
-            "agent:main:main": {
+            [sessionKey]: {
               pullRequests: [
                 {
                   number: 123,
@@ -399,105 +347,80 @@ suite.define(() => {
             },
           },
         });
+        await openDetailsPullRequests(page);
         await expect(page.locator('.chat-pr[data-state="merged"]').first()).toBeVisible();
-        await gateway.setMethodResponse("progressCard.get", {
-          card: {
-            sessionKey: "agent:main:main",
-            revision: 1,
-            updatedAt: 1_789_923_001_000,
-            markdown: "Mobile layout checks completed.",
-            steps: [
-              { step: "Inspect the layout", status: "completed" },
-              { step: "Verify the controls", status: "completed" },
-              { step: "Review the result", status: "completed" },
-            ],
-          },
-        });
-        await gateway.emitGatewayEvent("progressCard.changed", {
-          sessionKey: "agent:main:main",
-          revision: 1,
-        });
-        await expect(page.locator(".session-progress-card--composer")).toBeVisible();
+        const setProgress = async (
+          revision: number,
+          markdown: string,
+          steps: Array<{ step: string; status: string }>,
+        ) => {
+          await gateway.setMethodResponse("progressCard.get", {
+            card: {
+              sessionKey,
+              revision,
+              updatedAt: 1_789_923_001_000,
+              markdown,
+              steps,
+            },
+          });
+          await gateway.emitGatewayEvent("progressCard.changed", {
+            sessionKey,
+            revision,
+          });
+        };
+        await setProgress(1, "Mobile layout checks completed.", [
+          { step: "Inspect the layout", status: "completed" },
+          { step: "Verify the controls", status: "completed" },
+          { step: "Review the result", status: "completed" },
+        ]);
+        await expect(page.locator('[data-progress-card-placement="details"]')).toBeVisible();
         const chat = await geometry(page);
-        await page.screenshot({ path: path.join(artifacts, "chat.png"), animations: "disabled" });
         await textarea.fill("Please continue the layout check.");
-        const sendPoint = await expectReachableAction(
-          page,
-          "Send message",
-          height - bottom,
-          mobile,
-        );
+        const sendPoint = await reach("Send message", height - bottom);
         // Coordinate input cannot auto-scroll an offscreen control into view.
-        if (mobile) {
-          await page.touchscreen.tap(sendPoint.x, sendPoint.y);
-        } else {
-          await page.mouse.click(sendPoint.x, sendPoint.y);
-        }
+        await (mobile
+          ? page.touchscreen.tap(sendPoint.x, sendPoint.y)
+          : page.mouse.click(sendPoint.x, sendPoint.y));
         await gateway.waitForRequest("chat.send");
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
         const generating = await geometry(page);
-        await page.screenshot({
-          path: path.join(artifacts, "generating.png"),
-          animations: "disabled",
-        });
-        await gateway.setMethodResponse("progressCard.get", {
-          card: {
-            sessionKey: "agent:main:main",
-            revision: 2,
-            updatedAt: 1_789_923_001_000,
-            markdown: "Checking the usable mobile canvas.",
-            steps: [
-              { step: "Inspect the layout", status: "completed" },
-              { step: "Verify the controls", status: "in_progress" },
-            ],
-          },
-        });
-        await gateway.emitGatewayEvent("progressCard.changed", {
-          sessionKey: "agent:main:main",
-          revision: 2,
-        });
-        const progress = page.locator(".session-progress-card").first();
+        await setProgress(2, "Checking the usable mobile canvas.", [
+          { step: "Inspect the layout", status: "completed" },
+          { step: "Verify the controls", status: "in_progress" },
+        ]);
+        const progress = page.locator('[data-progress-card-placement="details"]');
+        // Sending is an outside click; updates must not reopen Details.
+        await expect(progress).toBeHidden();
+        await openChatDetails(page);
         await expect(progress).toBeVisible();
         const withProgress = await geometry(page);
-        await page.screenshot({
-          path: path.join(artifacts, "progress.png"),
-          animations: "disabled",
-        });
-        const keyboard = [];
+        await closeChatDetails(page);
         if (mobile) {
           await textarea.focus();
-          // Simulate only the browser's VisualViewport contract. No drawn
-          // keyboard, clipped screenshot, or claim of native IME reproduction.
-          const naturalHeight = height;
-          for (const state of [
-            { name: "small-browser-bar", height: naturalHeight - 62, offsetTop: 0, scale: 1 },
-            { name: "keyboard-open", height: height - 240, offsetTop: 0, scale: 1 },
-            { name: "keyboard-pan", height: height - 270, offsetTop: 45, scale: 1 },
-            {
-              name: "keyboard-dismissed-focus-retained",
-              height: naturalHeight,
-              offsetTop: 0,
-              scale: 1,
-            },
-            { name: "pinch-zoom", height: height / 2, offsetTop: 35, scale: 2 },
-          ]) {
-            await visualViewport(page, state.height, state.offsetTop, state.scale);
-            keyboard.push({ ...state, geometry: await geometry(page) });
-            if (state.name === "keyboard-open" && width > height) {
-              await page.screenshot({
-                path: path.join(artifacts, "short-editor.png"),
-                animations: "disabled",
-              });
-              await expectEditableDraft(page, state.height + state.offsetTop, artifacts, mobile);
+          // Simulate the VisualViewport contract, not a native IME.
+          for (const [kind, visibleHeight, offsetTop, scale] of [
+            ["small-browser-bar", height - 62, 0, 1],
+            ["keyboard-open", height - 240, 0, 1],
+            ["keyboard-pan", height - 270, 45, 1],
+            ["keyboard-dismissed-focus-retained", height, 0, 1],
+            ["pinch-zoom", height / 2, 35, 2],
+          ] as const) {
+            await visualViewport(page, visibleHeight, offsetTop, scale);
+            const frame = await geometry(page);
+            const occluded = kind === "keyboard-open" || kind === "keyboard-pan";
+            expect(frame.shell.bottom, kind).toBeCloseTo(
+              scale !== 1
+                ? (largeUnit ? height + top : height) - bottom
+                : visibleHeight + offsetTop - (occluded ? 0 : bottom),
+              0,
+            );
+            expect(frame.composer.bottom, kind).toBeLessThanOrEqual(frame.shell.bottom);
+            if (kind === "keyboard-open" && width > height) {
+              await expectEditableDraft(page, visibleHeight + offsetTop, mobile);
             }
-            if (state.scale === 1) {
-              await expectReachableAction(
-                page,
-                "Stop generating",
-                state.height + state.offsetTop,
-                mobile,
-              );
+            if (scale === 1) {
+              await reach("Stop generating", visibleHeight + offsetTop);
             }
           }
           await visualViewport(page, height);
@@ -511,15 +434,15 @@ suite.define(() => {
           });
           await waitForLayoutSettled(page, ".chat-main__conversation-frame");
           const bounds = (await frame.boundingBox())!;
-          await expectEditableDraft(page, bounds.y + bounds.height, artifacts, mobile);
-          await expectReachableAction(page, "Stop generating", bounds.y + bounds.height, mobile);
+          await expectEditableDraft(page, bounds.y + bounds.height, mobile);
+          await reach("Stop generating", bounds.y + bounds.height);
           await frame.evaluate((element: HTMLElement) => {
             element.style.removeProperty("flex");
           });
         }
         if (mobile && width > height) {
           await visualViewport(page, height - 240);
-          const point = await expectReachableAction(page, "Stop generating", height - 240, mobile);
+          const point = await reach("Stop generating", height - 240);
           await page.touchscreen.tap(point.x, point.y);
         } else {
           await stop.click();
@@ -527,22 +450,16 @@ suite.define(() => {
         await gateway.waitForRequest("chat.abort");
         if (mobile) {
           await visualViewport(page, height);
-        }
-        const surfaces: Array<{
-          name: string;
-          left: number;
-          right: number;
-          top: number;
-          bottom: number;
-        }> = [];
-        if (mobile) {
           const readSurface = async (selector: string, surfaceName: string) => {
             await waitForLayoutSettled(page, selector);
             const bounds = await page.locator(selector).evaluate((el) => {
               const box = el.getBoundingClientRect();
               return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
             });
-            surfaces.push({ name: surfaceName, ...bounds });
+            expect(bounds.left, surfaceName).toBeGreaterThanOrEqual(left);
+            expect(bounds.right, surfaceName).toBeLessThanOrEqual(width - right);
+            expect(bounds.top, surfaceName).toBeGreaterThanOrEqual(top);
+            expect(bounds.bottom, surfaceName).toBeLessThanOrEqual(height);
           };
           await page.locator("[data-chat-model-select]").click();
           await expect(page.locator(".chat-controls__model-menu")).toBeVisible();
@@ -557,25 +474,10 @@ suite.define(() => {
           await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
           await expect(page.locator(".sidebar-session-filter-panel")).toBeVisible();
           await readSurface(".sidebar-session-filter-panel", "filter-sheet");
-          await page.screenshot({
-            path: path.join(artifacts, "drawer-filter.png"),
-            animations: "disabled",
-          });
           await page.keyboard.press("Escape");
           await page.keyboard.press("Escape");
         }
-        await writeFile(
-          path.join(artifacts, "geometry.json"),
-          JSON.stringify(
-            { scenario, fresh, chat, generating, withProgress, keyboard, surfaces },
-            null,
-            2,
-          ),
-        );
-        // Collect captures before the regression assertion so the unfixed entry
-        // point is inspectable in exactly the same route, data and viewport.
-        expect(chat.layoutHeight).toBe(height);
-        expect(chat.visualHeight).toBe(height);
+        expect([chat.layoutHeight, chat.visualHeight]).toEqual([height, height]);
         expect(chat.composer.bottom).toBeLessThanOrEqual(height - bottom);
         expect(chat.shell.top).toBeCloseTo(top, 0);
         expect(chat.shell.bottom).toBeCloseTo(height - bottom, 0);
@@ -587,28 +489,12 @@ suite.define(() => {
           expect(chat.composer.right).toBeLessThanOrEqual(width - right - 20);
           expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
           expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
-          if (withProgress.progress) {
-            expect(withProgress.progress.left).toBeCloseTo(chat.composer.left, 0);
-            expect(withProgress.progress.right).toBeCloseTo(chat.composer.right, 0);
-          }
-          for (const surface of surfaces) {
-            expect(surface.left, surface.name).toBeGreaterThanOrEqual(left);
-            expect(surface.right, surface.name).toBeLessThanOrEqual(width - right);
-            expect(surface.top, surface.name).toBeGreaterThanOrEqual(top);
-            expect(surface.bottom, surface.name).toBeLessThanOrEqual(height);
-          }
-          for (const state of keyboard) {
-            const occluded = state.name === "keyboard-open" || state.name === "keyboard-pan";
-            expect(state.geometry.shell.bottom, state.name).toBeCloseTo(
-              state.scale !== 1
-                ? (scenario.largeUnit ? height + top : height) - bottom
-                : state.height + state.offsetTop - (occluded ? 0 : bottom),
-              0,
-            );
-            expect(state.geometry.composer.bottom, state.name).toBeLessThanOrEqual(
-              state.geometry.shell.bottom,
-            );
-          }
+          expect(withProgress.details).not.toBeNull();
+          expect(withProgress.details!.left).toBeGreaterThanOrEqual(
+            withProgress.conversation!.left,
+          );
+          expect(withProgress.details!.right).toBeLessThanOrEqual(withProgress.conversation!.right);
+          expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.footer!.top);
         }
       },
     );

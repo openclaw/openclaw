@@ -6,6 +6,7 @@ import {
   validateSkillsWorkshopListParams,
   validateSkillsWorkshopReadParams,
   validateSkillsWorkshopRestoreParams,
+  validateSkillsWorkshopUndoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   archiveWorkshopSkill,
@@ -14,6 +15,7 @@ import {
   viewWorkshopSkill,
   WorkshopWriteError,
 } from "../../skills/workshop/library.js";
+import { undoWorkshopReview } from "../../skills/workshop/review-undo.js";
 import { buildSkillsWorkshopListResult } from "../../skills/workshop/workshop-list.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./shared-types.js";
@@ -22,9 +24,9 @@ import {
   type ResolvedSkillsWorkspace,
 } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, type Validator } from "./validation.js";
+import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
-function defineWorkshopHandler<TParams>(
+function defineWorkshopHandler<TParams extends { agentId?: string } & Record<string, unknown>>(
   method: string,
   validate: Validator<TParams>,
   run: (
@@ -33,11 +35,8 @@ function defineWorkshopHandler<TParams>(
     invocation: GatewayRequestHandlerOptions,
   ) => Promise<unknown>,
 ): GatewayRequestHandler {
-  return async (invocation) => {
+  return defineValidatedGatewayHandler(method, validate, async (invocation) => {
     const { params, respond, context } = invocation;
-    if (!assertValidParams(params, validate, method, respond)) {
-      return;
-    }
     const resolved = resolveSkillsAgentWorkspace(params, context);
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
@@ -51,6 +50,18 @@ function defineWorkshopHandler<TParams>(
       }
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
     }
+  });
+}
+
+function workshopWriteContext(
+  resolved: ResolvedSkillsWorkspace,
+  invocation: GatewayRequestHandlerOptions,
+) {
+  return {
+    config: resolved.cfg,
+    agentId: resolved.agentId,
+    actor: "user" as const,
+    assertLive: readGatewayRequestMutationAuthority(invocation).assertCurrent,
   };
 }
 
@@ -88,36 +99,26 @@ export const skillsWorkshopHandlers: GatewayRequestHandlers = {
     validateSkillsWorkshopArchiveParams,
     // Captured at admission; the library rechecks it before each final file effect.
     async (params, resolved, invocation) => ({
-      change: await archiveWorkshopSkill(
-        {
-          config: resolved.cfg,
-          agentId: resolved.agentId,
-          actor: "user",
-          assertLive: readGatewayRequestMutationAuthority(invocation).assertCurrent,
-        },
-        {
-          name: params.name,
-          reason: params.reason,
-        },
-      ),
+      change: await archiveWorkshopSkill(workshopWriteContext(resolved, invocation), {
+        name: params.name,
+        reason: params.reason,
+      }),
     }),
   ),
   "skills.workshop.restore": defineWorkshopHandler(
     "skills.workshop.restore",
     validateSkillsWorkshopRestoreParams,
     async (params, resolved, invocation) => ({
-      change: await restoreWorkshopSkill(
-        {
-          config: resolved.cfg,
-          agentId: resolved.agentId,
-          actor: "user",
-          assertLive: readGatewayRequestMutationAuthority(invocation).assertCurrent,
-        },
-        {
-          name: params.name,
-          versionId: params.versionId,
-        },
-      ),
+      change: await restoreWorkshopSkill(workshopWriteContext(resolved, invocation), {
+        name: params.name,
+        versionId: params.versionId,
+      }),
     }),
+  ),
+  "skills.workshop.undo": defineWorkshopHandler(
+    "skills.workshop.undo",
+    validateSkillsWorkshopUndoParams,
+    (params, resolved, invocation) =>
+      undoWorkshopReview(workshopWriteContext(resolved, invocation), { runId: params.runId }),
   ),
 };

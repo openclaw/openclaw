@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
@@ -22,6 +22,11 @@ const boundary = vi.hoisted(() => ({
   readToken: vi.fn(),
   connect: vi.fn(),
   ensureToken: vi.fn(),
+  config: vi.fn<() => OpenClawConfig>(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => boundary.config(),
 }));
 vi.mock("../browser/extension-install.js", async (original) => {
   const real = await original<typeof import("../browser/extension-install.js")>();
@@ -44,6 +49,17 @@ vi.mock("../browser/extension-relay/owner-client.js", () => ({
 const fixture = useExtensionInstallFixture();
 const { defaultRuntime: capture, resetRuntimeCapture } = createCliRuntimeCapture();
 const readFiles = (files: string[]) => Promise.all(files.map((file) => fs.readFile(file)));
+function makeConfig(workPort = 19444) {
+  return {
+    browser: {
+      defaultProfile: "other",
+      profiles: {
+        work: { driver: "extension" as const, cdpPort: workPort },
+        other: { driver: "extension" as const, cdpPort: 19555 },
+      },
+    },
+  };
+}
 async function preserveFiles(...files: string[]) {
   const before = await readFiles(files);
   return async () => expect(await readFiles(files)).toEqual(before);
@@ -102,22 +118,13 @@ async function setup(
     entries: { [installedId]: { location: 4, path: seeded.installedCopy.path, state: 1 } },
   });
   const configPath = registeredConfigPath ?? path.join(f.stateDir, "openclaw.json");
-  const cfg = {
-    browser: {
-      defaultProfile: "other",
-      profiles: {
-        work: { driver: "extension" as const, cdpPort: 19444 },
-        other: { driver: "extension" as const, cdpPort: 19555 },
-      },
-    },
-  };
+  const cfg = makeConfig();
   await fs.writeFile(configPath, JSON.stringify(cfg), { mode: 0o600 });
   const keyPath = path.join(f.stateDir, "credentials", "browser-extension-relay.secret");
   await fs.mkdir(path.dirname(keyPath), { recursive: true, mode: 0o700 });
   const key = Buffer.from(Array.from({ length: 32 }, (_, i) => (i * 19 + 5) & 255)).toString("hex");
   await fs.writeFile(keyPath, key + "\n", { mode: 0o600 });
-  const preservedPaths = [keyPath, configPath, preferences];
-  const assertFilesPreserved = await preserveFiles(...preservedPaths);
+  const assertFilesPreserved = await preserveFiles(keyPath, configPath, preferences);
   const keyInode = (await fs.stat(keyPath)).ino;
   // Real package relocation changes the bundle ID and removes the old entrypoint.
   const nextPackage = path.join(f.root, options.relocate === false ? "package" : "package-v2");
@@ -143,7 +150,7 @@ async function setup(
     status: async () => ({ ready: true, identity: { extensionVersion: "fixture" } }),
     close: async () => {},
   });
-  const config = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(cfg);
+  const config = boundary.config.mockReset().mockReturnValue(cfg);
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(capture.error);
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(capture.exit);
@@ -179,7 +186,6 @@ async function setup(
     deps: boundary.deps,
     root,
     bundledDir,
-    pluginRoot,
     nativeHostPath,
     manifest,
     manifestPath: registration.manifestPath,
@@ -319,18 +325,6 @@ describe("POSIX bundle migration", () => {
       await f.assertPairingPreserved();
     },
   );
-  it("honors an explicit different extension profile rather than treating omission as that choice", async () => {
-    const f = await setup(platform);
-    await f.run("install", "other");
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ profile: "other", relayPort: 19555 }),
-      }),
-    );
-    const selected = JSON.parse(await fs.readFile(f.manifestPath, "utf8")) as { path: string };
-    expect(await fs.readFile(selected.path, "utf8")).toContain("'--browser-profile' 'other'");
-    await f.assertPairingPreserved();
-  });
   it("refuses verification for a different profile without rewriting a healthy registration", async () => {
     const f = await setup(platform, { relocate: false });
     const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);

@@ -10,6 +10,7 @@ import {
   resolveClientIp,
   resolveRequestClientIpFromHeaders,
 } from "./net.js";
+import type { RemoteControlUiIngressContext } from "./server/client-identity-types.js";
 
 export const PROXY_ATTRIBUTION_REQUIRED_REASON = "proxy_attribution_required";
 export const PROXY_ATTRIBUTION_GUIDANCE =
@@ -29,6 +30,7 @@ export type GatewayTailscaleIngressEndpoint = {
 
 export type GatewayIngressTransport =
   | { kind: "ordinary" }
+  | { kind: "remote-forwarded"; context: RemoteControlUiIngressContext }
   | { kind: "managed-tailscale"; mode: GatewayTailscaleIngressMode };
 
 export type VerifiedTailscaleIngressIdentity = {
@@ -52,6 +54,7 @@ type AttributedGatewayIngress = {
 export type GatewayIngressAttribution =
   | (AttributedGatewayIngress & { kind: "direct-local" })
   | (AttributedGatewayIngress & { kind: "direct-remote" })
+  | (AttributedGatewayIngress & { kind: "remote-forwarded" })
   | (AttributedGatewayIngress & {
       kind: "trusted-proxy";
       /** Deny-only observation; this never grants managed Tailscale provenance. */
@@ -88,6 +91,9 @@ export function markGatewayIngressTransport(
   if (existing) {
     if (
       existing.kind !== transport.kind ||
+      (existing.kind === "remote-forwarded" &&
+        transport.kind === "remote-forwarded" &&
+        existing.context !== transport.context) ||
       (existing.kind === "managed-tailscale" &&
         transport.kind === "managed-tailscale" &&
         existing.mode !== transport.mode)
@@ -96,7 +102,41 @@ export function markGatewayIngressTransport(
     }
     return;
   }
-  requestTransport.set(req, transport);
+  if (preparedAttribution.has(req)) {
+    throw new Error("Gateway ingress policy already prepared before transport assignment");
+  }
+  requestTransport.set(req, Object.freeze({ ...transport }));
+}
+
+export function readGatewayIngressTransport(
+  req: IncomingMessage,
+): GatewayIngressTransport | undefined {
+  return requestTransport.get(req);
+}
+
+export function getRemoteControlUiIngressContext(
+  req: IncomingMessage,
+): RemoteControlUiIngressContext | undefined {
+  const transport = readGatewayIngressTransport(req);
+  return transport?.kind === "remote-forwarded" ? transport.context : undefined;
+}
+
+export function assertRemoteControlUiIngressCurrent(
+  context: RemoteControlUiIngressContext | undefined,
+): void {
+  context?.signal.throwIfAborted();
+  context?.assertCurrent();
+}
+
+export function hasCurrentRemoteControlUiIngress(
+  context: RemoteControlUiIngressContext | undefined,
+): boolean {
+  try {
+    assertRemoteControlUiIngressCurrent(context);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function unattributableProxy(remoteAddress: string): GatewayIngressAttribution {
@@ -214,6 +254,17 @@ function resolveGatewayIngressAttribution(params: {
     "unknown";
   const transport = requestTransport.get(req) ?? { kind: "ordinary" as const };
 
+  if (transport.kind === "remote-forwarded") {
+    return Object.freeze({
+      kind: "remote-forwarded",
+      clientIp: remoteAddress,
+      rateLimit: Object.freeze({
+        subject: Object.freeze({ key: `remote-control-ui:${transport.context.pluginId}` }),
+        resetOnSuccess: true as const,
+      }),
+    });
+  }
+
   if (transport.kind === "managed-tailscale") {
     return resolveManagedTailscaleIngress({
       req,
@@ -288,17 +339,14 @@ export function createGatewayUnattributableProxyReporter(log: {
   let emittedInWindow = 0;
   return (attribution) => {
     const now = Date.now();
-    // A wall-clock rollback invalidates both schedules; otherwise future-dated source
-    // records could suppress warnings until the clock catches up and their TTL elapses.
-    if (now < lastObservedAt) {
+    // Reset the aggregate budget on expiry or rollback. Only rollback invalidates
+    // per-source TTLs; an ordinary refill must retain peers warned beside it.
+    if (now < lastObservedAt || now - windowStartedAt >= UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS) {
       windowStartedAt = now;
       emittedInWindow = 0;
-      reportedSources.clear();
-    } else if (now - windowStartedAt >= UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS) {
-      // The aggregate budget refills on its own schedule. Source suppression is left to
-      // the cache's TTL so a peer warned just before a refill waits out its own window.
-      windowStartedAt = now;
-      emittedInWindow = 0;
+      if (now < lastObservedAt) {
+        reportedSources.clear();
+      }
     }
     lastObservedAt = now;
     if (

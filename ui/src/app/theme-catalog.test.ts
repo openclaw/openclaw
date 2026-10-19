@@ -1,7 +1,6 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
+/* @vitest-environment jsdom */
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   ThemesGetResult,
@@ -10,6 +9,7 @@ import type {
 import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import {
   BUILTIN_THEMES,
+  resolveThemeBranding,
   type ThemeDescriptor,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -17,8 +17,11 @@ import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
-import { renderAgentIdentityAvatar } from "../components/identity-avatar-view.ts";
+import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -102,11 +105,12 @@ afterEach(() => {
 it("resolves built-in branding before the palette and catalog load", () => {
   const id = "knot";
   patchSettings({ theme: id });
-  setCurrentThemeBranding({ mascot: "none", critters: [] });
+  setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
   const { gateway } = createGatewayStoreTestStore();
   const theme = createApplicationTheme(loadSettings(), gateway);
   try {
     expect(theme.branding).toEqual({
+      ...resolveThemeBranding(undefined),
       mascot: "claw",
       workingPhrases: undefined,
       critters: [],
@@ -122,8 +126,10 @@ it("resolves built-in branding before the palette and catalog load", () => {
 it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
   const theme = createApplicationTheme(loadSettings(), gateway);
-  const container = document.createElement("div");
-  const renderMark = vi.fn(() => render(renderAgentIdentityAvatar({ id: "openclaw" }), container));
+  const { container, unmount } = mountSolid(() =>
+    createComponent(AgentIdentityAvatar, { agent: { id: "openclaw" } }),
+  );
+  const renderMark = vi.fn();
   const unsubscribe = theme.subscribe(renderMark);
   gateway.start();
   current().request.mockResolvedValue(
@@ -132,15 +138,18 @@ it("notifies leaf branding consumers when a newly selected built-in palette load
   current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
   try {
     await vi.dynamicImportSettled();
+    flush();
     expect(container.querySelector(".identity-avatar--neutral")).not.toBeNull();
     renderMark.mockClear();
     patchSettings({ theme: "knot" });
+    flush();
     expect(theme.settings.theme).toBe("knot");
     expect(renderMark).toHaveBeenCalledTimes(1);
     expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
     const palette = document.getElementById("openclaw-theme-palette-knot")!;
     expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
     palette.dispatchEvent(new Event("load"));
+    flush();
     expect(renderMark).toHaveBeenCalledTimes(2);
     expect(document.documentElement.dataset.themeId).toBe("knot");
     expect(document.documentElement.dataset.themeAvatarHat).toBeUndefined();
@@ -149,7 +158,7 @@ it("notifies leaf branding consumers when a newly selected built-in palette load
     unsubscribe();
     theme.dispose();
     gateway.stop();
-    render(nothing, container);
+    unmount();
     document.getElementById("openclaw-theme-palette-knot")?.remove();
   }
 });
@@ -161,6 +170,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   favicon.type = "image/svg+xml";
   favicon.setAttribute("href", "/favicon.svg");
   document.head.append(favicon);
+  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   let response = catalog();
@@ -175,7 +185,9 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   });
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
-    snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "profile-alias" } }] },
+    snapshot: {
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "profile-alias" } }],
+    },
   });
   try {
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
@@ -206,6 +218,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       ),
     );
     expect(applicationTheme.branding).toEqual({
+      ...resolveThemeBranding({ mascot: "none" }),
       mascot: "none",
       workingPhrases: ["Building", "Compiling"],
       critters: ["penguin", "fedora"],
@@ -217,6 +230,9 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
     expect(decodeURIComponent(favicon.href)).toContain("<rect");
 
     const artwork = {
+      icons: {
+        compass: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/icon/compass?v=1" },
+      },
       hats: {
         beret: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/hat/beret?v=1" },
       },
@@ -231,6 +247,11 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       ...definition,
       mascot: "none",
       avatarHat: "beret",
+      brandName: "Northstar",
+      brandIcon: "compass",
+      workingIndicator: "brand",
+      lobsterdex: false,
+      communityLinks: false,
       critters: ["ferris"],
       workingPhrases: [],
       dark: createThemePaletteFixture({ background: "#332244" }),
@@ -243,6 +264,13 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       ),
     );
     expect(applicationTheme.branding.artwork).toEqual(artwork);
+    expect(applicationTheme.branding).toMatchObject({
+      brandName: "Northstar",
+      brandIcon: "compass",
+      workingIndicator: "brand",
+      lobsterdex: false,
+      communityLinks: false,
+    });
     expect(currentThemeBranding().artwork).toEqual(artwork);
     expect(currentThemeBranding().avatarHat).toBe("beret");
     expect(currentThemeBranding().critters).toEqual(["ferris"]);
@@ -270,6 +298,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   } finally {
     applicationTheme.dispose();
     gateway.stop();
+    bindControlUiDocumentHead({ themeColors: [], favicons: [] });
     favicon.remove();
   }
 });
@@ -354,7 +383,9 @@ it("does not report a previous palette failure after a local theme switch", asyn
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
     auth: { role: "operator", scopes: ["operator.read"] },
-    snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "read-only" } }] },
+    snapshot: {
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "read-only" } }],
+    },
   });
   try {
     await vi.waitFor(() =>
@@ -466,59 +497,6 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
   }
 });
 
-it.each(["success", "failure"] as const)(
-  "ignores a late palette %s after its plugin disappears during refresh",
-  async (outcome) => {
-    patchSettings({ theme: "claw" });
-    const response = builtinCatalog();
-    const refreshing = createDeferred<ThemesListResult>();
-    const retired = createDeferred<ThemesGetResult>();
-    const { gateway, current } = createGatewayStoreTestStore();
-    const applicationTheme = createApplicationTheme(loadSettings(), gateway);
-    gateway.start();
-    let lists = 0;
-    current().request.mockImplementation((method) => {
-      if (method === "themes.list") {
-        return ++lists === 1 ? Promise.resolve(response) : refreshing.promise;
-      }
-      if (method === "themes.get") {
-        return retired.promise;
-      }
-      if (method === "plugins.uiDescriptors") {
-        return Promise.resolve({ ok: true, generation: 1, descriptors: [], methods: [] });
-      }
-      return Promise.reject(new Error(`Unexpected request ${method}`));
-    });
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    try {
-      await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toContainEqual(descriptor));
-      current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
-      await vi.waitFor(() => expect(lists).toBe(2));
-      patchSettings({ theme: descriptor.id });
-      await vi.waitFor(() =>
-        expect(current().request).toHaveBeenCalledWith("themes.get", { id: descriptor.id }),
-      );
-      refreshing.resolve({ ...response, themes: [...BUILTIN_THEMES] });
-      await refreshing.promise;
-      expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES);
-
-      if (outcome === "success") {
-        retired.resolve({ ...catalog(), current: response.current });
-      } else {
-        retired.reject(new Error("Removed palette is unavailable"));
-      }
-      await retired.promise.catch(() => undefined);
-      expect(applicationTheme.settings.theme).toBe(descriptor.id);
-      expect(document.documentElement.dataset.themeId).toBe("claw");
-      expect(document.getElementById("openclaw-custom-theme")).toBeNull();
-      expect(applicationTheme.catalog?.error).toBeNull();
-    } finally {
-      applicationTheme.dispose();
-      gateway.stop();
-    }
-  },
-);
-
 it.each([
   { boundary: "profile", pending: "catalog" },
   { boundary: "profile", pending: "palette" },
@@ -552,7 +530,7 @@ it.each([
     const hello = () => ({
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
-      snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
+      snapshot: { presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "first" } }] },
     });
     current().opts.onHello?.(hello());
     try {

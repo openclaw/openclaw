@@ -1,6 +1,8 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveRequesterPrincipalKey } from "../../../agents/requester-origin.js";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
+import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
@@ -17,39 +19,28 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   type FollowupRun,
+  type InternalFollowupRun,
   type QueuedFollowupReplyBatch,
 } from "./types.js";
 
-export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
-  return (
-    // SAFETY: queue producers attach this private marker; only literal true selects prepared input.
-    (run as FollowupRun & { currentTurnImagesPrepared?: true }).currentTurnImagesPrepared === true
-  );
+export function hasPreparedCurrentTurnImages(run: InternalFollowupRun): boolean {
+  return run.currentTurnImagesPrepared === true;
 }
 
-const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
-const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
-  keys: new WeakMap<NonNullable<FollowupRun["turnAdoptionLifecycle"]>, string>(),
-  nextId: 1,
-}));
+const queuedAdmissionOwnerState = resolveGlobalSingleton(
+  Symbol.for("openclaw.queuedAdmissionOwnerState"),
+  () => ({
+    keys: new WeakMap<NonNullable<FollowupRun["turnAdoptionLifecycle"]>, string>(),
+    nextId: 1,
+  }),
+);
 
-export function hasExclusiveTurnAdmission(
+function hasExclusiveTurnAdmission(
   lifecycle: FollowupRun["turnAdoptionLifecycle"],
 ): lifecycle is NonNullable<FollowupRun["turnAdoptionLifecycle"]> & {
   admission: "exclusive";
 } {
   return lifecycle?.admission === "exclusive";
-}
-
-export function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
-  const owners = new Set(
-    items.flatMap((item) =>
-      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
-    ),
-  );
-  if (owners.size > 1) {
-    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
-  }
 }
 
 function resolveTurnAdoptionLifecycleDeliveryKey(
@@ -69,8 +60,6 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
     admissionOwnerKey = `admission:${queuedAdmissionOwnerState.nextId++}`;
     queuedAdmissionOwnerState.keys.set(lifecycle, admissionOwnerKey);
   }
-  // Durable admission callbacks own separate ingress identities. Combining
-  // them would let one source commit before a sibling rejects the aggregate.
   return JSON.stringify([explicitOwnerKey, admissionOwnerKey]);
 }
 
@@ -83,12 +72,18 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
 export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   const execution = run.run;
   return JSON.stringify([
+    resolveRequesterPrincipalKey({
+      ...execution,
+      messageChannel: run.originatingChannel,
+      operatorAuthority: run.operatorAuthority,
+    }),
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
     execution.senderId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
     execution.senderIsOwner === true,
+    Boolean(run.createChannelCronAuthority),
     execution.execOverrides?.host ?? "",
     execution.execOverrides?.security ?? "",
     execution.execOverrides?.ask ?? "",
@@ -160,6 +155,8 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
     ),
     run.disableTools === true,
+    run.forceRestartSafeTools === true,
+    run.forceCodeModeTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -182,52 +179,21 @@ export async function prepareNextDeliveryGroup(
   assertDrainCurrent: () => void,
 ): Promise<{ items: FollowupRun[]; assertCurrent: () => void }> {
   const items = readItems().slice();
-  const sourceKey = (item: FollowupRun) =>
-    JSON.stringify([
-      resolveFollowupDeliveryStorageKey(item),
-      item.run.agentId,
-      item.run.sessionKey,
-      item.run.sessionId,
-      item.run.sessionFile,
-      item.admissionSessionId,
-      item.run.gatewayUiCommandTarget,
-    ]);
-  const sources = items.map((item) => ({
-    item,
-    run: item.run,
-    config: item.run.config,
-    lifecycle: item.turnAdoptionLifecycle,
-    operator: item.operatorAuthority,
-    key: sourceKey(item),
-  }));
   const assertCurrent = () => {
     assertDrainCurrent();
-    for (const source of sources) {
-      source.item.operatorAuthority?.assertCurrent();
-    }
-    const current = readItems();
-    for (const [index, source] of sources.entries()) {
-      const { item } = source;
-      if (
-        current[index] !== item ||
-        isFollowupRunAborted(item) ||
-        item.run !== source.run ||
-        item.run.config !== source.config ||
-        item.turnAdoptionLifecycle !== source.lifecycle ||
-        item.operatorAuthority !== source.operator ||
-        sourceKey(item) !== source.key
-      ) {
+    for (const item of items) {
+      item.operatorAuthority?.assertCurrent();
+      if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }
     }
-    assertDrainCurrent();
   };
   assertCurrent();
   if (items.length <= 1) {
     return { items, assertCurrent };
   }
   const policyItems = items.filter((item) => item.run.gatewayUiCommandTarget && !item.disableTools);
-  return withSandboxRuntimeStatusesInWorker(
+  const statuses = await withSandboxRuntimeStatusesInWorker(
     policyItems.map(({ run }) => ({
       cfg: run.config,
       agentId: run.agentId,
@@ -235,34 +201,37 @@ export async function prepareNextDeliveryGroup(
       classificationSessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     })),
     { env: { ...process.env }, cwd: process.cwd(), assertCurrent },
-    (statuses) => {
-      const group: FollowupRun[] = [];
-      let firstKey: string | undefined;
-      for (const item of items) {
-        const index = policyItems.indexOf(item);
-        const profile =
-          index < 0
-            ? undefined
-            : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
-        const storageKey = resolveFollowupDeliveryStorageKey(item);
-        const personalTargets = profile
-          ? resolveReplyPersonalToolTargets(item, profile)
-          : undefined;
-        const key = JSON.stringify([
-          storageKey,
-          personalTargets ? stableStringify(personalTargets.screenTarget ?? null) : "null",
-          personalTargets?.themeProfileId ?? "",
-        ]);
-        if (firstKey !== undefined && key !== firstKey) {
-          break;
-        }
-        firstKey = key;
-        group.push(item);
-      }
-      assertCurrent();
-      return { items: group, assertCurrent };
-    },
+    (prepared) => prepared,
   );
+  return await withPreparedSessionCapabilityRead(() => {
+    const group: FollowupRun[] = [];
+    let firstKey: string | undefined;
+    for (const item of items) {
+      const index = policyItems.indexOf(item);
+      const profile =
+        index < 0
+          ? undefined
+          : resolveReplyToolAuthorityContext(
+              item,
+              undefined,
+              expectDefined(statuses[index], "prepared sandbox status"),
+            ).capabilityProfile;
+      const storageKey = resolveFollowupDeliveryStorageKey(item);
+      const personalTargets = profile ? resolveReplyPersonalToolTargets(item, profile) : undefined;
+      const key = JSON.stringify([
+        storageKey,
+        personalTargets ? stableStringify(personalTargets.screenTarget ?? null) : "null",
+        personalTargets?.themeProfileId ?? "",
+      ]);
+      if (firstKey !== undefined && key !== firstKey) {
+        break;
+      }
+      firstKey = key;
+      group.push(item);
+    }
+    assertCurrent();
+    return { items: group, assertCurrent };
+  });
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
@@ -287,6 +256,8 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "sourceTurnId"
+  | "createChannelCronAuthority"
+  | "readAdmissionConfig"
   | "operatorAuthority"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
@@ -297,6 +268,8 @@ type FollowupRuntimeMetadata = Pick<
   | "gatewayLocalUserIngress"
   | "toolsAllow"
   | "disableTools"
+  | "forceRestartSafeTools"
+  | "forceCodeModeTools"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -391,6 +364,11 @@ export function collectRuntimeMetadata(
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
+  const terminalObservers = items.flatMap((item) =>
+    item.runObservers?.onAgentRunTerminalOutcome
+      ? [item.runObservers.onAgentRunTerminalOutcome]
+      : [],
+  );
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [
     ...new Map(
@@ -401,10 +379,13 @@ export function collectRuntimeMetadata(
   ];
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
+    createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
+    readAdmissionConfig: authoritySource?.readAdmissionConfig,
     operatorAuthority: authoritySource?.operatorAuthority,
-    ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
-      ? { personalBootstrapEligible: true }
-      : {}),
+    personalBootstrapEligible:
+      items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
+        ? true
+        : undefined,
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: collectCurrentInboundContext(items),
@@ -418,26 +399,37 @@ export function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
+    forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
+    forceCodeModeTools: authoritySource?.forceCodeModeTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: collectReplyDisposition(items),
-    runObservers: items.at(-1)?.runObservers,
+    runObservers:
+      terminalObservers.length === 0
+        ? authoritySource?.runObservers
+        : {
+            ...authoritySource?.runObservers,
+            onAgentRunTerminalOutcome: (outcome) => {
+              const failures: unknown[] = [];
+              for (const observer of terminalObservers) {
+                try {
+                  observer(outcome);
+                } catch (error) {
+                  failures.push(error);
+                }
+              }
+              if (failures.length > 0) {
+                throw failures[0];
+              }
+            },
+          },
   };
 }
 
-export function resolveOverflowSummaryInboundEventKind(
-  sources: FollowupRun[],
-): "room_event" | undefined {
-  return sources.length > 0 &&
-    sources.every((source) => source.currentInboundEventKind === "room_event")
-    ? "room_event"
-    : undefined;
-}
-
-export function getFollowupOriginRouting(source: FollowupRun) {
+function getFollowupOriginRouting(source: FollowupRun) {
   return {
     originatingChannel: source.originatingChannel,
     originatingTo: source.originatingTo,
@@ -450,10 +442,13 @@ export function getFollowupOriginRouting(source: FollowupRun) {
   };
 }
 
-export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
+export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
+    controllerInput: source.controllerInput,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
+    createChannelCronAuthority: source.createChannelCronAuthority,
+    readAdmissionConfig: source.readAdmissionConfig,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
     personalBootstrapEligible: source.personalBootstrapEligible,
@@ -463,8 +458,12 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
+    forceRestartSafeTools: source.forceRestartSafeTools,
+    forceCodeModeTools: source.forceCodeModeTools,
+    currentTurnImagesPrepared: source.currentTurnImagesPrepared,
     images: source.images,
     imageOrder: source.imageOrder,
+    mediaImageLayout: source.mediaImageLayout,
     media: source.media,
     channelAdmissionEvidence: source.channelAdmissionEvidence,
     gatewayLocalUserIngress: source.gatewayLocalUserIngress,
@@ -473,6 +472,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     enqueuedAt: source.enqueuedAt,
     ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
+    deliveryCorrelations: source.deliveryCorrelations,
+    onQueueDisposition: source.onQueueDisposition,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,

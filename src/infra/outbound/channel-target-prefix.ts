@@ -48,10 +48,7 @@ export function stripTargetTopicSuffix(
 ): string {
   const trimmed = raw.trim();
   const numericTopicMatch = options.allowNumericShorthand ? /^(-?\d+):(\d+)$/.exec(trimmed) : null;
-  if (numericTopicMatch?.[1]) {
-    return numericTopicMatch[1];
-  }
-  return trimmed.replace(/:topic:.*$/i, "").trim();
+  return numericTopicMatch?.[1] ?? trimmed.replace(/:topic:.*$/i, "").trim();
 }
 
 function resolveChannelTargetProviderPrefix(

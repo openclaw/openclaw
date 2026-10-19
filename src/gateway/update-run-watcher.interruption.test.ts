@@ -25,6 +25,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -41,6 +42,12 @@ const observation = vi.hoisted(() => ({
   settle: vi.fn(),
 }));
 // Keep the real ledger kernels; worker transport has separate boundary coverage.
+vi.mock("../state/openclaw-state-schema-publication.async.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
+  reconcileOpenClawStateSchemaPublicationAsync: async (
+    ...args: Parameters<typeof reconcileOpenClawStateSchemaPublication>
+  ) => reconcileOpenClawStateSchemaPublication(...args),
+}));
 vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
   reconcileAbandonedUpdateRunsAsync: async (
@@ -196,8 +203,8 @@ it("settles a verified abandoned CLI run", async () => {
   });
   watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   await published.promise;
-  expect(getUpdateRun(runId)?.status).toBe("succeeded");
   expect(getUpdateRun(runId)).toMatchObject({
+    status: "succeeded",
     reason: null,
     after: { version: "2026.9.4", buildId: "candidate-build" },
     verification: { versionMatch: true, readyz: true, runningBuildId: "candidate-build" },
@@ -206,10 +213,9 @@ it("settles a verified abandoned CLI run", async () => {
     "update.run.changed",
     expect.objectContaining({ runId, status: "succeeded" }),
   );
-  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
-    "Updater exited before recording completion",
-  );
-  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
+  const report = renderUpdateRunReport(getUpdateRun(runId)!).markdown;
+  expect(report).toContain("Updater exited before recording completion");
+  expect(report).toContain("settle check: settled");
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
 });
 
@@ -283,12 +289,13 @@ it.each(["absent", "driver-revived", "newer-completed-run"])(
     }
     expect(await reconcileInterruptedUpdateRuns({ candidate })).toEqual([]);
     expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
-    expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
-    expect(getUpdateRun(runId)?.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
+    const run = getUpdateRun(runId)!;
+    expect(run.status).not.toBe("succeeded");
+    expect(run.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
     expect(console.warn).not.toHaveBeenCalled();
     if (candidateState === "absent") {
       expect(observation.settle).not.toHaveBeenCalled();
-      expect(getUpdateRun(runId)?.status).toBe("running");
+      expect(run.status).toBe("running");
     }
   },
 );

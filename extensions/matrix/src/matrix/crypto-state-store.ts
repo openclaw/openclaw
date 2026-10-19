@@ -1,7 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import {
@@ -10,7 +16,7 @@ import {
   writeMatrixStateChunks,
 } from "./chunked-state.js";
 import type { MatrixStoredRecoveryKey } from "./sdk/types.js";
-import { resolveMatrixSqliteStateEnv } from "./sqlite-state.js";
+import { resolveMatrixSqliteStateEnv, updateMatrixKeyedState } from "./sqlite-state.js";
 
 const STATE_KEY = "current";
 const RECOVERY_KEY_NAMESPACE = "recovery-key";
@@ -32,6 +38,7 @@ type MatrixIdbSnapshotMeta = {
   digest: string;
   databaseCount: number;
   persistedAt: string;
+  cleanOwnerGeneration?: string;
 };
 
 type MatrixIdbSnapshotChunk = {
@@ -42,7 +49,22 @@ type MatrixIdbSnapshotChunk = {
 
 type MatrixIdbSnapshotRecord = MatrixIdbSnapshotMeta | MatrixIdbSnapshotChunk;
 
-export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStore">;
+class MatrixIdbSnapshotInvalidError extends Error {
+  readonly code = "matrix-idb-snapshot-invalid";
+
+  constructor(reason: string) {
+    super(
+      `Invalid Matrix crypto SQLite snapshot (${reason}); preserve the account state and restore a valid backup before retrying.`,
+    );
+    this.name = "MatrixIdbSnapshotInvalidError";
+  }
+}
+
+export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStoreV2">;
+
+export type MatrixSnapshotStateReader = {
+  openKeyedStoreV2: <T>(options: OpenKeyedStoreOptions) => Pick<PluginStateKeyedStore<T>, "lookup">;
+};
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
   return {
@@ -72,7 +94,7 @@ export async function readMatrixRecoveryKeyStateForPathAsync(
   recoveryKeyPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
 ): Promise<MatrixStoredRecoveryKey | null> {
-  const store = stateRuntime.openKeyedStore<MatrixStoredRecoveryKey>(
+  const store = stateRuntime.openKeyedStoreV2<MatrixStoredRecoveryKey>(
     openMatrixRecoveryKeyStoreOptions(path.dirname(recoveryKeyPath)),
   );
   return normalizeMatrixStoredRecoveryKey(
@@ -90,67 +112,39 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
   if (!payload) {
     throw new Error("Invalid Matrix recovery key state");
   }
-  if (params.preserveEncodedPrivateKey) {
-    await updateMatrixRecoveryKeyState(
-      params,
-      (current) =>
-        normalizeMatrixStoredRecoveryKey({
-          ...payload,
-          encodedPrivateKey: normalizeMatrixStoredRecoveryKey(current)?.encodedPrivateKey,
-        }) ?? undefined,
-    );
-    return;
-  }
-  await params.stateRuntime
-    .openKeyedStore<MatrixStoredRecoveryKey>(
-      openMatrixRecoveryKeyStoreOptions(path.dirname(params.recoveryKeyPath)),
-    )
-    .register(resolveRecoveryKeyStateKeyForPath(params.recoveryKeyPath), payload);
-}
-
-async function updateMatrixRecoveryKeyState(
-  params: { recoveryKeyPath: string; stateRuntime: MatrixSnapshotStateRuntime },
-  update: (current: MatrixStoredRecoveryKey | undefined) => MatrixStoredRecoveryKey | undefined,
-): Promise<void> {
-  const store = params.stateRuntime.openKeyedStore<MatrixStoredRecoveryKey>(
+  const store = params.stateRuntime.openKeyedStoreV2<MatrixStoredRecoveryKey>(
     openMatrixRecoveryKeyStoreOptions(path.dirname(params.recoveryKeyPath)),
   );
   const key = resolveRecoveryKeyStateKeyForPath(params.recoveryKeyPath);
-  if (!store.observe || !store.compareAndApply) {
-    // The published >=2026.9.4 host floor supplies callback updates, before data-only CAS.
-    if (!store.update) {
-      throw new Error("Matrix recovery key store does not support atomic updates");
-    }
-    await store.update(key, update);
+  if (params.preserveEncodedPrivateKey) {
+    const update = (current: MatrixStoredRecoveryKey | undefined) =>
+      normalizeMatrixStoredRecoveryKey({
+        ...payload,
+        encodedPrivateKey: normalizeMatrixStoredRecoveryKey(current)?.encodedPrivateKey,
+      }) ?? undefined;
+    await updateMatrixKeyedState(store, key, update);
     return;
   }
-  let observation = await store.observe(key);
-  for (;;) {
-    const value = update(observation.value);
-    const result = await store.compareAndApply(
-      key,
-      observation.comparison,
-      value === undefined
-        ? { operation: "update", action: "keep" }
-        : { operation: "update", action: "set", value },
-    );
-    if (result.status !== "conflict") {
-      return;
-    }
-    observation = result.current;
-  }
+  await store.register(key, payload);
 }
 
 export async function readMatrixIdbSnapshotJson(
   storageRootDir: string,
   stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
 ): Promise<string | null> {
-  const store = stateRuntime.openKeyedStore<MatrixIdbSnapshotRecord>(
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
   );
   const meta = await store.lookup(idbMetaKey());
-  if (!isIdbSnapshotMeta(meta)) {
+  if (meta === undefined) {
+    // Chunks without metadata can be an interrupted first publication, not a fresh account.
+    if ((await store.entries()).length !== 0) {
+      throw new MatrixIdbSnapshotInvalidError("metadata is missing");
+    }
     return null;
+  }
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("metadata is malformed");
   }
   const chunks = await readMatrixStateChunks(
     store,
@@ -158,16 +152,52 @@ export async function readMatrixIdbSnapshotJson(
     "snapshot-chunk",
   );
   if (!chunks) {
-    return null;
+    throw new MatrixIdbSnapshotInvalidError("snapshot chunks are missing or malformed");
   }
   const snapshotJson = chunks.join("");
-  return meta.digest === digestText(snapshotJson) ? snapshotJson : null;
+  if (meta.digest !== digestText(snapshotJson)) {
+    throw new MatrixIdbSnapshotInvalidError("checksum mismatch");
+  }
+  return snapshotJson;
+}
+
+export async function readMatrixIdbSnapshotOwnerGeneration(
+  storageRootDir: string,
+  stateRuntime: MatrixSnapshotStateReader = getMatrixRuntime().state,
+): Promise<string | undefined> {
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (meta === undefined) {
+    return undefined;
+  }
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("metadata is malformed");
+  }
+  return meta.cleanOwnerGeneration;
+}
+
+/** Publish last, after the final snapshot and clean sync cursor have settled. */
+export async function sealMatrixIdbSnapshotOwnerGeneration(
+  storageRootDir: string,
+  generation: string,
+  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+): Promise<void> {
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("final metadata is missing or malformed");
+  }
+  await store.register(idbMetaKey(), { ...meta, cleanOwnerGeneration: generation });
 }
 
 async function hasMatrixIdbSnapshotState(storageRootDir: string): Promise<boolean> {
   return isIdbSnapshotMeta(
     await getMatrixRuntime()
-      .state.openKeyedStore<MatrixIdbSnapshotRecord>(
+      .state.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
         openMatrixIdbSnapshotStoreOptions(storageRootDir),
       )
       .lookup(idbMetaKey()),
@@ -182,7 +212,7 @@ export async function writeMatrixIdbSnapshotJson(params: {
 }): Promise<void> {
   const store = (
     params.stateRuntime ?? getMatrixRuntime().state
-  ).openKeyedStore<MatrixIdbSnapshotRecord>(
+  ).openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(params.storageRootDir),
   );
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
@@ -196,7 +226,7 @@ export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Pro
   let score = 0;
   try {
     const migration = await getMatrixRuntime()
-      .state.openKeyedStore(openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir))
+      .state.openKeyedStoreV2(openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir))
       .lookup(STATE_KEY);
     if (
       isRecord(migration) &&
@@ -242,7 +272,7 @@ function resolveRecoveryKeyStateKeyForPath(recoveryKeyPath: string): string {
   if (basename === MATRIX_RECOVERY_KEY_FILENAME) {
     return STATE_KEY;
   }
-  return `file:${createHash("sha256").update(basename, "utf8").digest("hex").slice(0, 32)}`;
+  return `file:${digestText(basename).slice(0, 32)}`;
 }
 
 function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryKey | null {
@@ -282,7 +312,6 @@ function buildIdbSnapshotRows(
 ): {
   meta: { key: string; value: MatrixIdbSnapshotMeta };
   chunks: { key: string; value: MatrixIdbSnapshotChunk }[];
-  nextChunkKeys: Set<string>;
 } {
   const generation = randomUUID().replaceAll("-", "");
   const chunks = chunkMatrixStateJson(
@@ -300,7 +329,6 @@ function buildIdbSnapshotRows(
   }));
   return {
     chunks,
-    nextChunkKeys: new Set(chunks.map((chunk) => chunk.key)),
     meta: {
       key: idbMetaKey(),
       value: {
@@ -328,10 +356,6 @@ function idbChunkKey(generation: string, index: number): string {
   return `${idbChunkKeyPrefix()}${generation}:${index}`;
 }
 
-function digestText(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {
   return (
     isRecord(value) &&
@@ -339,14 +363,13 @@ function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {
     value.version === 1 &&
     typeof value.generation === "string" &&
     value.generation.trim() !== "" &&
-    typeof value.chunkCount === "number" &&
-    Number.isSafeInteger(value.chunkCount) &&
-    value.chunkCount >= 0 &&
-    value.chunkCount <= IDB_SNAPSHOT_MAX_CHUNKS &&
+    asSafeIntegerInRange(value.chunkCount, { min: 0, max: IDB_SNAPSHOT_MAX_CHUNKS }) !==
+      undefined &&
     typeof value.digest === "string" &&
-    typeof value.databaseCount === "number" &&
-    Number.isSafeInteger(value.databaseCount) &&
-    value.databaseCount >= 0 &&
-    typeof value.persistedAt === "string"
+    asSafeIntegerInRange(value.databaseCount, { min: 0 }) !== undefined &&
+    typeof value.persistedAt === "string" &&
+    (value.cleanOwnerGeneration === undefined ||
+      (typeof value.cleanOwnerGeneration === "string" &&
+        /^[a-f0-9]{32}$/.test(value.cleanOwnerGeneration)))
   );
 }

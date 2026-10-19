@@ -1,10 +1,21 @@
 // Contained reads of active-run lifecycle probes. A handle probe that throws must
-// never escape into steering, supersede, or cancellation callers.
+// never escape into steering or cancellation callers.
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
-import type { EmbeddedAgentQueueHandle } from "./run-state.js";
+import type { EmbeddedAgentQueueHandle } from "../../sessions/session-controller.contracts.js";
 
 type CompactionProbe = { isCompacting?: () => boolean };
 const reportedCompactingProbeFailures = new WeakSet<CompactionProbe>();
+
+export function isEmbeddedRunHandleInProgress(
+  handle: EmbeddedAgentQueueHandle | undefined,
+): handle is EmbeddedAgentQueueHandle {
+  try {
+    return handle ? !handle.isAborted?.() : false;
+  } catch {
+    // A failed optional status probe cannot prove that live work has ended.
+    return true;
+  }
+}
 
 export function isEmbeddedRunHandleAbortable(
   sessionId: string,
@@ -40,21 +51,6 @@ export function isEmbeddedRunHandleCompacting(
       );
     }
     return undefined;
-  }
-}
-
-export function isEmbeddedRunHandleSupersedable(
-  runId: string,
-  handle: EmbeddedAgentQueueHandle,
-): boolean {
-  if (!isEmbeddedRunHandleAbortable(runId, handle)) {
-    return false;
-  }
-  try {
-    return handle.isStopped?.() !== true && handle.isAborted?.() !== true;
-  } catch (err) {
-    diag.warn(`supersede failed: runId=${runId} reason=lifecycle_check_failed err=${String(err)}`);
-    return false;
   }
 }
 

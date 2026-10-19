@@ -22,9 +22,11 @@ import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/mo
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "../packages/model-catalog-core/src/model-inference-capabilities.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogBundleV2,
+  RemoteModelCatalogBundleV3,
   RemoteModelCatalogPricing,
   RemoteModelCatalogPricingV2,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
@@ -116,6 +118,7 @@ export function parsePublishModelCatalogArgs(args: string[]) {
   let pricing = false;
   let out: string | undefined;
   let outV2: string | undefined;
+  let outV3: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--dry-run") {
@@ -136,12 +139,23 @@ export function parsePublishModelCatalogArgs(args: string[]) {
       index += 1;
       continue;
     }
+    if (arg === "--out-v3") {
+      outV3 = requireOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${arg}`);
   }
   if (!dryRun && !out) {
     throw new Error("provide --out <file> or --dry-run");
   }
-  return { dryRun, pricing, ...(out ? { out } : {}), ...(outV2 ? { outV2 } : {}) };
+  return {
+    dryRun,
+    pricing,
+    ...(out ? { out } : {}),
+    ...(outV2 ? { outV2 } : {}),
+    ...(outV3 ? { outV3 } : {}),
+  };
 }
 
 export function readModelCatalogManifests(
@@ -165,20 +179,20 @@ export function readModelCatalogManifests(
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-async function loadClientBundleValidator(version: 1 | 2 = 1) {
+async function loadClientBundleValidator(version: 1 | 2 | 3 = 1) {
   const modulePath = path.join(
     defaultRootDir,
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
   const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
   const name =
-    version === 1
-      ? "validateAndSanitizeRemoteModelCatalogBundle"
-      : "validateAndSanitizeRemoteModelCatalogBundleV2";
-  if (typeof module[name] !== "function") {
+    version === 1 ? "parseRemoteModelCatalogBundle" : `parseRemoteModelCatalogBundleV${version}`;
+  const parse = module[name];
+  const sanitize = module.sanitizeRemoteModelCatalogBundle;
+  if (typeof parse !== "function" || typeof sanitize !== "function") {
     throw new Error("remote catalog bundle validator export is unavailable");
   }
-  return module[name];
+  return (bundle: unknown) => sanitize(parse(bundle));
 }
 
 export async function assembleModelCatalogBundle(options: {
@@ -199,8 +213,9 @@ export async function assembleModelCatalogBundle(options: {
         throw new Error(`provider ${providerId} is declared by more than one plugin manifest`);
       }
       if (isRecord(provider)) {
+        // Credential ownership belongs to the installed manifest, never a downloaded catalog.
         // Manifests shipped since 2026.9.7 may still carry the retired authoring field.
-        const { recommendedModels: _retired, ...v1Provider } = provider;
+        const { authScope: _authScope, recommendedModels: _retired, ...v1Provider } = provider;
         providers[providerId] = v1Provider;
       } else {
         providers[providerId] = provider;
@@ -208,8 +223,11 @@ export async function assembleModelCatalogBundle(options: {
     }
   }
 
-  if (!Object.hasOwn(providers, "anthropic") || !Object.hasOwn(providers, "openai")) {
-    throw new Error("catalog must include anthropic and openai providers");
+  // Runtime-discovered providers can intentionally have no static catalog rows.
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (isRecord(provider) && Array.isArray(provider.models) && provider.models.length === 0) {
+      delete providers[providerId];
+    }
   }
   const bundle = {
     schemaVersion: 1,
@@ -218,15 +236,45 @@ export async function assembleModelCatalogBundle(options: {
     sourceCommit: options.sourceCommit,
     providers,
   };
-  const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
+  const validateBundle: BundleValidator =
+    options.validateBundle ?? (await loadClientBundleValidator());
   const validated = validateBundle(bundle);
-  const summary = summarizeModelCatalogBundle(validated);
+  // The assembly is canonical source data, not a legacy wire projection. Preserve
+  // validated task declarations until v1/v2 and v3 are projected separately.
+  for (const [id, provider] of Object.entries(validated.providers)) {
+    const source = providers[id];
+    if (!isRecord(source) || !Array.isArray(source.models)) {
+      continue;
+    }
+    const declarations = new Map(
+      source.models.flatMap((model) =>
+        isRecord(model) && typeof model.id === "string" && model.inference !== undefined
+          ? [[model.id.trim(), ModelInferenceCapabilitiesSchema.parse(model.inference)] as const]
+          : [],
+      ),
+    );
+    for (const model of provider.models) {
+      const inference = declarations.get(model.id);
+      if (inference) {
+        model.inference = inference;
+      }
+    }
+  }
+  assertModelCatalogCompleteness(validated);
+  return validated;
+}
+
+function assertModelCatalogCompleteness(bundle: PublishedModelCatalogBundle) {
+  if (!Object.hasOwn(bundle.providers, "anthropic") || !Object.hasOwn(bundle.providers, "openai")) {
+    throw new Error("catalog must include anthropic and openai providers");
+  }
+  const summary = summarizeModelCatalogBundle(bundle);
   if (summary.models < MODEL_CATALOG_MIN_MODELS) {
     throw new Error(
       `catalog model count ${summary.models} is below required floor ${MODEL_CATALOG_MIN_MODELS}`,
     );
   }
-  return validated;
+  return summary;
 }
 
 export function summarizeModelCatalogBundle(bundle: PublishedModelCatalogBundle) {
@@ -631,6 +679,141 @@ export async function hydrateModelCatalogFromModelsDev(options: {
   return result;
 }
 
+/**
+ * Providers whose public, keyless /models lists the ids requests send. Novita's list mixes
+ * the case of some ids, so only a case-insensitive miss means it no longer serves the row.
+ */
+const PROVIDER_MODEL_INVENTORIES: Readonly<
+  Record<string, { url: string; caseInsensitive?: true }>
+> = {
+  chutes: { url: "https://llm.chutes.ai/v1/models" },
+  deepinfra: { url: "https://api.deepinfra.com/v1/openai/models" },
+  huggingface: { url: "https://router.huggingface.co/v1/models" },
+  kilocode: { url: "https://api.kilo.ai/api/gateway/models" },
+  novita: { url: "https://api.novita.ai/openai/v1/models", caseInsensitive: true },
+  nvidia: { url: "https://integrate.api.nvidia.com/v1/models" },
+  opencode: { url: "https://opencode.ai/zen/v1/models" },
+  "opencode-go": { url: "https://opencode.ai/inference/go/v1/models" },
+  venice: { url: "https://api.venice.ai/api/v1/models" },
+};
+
+/** Marks published rows a provider's live inventory no longer lists as deprecated. */
+export async function retireUnservedModels(options: {
+  bundle: PublishedModelCatalogBundle;
+  fetchImpl?: typeof fetch;
+  loadSource?: ModelCatalogSourceLoader;
+}): Promise<Record<string, string[]>> {
+  const loadSource = options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl);
+  const result: Record<string, string[]> = {};
+  for (const [providerId, { url, caseInsensitive }] of Object.entries(PROVIDER_MODEL_INVENTORIES)) {
+    const provider = options.bundle.providers[providerId];
+    if (!provider) {
+      continue;
+    }
+    let payload: unknown;
+    try {
+      payload = await loadSource(url, `${providerId} model inventory`);
+    } catch (error) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${error instanceof Error ? error.message : String(error)}; publishing ${providerId} without inventory retirement\n`,
+      );
+      continue;
+    }
+    const rows = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+    const ids = rows.flatMap((row) =>
+      isRecord(row) && typeof row.id === "string" && row.id ? [row.id] : [],
+    );
+    // An empty or partial inventory is an outage, not proof every model was retired.
+    if (ids.length === 0 || ids.length !== rows.length) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${providerId} model inventory is empty or malformed; publishing ${providerId} without inventory retirement\n`,
+      );
+      continue;
+    }
+    const fold = (id: string) => (caseInsensitive ? id.toLowerCase() : id);
+    const served = new Set(ids.map(fold));
+    const retired: string[] = [];
+    for (const model of provider.models) {
+      if (
+        model.status === "deprecated" ||
+        model.status === "disabled" ||
+        served.has(fold(model.id))
+      ) {
+        continue;
+      }
+      model.status = "deprecated";
+      model.statusReason = `${providerId} no longer lists this model in its public model inventory.`;
+      retired.push(model.id);
+    }
+    result[providerId] = retired;
+  }
+  return result;
+}
+
+/** Providers that publish their own featured list; its picks lead their recommendations. */
+const PROVIDER_FEATURED_MODELS: Readonly<Record<string, string>> = {
+  nvidia: "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json",
+};
+
+/**
+ * Matches each provider's featured list to its served rows, in feed order. An unavailable
+ * or malformed feed leaves that provider on the global list alone.
+ */
+export async function resolveProviderFeaturedModels(options: {
+  bundle: PublishedModelCatalogBundle;
+  fetchImpl?: typeof fetch;
+  loadSource?: ModelCatalogSourceLoader;
+}): Promise<Record<string, { ids: string[]; skipped: string[] }>> {
+  const loadSource = options.loadSource ?? createModelCatalogSourceLoader(options.fetchImpl);
+  const result: Record<string, { ids: string[]; skipped: string[] }> = {};
+  for (const [providerId, url] of Object.entries(PROVIDER_FEATURED_MODELS)) {
+    const provider = options.bundle.providers[providerId];
+    if (!provider) {
+      continue;
+    }
+    const fallback = `publishing ${providerId} with global recommendations only`;
+    let payload: unknown;
+    try {
+      payload = await loadSource(url, `${providerId} featured models`);
+    } catch (error) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${error instanceof Error ? error.message : String(error)}; ${fallback}\n`,
+      );
+      continue;
+    }
+    const rows = isRecord(payload) ? payload["featured-models"] : undefined;
+    const featured = Array.isArray(rows)
+      ? rows.flatMap((row) =>
+          isRecord(row) && typeof row.model === "string" && row.model ? [row.model] : [],
+        )
+      : [];
+    if (!Array.isArray(rows) || featured.length !== rows.length) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${providerId} featured models are malformed; ${fallback}\n`,
+      );
+      continue;
+    }
+    const servedIds = servedModelIdsByKey(provider.models);
+    const ids: string[] = [];
+    const skipped: string[] = [];
+    for (const featuredId of featured) {
+      const id = servedIds.get(canonicalModelKey(featuredId));
+      if (!id) {
+        skipped.push(featuredId);
+      } else if (!ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+    if (featured.length > 0 && ids.length === 0) {
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: ${providerId} featured models match no served model; ${fallback}\n`,
+      );
+    }
+    result[providerId] = { ids, skipped };
+  }
+  return result;
+}
+
 async function parsePricingCatalog(
   source: PricingSource,
   body: unknown,
@@ -991,6 +1174,39 @@ export async function enrichModelCatalogPricing(options: {
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
+// Released chat-only formats cannot admit native tasks or video-only inputs.
+function projectReleasedModelInputs(bundle: PublishedModelCatalogBundle): void {
+  for (const [id, provider] of Object.entries(bundle.providers)) {
+    const omitted = new Set<string>();
+    provider.models = provider.models.filter((model) => {
+      if (model.inference?.chat === false) {
+        omitted.add(model.id);
+        return false;
+      }
+      delete model.inference;
+      const input = model.input?.filter(
+        (value) => value === "text" || value === "image" || value === "document",
+      );
+      if (input?.length === 0) {
+        omitted.add(model.id);
+        return false;
+      }
+      if (input) {
+        model.input = input;
+      }
+      return true;
+    });
+    for (const field of ["defaultModel", "defaultUtilityModel"] as const) {
+      if (provider[field] && omitted.has(provider[field])) {
+        delete provider[field];
+      }
+    }
+    if (provider.models.length === 0) {
+      delete bundle.providers[id];
+    }
+  }
+}
+
 export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle): string {
   const providers = Object.fromEntries(
     Object.entries(bundle.providers)
@@ -1054,14 +1270,12 @@ function readRecommendedModels(rootDir: string): string[] {
 }
 
 /**
- * Projects the global list onto one provider's served model rows, in list order. A
- * listed model is hidden when the provider also serves a newer listed member of its
- * family. Deprecated, disabled and replaced rows are not served.
+ * Maps canonical keys to a provider's served row ids. Deprecated, disabled and replaced
+ * rows are not served.
  */
-export function projectRecommendedModels(
-  recommendedModels: readonly string[],
+function servedModelIdsByKey(
   models: readonly Pick<ModelCatalogModel, "id" | "name" | "status" | "replacedBy">[],
-): string[] {
+): Map<string, string> {
   // The shortest id is the base alias, ahead of dated, tagged, or -fast variants.
   const idByKey = new Map<string, string>();
   for (const { id, name, status, replacedBy } of models) {
@@ -1074,6 +1288,19 @@ export function projectRecommendedModels(
       idByKey.set(key, id);
     }
   }
+  return idByKey;
+}
+
+/**
+ * Projects the global list onto one provider's served model rows, in list order. A
+ * listed model is hidden when the provider also serves a newer listed member of its
+ * family.
+ */
+export function projectRecommendedModels(
+  recommendedModels: readonly string[],
+  models: readonly Pick<ModelCatalogModel, "id" | "name" | "status" | "replacedBy">[],
+): string[] {
+  const idByKey = servedModelIdsByKey(models);
   const served = recommendedModels.flatMap((key) => {
     const id = idByKey.get(key);
     return id ? [{ key, id, family: canonicalModelFamily(key).name }] : [];
@@ -1089,24 +1316,53 @@ export function projectRecommendedModels(
     .map(({ id }) => id);
 }
 
-export async function assembleModelCatalogBundleV2(
+/**
+ * A provider's featured models lead its recommendations as listed, so the global family
+ * rule never hides a provider pick; the global projection follows without repeats.
+ */
+async function assembleVersionedModelCatalogBundle(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
   recommendedModels: readonly string[] = [],
-): Promise<RemoteModelCatalogBundleV2> {
+  featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
+  version: 2 | 3 = 2,
+): Promise<RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3> {
   const providers: RemoteModelCatalogBundleV2["providers"] = {};
-  const models: RemoteModelCatalogBundleV2["models"] = [];
+  const models: RemoteModelCatalogBundleV3["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
-    const recommended = projectRecommendedModels(recommendedModels, provider.models);
+    const chatModels = provider.models.filter((model) => model.inference?.chat !== false);
+    const featured = (featuredModels[providerId]?.ids ?? []).filter((id) =>
+      chatModels.some((model) => model.id === id),
+    );
+    const recommended = [
+      ...featured,
+      ...projectRecommendedModels(recommendedModels, chatModels).filter(
+        (id) => !featured.includes(id),
+      ),
+    ];
     providers[providerId] = {
       api: provider.api,
-      defaultModel: provider.defaultModel,
-      defaultUtilityModel: provider.defaultUtilityModel,
+      defaultModel:
+        provider.models.find((model) => model.id === provider.defaultModel)?.inference?.chat ===
+        false
+          ? undefined
+          : provider.defaultModel,
+      defaultUtilityModel:
+        provider.models.find((model) => model.id === provider.defaultUtilityModel)?.inference
+          ?.chat === false
+          ? undefined
+          : provider.defaultUtilityModel,
       ...(recommended.length > 0 ? { recommendedModels: recommended } : {}),
     };
     for (const model of provider.models) {
+      if (version === 2 && model.inference?.chat === false) {
+        continue;
+      }
       const { cost, ...metadata } = model;
+      if (version === 2) {
+        delete metadata.inference;
+      }
       delete metadata.baseUrl;
       delete metadata.headers;
       delete metadata.upstreamModel;
@@ -1127,13 +1383,12 @@ export async function assembleModelCatalogBundleV2(
       models.push({ ...metadata, provider: providerId, pricing });
     }
   }
-  const validateBundle = await loadClientBundleValidator(2);
-  // The first supporting release is not assigned yet. schemaVersion gates v2;
-  // never copy v1's older client floor onto a new wire contract.
+  const validateBundle = await loadClientBundleValidator(version);
+  // schemaVersion gates admission; never copy v1's older client floor onto newer wires.
   const upstreamPricing = serializeStandalonePricing(standalonePricing?.upstream);
   const providerPricing = serializeStandalonePricing(standalonePricing?.provider);
   return validateBundle({
-    schemaVersion: 2,
+    schemaVersion: version,
     generatedAt: bundle.generatedAt,
     sourceCommit: bundle.sourceCommit,
     providers,
@@ -1143,7 +1398,27 @@ export async function assembleModelCatalogBundleV2(
   });
 }
 
-export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2): string {
+export async function assembleModelCatalogBundleV2(
+  bundle: PublishedModelCatalogBundle,
+  pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
+  standalonePricing?: StandalonePricing,
+  recommendedModels: readonly string[] = [],
+  featuredModels: Readonly<Record<string, { ids: readonly string[] }>> = {},
+): Promise<RemoteModelCatalogBundleV2> {
+  // SAFETY: the requested wire version selects its corresponding client validator.
+  return (await assembleVersionedModelCatalogBundle(
+    bundle,
+    pricingSelections,
+    standalonePricing,
+    recommendedModels,
+    featuredModels,
+    2,
+  )) as RemoteModelCatalogBundleV2;
+}
+
+export function serializeModelCatalogBundleV2(
+  bundle: RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
+): string {
   const models = bundle.models
     .toSorted(
       (left, right) =>
@@ -1189,12 +1464,11 @@ export async function runPublishModelCatalog(
 ) {
   const rootDir = options.rootDir ?? defaultRootDir;
   const args = parsePublishModelCatalogArgs(options.args ?? process.argv.slice(2));
-  if (
-    args.out &&
-    args.outV2 &&
-    path.resolve(rootDir, args.out) === path.resolve(rootDir, args.outV2)
-  ) {
-    throw new Error("--out and --out-v2 must name different files");
+  const outputPaths = [args.out, args.outV2, args.outV3]
+    .filter((file): file is string => Boolean(file))
+    .map((file) => path.resolve(rootDir, file));
+  if (new Set(outputPaths).size !== outputPaths.length) {
+    throw new Error("--out, --out-v2 and --out-v3 must name different files");
   }
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
@@ -1212,6 +1486,9 @@ export async function runPublishModelCatalog(
   }
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
+  const retirementResult = await retireUnservedModels({ bundle, loadSource });
+  const featuredResult =
+    args.outV2 || args.outV3 ? await resolveProviderFeaturedModels({ bundle, loadSource }) : {};
   const standalonePricing: StandalonePricing = { upstream: new Map(), provider: new Map() };
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({
@@ -1222,6 +1499,17 @@ export async function runPublishModelCatalog(
         standalonePricing,
       })
     : { modelsEnriched: 0, pricingEntries: 0 };
+  const bundleV3 = args.outV3
+    ? await assembleVersionedModelCatalogBundle(
+        bundle,
+        pricingSelections,
+        standalonePricing,
+        recommendedModels,
+        featuredResult,
+        3,
+      )
+    : undefined;
+  projectReleasedModelInputs(bundle);
   // Validate after all enrichment so metadata-only and dry-run output obey the
   // same client contract as priced catalogs.
   const validateBundle = await loadClientBundleValidator();
@@ -1232,14 +1520,17 @@ export async function runPublishModelCatalog(
         pricingSelections,
         standalonePricing,
         recommendedModels,
+        featuredResult,
       )
     : undefined;
   bundle = validateBundle(bundle);
-  const summary = summarizeModelCatalogBundle(bundle);
+  const summary = assertModelCatalogCompleteness(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
   const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;
   const bundleV2Bytes = serializedV2 ? Buffer.byteLength(serializedV2) : 0;
+  const serializedV3 = bundleV3 ? serializeModelCatalogBundleV2(bundleV3) : undefined;
+  const bundleV3Bytes = serializedV3 ? Buffer.byteLength(serializedV3) : 0;
   if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
     process.stderr.write(
       `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
@@ -1255,6 +1546,11 @@ export async function runPublishModelCatalog(
       `catalog v2 bundle ${bundleV2Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
     );
   }
+  if (bundleV3Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error(
+      `catalog v3 bundle ${bundleV3Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
   const hydrationSummary = Object.entries(hydrationResult)
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(
@@ -1262,31 +1558,59 @@ export async function runPublishModelCatalog(
         `[${SCRIPT_LABEL}] models.dev provider=${providerId} added=${added} filled=${filled} skipped=${skipped}\n`,
     )
     .join("");
+  const retirementSummary = Object.entries(retirementResult)
+    .map(
+      ([providerId, ids]) =>
+        `[${SCRIPT_LABEL}] inventory provider=${providerId} retired=${ids.length}${ids.length > 0 ? ` ids=${ids.join(",")}` : ""}\n`,
+    )
+    .join("");
+  const featuredSummary = Object.entries(featuredResult)
+    .map(
+      ([providerId, { ids, skipped }]) =>
+        `[${SCRIPT_LABEL}] featured provider=${providerId} matched=${ids.length}${skipped.length > 0 ? ` skipped=${skipped.join(",")}` : ""}\n`,
+    )
+    .join("");
   const stats = `schemaVersion=1 providers=${summary.providers} models=${summary.models} costModels=${summary.costModels} pricingEnriched=${pricingResult.modelsEnriched} pricingEntries=${pricingResult.pricingEntries} bundleBytes=${bundleBytes} generatedAt=${bundle.generatedAt} minVersion=${bundle.minVersion} sourceCommit=${bundle.sourceCommit}`;
   if (args.dryRun) {
-    process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}`);
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] dry-run ${stats}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,
+    );
     return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
   }
   if (!args.out) {
     throw new Error("output path is required outside dry-run mode");
   }
   const outputFile = path.resolve(rootDir, args.out);
-  if (args.outV2 && serializedV2) {
-    await publishModelCatalogPair(
-      [
-        { file: outputFile, content: serialized },
-        { file: path.resolve(rootDir, args.outV2), content: serializedV2 },
-      ],
-      (message) => process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
-    );
-    process.stdout.write(
-      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} recommendedProviders=${Object.values(bundleV2?.providers ?? {}).filter((provider) => provider.recommendedModels).length} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
+  const outputs = [
+    { file: outputFile, content: serialized },
+    ...(args.outV2 && serializedV2
+      ? [{ file: path.resolve(rootDir, args.outV2), content: serializedV2 }]
+      : []),
+    ...(args.outV3 && serializedV3
+      ? [{ file: path.resolve(rootDir, args.outV3), content: serializedV3 }]
+      : []),
+  ];
+  if (outputs.length > 1) {
+    await publishModelCatalogPair(outputs, (message) =>
+      process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
     );
   } else {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, serialized);
   }
-  process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
+  for (const [version, published, bytes, out] of [
+    [2, bundleV2, bundleV2Bytes, args.outV2],
+    [3, bundleV3, bundleV3Bytes, args.outV3],
+  ] as const) {
+    if (published) {
+      process.stdout.write(
+        `[${SCRIPT_LABEL}] published schemaVersion=${version} models=${published.models.length} recommendedProviders=${Object.values(published.providers).filter((provider) => provider.recommendedModels).length} bundleBytes=${bytes} out=${out}\n`,
+      );
+    }
+  }
+  process.stdout.write(
+    `[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}${retirementSummary}${featuredSummary}`,
+  );
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }
 

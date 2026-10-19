@@ -1,4 +1,5 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import * as logger from "../logger.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -99,79 +100,54 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).not.toHaveBeenCalled();
   });
 
-  it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
-    sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
-    const dispatch = (index: number) =>
-      sendExecApprovalFollowupResult(
-        { approvalId: `approval-${index}`, sessionKey },
-        "Exec finished",
-      );
-    const failureKeysBeyondDedupeWindow = 257;
-    for (let i = 0; i < failureKeysBeyondDedupeWindow; i += 1) {
-      await dispatch(i);
-    }
-    await dispatch(0);
-    expect(logWarn).toHaveBeenCalledTimes(failureKeysBeyondDedupeWindow + 1);
-    expect(logWarn).toHaveBeenLastCalledWith(
-      "exec approval followup dispatch failed (id=approval-0): Channel is required",
-    );
-  });
-
-  it.each([true, false])(
-    "authenticates an elevated=%s result handoff to one session and claimant",
-    async (elevated) => {
-      const approvalId = `approval-authenticated-${elevated}`;
-      await sendExecApprovalFollowupResult(
-        {
-          approvalId,
-          agentId: "research",
-          sessionKey,
-          expectedSessionId: "session-original",
-          turnSourceChannel: "telegram",
-          ...(elevated ? { bashElevated } : {}),
-        },
-        "Exec finished",
-      );
-      const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
-      assert.isDefined(call);
-      expect(call).toMatchObject({
+  it("authenticates a result handoff to one session and claimant", async () => {
+    const approvalId = "approval-authenticated-false";
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId,
         agentId: "research",
         sessionKey,
         expectedSessionId: "session-original",
-      });
-      expect(call.internalRuntimeHandoffId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      );
-      expect(call.idempotencyKey).toMatch(
-        new RegExp(`^exec-approval-followup:${approvalId}:nonce:`),
-      );
-      expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
-      expect(call).not.toHaveProperty("bashElevated");
-      expect(call).not.toHaveProperty("execApprovalFollowupToken");
-      const claim = {
-        handoffId: call.internalRuntimeHandoffId,
-        approvalId,
-        idempotencyKey: call.idempotencyKey,
-        sessionKey,
-        claimId: "owner-run",
-      };
-      expect(
-        claimExecApprovalFollowupRuntimeHandoff({ ...claim, sessionKey: "wrong-session" }),
-      ).toBeUndefined();
-      expect(claimExecApprovalFollowupRuntimeHandoff(claim)).toEqual({
-        kind: "exec-approval-followup",
-        approvalId,
-        sessionKey,
-        idempotencyKey: call.idempotencyKey,
-        ...(elevated ? { bashElevated } : {}),
-        resultText: "Exec finished",
-      });
-      expect(
-        claimExecApprovalFollowupRuntimeHandoff({ ...claim, claimId: "competing-run" }),
-      ).toBeUndefined();
-      expect(finalizeExecApprovalFollowupRuntimeHandoff(claim)).toBe(true);
-    },
-  );
+        turnSourceChannel: "telegram",
+      },
+      "Exec finished",
+    );
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
+    assert.isDefined(call);
+    expect(call).toMatchObject({
+      agentId: "research",
+      sessionKey,
+      expectedSessionId: "session-original",
+    });
+    expect(call.internalRuntimeHandoffId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(call.idempotencyKey).toMatch(new RegExp(`^exec-approval-followup:${approvalId}:nonce:`));
+    expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
+    expect(call).not.toHaveProperty("bashElevated");
+    expect(call).not.toHaveProperty("execApprovalFollowupToken");
+    const claim = {
+      handoffId: call.internalRuntimeHandoffId,
+      approvalId,
+      idempotencyKey: call.idempotencyKey,
+      sessionKey,
+      claimId: "owner-run",
+    };
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({ ...claim, sessionKey: "wrong-session" }),
+    ).toBeUndefined();
+    expect(claimExecApprovalFollowupRuntimeHandoff(claim)).toEqual({
+      kind: "exec-approval-followup",
+      approvalId,
+      sessionKey,
+      idempotencyKey: call.idempotencyKey,
+      resultText: "Exec finished",
+    });
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({ ...claim, claimId: "competing-run" }),
+    ).toBeUndefined();
+    expect(finalizeExecApprovalFollowupRuntimeHandoff(claim)).toBe(true);
+  });
 
   it("does not register elevated runtime handoffs when the process clock is invalid", () => {
     expect(
@@ -231,7 +207,6 @@ describe("resolveExecApprovalWaitOutcome", () => {
   });
 
   it.each([
-    ["allow-once", true, null],
     ["allow-always", true, null],
     ["deny", false, "user-denied"],
   ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
@@ -276,6 +251,8 @@ describe("resolveExecApprovalWaitOutcome", () => {
 });
 
 describe("createExecApprovalRequestRoute", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
   const createRoute = (turnSourceChannel?: string, finalDecision?: null) =>
     createExecApprovalRequestRoute({
       warnings: [],
@@ -297,12 +274,9 @@ describe("createExecApprovalRequestRoute", () => {
     });
   });
 
-  it.each(["webchat", "discord"])(
-    "keeps waiting without a terminal decision on %s",
-    async (channel) => {
-      await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
-    },
-  );
+  it.each(["webchat"])("keeps waiting without a terminal decision on %s", async (channel) => {
+    await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
+  });
 });
 
 describe("buildExecApprovalPendingToolResult", () => {

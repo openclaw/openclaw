@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ReadResourceResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ReadResourceResultSchema } from "@modelcontextprotocol/core";
 import { z } from "zod";
 import type { QuestionResourceActionResult } from "../../packages/gateway-protocol/src/question-resource.js";
 import { captureAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
@@ -21,6 +21,8 @@ import {
   type McpAppFormOrigin,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
+import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-read-facts.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
 import { canSelectQuestion } from "./question-access.js";
@@ -31,7 +33,10 @@ import {
 import { readArtifactBase64Payload } from "./server-methods/artifacts-base64.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import { resolveLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
+import {
+  resolveLocalSessionWorkspaceRoot,
+  withSessionFileRoot,
+} from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createWorkspaceUploadBatch } from "./server-methods/workspace-fs.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
@@ -260,7 +265,7 @@ export async function executeMcpAppFormResource(
   }
   form.operations += 1;
   const caller = readGatewayRequestMutationAuthority(options);
-  const read = retainSessionScopedRead(options, record.sessionKey, record.agentId);
+  const read = await retainSessionScopedRead(options, record.sessionKey, record.agentId);
   const authorized = prepareQuestionAuthorization(
     options,
     observation,
@@ -432,7 +437,6 @@ async function preview(
       assertPreparedPolicy();
     }
   };
-  assertExecutionCurrent();
   const result = await callMcpAppToolWithElicitation({
     options,
     origin,
@@ -488,47 +492,85 @@ export function createMcpAppWorkspaceUploadProvider(params: {
   agentId: string;
   assertCurrent: () => void;
 }): McpFormResourceUpload {
-  return async (request) => {
-    const assertCurrent = () => {
-      params.assertCurrent();
-      request.assertCurrent();
-      if (resolveLocalSessionWorkspaceRoot(params) !== params.workspaceDir) {
-        throw new Error("Form upload workspace authority changed");
-      }
-    };
-    const files = request.files.map((file) => {
-      if (
-        file.name.includes("/") ||
-        file.name.includes("\\") ||
-        file.name === "." ||
-        file.name === ".."
-      ) {
-        throw new Error("Invalid upload filename");
-      }
-      const relativePath = request.kind === "directory" ? file.relativePath : file.name;
-      if (
-        !relativePath ||
-        (request.kind === "directory" && relativePath.split("/").length < 2) ||
-        (request.kind === "file" && file.relativePath)
-      ) {
-        throw new Error("Upload does not match the field’s file/directory mode");
-      }
-      return { relativePath, data: file.data };
-    });
-    const saved = await createWorkspaceUploadBatch({
-      rootDir: params.workspaceDir,
-      files,
-      assertCurrent,
-    });
-    if (request.kind === "file") {
-      return saved.paths.map((filePath, index) => ({
-        uri: pathToFileURL(filePath).href,
-        name: request.files[index]!.name,
-      }));
-    }
-    return [...new Set(files.map((file) => file.relativePath.split("/")[0]!))].map((name) => ({
-      uri: pathToFileURL(path.join(saved.rootDir, name)).href,
-      name,
-    }));
-  };
+  const metadata = captureSessionEntryMetadataRead(params, params.assertCurrent);
+  const initial = metadata?.readCurrent();
+  return async (request) =>
+    withSessionFileRoot(
+      params,
+      request.options.context.getRuntimeConfig(),
+      async (loaded, assertSourceCurrent) => {
+        const assertCurrent = () => {
+          params.assertCurrent();
+          assertSourceCurrent();
+          metadata?.assertCurrent();
+          request.assertCurrent();
+          if (metadata) {
+            const current = metadata.readCurrent();
+            if (
+              current?.sessionId !== initial?.sessionId ||
+              current?.lifecycleRevision !== initial?.lifecycleRevision
+            ) {
+              throw new Error("Form upload session generation changed");
+            }
+          }
+          if (
+            resolveLocalSessionWorkspaceRoot({
+              ...params,
+              source: {
+                entry: metadata
+                  ? metadata.readCurrent()
+                  : readRetainedSessionEntryFacts(
+                      {
+                        agentId: loaded.readSource?.agentId ?? params.agentId,
+                        path: loaded.readSource?.path ?? loaded.storePath,
+                      },
+                      {
+                        sessionKeys: [loaded.canonicalKey],
+                        projection: "exact",
+                        snapshotFields: [],
+                      },
+                    )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry,
+                cfg: request.options.context.getRuntimeConfig(),
+              },
+            }) !== params.workspaceDir
+          ) {
+            throw new Error("Form upload workspace authority changed");
+          }
+        };
+        const files = request.files.map((file) => {
+          if (
+            file.name.includes("/") ||
+            file.name.includes("\\") ||
+            file.name === "." ||
+            file.name === ".."
+          ) {
+            throw new Error("Invalid upload filename");
+          }
+          const relativePath = request.kind === "directory" ? file.relativePath : file.name;
+          if (
+            !relativePath ||
+            (request.kind === "directory" && relativePath.split("/").length < 2) ||
+            (request.kind === "file" && file.relativePath)
+          ) {
+            throw new Error("Upload does not match the field’s file/directory mode");
+          }
+          return { relativePath, data: file.data };
+        });
+        const saved = await createWorkspaceUploadBatch({
+          rootDir: params.workspaceDir,
+          files,
+          assertCurrent,
+        });
+        if (request.kind === "file") {
+          return saved.paths.map((filePath, index) => ({
+            uri: pathToFileURL(filePath).href,
+            name: request.files[index]!.name,
+          }));
+        }
+        return [...new Set(files.map((file) => file.relativePath.split("/")[0]!))].map((name) => ({
+          uri: pathToFileURL(path.join(saved.rootDir, name)).href,
+          name,
+        }));
+      },
+    );
 }

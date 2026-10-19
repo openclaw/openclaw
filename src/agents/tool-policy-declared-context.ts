@@ -1,5 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -20,12 +18,12 @@ export function buildDeclaredToolAllowlistContext(params: {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): DeclaredToolAllowlistContext | undefined {
-  const servers = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
+  const servers = params.config?.mcp?.servers ?? {};
   const isDenied = createMcpServerToolDenyMatcher(params.toolDenylist);
   const usedServerNames = new Set<string>();
   const mcpServerNames: string[] = [];
   for (const [name, value] of Object.entries(servers)) {
-    if (!isRecord(value) || value.enabled === false || !name.trim()) {
+    if (value.enabled === false || !name.trim()) {
       continue;
     }
     const safeServerName = sanitizeServerName(name, usedServerNames);

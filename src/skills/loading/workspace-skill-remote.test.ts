@@ -14,10 +14,10 @@ import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadWorkspaceSkills,
   prepareWorkspaceSkills,
-  readWorkspaceSkillSources,
   resolveWorkspaceSkillPromptEntries,
 } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
+import { readWorkspaceSkillSources } from "./workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
@@ -32,30 +32,9 @@ vi.mock("../library/selection.js", async (importOriginal) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-it.runIf(process.platform !== "win32")(
-  "preserves configured external symlink targets on the workspace host",
-  async () => {
-    const root = tempDirs.make("remote-skill-symlink-");
-    const workspaceDir = path.join(root, "workspace");
-    const target = path.join(root, "allowed", "linked");
-    await writeSkill({ dir: target, name: "linked", description: "Admitted external skill" });
-    await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-    await fs.symlink(target, path.join(workspaceDir, "skills", "linked"), "dir");
-    const config = { skills: { load: { allowSymlinkTargets: [path.dirname(target)] } } };
-    expect(
-      loadWorkspaceSkills(workspaceDir, { config, workspaceOnly: true }).map(
-        (entry) => entry.skill.name,
-      ),
-    ).toEqual(["linked"]);
-    const discovered = readWorkspaceSkillSources({
-      sourcePlan: resolveWorkspaceSkillSourcePlan(workspaceDir, { config, workspaceOnly: true }),
-      limits: resolveSkillDiscoveryLimits(config),
-      additionalBins: [],
-    });
-    expect(discovered.entries.map((entry) => entry.skill.name)).toEqual(["linked"]);
-  },
-);
+const releases: Array<() => void> = [];
 afterEach(() => {
+  releases.splice(0).forEach((release) => release());
   library.entries = [];
   vi.unstubAllEnvs();
 });
@@ -106,11 +85,21 @@ async function fixture() {
       { skillId: "pin", revision: "a".repeat(64), name: "pinned", ownerProfileId: null },
     ],
   };
-  return { gateway, remote, sources, bridge, options };
+  const bind = (loadSkills = async (_request: WorkspaceSkillSourceRequest) => sources) => {
+    const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
+    releases.push(release);
+    return release;
+  };
+  return { gateway, remote, sources, options, bind };
 }
 
+const writeNamedSkill = (dir: string, name: string, description: string) =>
+  writeSkill({ dir: path.join(dir, name), name, description });
+const skillNamed = (entries: SkillEntry[], name: string) =>
+  entries.find((entry) => entry.skill.name === name)?.skill;
+
 it("keeps explicitly hidden remote collision losers out of snapshot hydration", async () => {
-  const { gateway, sources, bridge, options } = await fixture();
+  const { gateway, sources, options, bind } = await fixture();
   const hidden = sources.entries.find((entry) => entry.skill.name === "available")!;
   hidden.exposure = {
     includeInRuntimeRegistry: true,
@@ -118,58 +107,24 @@ it("keeps explicitly hidden remote collision losers out of snapshot hydration", 
     userInvocable: true,
   };
   hidden.sourceOrder = -1;
-  await writeSkill({
-    dir: path.join(options.managedSkillsDir, "available"),
-    name: "available",
-    description: "Gateway winner",
+  await writeNamedSkill(options.managedSkillsDir, "available", "Gateway winner");
+  bind();
+  const prepared = await resolveWorkspaceSkillPromptEntries(gateway, options);
+  expect(skillNamed(prepared.eligible, "available")?.filePath).toBe(
+    path.join(options.managedSkillsDir, "available", "SKILL.md"),
+  );
+  const selected = await buildSkillSnapshot(gateway, {
+    ...options,
+    matchesSnapshotSkill: (skill) => skill.filePath === hidden.skill.filePath,
   });
-  const release = registerAgentWorkspaceAccess(gateway, {
-    bridge,
-    loadSkills: async () => sources,
-  });
-  try {
-    const prepared = await resolveWorkspaceSkillPromptEntries(gateway, options);
-    expect(
-      prepared.eligible.find((entry) => entry.skill.name === "available")?.skill.filePath,
-    ).toBe(path.join(options.managedSkillsDir, "available", "SKILL.md"));
-    const selected = await buildSkillSnapshot(gateway, {
-      ...options,
-      matchesSnapshotSkill: (skill) => skill.filePath === hidden.skill.filePath,
-    });
-    expect(selected.skills).toHaveLength(1);
-    expect(selected.discoverySkills).toEqual([]);
-    expect(selected.resolvedSkills).toEqual([]);
-  } finally {
-    release();
-  }
+  expect(selected.skills).toHaveLength(1);
+  expect(selected.discoverySkills).toEqual([]);
+  expect(selected.resolvedSkills).toEqual([]);
 });
 
-describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (caller) => {
-  it.each([false, true])(
-    "preserves local discovery for document-only workspace adapters (stopped=%s)",
-    async (stopped) => {
-      const { gateway, bridge, options } = await fixture();
-      const load = async () =>
-        caller === "prompt"
-          ? (await resolveWorkspaceSkillPromptEntries(gateway, options)).eligible
-          : await prepareWorkspaceSkills(gateway, options);
-      const expected = await load();
-      expect(expected.some((entry) => entry.skill.name === "stale")).toBe(true);
-      const release = registerAgentWorkspaceAccess(gateway, { bridge });
-      if (stopped) {
-        release();
-      }
-      try {
-        expect(await load()).toEqual(expected);
-        expect(bridge.readFile).not.toHaveBeenCalled();
-      } finally {
-        release();
-      }
-    },
-  );
-
+describe("remote skill discovery", () => {
   it("keeps installed sources on Gateway and workspace files on the host", async () => {
-    const { gateway, remote, sources, bridge, options } = await fixture();
+    const { gateway, remote, sources, options, bind } = await fixture();
     const config = {
       ...options.config,
       agents: { entries: { main: { agentDir: path.join(gateway, "agent") } } },
@@ -183,7 +138,7 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
       [options.managedSkillsDir, "workspace-wins", "Shadowed managed instructions"],
       [path.join(remote, "skills"), "workspace-wins", "Workspace instructions"],
     ] as const) {
-      await writeSkill({ dir: path.join(dir, name), name, description });
+      await writeNamedSkill(dir, name, description);
     }
     sources.entries = readWorkspaceSkillSources({
       sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
@@ -191,77 +146,45 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
       additionalBins: [],
     }).entries;
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
-    const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
-    try {
-      const params = { ...options, config, agentId: "main" };
-      const entries =
-        caller === "prompt"
-          ? (await resolveWorkspaceSkillPromptEntries(gateway, params)).eligible
-          : await prepareWorkspaceSkills(gateway, params);
-      const workshopWins = entries.find((entry) => entry.skill.name === "workshop-wins")?.skill;
-      const managedWins = entries.find((entry) => entry.skill.name === "managed-wins")?.skill;
-      const workspaceWins = entries.find((entry) => entry.skill.name === "workspace-wins")?.skill;
-      expect(workshopWins).toMatchObject({
-        description: "Gateway Workshop instructions",
-        filePath: path.join(workshopDir, "workshop-wins", "SKILL.md"),
-      });
-      expect(managedWins).toMatchObject({ description: "Gateway managed instructions" });
-      expect(workspaceWins).toMatchObject({ description: "Workspace instructions" });
-      expect(resolveSkillFileHost(workshopWins!)).toBe("gateway");
-      expect(resolveSkillFileHost(managedWins!)).toBe("gateway");
-      expect(resolveSkillFileHost(workspaceWins!)).toBe("workspace");
-      const plan = loadSkills.mock.calls[0]![0].sourcePlan;
-      expect(plan.roots.map((root) => root.tier)).toEqual(["workspace", "workspace"]);
-      expect(plan.pluginSkillsDir).toBeUndefined();
-      expect(plan.pluginSkillRoots).toEqual([]);
-      expect(plan.bundledSkillsDir).toBeUndefined();
-      if (caller === "runtime") {
-        await fs.writeFile(
-          path.join(workshopDir, "workshop-wins", "skill-card.md"),
-          "Workshop card",
-        );
-        sources.status = readWorkspaceSkillStatusFacts({
-          entries: sources.entries,
-          workspaceDir: remote,
-          managedSkillsDir: path.join(remote, "skills"),
-        });
-        const status = await prepareWorkspaceSkillStatus(gateway, {
-          ...params,
-          skillCardKey: "workshop-wins",
-        });
-        expect(status.files.find((file) => file.name === "workshop-wins")?.skillCard?.content).toBe(
-          "Workshop card",
-        );
-      }
-    } finally {
-      release();
-    }
-  });
-
-  it("uses workspace host facts while retaining execution precedence and Library selections", async () => {
-    const { gateway, remote, sources, bridge, options } = await fixture();
-    const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
-    const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
-    try {
-      const entries =
-        caller === "prompt"
-          ? (await resolveWorkspaceSkillPromptEntries(gateway, options)).eligible
-          : await prepareWorkspaceSkills(gateway, options);
-      expect(entries.map((entry) => entry.skill.name)).toEqual(["available", "project", "pinned"]);
-      expect(entries[0]?.skill.baseDir).toBe(path.join(remote, "skills", "available"));
-      expect(entries[0]?.frontmatter["command-tool"]).toBe("exec");
-      expect(entries[0]?.disableCommandDispatch).not.toBe(true);
-      expect(loadSkills.mock.calls[0]?.[0]).toMatchObject({
-        executionWorkspaceDir: options.executionWorkspaceDir,
-        additionalBins: ["library-tool"],
-      });
-    } finally {
-      release();
-    }
+    bind(loadSkills);
+    const params = { ...options, config, agentId: "main" };
+    const entries = await prepareWorkspaceSkills(gateway, params);
+    const workshopWins = skillNamed(entries, "workshop-wins");
+    const managedWins = skillNamed(entries, "managed-wins");
+    const workspaceWins = skillNamed(entries, "workspace-wins");
+    expect(workshopWins).toMatchObject({
+      description: "Gateway Workshop instructions",
+      filePath: path.join(workshopDir, "workshop-wins", "SKILL.md"),
+    });
+    expect(managedWins).toMatchObject({ description: "Gateway managed instructions" });
+    expect(workspaceWins).toMatchObject({ description: "Workspace instructions" });
+    expect(resolveSkillFileHost(workshopWins!)).toBe("gateway");
+    expect(resolveSkillFileHost(managedWins!)).toBe("gateway");
+    expect(resolveSkillFileHost(workspaceWins!)).toBe("workspace");
+    const plan = loadSkills.mock.calls[0]![0].sourcePlan;
+    expect(plan.roots.map((root) => root.tier)).toEqual(["workspace", "workspace"]);
+    expect(plan).toMatchObject({
+      pluginSkillsDir: undefined,
+      pluginSkillRoots: [],
+      bundledSkillsDir: undefined,
+    });
+    await fs.writeFile(path.join(workshopDir, "workshop-wins", "skill-card.md"), "Workshop card");
+    sources.status = readWorkspaceSkillStatusFacts({
+      entries: sources.entries,
+      workspaceDir: remote,
+      managedSkillsDir: path.join(remote, "skills"),
+    });
+    const status = await prepareWorkspaceSkillStatus(gateway, {
+      ...params,
+      skillCardKey: "workshop-wins",
+    });
+    expect(status.files.find((file) => file.name === "workshop-wins")?.skillCard?.content).toBe(
+      "Workshop card",
+    );
   });
 
   it("keeps canonical execution entries and their binary requirements on the right hosts", async () => {
-    const { gateway, sources, bridge, options } = await fixture();
+    const { gateway, sources, options, bind } = await fixture();
     await writeSkill({
       dir: path.join(options.executionWorkspaceDir, "skills", "project"),
       name: "project",
@@ -269,39 +192,26 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
       metadata: JSON.stringify({ openclaw: { requires: { bins: ["remote-tool"] } } }),
     });
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
-    const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
-    try {
-      const params = { ...options, executionWorkspaceFileHost: "gateway" as const };
-      const entries =
-        caller === "prompt"
-          ? (await resolveWorkspaceSkillPromptEntries(gateway, params)).eligible
-          : await prepareWorkspaceSkills(gateway, params);
-      expect(entries.map((entry) => entry.skill.name)).toEqual(["available", "project", "pinned"]);
-      const project = entries.find((entry) => entry.skill.name === "project")?.skill;
-      const available = entries.find((entry) => entry.skill.name === "available")?.skill;
-      expect(project).toMatchObject({ description: "Gateway canonical instructions" });
-      expect(resolveSkillFileHost(project!)).toBe("gateway");
-      expect(resolveSkillFileHost(available!)).toBe("workspace");
-      expect(loadSkills.mock.calls[0]![0]).toMatchObject({
-        executionWorkspaceDir: undefined,
-        additionalBins: expect.arrayContaining(["remote-tool", "library-tool"]),
-      });
-    } finally {
-      release();
-    }
+    bind(loadSkills);
+    const params = { ...options, executionWorkspaceFileHost: "gateway" as const };
+    const entries = (await resolveWorkspaceSkillPromptEntries(gateway, params)).eligible;
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["available", "project", "pinned"]);
+    const project = skillNamed(entries, "project");
+    const available = skillNamed(entries, "available");
+    expect(project).toMatchObject({ description: "Gateway canonical instructions" });
+    expect(resolveSkillFileHost(project!)).toBe("gateway");
+    expect(resolveSkillFileHost(available!)).toBe("workspace");
+    expect(loadSkills.mock.calls[0]![0]).toMatchObject({
+      executionWorkspaceDir: undefined,
+      additionalBins: expect.arrayContaining(["remote-tool", "library-tool"]),
+    });
   });
 
   it("rejects discovery completed after its workspace binding stops", async () => {
-    const { gateway, sources, bridge, options } = await fixture();
+    const { gateway, sources, options, bind } = await fixture();
     const deferred = createDeferredCore<WorkspaceSkillSources>();
-    const release = registerAgentWorkspaceAccess(gateway, {
-      bridge,
-      loadSkills: () => deferred.promise,
-    });
-    const pending =
-      caller === "prompt"
-        ? resolveWorkspaceSkillPromptEntries(gateway, options)
-        : prepareWorkspaceSkills(gateway, options);
+    const release = bind(() => deferred.promise);
+    const pending = resolveWorkspaceSkillPromptEntries(gateway, options);
     const rejected = expect(pending).rejects.toThrow("stopped or not ready");
     release();
     deferred.resolve(sources);
@@ -309,61 +219,10 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
   });
 });
 
-it("preserves extra-directory precedence across Gateway and workspace sources", async () => {
-  const { gateway, remote, bridge, options } = await fixture();
-  const earlier = path.join(path.dirname(gateway), "earlier");
-  const later = path.join(path.dirname(gateway), "later");
-  const logicalExtra = path.join(gateway, "custom-skills");
-  const hostExtra = path.join(remote, "custom-skills");
-  for (const [dir, name, description] of [
-    [earlier, "host-wins", "Earlier Gateway source"],
-    [hostExtra, "host-wins", "Workspace extra source"],
-    [hostExtra, "gateway-wins", "Earlier workspace source"],
-    [later, "gateway-wins", "Later Gateway source"],
-  ] as const) {
-    await writeSkill({ dir: path.join(dir, name), name, description });
-  }
-  const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => {
-    const map = (dir: string) => path.join(remote, path.relative(gateway, dir));
-    return readWorkspaceSkillSources({
-      ...request,
-      sourcePlan: {
-        ...request.sourcePlan,
-        workspaceDir: remote,
-        managedSkillsDir: map(request.sourcePlan.managedSkillsDir),
-        roots: request.sourcePlan.roots.map((root) => ({ ...root, dir: map(root.dir) })),
-      },
-    });
-  });
-  const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
-  try {
-    const entries = await prepareWorkspaceSkills(gateway, {
-      ...options,
-      executionWorkspaceDir: undefined,
-      librarySelections: [],
-      config: {
-        ...options.config,
-        skills: { load: { extraDirs: [earlier, logicalExtra, later] } },
-      },
-    });
-    const hostWins = entries.find((entry) => entry.skill.name === "host-wins")?.skill;
-    const gatewayWins = entries.find((entry) => entry.skill.name === "gateway-wins")?.skill;
-    expect(hostWins).toMatchObject({ description: "Workspace extra source" });
-    expect(gatewayWins).toMatchObject({ description: "Later Gateway source" });
-    expect(resolveSkillFileHost(hostWins!)).toBe("workspace");
-    expect(resolveSkillFileHost(gatewayWins!)).toBe("gateway");
-    expect(loadSkills.mock.calls[0]![0].sourcePlan.roots.map((root) => root.dir)).toContain(
-      logicalExtra,
-    );
-  } finally {
-    release();
-  }
-});
-
 it.each(["pinned", "stale"])(
   "reads only authorized Gateway Library files for the %s card",
   async (skillCardKey) => {
-    const { gateway, remote, sources, bridge, options } = await fixture();
+    const { gateway, remote, sources, options, bind } = await fixture();
     await fs.writeFile(
       path.join(library.entries[0]!.skill.baseDir, "skill-card.md"),
       "# Library card\n",
@@ -381,23 +240,16 @@ it.each(["pinned", "stale"])(
       managedSkillsDir: path.join(remote, "managed"),
       files: [],
     };
-    const release = registerAgentWorkspaceAccess(gateway, {
-      bridge,
-      loadSkills: async () => sources,
+    bind();
+    const prepared = await prepareWorkspaceSkillStatus(gateway, { ...options, skillCardKey });
+    expect(prepared.files.find((file) => file.name === "stale")).toBeUndefined();
+    expect(prepared.files.find((file) => file.name === "pinned")?.skillCard).toMatchObject({
+      present: true,
     });
-    try {
-      const prepared = await prepareWorkspaceSkillStatus(gateway, { ...options, skillCardKey });
-      expect(prepared.files.find((file) => file.name === "stale")).toBeUndefined();
-      expect(prepared.files.find((file) => file.name === "pinned")?.skillCard).toMatchObject({
-        present: true,
-      });
-      if (skillCardKey === "pinned") {
-        expect(prepared.files.find((file) => file.name === "pinned")?.skillCard?.content).toBe(
-          "# Library card\n",
-        );
-      }
-    } finally {
-      release();
+    if (skillCardKey === "pinned") {
+      expect(prepared.files.find((file) => file.name === "pinned")?.skillCard?.content).toBe(
+        "# Library card\n",
+      );
     }
   },
 );

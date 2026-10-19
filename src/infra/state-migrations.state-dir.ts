@@ -6,28 +6,17 @@ import {
   resolvePathPrefixSync,
   retainEntryForPublication,
 } from "@openclaw/fs-safe/advanced";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
-import {
-  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
-  listReferencedLegacyOAuthSidecarPaths,
-} from "../commands/doctor-auth-legacy-paths.js";
-import { readCurrentConfigForResolution } from "../config/io.runtime.js";
+import { inspectLegacyOAuthSidecarsBeforeConfigRecovery } from "../commands/doctor-auth-legacy-paths.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
-import {
-  legacyInstalledPluginIndexUnsupportedMessage,
-  resolveLegacyInstalledPluginIndexStorePath,
-} from "../plugins/installed-plugin-index-store-path.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveUserPath } from "./home-dir.js";
-import { migrationFileExists } from "./state-migrations.fs.js";
-import { listRetiredDeliveryQueueFiles } from "./state-migrations.retired-delivery-files.js";
-import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
-import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
+import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 
 let autoMigrateStateDirChecked = false;
 
@@ -108,13 +97,16 @@ export function resolveLegacyProfileWorkspaceMigrationPaths(params: {
 }): { source: string; target: string } | undefined {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+  const { profileWorkspace: source } = resolveLegacyProfileMigrationExceptions({ env, homedir });
+  if (!source) {
     return undefined;
   }
   const paths = {
-    source: path.join(resolveProfileStateDir("default", env, homedir), `workspace-${profile}`),
-    target: path.join(resolveProfileStateDir(profile, env, homedir), "workspace"),
+    source,
+    target: path.join(
+      resolveProfileStateDir(env.OPENCLAW_PROFILE ?? "default", env, homedir),
+      "workspace",
+    ),
   };
   return resolveConfiguredProfileWorkspace({ ...params, ...paths }) ? undefined : paths;
 }
@@ -306,27 +298,18 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
     );
     return result();
   }
-  assertNoRetiredRuntimeStateFiles(source, env, params.homedir);
   const configPath = resolveLegacyStateConfigPath(source);
-  assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(source));
-  assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env, configPath, stateDir: source });
-  const { config: inspectionConfig, env: inspectionEnv } = readCurrentConfigForResolution({
+  const sidecarPaths = inspectLegacyOAuthSidecarsBeforeConfigRecovery({
     env,
     configPath,
+    stateDir: source,
   });
-  assertNoRetiredStateFiles(
-    "OAuth credential sidecars",
-    listReferencedLegacyOAuthSidecarPaths(inspectionEnv, inspectionConfig, source),
+  const pluginInstallWarning = withArtifactPreservingStateReads(() =>
+    inspectPersistedInstalledPluginIndexInstallRecordsSync({ stateDir: source }).status ===
+    "invalid"
+      ? `State dir migration skipped because persisted plugin install records in ${source} are invalid`
+      : null,
   );
-  const legacyIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: source });
-  const pluginInstallWarning = migrationFileExists(legacyIndexPath)
-    ? legacyInstalledPluginIndexUnsupportedMessage(legacyIndexPath)
-    : withArtifactPreservingStateReads(() =>
-        inspectPersistedInstalledPluginIndexInstallRecordsSync({ stateDir: source }).status ===
-        "invalid"
-          ? `State dir migration skipped because persisted plugin install records in ${source} are invalid`
-          : null,
-      );
   if (pluginInstallWarning) {
     warnings.push(pluginInstallWarning);
     return result();
@@ -334,6 +317,20 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
   renameLegacyPath(source, target, "directory");
   clearPluginMetadataLifecycleCaches();
   changes.push(`State dir: ${source} → ${target}`);
+  // Configured absolute/tilde locators are not rewritten by the directory owner.
+  // Keep their preserved credential bytes recoverable without restoring a legacy alias.
+  const movedOAuthDirs = new Set(
+    sidecarPaths
+      .filter((file) => isPathInside(source, file))
+      .map((file) => path.dirname(path.dirname(file))),
+  );
+  for (const oauthDir of movedOAuthDirs) {
+    const movedOAuthDir = path.join(target, path.relative(source, oauthDir));
+    const quotedOAuthDir = `'${movedOAuthDir.replaceAll("'", "'\\''")}'`;
+    warnings.push(
+      `OAuth sidecars were preserved at ${movedOAuthDir} (previously ${oauthDir}). If an OAuth directory still points at the old location, update the configured OPENCLAW_OAUTH_DIR and run OPENCLAW_OAUTH_DIR=${quotedOAuthDir} openclaw doctor --fix to recover those credentials.`,
+    );
+  }
   return result();
 }
 

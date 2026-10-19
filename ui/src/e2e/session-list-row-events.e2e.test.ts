@@ -5,6 +5,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session list row events" });
@@ -111,13 +112,13 @@ suite.define(() => {
             snapshotAt: now,
           },
         });
+        await page.clock.runFor(500);
         await expect.poll(() => sidebarRow.textContent()).toContain("Updated by certified event");
         if (route !== "chat") {
           await expect
             .poll(() => foreground.first().textContent())
             .toContain(route === "agents" ? "Main roster preview" : "Updated by certified event");
         }
-        await page.clock.runFor(500);
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           sessionKey: key,
@@ -139,11 +140,21 @@ suite.define(() => {
             snapshotAt: now + 500,
           },
         });
-        await expect.poll(() => sidebarRow.textContent()).toContain("Updated with held ancestor");
         await page.clock.runFor(59_499);
+        await expect.poll(() => sidebarRow.textContent()).toContain("Updated with held ancestor");
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
         for (const request of before) {
-          expect(request.params).toMatchObject({ rowMode: "compact", source: expect.any(String) });
+          const params = requireRecord(request.params);
+          expect(params).toMatchObject({
+            rowMode:
+              (params.source === "sidebar" || params.source === "agent-roster") &&
+              params.includeLastMessage === true
+                ? "sidebar"
+                : params.hasBoard === true
+                  ? "dashboard"
+                  : "compact",
+            source: expect.any(String),
+          });
         }
       });
     },

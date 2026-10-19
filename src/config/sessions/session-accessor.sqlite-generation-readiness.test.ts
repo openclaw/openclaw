@@ -17,10 +17,165 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+it.for(["assignment", "metadata"] as const)(
+  "checks absent ID selection during held $0 publication",
+  async (change, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:id-publication-sibling",
+      };
+      const original = {
+        sessionId: "id-publication-sibling",
+        lifecycleRevision: "original-lifecycle",
+        updatedAt: 1,
+      };
+      replaceSessionEntrySync(scope, original);
+      const sessionId = "id-publication-target";
+      const selected = await captureSessionEntryCurrentCheckAsyncInternal({
+        agentId: scope.agentId,
+        storePath: scope.storePath,
+        sessionId,
+        fields: ["inheritedToolDeny"],
+        errorMessage: "ID selection changed",
+      });
+      expect(selected.entry).toBeUndefined();
+      selected.source();
+      const committed = createDeferred();
+      const release = createDeferred();
+      const onAbort = () => release.resolve();
+      signal.addEventListener("abort", onAbort, { once: true });
+      delivery.afterResult = async () => {
+        committed.resolve();
+        await release.promise;
+      };
+      const pending = applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        requireWriteSuccess: true,
+        update: () => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry:
+                change === "assignment"
+                  ? { sessionId, lifecycleRevision: "created-lifecycle", updatedAt: 2 }
+                  : { ...original, label: "Harmless metadata", updatedAt: 2 },
+            },
+          ],
+        }),
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(committed.promise, pending, "ID write did not commit"),
+          signal,
+        );
+        if (change === "assignment") {
+          expect(selected.source).toThrow("ID selection changed");
+        } else {
+          selected.source();
+        }
+        release.resolve();
+        await withinTest(pending, signal);
+        if (change === "assignment") {
+          expect(selected.source).toThrow("ID selection changed");
+        } else {
+          selected.source();
+        }
+      } finally {
+        release.resolve();
+        delivery.afterResult = undefined;
+        await Promise.allSettled([pending]);
+        signal.removeEventListener("abort", onAbort);
+        selected.release();
+      }
+    });
+  },
+);
+
+it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
+  "keeps exec-wake settings available only when pending %s publication preserves policy",
+  async (setting, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:permission-readiness",
+      };
+      const original = {
+        sessionId: "e1234567-1234-1234-1234-123456789abc",
+        lifecycleRevision: "original-lifecycle",
+        permissionMode: "full" as const,
+        toolOverrides: { webSearch: true },
+        updatedAt: 1,
+      };
+      replaceSessionEntrySync(scope, original);
+      const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
+      const settings = {
+        permissionMode:
+          setting === "permissionMode" ? ("read-only" as const) : original.permissionMode,
+        toolOverrides: setting === "toolOverrides" ? { webSearch: false } : original.toolOverrides,
+      };
+      const committed = createDeferred();
+      const release = createDeferred();
+      const onAbort = () => release.resolve();
+      signal.addEventListener("abort", onAbort, { once: true });
+      delivery.afterResult = async () => {
+        committed.resolve();
+        await release.promise;
+      };
+      const write = applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        requireWriteSuccess: true,
+        update: () => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: { ...original, ...settings, lifecycleRunId: "completion-wake" },
+            },
+          ],
+        }),
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(committed.promise, write, "policy write did not commit"),
+          signal,
+        );
+        // Exec wakes check identity and settings synchronously after tool-preparation awaits.
+        generation.assertCurrent();
+        if (setting === "lifecycleRunId") {
+          expect(generation.readSessionSettings()).toEqual(settings);
+        } else {
+          expect(generation.readSessionSettings).toThrow(
+            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+          );
+        }
+        release.resolve();
+        await withinTest(write, signal);
+        generation.assertCurrent();
+        expect(generation.readSessionSettings()).toEqual(settings);
+      } finally {
+        release.resolve();
+        delivery.afterResult = undefined;
+        await Promise.allSettled([write]);
+        signal.removeEventListener("abort", onAbort);
+        generation.release();
+      }
+    });
+  },
+);
 
 it.for(["metadata", "replacement"] as const)(
   "joins admitted %s publication before checking the retained session generation",

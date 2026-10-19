@@ -1,110 +1,107 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
+import { describe, expect, it, vi } from "vitest";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureEnv } from "../../test-utils/env.js";
-import "./oauth-external-auth-passthrough.test-support.js";
-import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import {
+  candidate,
+  expired,
+  expectTerminal,
+  oauth,
+  profileId,
+  provider,
+  read,
+  useOAuthCoordinationFixture,
+} from "./oauth-coordination.test-support.js";
 import {
   createFailedOAuthRefreshFence,
   createOAuthRefreshFence,
-  isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
 import {
+  OAuthRefreshPeerFenceError,
   fenceOAuthRefreshPeers,
   rollbackOAuthRefreshPeerClaims,
   settleOAuthRefreshPeerClaims,
 } from "./oauth-refresh-peers.js";
-import {
-  OAUTH_AGENT_ENV_KEYS,
-  createOAuthMainAgentDir,
-  createOAuthTestTempRoot,
-  createExpiredOauthStore,
-  removeOAuthTestTempRoot,
-  resolveApiKeyForProfileInTest,
-  resetOAuthProviderRuntimeMocks,
-} from "./oauth-test-utils.js";
+import { storeWith } from "./oauth-test-utils.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
+import { closeAuthProfileReadPool, resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { saveAuthProfileStore } from "./store-runtime.js";
+import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
-
-const {
-  refreshProviderOAuthCredentialWithPluginMock,
-  formatProviderAuthProfileApiKeyWithPluginMock,
-} = getOAuthProviderRuntimeMocks();
-
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-  const { resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js");
-  resetOAuthRefreshQueuesForTest();
-}
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai" }],
 }));
-
-function resetOAuthTestState(): void {
-  resetFileLockStateForTest();
-  resetOAuthProviderRuntimeMocks({
-    refreshProviderOAuthCredentialWithPluginMock,
-    formatProviderAuthProfileApiKeyWithPluginMock,
-  });
-  clearRuntimeAuthProfileStoreSnapshots();
+const fx = useOAuthCoordinationFixture();
+async function seedAccountConflict(identifiedPeer = false) {
+  const [ownerAgentDir, peerAgentDir] = await Promise.all([
+    fx.agentDirectory("owner-a"),
+    fx.agentDirectory("peer-a"),
+  ]);
+  const accountA = expired({ accountId: "acct-a" });
+  saveAuthProfileStore(accountA, ownerAgentDir);
+  saveAuthProfileStore(identifiedPeer ? accountA : expired(), peerAgentDir);
+  saveAuthProfileStore(
+    storeWith(profileId, oauth("shared-b", { accountId: "acct-b" })),
+    fx.mainDir,
+  );
+  return { ownerAgentDir, peerAgentDir };
 }
-
-const profileId = "openai:default";
-const provider = "openai";
-function candidate(agentId: string, agentDir: string) {
-  return {
-    configured: true,
-    agentId,
-    agentDir,
-    databasePath: resolveAuthProfileDatabasePath(agentDir),
-    env: process.env,
-  };
+function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
+  const shared = openOpenClawStateDatabase();
+  const { databasePath } = captureAuthProfileStorePersistenceSnapshot(agentDir).owner;
+  const source = readDatabasePathIdentitySync(databasePath);
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ path: shared.path }),
+    { databasePath, identity: `${source.key}:${source.birthtime ?? ""}` },
+    selectedProfileId,
+  );
+  authority.observe(loadPersistedAuthProfileStore(agentDir)?.profiles[selectedProfileId]);
+  return authority;
 }
-
-function read(agentDir: string, id = profileId) {
-  return loadPersistedAuthProfileStore(agentDir)?.profiles[id];
-}
-function resolveFrom(agentDir: string) {
-  return resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-    store: ensureAuthProfileStore(agentDir),
-    profileId,
-    agentDir,
-  });
-}
-
-let tempRoot: string;
-let mainAgentDir: string;
-let envSnapshot: ReturnType<typeof captureEnv>;
-beforeEach(async () => {
-  envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-  resetOAuthTestState();
-  tempRoot = await createOAuthTestTempRoot("openclaw-oauth-shard-");
-  mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-  await loadOAuthModuleForTest();
-});
-afterEach(async () => {
-  envSnapshot.restore();
-  resetOAuthTestState();
-  await removeOAuthTestTempRoot(tempRoot);
-});
 
 describe("OAuth refresh peer settlement", () => {
+  it("settles a replaced peer database discovered after provider refresh", async () => {
+    const peerAgentDir = await fx.agentDirectory("peer-a");
+    const original = expired({ accountId: "acct-a" });
+    saveAuthProfileStore(original, peerAgentDir);
+    const peerPath = resolveAuthProfileDatabasePath(peerAgentDir);
+    const backupPath = path.join(fx.root, "peer-before-refresh.sqlite");
+    closeAuthProfileReadPool({ kind: "database", databasePath: peerPath });
+    await closeOpenClawAgentDatabaseByPathAsync(peerPath);
+    await fs.copyFile(peerPath, backupPath);
+    const originalIdentity = readDatabasePathIdentitySync(peerPath);
+    saveAuthProfileStore(original, fx.mainDir);
+    const replacement = oauth("rotated", { accountId: "acct-a" });
+    fx.refresh.mockImplementation(async () => {
+      const fenced = read(peerAgentDir);
+      expect(fenced?.type === "oauth" && isPendingOAuthRefreshFence(fenced)).toBe(true);
+      closeAuthProfileReadPool({ kind: "database", databasePath: peerPath });
+      await closeOpenClawAgentDatabaseByPathAsync(peerPath);
+      await fs.rename(backupPath, peerPath);
+      expect(readDatabasePathIdentitySync(peerPath).key).not.toBe(originalIdentity.key);
+      return replacement;
+    });
+
+    await expect(fx.resolve(fx.mainDir)).resolves.toMatchObject({ apiKey: replacement.access });
+    expect(read(fx.mainDir)).toMatchObject(replacement);
+    expect(read(peerAgentDir)).toBeUndefined();
+    await expect(fx.resolve(peerAgentDir)).resolves.toMatchObject({ apiKey: replacement.access });
+    expect(fx.refresh).toHaveBeenCalledOnce();
+  });
+
   it.each([["failed", createFailedOAuthRefreshFence]])(
     "does not replace a different %s fence for the same refresh generation",
     async (_, build) => {
-      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-      await fs.mkdir(peerAgentDir, { recursive: true });
+      const peerAgentDir = await fx.agentDirectory("peer-a");
       const original = {
         type: "oauth" as const,
         provider,
@@ -119,7 +116,7 @@ describe("OAuth refresh peer settlement", () => {
       await expect(
         fenceOAuthRefreshPeers({
           cfg: {},
-          ownerDatabasePath: resolveAuthProfileDatabasePath(mainAgentDir),
+          ownerDatabasePath: resolveAuthProfileDatabasePath(fx.mainDir),
           profileId,
           generation: original,
           fence: ownerFence,
@@ -129,48 +126,58 @@ describe("OAuth refresh peer settlement", () => {
     },
   );
 
-  it("terminally fences peers instead of exposing a different shared account", async () => {
-    const ownerAgentDir = path.join(tempRoot, "agents", "owner-a", "agent");
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await Promise.all([
-      fs.mkdir(ownerAgentDir, { recursive: true }),
-      fs.mkdir(peerAgentDir, { recursive: true }),
+  it("retains a peer claim when its committed fence reply is lost", async () => {
+    // OAuth fixtures reset the module registry before loading the auth runtime.
+    const [workerPublications, { SqliteWorkerError }] = await Promise.all([
+      import("../../state/openclaw-agent-worker-store.js"),
+      import("../../infra/sqlite-worker-contract.js"),
     ]);
-
-    const accountA = createExpiredOauthStore({
-      profileId,
-      provider,
-      accountId: "acct-a",
-    });
-    const accountB = createExpiredOauthStore({
-      profileId,
-      provider,
-      access: "shared-b-access",
-      refresh: "shared-b-refresh",
-      accountId: "acct-b",
-    });
-    const sharedB = accountB.profiles[profileId];
-    if (sharedB?.type !== "oauth") {
-      throw new Error("expected shared OAuth credential");
+    const peerAgentDir = await fx.agentDirectory("peer-lost-reply");
+    const store = expired();
+    saveAuthProfileStore(store, peerAgentDir);
+    const original = read(peerAgentDir);
+    if (original?.type !== "oauth") {
+      throw new Error("expected OAuth fixture");
     }
-    sharedB.expires = Date.now() + 60 * 60 * 1000;
-    saveAuthProfileStore(accountA, ownerAgentDir);
-    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), peerAgentDir);
-    saveAuthProfileStore(accountB, mainAgentDir);
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue({
-      type: "oauth",
-      provider,
-      access: "rotated-a-access",
-      refresh: "rotated-a-refresh",
-      expires: Date.now() + 60 * 60 * 1000,
-      accountId: "acct-a",
-    });
+    const fence = createOAuthRefreshFence({ profileId, credential: original });
+    const publish = workerPublications.executeOpenClawAgentWorkerPublication;
+    const lostReply = vi
+      .spyOn(workerPublications, "executeOpenClawAgentWorkerPublication")
+      .mockImplementationOnce(async (...args) => {
+        await publish(...args);
+        throw new SqliteWorkerError("Synthetic lost peer acknowledgment", "outcome-unknown");
+      });
+    try {
+      const failure = await fenceOAuthRefreshPeers({
+        cfg: {},
+        ownerDatabasePath: resolveAuthProfileDatabasePath(fx.mainDir),
+        profileId,
+        generation: original,
+        fence,
+        rollbackOnFailure: false,
+      }).catch((error: unknown) => error);
+      expect(lostReply).toHaveBeenCalledTimes(1);
+      expect(failure).toBeInstanceOf(OAuthRefreshPeerFenceError);
+      if (!(failure instanceof OAuthRefreshPeerFenceError)) {
+        throw new Error("expected lost peer claim");
+      }
+      expect(failure.claims).toHaveLength(1);
+      expect(read(peerAgentDir)).toStrictEqual(fence);
+      await rollbackOAuthRefreshPeerClaims({ profileId, fence, claims: failure.claims });
+      expect(read(peerAgentDir)).toStrictEqual(original);
+      expect(lostReply).toHaveBeenCalledTimes(2);
+    } finally {
+      lostReply.mockRestore();
+    }
+  });
 
-    await expect(resolveFrom(ownerAgentDir)).resolves.toEqual(
-      expect.objectContaining({ apiKey: "rotated-a-access" }),
-    );
+  it("terminally fences peers instead of exposing a different shared account", async () => {
+    const { ownerAgentDir, peerAgentDir } = await seedAccountConflict();
+    fx.refresh.mockResolvedValue(oauth("rotated-a", { accountId: "acct-a" }));
 
-    expect(read(mainAgentDir)).toMatchObject({
+    await expect(fx.resolve(ownerAgentDir)).resolves.toMatchObject({ apiKey: "rotated-a-access" });
+
+    expect(read(fx.mainDir)).toMatchObject({
       access: "shared-b-access",
       accountId: "acct-b",
     });
@@ -179,9 +186,8 @@ describe("OAuth refresh peer settlement", () => {
       accountId: "acct-a",
     });
     const terminalPeer = read(peerAgentDir);
-    expect(terminalPeer?.type === "oauth" && isOAuthRefreshFence(terminalPeer)).toBe(true);
-    expect(terminalPeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalPeer)).toBe(false);
-    await expect(resolveFrom(peerAgentDir)).resolves.toBeNull();
+    expectTerminal(terminalPeer);
+    await expect(fx.resolve(peerAgentDir)).resolves.toBeNull();
   });
 
   it.each([
@@ -200,8 +206,7 @@ describe("OAuth refresh peer settlement", () => {
   ])(
     "terminally fences an exact replacement for $name",
     async ({ provider: peerProvider, ownerIdentity, peerIdentity }) => {
-      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-      await fs.mkdir(peerAgentDir, { recursive: true });
+      const peerAgentDir = await fx.agentDirectory("peer-a");
       const peerProfileId = `${peerProvider}:default`;
       const ownerOriginal = {
         type: "oauth" as const,
@@ -226,7 +231,7 @@ describe("OAuth refresh peer settlement", () => {
       if (persistedFence?.type !== "oauth") {
         throw new Error("expected persisted OAuth fence");
       }
-      settleOAuthRefreshPeerClaims({
+      await settleOAuthRefreshPeerClaims({
         profileId: peerProfileId,
         fence: persistedFence,
         claims: [
@@ -239,31 +244,29 @@ describe("OAuth refresh peer settlement", () => {
         replacement,
       });
       const settled = read(peerAgentDir, peerProfileId);
-      expect(settled?.type === "oauth" && isOAuthRefreshFence(settled)).toBe(true);
-      expect(settled?.type === "oauth" && isPendingOAuthRefreshFence(settled)).toBe(false);
+      expectTerminal(settled);
     },
   );
 
   it("continues rolling back peers after one candidate cannot be restored or terminalized", async () => {
-    const original = createExpiredOauthStore({ profileId, provider }).profiles[profileId];
+    const original = expired().profiles[profileId];
     if (original?.type !== "oauth") {
       throw new Error("expected original OAuth credential");
     }
     const fence = createOAuthRefreshFence({ profileId, credential: original });
-    const brokenAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    const healthyAgentDir = path.join(tempRoot, "agents", "peer-b", "agent");
-    await Promise.all([
-      fs.mkdir(brokenAgentDir, { recursive: true }),
-      fs.mkdir(healthyAgentDir, { recursive: true }),
+    const [brokenAgentDir, healthyAgentDir] = await Promise.all([
+      fx.agentDirectory("peer-a"),
+      fx.agentDirectory("peer-b"),
     ]);
     await fs.writeFile(resolveAuthProfileDatabasePath(brokenAgentDir), "not a sqlite database");
     saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, healthyAgentDir);
+    const authority = retainPersistedCredential(healthyAgentDir, profileId);
     const persistedFence = read(healthyAgentDir);
     if (persistedFence?.type !== "oauth") {
       throw new Error("expected persisted OAuth fence");
     }
 
-    expect(() =>
+    await expect(
       rollbackOAuthRefreshPeerClaims({
         profileId,
         fence: persistedFence,
@@ -278,7 +281,8 @@ describe("OAuth refresh peer settlement", () => {
           },
         ],
       }),
-    ).toThrow(AggregateError);
+    ).rejects.toThrow(AggregateError);
+    expect(authority.readCurrentCredential()).toEqual(read(healthyAgentDir));
     expect(read(healthyAgentDir)).toMatchObject({
       type: "oauth",
       provider,
@@ -289,98 +293,48 @@ describe("OAuth refresh peer settlement", () => {
   });
 
   it("terminally fences superseded peers when shared inheritance is a different account", async () => {
-    const ownerAgentDir = path.join(tempRoot, "agents", "owner-a", "agent");
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await Promise.all([
-      fs.mkdir(ownerAgentDir, { recursive: true }),
-      fs.mkdir(peerAgentDir, { recursive: true }),
-    ]);
-
-    const accountA = createExpiredOauthStore({
-      profileId,
-      provider,
-      accountId: "acct-a",
-    });
-    const accountB = createExpiredOauthStore({
-      profileId,
-      provider,
-      access: "shared-b-access",
-      refresh: "shared-b-refresh",
-      accountId: "acct-b",
-    });
-    const sharedB = accountB.profiles[profileId];
-    if (sharedB?.type !== "oauth") {
-      throw new Error("expected shared OAuth credential");
-    }
-    sharedB.expires = Date.now() + 60 * 60 * 1000;
-    saveAuthProfileStore(accountA, ownerAgentDir);
-    saveAuthProfileStore(accountA, peerAgentDir);
-    saveAuthProfileStore(accountB, mainAgentDir);
+    const { ownerAgentDir, peerAgentDir } = await seedAccountConflict(true);
 
     const { promise: started, resolve: markStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+    fx.settle(finishRefresh);
+    fx.refresh.mockImplementation(async () => {
       markStarted();
       await finishRefreshGate;
       return undefined;
     });
 
-    const resolving = resolveFrom(ownerAgentDir);
+    const resolving = fx.resolve(ownerAgentDir);
     await started;
-    await persistAuthProfileBatch({
-      agentDir: ownerAgentDir,
-      profiles: [
-        {
-          profileId,
-          credential: {
-            type: "oauth",
-            provider,
-            access: "relogin-a-access",
-            refresh: "relogin-a-refresh",
-            expires: Date.now() + 60 * 60 * 1000,
-            accountId: "acct-a",
-          },
-        },
-      ],
-      resetFailureState: true,
-      allowOAuthGenerationReplacement: true,
-    });
+    await fx.reconnect(ownerAgentDir, oauth("relogin-a", { accountId: "acct-a" }));
     finishRefresh();
 
-    await expect(resolving).resolves.toEqual(
-      expect.objectContaining({ apiKey: "relogin-a-access" }),
-    );
-    expect(read(mainAgentDir)).toMatchObject({
+    await expect(resolving).resolves.toMatchObject({ apiKey: "relogin-a-access" });
+    expect(read(fx.mainDir)).toMatchObject({
       access: "shared-b-access",
       accountId: "acct-b",
     });
     const terminalPeer = read(peerAgentDir);
-    expect(terminalPeer?.type === "oauth" && isOAuthRefreshFence(terminalPeer)).toBe(true);
-    expect(terminalPeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalPeer)).toBe(false);
+    expectTerminal(terminalPeer);
   });
 
   it("reports exact removal owners and preserves a reconnected peer", async () => {
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    const otherAgentDir = path.join(tempRoot, "agents", "other", "agent");
-    await Promise.all(
-      [peerAgentDir, otherAgentDir].map((dir) => fs.mkdir(dir, { recursive: true })),
-    );
-    const original = createExpiredOauthStore({
-      profileId,
-      provider: "openai",
-      accountId: "acct-a",
-    });
-    const replacement = createExpiredOauthStore({
-      profileId,
-      provider: "openai",
+    const [peerAgentDir, otherAgentDir] = await Promise.all([
+      fx.agentDirectory("peer-a"),
+      fx.agentDirectory("other"),
+    ]);
+    const original = expired({ accountId: "acct-a" });
+    const replacement = expired({
       access: "independent-access",
       refresh: "independent-refresh",
       accountId: "acct-b",
     });
     // Create the historical copy first; a save after the shared owner exists is inherited.
     saveAuthProfileStore(original, peerAgentDir);
-    saveAuthProfileStore(original, mainAgentDir);
+    saveAuthProfileStore(original, fx.mainDir);
     saveAuthProfileStore(replacement, otherAgentDir);
+    const ownerAuthority = retainPersistedCredential(fx.mainDir, profileId);
+    const peerAuthority = retainPersistedCredential(peerAgentDir, profileId);
     expect(read(peerAgentDir)).toEqual(original.profiles[profileId]);
     const peerScope = {
       agentDir: peerAgentDir,
@@ -398,7 +352,7 @@ describe("OAuth refresh peer settlement", () => {
 
     await expect(
       removeAuthProfilesAcrossOwnerStores({
-        agentDir: mainAgentDir,
+        agentDir: fx.mainDir,
         profileIds: [profileId],
         beforeRemove,
         onIncomplete,
@@ -410,13 +364,15 @@ describe("OAuth refresh peer settlement", () => {
       [
         {
           agentDir: undefined,
-          databasePath: resolveAuthProfileDatabasePath(mainAgentDir),
+          databasePath: resolveAuthProfileDatabasePath(fx.mainDir),
           profileIds: [profileId],
         },
         peerScope,
       ],
     );
-    expect(read(mainAgentDir)).toBeUndefined();
+    expect(ownerAuthority.readCurrentCredential()).toBeUndefined();
+    expect(peerAuthority.readCurrentCredential()).toEqual(replacement.profiles[profileId]);
+    expect(read(fx.mainDir)).toBeUndefined();
     expect(read(peerAgentDir)).toEqual(replacement.profiles[profileId]);
     expect(read(otherAgentDir)).toEqual(replacement.profiles[profileId]);
     expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(
@@ -426,43 +382,32 @@ describe("OAuth refresh peer settlement", () => {
   });
 
   it("does not republish a refresh generation removed during provider I/O", async () => {
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await fs.mkdir(peerAgentDir, { recursive: true });
+    const peerAgentDir = await fx.agentDirectory("peer-a");
 
-    const original = createExpiredOauthStore({
-      profileId,
-      provider,
-      accountId: "acct-a",
-    });
+    const original = expired({ accountId: "acct-a" });
     saveAuthProfileStore(original, peerAgentDir);
-    saveAuthProfileStore(original, mainAgentDir);
+    saveAuthProfileStore(original, fx.mainDir);
     expect(read(peerAgentDir)).toEqual(original.profiles[profileId]);
 
     const { promise: started, resolve: markStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+    fx.settle(finishRefresh);
+    fx.refresh.mockImplementation(async () => {
       markStarted();
       await finishRefreshGate;
-      return {
-        type: "oauth",
-        provider,
-        access: "late-rotated-access",
-        refresh: "late-rotated-refresh",
-        expires: Date.now() + 60 * 60 * 1000,
-        accountId: "acct-a",
-      } as never;
+      return oauth("late-rotated", { accountId: "acct-a" }) as never;
     });
 
-    const resolving = resolveFrom(peerAgentDir);
+    const resolving = fx.resolve(peerAgentDir);
     await started;
     await removeAuthProfilesAcrossOwnerStores({
       profileIds: [profileId],
-      agentDir: mainAgentDir,
+      agentDir: fx.mainDir,
     });
     finishRefresh();
 
     await expect(resolving).rejects.toThrow("Failed to persist refreshed OAuth credential");
-    expect(read(mainAgentDir)).toBeUndefined();
+    expect(read(fx.mainDir)).toBeUndefined();
     expect(read(peerAgentDir)).toBeUndefined();
   });
 });

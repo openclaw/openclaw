@@ -111,15 +111,20 @@ async function capture(page: Page, name: string, focus: Locator) {
     name + " interaction must fit the viewport",
   ).toBe(true);
   const visibleText = (await page.locator("body").textContent()) ?? "";
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+  const renderedText = await page.locator("body").innerText();
   // Synthetic content only. Never retain handoffs, fixture secrets or private fixture paths.
-  for (const secret of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.stateDir,
-    instance.homeDir,
-    "synthetic-background-fixture-key",
-  ]) {
-    expect(visibleText.includes(secret), name + " contains private fixture data").toBe(false);
+  for (const [category, secret] of [
+    ["gatewayToken", instance.gatewayToken],
+    ["hookToken", instance.hookToken],
+    ["stateDir", instance.stateDir],
+    ["homeDir", instance.homeDir],
+    ["fixtureKey", "synthetic-background-fixture-key"],
+  ] as const) {
+    expect(
+      visibleText.includes(secret),
+      `${category}: visible-text-match=${renderedText.includes(secret)}`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
@@ -147,6 +152,19 @@ suite.define(() => {
         });
         const page = await context.newPage();
         const wire = observeBackgroundWorkRpc(page, signal);
+        // The scenario aborts before closing the page, including native test timeouts.
+        const logFailure = () =>
+          console.error(
+            "[background-work-real-gateway] failure",
+            JSON.stringify({
+              stage: proof.stage,
+              parentRequests: provider.parentRequests(),
+              parentPending: provider.parentIsPending(),
+              processOpen: provider.processIsOpen(),
+              rpc: wire.diagnostics(),
+            }),
+          );
+        signal.addEventListener("abort", logFailure, { once: true });
         proof.stage = "create parent and pair browser";
         await runCli([
           "gateway",
@@ -193,6 +211,7 @@ suite.define(() => {
           await provider.wait(gate, signal);
         }
         await composer.fill(fixture.draft);
+        proof.stage = "persist parent draft";
         await waitForCommittedComposerDraft(
           page,
           "chat:v3:" + fixture.key + "\u0000agent:main",
@@ -215,11 +234,13 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         const subagents = parent.locator("openclaw-chat-subagents-panel");
         const childOpen = subagents.getByRole("button", { name: fixture.childLabel, exact: true });
+        proof.stage = "wait for child row";
         await childOpen.waitFor();
         const childKey = await childOpen
           .locator("xpath=ancestor::*[@data-session-key]")
           .getAttribute("data-session-key");
         expect(childKey).toMatch(/^agent:main:subagent:/);
+        proof.stage = "wait for child roster response";
         const roster = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -239,11 +260,13 @@ suite.define(() => {
         await capture(page, "desktop-subagents-list", childOpen);
         await childOpen.click();
         const detail = subagents.locator(".chat-subagent-detail");
+        proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
+        proof.stage = "observe child in-flight startup response";
         const history = payloadOf(
           await wire.waitFor(
             (rpc) =>
-              rpc.request.method === "chat.history" &&
+              rpc.request.method === "chat.startup" &&
               paramsOf(rpc).sessionKey === childKey &&
               Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
           ),
@@ -252,7 +275,9 @@ suite.define(() => {
         proof.childHistory = { runId: run.runId, sessionAbortable: run.sessionAbortable ?? false };
         expect(run.runId).toBeTruthy();
         expect(run.runId).not.toBe(parentRunId);
+        proof.stage = "render child streaming progress";
         provider.writeChildProgress();
+        proof.stage = "wait for child progress";
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
         const childStop = detail.getByRole("button", { name: "Stop generating", exact: true });
         await childStop.waitFor();
@@ -263,6 +288,7 @@ suite.define(() => {
         proof.stage = "independent process list and retained output";
         await openChatSidePanelType(page, "Processes");
         const processes = parent.locator("openclaw-chat-processes-panel");
+        proof.stage = "wait for process list with retained output";
         const processList = payloadOf(
           await wire.waitFor(
             (rpc) =>
@@ -338,6 +364,7 @@ suite.define(() => {
             runIds: expect.arrayContaining([run.runId]),
           });
         }
+        proof.stage = "settle child provider cancellation";
         await provider.wait(provider.childClosed, signal);
         await childStop.waitFor({ state: "hidden" });
         expect(provider.processIsOpen(), "child Stop must not stop parent exec").toBe(true);
@@ -379,6 +406,7 @@ suite.define(() => {
         expect(payloadOf(stoppedProcess) as SessionsProcessesStopResult).toEqual({
           requested: true,
         });
+        proof.stage = "settle process cancellation and observe terminal response";
         await provider.wait(provider.processClosed, signal);
         const terminal = (
           payloadOf(
@@ -450,6 +478,7 @@ suite.define(() => {
         proof.stage = "complete";
         proof.complete = true;
         await saveProof();
+        signal.removeEventListener("abort", logFailure);
       },
     });
   }, 120_000);

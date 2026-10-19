@@ -4,6 +4,7 @@ import type {
   GatewayRequestContext,
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
 import {
   getPluginExecutionFrame,
   pluginInstanceInvocation,
@@ -119,16 +120,11 @@ function copyGatewayScope(
   }
   // Copy enumerable values like spread, but do not read a registry that the caller replaces.
   for (const key of Reflect.ownKeys(current)) {
-    if (key !== "pluginRegistry" && Object.getOwnPropertyDescriptor(current, key)?.enumerable) {
-      Object.defineProperty(scoped, key, {
-        value: Reflect.get(current, key),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
+    if (key !== "pluginRegistry" && Object.prototype.propertyIsEnumerable.call(current, key)) {
+      Reflect.set(scoped, key, Reflect.get(current, key));
     }
   }
-  if (inheritRegistry && Object.getOwnPropertyDescriptor(current, "pluginRegistry")?.enumerable) {
+  if (inheritRegistry && Object.prototype.propertyIsEnumerable.call(current, "pluginRegistry")) {
     try {
       bindBorrowedRegistry(scoped, current.pluginRegistry);
     } catch (error) {
@@ -174,7 +170,31 @@ export function withPluginRuntimeGatewayContextResolver<T>(
   scoped.isWebchatConnect = current?.isWebchatConnect ?? isNotWebchatConnect;
   scoped.resolveGatewayContext = resolveGatewayContext;
   delete scoped.context;
-  return runWithPluginGatewayScope(scoped, run);
+  return withAgentDatabasePreparationContext(
+    resolveAgentDatabasePreparation(resolveGatewayContext),
+    () => runWithPluginGatewayScope(scoped, run),
+  );
+}
+
+const resolveUnboundAgentDatabasePreparation = () => undefined;
+const agentDatabasePreparationResolvers = new WeakMap<
+  GatewayContextResolver,
+  () => GatewayRequestContext["agentDatabaseStartup"]
+>();
+
+// One owner callback per resolver lets nested work reuse the preparation async frame.
+function resolveAgentDatabasePreparation(
+  resolveGatewayContext: GatewayContextResolver | undefined,
+) {
+  if (!resolveGatewayContext) {
+    return resolveUnboundAgentDatabasePreparation;
+  }
+  let resolve = agentDatabasePreparationResolvers.get(resolveGatewayContext);
+  if (!resolve) {
+    resolve = () => resolveGatewayContext()?.agentDatabaseStartup;
+    agentDatabasePreparationResolvers.set(resolveGatewayContext, resolve);
+  }
+  return resolve;
 }
 
 /** Runs work against an owned registry handle while preserving any gateway request facts. */

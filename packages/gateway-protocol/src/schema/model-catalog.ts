@@ -118,12 +118,16 @@ export const ModelChoiceSchema = closedObject({
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   runtimeChoices: Type.Optional(Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 })),
+  /** Hosted-catalog recommendation; picker rows arrive recommended-first within each provider. */
+  recommended: Type.Optional(Type.Boolean()),
 });
 
 /** Model catalog result. */
 export const ModelCatalogProviderOutcomeSchema = closedObject({
   provider: NonEmptyString,
   profileId: Type.Optional(NonEmptyString),
+  /** Advisory only: configured ids missing from a successful server listing. */
+  unlistedConfiguredModelIds: Type.Optional(Type.Array(NonEmptyString)),
   status: Type.Union([
     Type.Literal("ready"),
     Type.Literal("auth-rejected"),

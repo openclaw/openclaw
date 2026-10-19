@@ -17,7 +17,9 @@ import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
+import { positiveDurationError } from "../../shared/positive-duration.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -27,6 +29,7 @@ const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
   "AUTH_TOKEN_MISMATCH",
   "AUTH_DEVICE_TOKEN_MISMATCH",
   "AUTH_SCOPE_MISMATCH",
+  "AUTH_VERIFIED_USER_REQUIRED",
   "PAIRING_REQUIRED",
 ]);
 const NODE_PAIR_APPROVAL_GATEWAY_METHODS = new Set<string>(["node.pair.list", "node.pair.approve"]);
@@ -199,7 +202,6 @@ export function buildNodeInvokeParams(params: {
   return invokeParams;
 }
 
-/** Parse an optional integer node CLI flag. */
 export function parseOptionalNodeInteger(
   value: unknown,
   flag: string,
@@ -216,7 +218,16 @@ export function parseOptionalNodeInteger(
   return parsed;
 }
 
-/** Parse an optional finite number node CLI flag with optional bounds. */
+export function parseNodeDurationMs(value: string): number {
+  try {
+    const durationMs = parseDurationMs(value);
+    parseOptionalNodeInteger(durationMs, "--duration");
+    return durationMs;
+  } catch {
+    throw positiveDurationError("--duration", "ms");
+  }
+}
+
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
   flag: string,
@@ -263,7 +274,6 @@ export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string
   }
 }
 
-/** Resolve a node query to the best available node record. */
 export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {

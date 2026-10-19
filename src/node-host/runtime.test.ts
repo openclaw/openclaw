@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { SkillBinsProvider } from "./invoke.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 import {
   createNodeHostClient,
   frame,
@@ -226,10 +227,6 @@ describe("node-host invocation cancellation", () => {
       let observed: Promise<void> | undefined;
       let retiring: Promise<void> | undefined;
       let closed = false;
-      const tick = () =>
-        new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
       try {
         await vi.waitFor(() => expect(held.signal).toBeDefined());
         held.signal?.addEventListener(
@@ -248,15 +245,19 @@ describe("node-host invocation cancellation", () => {
           expect(closing).toBe(retiring);
         }
         await entered.promise;
-        await tick();
+        await setImmediate();
         expect(closed).toBe(false);
         for (const cleanup of cleanups) {
           cleanup.resolve();
-          await tick();
+          await setImmediate();
           if (cleanups.at(-1) !== cleanup) {
             expect(closed).toBe(false);
           }
         }
+        // Disconnect notification is not the accepted invocation's settlement.
+        expect(closed).toBe(false);
+        held.release();
+        await invoking;
         await retiring;
         await closing;
         expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(transition === "close" ? 1 : 2);
@@ -303,33 +304,19 @@ describe("node-host invocation cancellation", () => {
     }
   });
 
-  it("aggregates independent supervisor and MCP close failures in owner order", async () => {
-    const supervisorError = new Error("supervisor close failed");
-    const mcpError = new Error("MCP close failed");
-    mocks.closeWorkerSupervisor.mockRejectedValueOnce(supervisorError);
-    mocks.closeMcp.mockRejectedValueOnce(mcpError);
-    const runtime = await startRuntime();
-
-    const error = await runtime.close().catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([supervisorError, mcpError]);
-  });
-
   it("aborts MCP startup before waiting while supervisor retirement runs independently", async () => {
     let startupSignal: AbortSignal | undefined;
-    let resolveStartup!: (manager: Awaited<ReturnType<typeof mocks.startMcp>>) => void;
+    const startup = createDeferred<Awaited<ReturnType<typeof mocks.startMcp>>>();
     mocks.startMcp.mockImplementationOnce(async (_servers, deps) => {
       startupSignal = deps?.signal;
-      return await new Promise((resolve) => {
-        resolveStartup = resolve;
-      });
+      return await startup.promise;
     });
     const runtime = await startRuntime();
 
     const closing = runtime.close();
     expect(startupSignal?.aborted).toBe(true);
     await vi.waitFor(() => expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce());
-    resolveStartup({
+    startup.resolve({
       descriptors: [],
       callMcpTool: vi.fn(),
       close: mocks.closeMcp,

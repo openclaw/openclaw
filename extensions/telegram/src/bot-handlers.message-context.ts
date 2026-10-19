@@ -1,15 +1,16 @@
 import type { Message } from "grammy/types";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveStoredModelOverrideAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
-  getSessionEntry,
-  readAmbientTranscriptWatermark,
+  getSessionEntryAsync,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
+  resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {
@@ -147,12 +148,8 @@ export function formatTelegramAmbientTranscriptBody(
 export function createTelegramMessageSessionRuntime({
   accountId,
   resolveTelegramGroupConfig,
-  telegramDeps,
-}: Pick<
-  RegisterTelegramHandlerParams,
-  "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
->) {
-  const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
+}: Pick<RegisterTelegramHandlerParams, "accountId" | "resolveTelegramGroupConfig">) {
+  const loadSessionEntry = getSessionEntryAsync;
   const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -172,14 +169,14 @@ export function createTelegramMessageSessionRuntime({
       route,
       dmThreadId,
     });
-    const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
+    const storePath = resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const entry = loadSessionEntry({ storePath, sessionKey });
-    const storedOverride = resolveStoredModelOverride({
+    const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
+    const storedOverride = await resolveStoredModelOverrideAsync({
       sessionEntry: entry,
       loadSessionEntry: (parentSessionKey) =>
-        loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
+        loadSessionEntry({ agentId: route.agentId, storePath, sessionKey: parentSessionKey }),
       sessionKey,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
@@ -207,21 +204,19 @@ export function createTelegramMessageSessionRuntime({
     };
   };
 
-  const resolvePromptContextAmbientWatermark = (
+  const resolvePromptContextAmbientWatermark = async (
     params: ResolvePromptContextAmbientWatermarkParams,
-  ): TelegramAmbientTranscriptWatermark | undefined => {
+  ): Promise<TelegramAmbientTranscriptWatermark | undefined> => {
     if (!params.isGroup) {
       return undefined;
     }
-    const key = (
-      telegramDeps.resolveAmbientTranscriptWatermarkKey ?? resolveAmbientTranscriptWatermarkKey
-    )({
+    const key = resolveAmbientTranscriptWatermarkKey({
       channel: "telegram",
       accountId,
       conversationId: String(params.chatId),
       ...(params.resolvedThreadId !== undefined ? { threadId: params.resolvedThreadId } : {}),
     });
-    return (telegramDeps.readAmbientTranscriptWatermark ?? readAmbientTranscriptWatermark)({
+    return await readAmbientTranscriptWatermarkAsync({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       key,
@@ -237,14 +232,12 @@ export function createTelegramMessageContextRuntime({
   ownerAgentId,
   opts,
   telegramCfg,
-  telegramDeps,
 }: Pick<RegisterTelegramHandlerParams, "cfg" | "accountId" | "ownerAgentId" | "telegramCfg"> & {
   opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
-  telegramDeps: Pick<RegisterTelegramHandlerParams["telegramDeps"], "resolveStorePath">;
 }) {
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
-      telegramDeps.resolveStorePath(cfg.session?.store, {
+      resolveStorePath(cfg.session?.store, {
         agentId: ownerAgentId,
       }),
     ),

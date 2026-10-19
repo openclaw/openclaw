@@ -22,7 +22,7 @@ When debugging real providers/models (requires real creds):
   - Pins the OpenClaw agent harness and uses isolated Gateway state, synthetic
     files, and externally held HTTP responses. It checks concurrent hidden-result
     fanout, status-only interrogation of a waiting child tree, operator resume
-    with preserved task identity and idempotent replay, child timeout, a live HTTP
+    with preserved task identity and replay without duplicate work, child timeout, a live HTTP
     503 retrieval failure, and cancellation racing an in-flight result after its
     owner claims the run. Parent reports are checked against held requests,
     child execution, task delivery state, and hidden results. The 503 case checks
@@ -102,7 +102,7 @@ When debugging real providers/models (requires real creds):
     path.
 - OpenClaw first-run Docker smoke: `pnpm test:docker:system-agent-first-run`
   - Starts from an empty OpenClaw state dir and first proves the packaged
-    `openclaw setup` CLI fails closed without inference. It then
+    `openclaw setup` CLI refuses to run without inference. It then
     tests and activates fake Claude through the packaged activation module.
     Only afterward does a fuzzy packaged CLI request reach the planner and
     resolve to typed setup, followed by one-shot model, agent, Discord config,

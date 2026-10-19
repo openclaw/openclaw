@@ -432,9 +432,7 @@ export function createSlackDurableIngress(
         record.payload.kind === "relay"
           ? resolveSlackIngressLane({ event: record.payload.message }, record.id)
           : resolveSlackIngressLane(record.payload.body, record.id),
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       ...(options.onLog ? { onLog: options.onLog } : {}),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
@@ -473,19 +471,14 @@ export function createSlackDurableIngress(
   };
 
   return {
-    wrapReceiver: (receiver) => {
-      const client = Reflect.get(receiver as object, "client");
-      const wrapped: Receiver & { client?: unknown } = {
-        init: (nextApp) => {
-          app = nextApp;
-          receiver.init({ processEvent: acceptReceiverEvent } as App);
-        },
-        start: (...args) => receiver.start(...args),
-        stop: (...args) => receiver.stop(...args),
-        ...(client === undefined ? {} : { client }),
-      };
-      return wrapped;
-    },
+    wrapReceiver: (receiver) => ({
+      init: (nextApp) => {
+        app = nextApp;
+        receiver.init({ processEvent: acceptReceiverEvent } as App);
+      },
+      start: (...args) => receiver.start(...args),
+      stop: (...args) => receiver.stop(...args),
+    }),
     acceptRelayEvent,
     attachRelayDispatch: (dispatch) => {
       relayDispatch = dispatch;

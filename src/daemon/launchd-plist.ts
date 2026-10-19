@@ -103,17 +103,14 @@ export function resolveGeneratedEnvWrapperLayout(
   programArguments: string[],
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): { envFilePath: string; commandStartIndex: number } | null {
-  if (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL) {
-    const wrapperPath = programArguments[1];
-    const envFilePath = programArguments[2];
+  for (const wrapperIndex of programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL
+    ? [1, 0]
+    : [0]) {
+    const wrapperPath = programArguments[wrapperIndex];
+    const envFilePath = programArguments[wrapperIndex + 1];
     if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
-      return { envFilePath, commandStartIndex: 3 };
+      return { envFilePath, commandStartIndex: wrapperIndex + 2 };
     }
-  }
-  const wrapperPath = programArguments[0];
-  const envFilePath = programArguments[1];
-  if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
-    return { envFilePath, commandStartIndex: 2 };
   }
   return null;
 }
@@ -157,7 +154,7 @@ async function readLaunchAgentEnvironmentFile(
   const lines = content.split("\n");
   for (let index = 0; index < lines.length; index++) {
     const rawLine = lines[index] ?? "";
-    const line = options?.requireEffective ? rawLine.trimStart() : rawLine.trim();
+    const line = rawLine.trimStart();
     if (!line.trim() || line.startsWith("#")) {
       continue;
     }
@@ -173,20 +170,17 @@ async function readLaunchAgentEnvironmentFile(
     if (!key || value === undefined) {
       continue;
     }
-    let parsedValue = parseGeneratedEnvValue(value);
-    if (options?.requireEffective) {
-      // The writer's quoted literals can span physical lines; retain their exact newline bytes.
-      while (
-        quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim() &&
-        index + 1 < lines.length
-      ) {
-        value += `\n${lines[++index]}`;
-        parsedValue = parseGeneratedEnvValue(value);
-      }
-      // Strict inspection accepts the writer's literal syntax, never shell expressions.
-      if (quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()) {
-        throw new Error("Unsupported LaunchAgent environment value");
-      }
+    // Only an unfinished writer literal (including '\'' escapes) consumes another line.
+    while (/^'(?:[^']|'\\'')*$/.test(value) && index + 1 < lines.length) {
+      value += `\n${lines[++index]}`;
+    }
+    const parsedValue = parseGeneratedEnvValue(value);
+    // Strict inspection accepts the writer's literal syntax, never shell expressions.
+    if (
+      options?.requireEffective &&
+      quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()
+    ) {
+      throw new Error("Unsupported LaunchAgent environment value");
     }
     environment[key] = parsedValue;
   }

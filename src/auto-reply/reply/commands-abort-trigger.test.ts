@@ -4,20 +4,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { handleAbortTrigger } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn());
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
   vi.fn(() => ({ entry: undefined, key: "agent:main:main" })),
 );
 const setAbortMemoryMock = vi.hoisted(() => vi.fn());
-const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
-  vi.fn(() => ({ active: false, aborted: false })),
-);
-const formatAbortReplyTextMock = vi.hoisted(() => vi.fn(() => "⚙️ Agent was aborted."));
-
-vi.mock("../../agents/embedded-agent.js", () => ({
-  abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
-}));
+const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -33,9 +25,10 @@ vi.mock("./abort-cutoff.js", () => ({
   shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
-vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  prepareSessionRunTargetAbort: () => () => abortSessionRunTargetWithOutcomeMock(),
+vi.mock("./abort-operation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./abort-operation.js")>()),
+  captureChannelSessionStop: vi.fn((params: { key?: string; sessionId?: string }) => params),
+  abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
   stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
 }));
 
@@ -47,17 +40,9 @@ vi.mock("./abort-primitives.js", () => ({
   setAbortMemory: setAbortMemoryMock,
 }));
 
-vi.mock("./abort.js", () => ({
-  formatAbortReplyText: formatAbortReplyTextMock,
-}));
-
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
   resolveCommandSessionEntryForKey: resolveCommandSessionEntryForKeyMock,
-}));
-
-vi.mock("./reply-run-registry.js", () => ({
-  resolveReplyOperationsForSession: vi.fn(() => []),
 }));
 
 function buildAbortParams(): HandleCommandsParams {
@@ -103,14 +88,31 @@ function buildAbortParams(): HandleCommandsParams {
 describe("handleAbortTrigger", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: false, aborted: false });
+    abortSessionRunTargetWithOutcomeMock.mockImplementation((params) => {
+      const outcome = {
+        aborted: false,
+        alreadyFinalizing: false,
+        queuedCancelled: 0,
+        activeCancelled: 0,
+        childrenStopped: 0,
+        childFailures: 0,
+        failures: [],
+        settled: Promise.resolve(),
+      };
+      return {
+        ...outcome,
+        completed: (async () => {
+          await params.recordAbortTarget?.({ recordCutoff: false });
+          return outcome;
+        })(),
+      };
+    });
   });
 
   it("rejects unauthorized natural-language abort triggers", async () => {
     const result = await handleAbortTrigger(buildAbortParams(), true);
     expect(result).toEqual({ shouldContinue: false });
     expect(abortSessionRunTargetWithOutcomeMock).not.toHaveBeenCalled();
-    expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
     expect(setAbortMemoryMock).not.toHaveBeenCalled();
   });
@@ -119,18 +121,40 @@ describe("handleAbortTrigger", () => {
     const params = buildAbortParams();
     params.command.isAuthorizedSender = true;
     params.command.senderIsOwner = true;
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: true, aborted: false });
-    formatAbortReplyTextMock.mockReturnValue(
-      "Agent reply is already finalizing and can no longer be aborted.",
-    );
-
+    abortSessionRunTargetWithOutcomeMock.mockImplementation((abortParams) => {
+      const outcome = {
+        aborted: false,
+        alreadyFinalizing: true,
+        queuedCancelled: 0,
+        activeCancelled: 0,
+        childrenStopped: 0,
+        childFailures: 0,
+        failures: [],
+        settled: Promise.resolve(),
+      };
+      return {
+        ...outcome,
+        completed: (async () => {
+          await abortParams.stopChildren?.(async () => true);
+          return outcome;
+        })(),
+      };
+    });
     const result = await handleAbortTrigger(params, true);
 
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "Agent reply is already finalizing and can no longer be aborted." },
     });
-    expect(formatAbortReplyTextMock).toHaveBeenCalledWith(undefined, "finalizing");
+    expect(abortSessionRunTargetWithOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hookContext: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          commandSource: "whatsapp",
+          senderId: "unauthorized",
+        }),
+      }),
+    );
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
     expect(setAbortMemoryMock).not.toHaveBeenCalled();
   });

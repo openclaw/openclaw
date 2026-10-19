@@ -1,5 +1,4 @@
 /** Durable malformed-cron recovery records stored in the shared SQLite database. */
-import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -16,9 +15,6 @@ export async function loadCronQuarantinedJobs(
     { env },
     { type: "cron.quarantine", storeKey: cronStoreKey(storePath) },
   );
-  if (reply && (!reply.ok || reply.type !== "cron.quarantine")) {
-    throw new Error("Unexpected cron quarantine observation result");
-  }
   return reply?.entries ?? [];
 }
 
@@ -37,15 +33,10 @@ export async function saveCronQuarantinedJobs(params: {
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();
   };
-  await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "cron.registerQuarantine", input }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
-    },
-  );
+  await runOpenClawStateWorkerOperation(context, (scope) => {
+    assertCurrent();
+    // Retirement may race dispatch; the worker commits without consulting the host.
+    return scope.execute({ type: "cron.registerQuarantine", input });
+  });
   assertCurrent();
 }

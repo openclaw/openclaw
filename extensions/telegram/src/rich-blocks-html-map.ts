@@ -246,12 +246,8 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   let stray = false;
   const visitRows = (parent: Extract<HtmlNode, { kind: "element" }>, inHeader: boolean) => {
     for (const child of parent.children) {
-      if (child.kind !== "element") {
-        stray ||= child.text.trim() !== "";
-        continue;
-      }
-      if (!child.closed) {
-        stray = true;
+      if (child.kind !== "element" || !child.closed) {
+        stray ||= child.kind === "element" || child.text.trim() !== "";
         continue;
       }
       if (child.name === "caption") {

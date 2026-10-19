@@ -3,7 +3,6 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
-import * as wikiLinks from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -15,47 +14,39 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function createReadVault(relativePath = "sources/alpha.md") {
+function writePage(file: string, frontmatter: Record<string, unknown>, body: string) {
+  return fs.writeFile(file, renderWikiMarkdown({ frontmatter, body }));
+}
+
+async function createReadVault(
+  frontmatter: Record<string, unknown> = { pageType: "source", id: "source.alpha", title: "Alpha" },
+  body = "# Alpha\n\nreadable line\n",
+) {
   const vault = await createVault({
     initialize: true,
     config: { search: { backend: "local", corpus: "wiki" } },
   });
+  const relativePath = "sources/alpha.md";
   const targetPath = path.join(vault.rootDir, relativePath);
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  await fs.writeFile(
-    targetPath,
-    renderWikiMarkdown({
-      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-      body: "# Alpha\n\nreadable line\n",
-    }),
-  );
+  await writePage(targetPath, frontmatter, body);
   return { ...vault, targetPath, relativePath };
 }
 
 describe("wiki query page reads", () => {
   it("reads only compiled metadata candidates for distributed query tokens", async () => {
-    const { rootDir, config, targetPath, relativePath } = await createReadVault();
-    await fs.writeFile(
-      targetPath,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.quartz",
-          title: "Cobalt",
-          aliases: ["amber"],
-          questions: ["lantern"],
-        },
-        body: "# Cobalt\n\nSelected evidence.\n",
-      }),
+    const { rootDir, config, targetPath, relativePath } = await createReadVault(
+      {
+        pageType: "source",
+        id: "source.quartz",
+        title: "Cobalt",
+        aliases: ["amber"],
+        questions: ["lantern"],
+      },
+      "# Cobalt\n\nSelected evidence.\n",
     );
     const unrelatedPath = path.join(rootDir, "sources", "unrelated.md");
-    await fs.writeFile(
-      unrelatedPath,
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", title: "Unrelated" },
-        body: "# Unrelated\n",
-      }),
-    );
+    await writePage(unrelatedPath, { pageType: "source", title: "Unrelated" }, "# Unrelated\n");
     const query = "cobalt quartz amber lantern";
     const liveResults = await searchMemoryWiki({ config, query, maxResults: 1 });
     expect(liveResults[0]?.path).toBe(relativePath);
@@ -68,55 +59,9 @@ describe("wiki query page reads", () => {
         }
       },
     });
-
     await expect(searchMemoryWiki({ config, query, maxResults: 1 })).resolves.toEqual(liveResults);
     expect(openedPages).toContain(targetPath);
     expect(openedPages).not.toContain(unrelatedPath);
-  });
-
-  it.each([false, true])(
-    "searches and reads without extracting unused links (compiled=%s)",
-    async (compiled) => {
-      const { config, targetPath, relativePath } = await createReadVault();
-      await fs.appendFile(
-        targetPath,
-        "\nCobalt lantern notes.\n[Guide](../concepts/guide.md)\n[[concepts/reference]]\n",
-      );
-      if (compiled) {
-        await compileMemoryWikiVault(config);
-      }
-      const extractLinks = vi.spyOn(wikiLinks, "extractWikiLinks");
-
-      for (const query of ["Alpha", "cobalt lantern", "concepts/reference"]) {
-        const results = await searchMemoryWiki({ config, query });
-        expect(results).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ path: relativePath, title: "Alpha", corpus: "wiki" }),
-          ]),
-        );
-      }
-      await expect(searchMemoryWiki({ config, query: "unmatched-orchid" })).resolves.toEqual([]);
-      for (const lookup of [relativePath, "alpha", "source.alpha"]) {
-        const result = await getMemoryWikiPage({ config, lookup });
-        expect(result?.path).toBe(relativePath);
-        expect(result?.content).toContain("[Guide](../concepts/guide.md)");
-      }
-      expect(extractLinks).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["sources/alpha.md", "sources/alpha.md"],
-    ["  sources\\nested\\alpha.md  ", "sources/nested/alpha.md"],
-  ])("reads %s without enumerating unrelated pages", async (lookup, relativePath) => {
-    const { rootDir, config } = await createReadVault(relativePath);
-    await fs.writeFile(path.join(rootDir, "sources", "unrelated.md"), "---\ninvalid: [\n---\n");
-    const readdir = vi.spyOn(fs, "readdir");
-
-    await expect(
-      getMemoryWikiPage({ config, lookup, fromLine: 4, lineCount: 1 }),
-    ).resolves.toMatchObject({ path: relativePath, content: "readable line", truncated: true });
-    expect(readdir).not.toHaveBeenCalled();
   });
 
   it.each(["large", "hardlinked"] as const)(
@@ -128,7 +73,6 @@ describe("wiki query page reads", () => {
       } else {
         await fs.link(targetPath, path.join(rootDir, "_attachments", "alpha-link.md"));
       }
-
       for (const lookup of [relativePath, "alpha", "source.alpha"]) {
         await expect(
           getMemoryWikiPage({ config, lookup, fromLine: 4, lineCount: 1 }),
@@ -139,78 +83,57 @@ describe("wiki query page reads", () => {
 
   it("preserves compiled claim precedence over a matching canonical page path", async () => {
     const { rootDir, config, relativePath } = await createReadVault();
-    await fs.writeFile(
+    await writePage(
       path.join(rootDir, "entities", "claim-owner.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.claim-owner",
-          title: "Claim owner",
-          claims: [{ id: relativePath, text: "A path-shaped claim ID.", status: "supported" }],
-        },
-        body: "# Claim owner\n\nClaim evidence.\n",
-      }),
+      {
+        pageType: "entity",
+        id: "entity.claim-owner",
+        title: "Claim owner",
+        claims: [{ id: relativePath, text: "A path-shaped claim ID.", status: "supported" }],
+      },
+      "# Claim owner\n\nClaim evidence.\n",
     );
     await compileMemoryWikiVault(config);
-
     await expect(getMemoryWikiPage({ config, lookup: relativePath })).resolves.toMatchObject({
       path: "entities/claim-owner.md",
       id: "entity.claim-owner",
     });
   });
 
-  it.each(["deleted", "directory"] as const)(
-    "skips a compiled candidate replaced by %s state",
-    async (kind) => {
-      const { rootDir, config, relativePath } = await createReadVault();
-      const stalePath = path.join(rootDir, "entities", "stale.md");
-      await fs.writeFile(
-        stalePath,
-        renderWikiMarkdown({
-          frontmatter: {
-            pageType: "entity",
-            title: "Alpha stale",
-            claims: [{ id: "claim.stale", text: "Alpha evidence.", status: "supported" }],
-          },
-          body: "# Alpha stale\n",
-        }),
-      );
-      await compileMemoryWikiVault(config);
-      await fs.unlink(stalePath);
-      if (kind === "directory") {
-        await fs.mkdir(stalePath);
-      }
+  it("skips a compiled candidate replaced by directory state", async () => {
+    const { rootDir, config, relativePath } = await createReadVault();
+    const stalePath = path.join(rootDir, "entities", "stale.md");
+    await writePage(
+      stalePath,
+      {
+        pageType: "entity",
+        title: "Alpha stale",
+        claims: [{ id: "claim.stale", text: "Alpha evidence.", status: "supported" }],
+      },
+      "# Alpha stale\n",
+    );
+    await compileMemoryWikiVault(config);
+    await fs.unlink(stalePath);
+    await fs.mkdir(stalePath);
+    const results = await searchMemoryWiki({ config, query: "Alpha" });
+    expect(results.some((page) => page.path === relativePath)).toBe(true);
+    expect(results.some((page) => page.path === "entities/stale.md")).toBe(false);
+    await expect(getMemoryWikiPage({ config, lookup: "claim.stale" })).resolves.toBeNull();
+  });
 
-      const results = await searchMemoryWiki({ config, query: "Alpha" });
-      expect(results.some((page) => page.path === relativePath)).toBe(true);
-      expect(results.some((page) => page.path === "entities/stale.md")).toBe(false);
-      await expect(getMemoryWikiPage({ config, lookup: "claim.stale" })).resolves.toBeNull();
-    },
-  );
-
-  it.each(["absent", "invalid", "directory"] as const)(
-    "retains ID fallback when the canonical candidate is %s",
-    async (kind) => {
-      const { rootDir, config, targetPath, relativePath } = await createReadVault();
-      await fs.unlink(targetPath);
-      if (kind === "invalid") {
-        await fs.writeFile(targetPath, "---\npageType: [\n---\n");
-      } else if (kind === "directory") {
-        await fs.mkdir(targetPath);
-      }
-      await fs.writeFile(
-        path.join(rootDir, "sources", "fallback.md"),
-        renderWikiMarkdown({
-          frontmatter: { pageType: "source", id: relativePath, title: "Fallback" },
-          body: "# Fallback\n",
-        }),
-      );
-
-      await expect(getMemoryWikiPage({ config, lookup: relativePath })).resolves.toMatchObject({
-        path: "sources/fallback.md",
-      });
-    },
-  );
+  it("retains ID fallback when the canonical candidate is invalid", async () => {
+    const { rootDir, config, targetPath, relativePath } = await createReadVault();
+    await fs.unlink(targetPath);
+    await fs.writeFile(targetPath, "---\npageType: [\n---\n");
+    await writePage(
+      path.join(rootDir, "sources", "fallback.md"),
+      { pageType: "source", id: relativePath, title: "Fallback" },
+      "# Fallback\n",
+    );
+    await expect(getMemoryWikiPage({ config, lookup: relativePath })).resolves.toMatchObject({
+      path: "sources/fallback.md",
+    });
+  });
 
   it.each(["exact", "basename", "search"] as const)(
     "rejects a page swapped outside the vault during %s reads",

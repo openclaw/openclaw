@@ -1,40 +1,31 @@
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import type { renderForwardedAvatar } from "../chat-avatar.ts";
+import type { ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { TurnRecap } from "../chat-progress.ts";
-import type { renderGroupedMessage } from "./chat-message-bubble.ts";
-import type { MessageReplyTarget } from "./chat-message-markdown.ts";
-import type { MessageReactionOptions } from "./chat-message-reactions.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
-import type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream.ts";
+import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
+import type { MessageReactionOptions } from "./chat-message-reaction-model.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";
+import type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream-view.tsx";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
-type ActiveContinuation = {
-  parts: StreamGroupPart[];
-  options: StreamGroupOptions;
-};
-
-type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
-
 export type RenderMessageGroupOptions = Omit<
-  GroupedMessageRenderOptions,
+  GroupedMessageOptions,
   | "isStreaming"
   | "duplicateCount"
   | "assistantMessageDisclosure"
   | "messageActions"
   | "entryId"
-  | "entryRef"
   | "replyLine"
 > &
   ChatSendStatusActions &
-  Parameters<typeof renderForwardedAvatar>[1] & {
+  ForwardedAvatarOptions & {
     /** A run frame's line, from its final answer; other groups resolve their own. */
     frameReplyLine?: ReplyLine;
-    entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
@@ -51,6 +42,7 @@ export type RenderMessageGroupOptions = Omit<
     /** Routing for peer sender names; absent leaves them plain text. */
     personActivity?: PersonActivityRouting;
     userAvatar?: string | null;
+    channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;
     avatarPlacement?: "gutter" | "footer" | "none";
     showAssistantAvatar?: boolean;
     contextWindow?: number | null;
@@ -58,7 +50,7 @@ export type RenderMessageGroupOptions = Omit<
     resolveReplyPreview?: ReplyPreviewLookup;
     onRewind?: () => void;
     rewindDisabled?: boolean;
-    activeContinuation?: ActiveContinuation;
+    activeContinuation?: { parts: StreamGroupPart[]; options: StreamGroupOptions };
     /** Only this run may supply live copy for an activity disclosure. */
     activityRunId?: string | null;
     activityGroupKey?: string;
@@ -67,6 +59,4 @@ export type RenderMessageGroupOptions = Omit<
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
-    /** Rendered as a transcript search result, outside its turn. */
-    searchResult?: boolean;
   } & MessageReactionOptions;

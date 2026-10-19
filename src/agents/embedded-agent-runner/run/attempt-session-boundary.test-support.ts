@@ -22,7 +22,9 @@ export function createSessionManager(
   return {
     getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
+    hasLoadedTranscriptTail: () => true,
     getSessionTarget: () => undefined,
+    reloadPersistedTranscriptAsync: async () => {},
     getSessionId: () => "session-boundary",
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;

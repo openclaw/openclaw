@@ -26,6 +26,7 @@ import {
 import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import {
@@ -65,6 +66,51 @@ describe("Codex native configuration lifecycle", () => {
     }
     throw new Error(`unexpected method: ${method}`);
   }
+
+  it("resumes the bound thread after replacing the inference proxy client", async () => {
+    const createClient = (persistedThreads: string[] = []) =>
+      createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        persistedThreads,
+        respond: async (method) => {
+          if (method === "account/read") {
+            return { account: { type: "apiKey" } };
+          }
+          if (method === "thread/start" || method === "thread/resume") {
+            return threadStartResult("proxy-thread");
+          }
+          return readNativeConfig(method);
+        },
+      });
+    const first = await createClient();
+    ownCodexInferenceClient(first.client);
+    let firstUrl: string | undefined;
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(first.client),
+        nativeCodeModeEnabled: false,
+      });
+      firstUrl = getCodexInferenceThread(first.client, binding.threadId)?.baseUrl;
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.restrictedThreadConfigFingerprint).toBeDefined();
+    } finally {
+      first.client.close();
+    }
+    const second = await createClient(["proxy-thread"]);
+    ownCodexInferenceClient(second.client);
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(second.client),
+        nativeCodeModeEnabled: false,
+      });
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.lifecycle.action).toBe("resumed");
+      expect(getCodexInferenceThread(second.client, binding.threadId)?.baseUrl).not.toBe(firstUrl);
+      expect(second.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+    } finally {
+      second.client.close();
+    }
+  });
 
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
@@ -286,11 +332,12 @@ describe("Codex native configuration lifecycle", () => {
   });
 
   it.each([
-    { changeModel: true, rotateLineage: false },
-    { changeModel: false, rotateLineage: true },
+    { changeModel: true, rotateLineage: false, revokeDuringBindingRead: false },
+    { changeModel: false, rotateLineage: true, revokeDuringBindingRead: false },
+    { changeModel: false, rotateLineage: false, revokeDuringBindingRead: true },
   ])(
-    "rebinds before native warm reuse (changed model: $changeModel, rotated lineage: $rotateLineage)",
-    async ({ changeModel, rotateLineage }) => {
+    "rebinds before native warm reuse (changed model: $changeModel, rotated lineage: $rotateLineage, revoked binding read: $revokeDuringBindingRead)",
+    async ({ changeModel, rotateLineage, revokeDuringBindingRead }) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       await writeCodexAppServerBinding(sessionFile, {
         webSearchThreadConfigFingerprint: JSON.stringify({
@@ -370,7 +417,7 @@ describe("Codex native configuration lifecycle", () => {
         "configRequirements/read",
         "thread/read",
       ]);
-      if (rotateLineage) {
+      if (rotateLineage || revokeDuringBindingRead) {
         await retainCodexAppServerLiveThread(
           client,
           warm.threadId,
@@ -386,22 +433,50 @@ describe("Codex native configuration lifecycle", () => {
           ([method]) => method === "thread/resume",
         ).length;
         const retainedBinding = await readCodexAppServerBinding(sessionFile);
+        const closeHost = revokeDuringBindingRead
+          ? await bindProductionHarnessHostCapabilitiesForTest(params)
+          : undefined;
+        let nativeReadCompleted = false;
+        const readBinding = testCodexAppServerBindingStore.readAsync.bind(
+          testCodexAppServerBindingStore,
+        );
+        const bindingRead = revokeDuringBindingRead
+          ? vi
+              .spyOn(testCodexAppServerBindingStore, "readAsync")
+              .mockImplementation(async (identity) => {
+                const binding = await readBinding(identity);
+                if (nativeReadCompleted) {
+                  closeHost?.();
+                }
+                return binding;
+              })
+          : undefined;
         const nativeRequest = CodexAppServerClient.prototype.request.bind(client);
         request.mockImplementation(async (...args) => {
           const response = await nativeRequest(...args);
           if (args[0] === "thread/read") {
+            nativeReadCompleted = true;
             // The wire read still completes normally. Change the durable lineage
             // while warm admission awaits it, without changing the native binding.
-            await patchSessionEntry({
-              agentId: "main",
-              sessionKey: "agent:main:session-1",
-              storePath: resolveStorePath(undefined, { agentId: "main" }),
-              update: () => ({ previousSessionId: "replaced-predecessor" }),
-            });
+            if (rotateLineage) {
+              await patchSessionEntry({
+                agentId: "main",
+                sessionKey: "agent:main:session-1",
+                storePath: resolveStorePath(undefined, { agentId: "main" }),
+                update: () => ({ previousSessionId: "replaced-predecessor" }),
+              });
+            }
           }
           return response;
         });
-        await expect(startOrResumeThread(common)).rejects.toThrow("active");
+        try {
+          await expect(startOrResumeThread(common)).rejects.toThrow(
+            "Codex warm thread ownership changed",
+          );
+        } finally {
+          bindingRead?.mockRestore();
+          closeHost?.();
+        }
         expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
           resumeCount,
         );

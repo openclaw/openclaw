@@ -200,7 +200,7 @@ function collectTouchedTextModelRefs(params: {
       return touched;
     }
     const previousRef = previousRefsByIdentity.get(modelRefComparisonKey(ref));
-    const ownerChanged = previousRef?.agentId !== ref.agentId;
+    const ownerChanged = previousRef !== undefined && previousRef.agentId !== ref.agentId;
     if (ownerChanged) {
       ref.dependency = true;
     }

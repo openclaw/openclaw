@@ -4,6 +4,8 @@ import {
   createChannelIngressError,
   createChannelIngressMonitor,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveXAccount, type ResolvedXAccount } from "./accounts.js";
@@ -11,14 +13,12 @@ import { openXAllowlist, XAllowlistChangedError } from "./allowlist.js";
 import { parseXPostEnvelope, type XPostEnvelope } from "./api.js";
 import { getXApi, getXTokenState } from "./client.js";
 import { runXEvents, waitForXBudgetReset, type XCursorState, type XEventStatus } from "./events.js";
-import {
-  formatXSenderLine,
-  resolveXGuestSettings,
-  resolveXGuestToolPolicy,
-} from "./guest-policy.js";
+import { formatXFailureReport, sendXFailureReport, type XWithheldReason } from "./failure-route.js";
+import { formatXSenderLine, resolveXGuestSettings } from "./guest-policy.js";
 import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 import { getXGuestStatus, resolveXGuestContainmentError } from "./guests.js";
-import { resolveXIngress, xMentionFacts } from "./ingress.js";
+import { createXPublicationPreparation, resolveXIngress, xMentionFacts } from "./ingress.js";
+import { readXReplyOutcome, type XReplyOutcome } from "./outcome.js";
 import { verifyPublicXThread } from "./public-thread.js";
 import { resolveXRecipient } from "./recipient.js";
 import type { XVisibleWorkSession } from "./reply.js";
@@ -26,6 +26,7 @@ import { getXRuntime } from "./runtime.js";
 import { sendXDelivery } from "./send.js";
 import { XBudgetExceededError } from "./spend.js";
 import { assembleXThread } from "./thread.js";
+import { buildXWorkSessionContext, openXWorkOrigins } from "./work-origin.js";
 
 const InvalidXEvent = createChannelIngressError("InvalidXEvent");
 type IngressPayload = { version: number; rawEvent: string };
@@ -249,7 +250,10 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       const publicationSnapshot =
         initialAuthorization.tier === "maintainer" &&
         resolveXAccount(cfg, account.accountId).config.autoPublishWorkSessions === true
-          ? await openXAllowlist(core).readSnapshot(account.accountId)
+          ? await openXAllowlist(core).readSnapshot(
+              account.accountId,
+              resolveXAccount(cfg, account.accountId).config.verifiedFromGitHub,
+            )
           : undefined;
       const publicThread =
         publicationSnapshot &&
@@ -258,6 +262,17 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         publicationSnapshot && publicThread
           ? {
               audience: "public" as const,
+              prepare: createXPublicationPreparation({
+                accountId: account.accountId,
+                post,
+                cfg,
+                readConfig,
+                route,
+                assertActive: () => {
+                  lifecycle.abortSignal.throwIfAborted();
+                  assertCurrent();
+                },
+              }),
               assertCurrent: () => {
                 lifecycle.abortSignal.throwIfAborted();
                 assertCurrent();
@@ -307,15 +322,21 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       if (guest && !(await admitGuest(authorization, cfg))) {
         return;
       }
-      const handle =
-        thread.users.find((user) => user.id === post.author_id)?.username ?? post.author_id;
+      const workSessionContext = guest
+        ? ""
+        : await buildXWorkSessionContext({
+            runtime: core,
+            cfg,
+            accountId: account.accountId,
+            conversationId: post.conversation_id,
+            requesterSessionKey: sessionKey,
+          });
+      const author = thread.users.find((user) => user.id === post.author_id);
+      const handle = author?.username ?? post.author_id;
       const ctxPayload = core.channel.inbound.buildContext({
         channelIngress,
         access: {
           mentions: { ...xMentionFacts, requireMention: true, explicitlyMentionedBot: true },
-          ...(guest
-            ? { toolPolicy: resolveXGuestToolPolicy(resolveXAccount(cfg, account.accountId)) }
-            : {}),
         },
         channel: "x",
         accountId: account.accountId,
@@ -342,10 +363,27 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
             authorization.tier,
             post.author_id,
             thread.users.find((user) => user.id === post.author_id),
-          )}\n${thread.bodyForAgent}`,
+            authorization.github,
+          )}\n${thread.bodyForAgent}${workSessionContext ? `\n\n${workSessionContext}` : ""}`,
         },
       });
       const sessions: XVisibleWorkSession[] = [];
+      const postUrl = `https://x.com/${handle}/status/${post.id}`;
+      // Untagged later finals inherit the turn's declared outcome; failure is sticky.
+      let turnOutcome: XReplyOutcome = "unclassified";
+      const withhold = async (reason: XWithheldReason, text: string) => {
+        const currentCfg = readConfig();
+        const failureRoute = resolveXAccount(currentCfg, account.accountId).config.failureRoute;
+        const routed = failureRoute
+          ? ` route=${failureRoute.channel} result=${await sendXFailureReport({
+              cfg: currentCfg,
+              route: failureRoute,
+              text: formatXFailureReport({ reason, authorHandle: handle, postUrl, text }),
+              signal: lifecycle.abortSignal,
+            })}`
+          : " route=none";
+        log.info(`reply withheld post=${post.id} reason=${reason}${routed}`);
+      };
       log.info(`mention post=${post.id} author=${post.author_id} allowed`);
       assertAdmissionCurrent();
       await core.channel.inbound.dispatch({
@@ -356,14 +394,62 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         ctxPayload,
         ...bindIngressLifecycleToReplyOptions(lifecycle),
         replyOptions: {
-          onVisibleWorkSessions: (visible) => {
+          onVisibleWorkSessions: async (visible, creation) => {
             if (!guest) {
-              sessions.push(...visible);
+              if (!author?.username) {
+                throw new Error(
+                  "X work-session origin requires the author's handle; retry the mention.",
+                );
+              }
+              const childKeys = new Set(visible.map((session) => session.sessionKey));
+              if (creation) {
+                childKeys.add(creation.createdSessionKey);
+              }
+              for (const childKey of childKeys) {
+                await openXWorkOrigins(core).registerIfAbsent(childKey, {
+                  accountId: account.accountId,
+                  postId: post.id,
+                  postUrl,
+                  authorHandle: handle,
+                  conversationId: post.conversation_id,
+                  senderTier: authorization.tier,
+                });
+              }
+              for (const session of visible) {
+                if (!sessions.some((existing) => existing.sessionKey === session.sessionKey)) {
+                  sessions.push(session);
+                }
+              }
             }
           },
         },
         delivery: {
-          preparePayload: (payload, info) => (info.kind === "final" ? payload : null),
+          // Runtime status notices need no model outcome. Model failures remain withheld.
+          preparePayload: async (payload, info) => {
+            if (info.kind !== "final") {
+              return null;
+            }
+            const { outcome, text } = readXReplyOutcome(payload.text ?? "");
+            if (payload.isError || outcome === "failure") {
+              turnOutcome = "failure";
+            } else if (outcome === "success" && turnOutcome !== "failure") {
+              turnOutcome = "success";
+            }
+            if (payload.isError) {
+              await withhold("error", text);
+              return null;
+            }
+            const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+            if (!hasMedia && (!text || isSilentReplyText(text))) {
+              log.info(`reply dropped post=${post.id} reason=${text ? "silent" : "empty"}`);
+              return null;
+            }
+            if (turnOutcome !== "success" && !payload.isStatusNotice) {
+              await withhold(turnOutcome, text);
+              return null;
+            }
+            return { ...payload, text };
+          },
           observeMessageSent: true,
           deliver: async (payload) => {
             if (!payload.text?.trim() && !payload.mediaUrl && !payload.mediaUrls?.length) {
@@ -376,6 +462,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
               text: payload.text ?? "",
               mediaUrl: payload.mediaUrl,
               mediaUrls: payload.mediaUrls,
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, route.agentId),
               mention: post,
               visibleWorkSessions: guest ? undefined : sessions,
               senderTier: authorization.tier,

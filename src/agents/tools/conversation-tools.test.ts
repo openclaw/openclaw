@@ -23,52 +23,37 @@ const conversation = {
   accountId: "default",
   kind: "direct" as const,
   target: "reef:peer-agent",
-  sessionId: "shared-main-session",
-  sessionKey: "agent:main:main",
-  role: "participant" as const,
   firstSeenAt: 100,
   lastSeenAt: 200,
 };
+const message = { conversationRef: conversation.conversationRef, message: "please acknowledge" };
+const sent = {
+  conversationRef: conversation.conversationRef,
+  channel: "reef",
+  messageId: "reef-outbound-1",
+};
 
 function mockGateway() {
-  return vi.spyOn(gateway, "callAgentToolGatewayRequest").mockImplementation(async (input) =>
-    input.method === "conversations.list"
-      ? {
-          conversations: [
-            {
-              conversationRef: conversation.conversationRef,
-              channel: conversation.channel,
-              accountId: conversation.accountId,
-              kind: conversation.kind,
-              target: conversation.target,
-              firstSeenAt: conversation.firstSeenAt,
-              lastSeenAt: conversation.lastSeenAt,
-            },
-          ],
-        }
-      : input.method === "conversations.send"
-        ? {
-            status: "sent" as const,
-            conversationRef: conversation.conversationRef,
-            channel: "reef",
-            messageId: "reef-outbound-1",
-            queueId: "queue-1",
-          }
-        : {
-            status: "replied" as const,
-            conversationRef: conversation.conversationRef,
-            channel: "reef",
-            messageId: "reef-outbound-1",
-            correlationPersisted: true,
-            reply: {
-              conversationRef: conversation.conversationRef,
-              messageId: "reef-inbound-1",
-              replyToId: "reef-outbound-1",
-              text: "peer acknowledged",
-              timestamp: 300,
-            },
-          },
-  );
+  return vi.spyOn(gateway, "callAgentToolGatewayRequest").mockImplementation(async ({ method }) => {
+    if (method === "conversations.list") {
+      return { conversations: [conversation] };
+    }
+    if (method === "conversations.send") {
+      return { status: "sent" as const, ...sent, queueId: "queue-1" };
+    }
+    return {
+      status: "replied" as const,
+      ...sent,
+      correlationPersisted: true,
+      reply: {
+        conversationRef: conversation.conversationRef,
+        messageId: "reef-inbound-1",
+        replyToId: "reef-outbound-1",
+        text: "peer acknowledged",
+        timestamp: 300,
+      },
+    };
+  });
 }
 
 describe("conversation tools", () => {
@@ -78,22 +63,15 @@ describe("conversation tools", () => {
     const list = createConversationsListTool({ agentId: "main" });
     const send = createConversationsSendTool({ agentId: "main" });
     const turn = createConversationsTurnTool({ agentId: "main" });
-    const listResult = await list.execute("list-contract", {});
-    const sendResult = await send.execute("send-contract", {
-      conversationRef: conversation.conversationRef,
-      message: "hello peer",
-    });
-    const turnResult = await turn.execute("turn-contract", {
-      conversationRef: conversation.conversationRef,
-      message: "please acknowledge",
-    });
-
-    expect(list.outputSchema).toBe(ConversationListResultSchema);
-    expect(send.outputSchema).toBe(ConversationSendResultSchema);
-    expect(turn.outputSchema).toBe(ConversationTurnResultSchema);
-    expect(Value.Check(list.outputSchema!, listResult.details)).toBe(true);
-    expect(Value.Check(send.outputSchema!, sendResult.details)).toBe(true);
-    expect(Value.Check(turn.outputSchema!, turnResult.details)).toBe(true);
+    for (const [tool, schema, params] of [
+      [list, ConversationListResultSchema, {}],
+      [send, ConversationSendResultSchema, message],
+      [turn, ConversationTurnResultSchema, message],
+    ] as const) {
+      expect(tool.outputSchema).toBe(schema);
+      const result = await tool.execute(`${tool.name}-contract`, params);
+      expect(Value.Check(schema, result.details)).toBe(true);
+    }
     expect(compactToolOutputHint(list.outputSchema)).toBe(
       '{ conversations: Array<{ accountId: string; channel: string; conversationRef: string; firstSeenAt: number; kind: "direct" | "group" | "channel"; lastSeenAt: number; target: string; label?: string; threadId?: string }> }',
     );
@@ -111,24 +89,11 @@ describe("conversation tools", () => {
       channel: "reef",
       query: "@peer-agent",
     });
-
     expect(callGateway).toHaveBeenCalledWith({
       method: "conversations.list",
       params: { agentId: "main", channel: "reef", query: "@peer-agent", limit: 50 },
     });
-    expect(result.details).toEqual({
-      conversations: [
-        {
-          conversationRef: conversation.conversationRef,
-          channel: "reef",
-          accountId: "default",
-          kind: "direct",
-          target: "reef:peer-agent",
-          firstSeenAt: 100,
-          lastSeenAt: 200,
-        },
-      ],
-    });
+    expect(result.details).toEqual({ conversations: [conversation] });
   });
 
   it("routes sends through the Gateway with a stable operation id", async () => {
@@ -222,17 +187,8 @@ describe("conversation tools", () => {
       agentSessionKey: "agent:main:telegram:direct:operator",
       config: {},
     });
-    await tool.execute("turn-call", {
-      conversationRef: conversation.conversationRef,
-      message: "please acknowledge",
-      timeoutSeconds: 12,
-    });
-    await tool.execute("turn-call", {
-      conversationRef: conversation.conversationRef,
-      message: "please acknowledge",
-      timeoutSeconds: 12,
-    });
-
+    await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
+    await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
     const first = callGateway.mock.calls[0]![0];
     const second = callGateway.mock.calls[1]![0];
     expect(first.params).toMatchObject({ turnId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u) });
@@ -255,19 +211,13 @@ describe("conversation tools", () => {
         message: "hello",
       }),
     ).rejects.toThrow("Invalid conversationRef");
-
     for (const createTool of [
       createConversationsListTool,
       createConversationsSendTool,
       createConversationsTurnTool,
     ]) {
       const tool = createTool({ agentId: "main", senderIsOwner: false, config: {} });
-      await expect(
-        tool.execute("blocked", {
-          conversationRef: conversation.conversationRef,
-          message: "blocked",
-        }),
-      ).rejects.toThrow("require owner access");
+      await expect(tool.execute("blocked", message)).rejects.toThrow("require owner access");
     }
     expect(callGateway).not.toHaveBeenCalled();
     for (const name of ["conversations_list", "conversations_send", "conversations_turn"]) {

@@ -1,5 +1,7 @@
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
+import { resolveBrowserOperationRequestTimeoutMs } from "./client-actions.js";
 import {
   browserClientTimeout,
   postBrowserJson,
@@ -238,8 +240,12 @@ export async function browserOpenTab(
     timeoutMs?: number;
     signal?: AbortSignal;
     managedOnly?: boolean;
+    /** Backend attachment allowance, independent of the navigation budget. */
+    requestTimeoutMs?: number;
   },
 ): Promise<BrowserOpenResult> {
+  const timeoutMs =
+    opts?.timeoutMs === undefined ? undefined : resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await postBrowserJson(
     baseUrl,
     "/tabs/open",
@@ -247,8 +253,12 @@ export async function browserOpenTab(
       url,
       ...(opts?.label ? { label: opts.label } : {}),
       ...(opts?.managedOnly ? { managedOnly: true } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     },
-    browserClientTimeout(baseUrl, opts?.timeoutMs, 15000),
+    Math.max(
+      clampPositiveTimerTimeoutMs(opts?.requestTimeoutMs) ?? 0,
+      resolveBrowserOperationRequestTimeoutMs(timeoutMs ?? 30_000),
+    ),
     opts,
   );
 }

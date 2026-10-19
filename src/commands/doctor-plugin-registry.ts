@@ -1,4 +1,3 @@
-/** Doctor repairs for stale plugin registry entries, managed npm shadows, and peer links. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -285,14 +284,15 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
     return null;
   }
 
+  const packageLines = stale.map(
+    (plugin) =>
+      `- ${plugin.pluginId}: ${plugin.packageName}${plugin.version ? `@${plugin.version}` : ""}`,
+  );
   if (!params.prompter.shouldRepair) {
     note(
       [
         "Managed npm plugin packages shadow bundled plugins:",
-        ...stale.map(
-          (plugin) =>
-            `- ${plugin.pluginId}: ${plugin.packageName}${plugin.version ? `@${plugin.version}` : ""}`,
-        ),
+        ...packageLines,
         `Repair with ${formatCliCommand("openclaw doctor --fix")} to remove stale managed npm packages and rebuild the plugin registry.`,
       ].join("\n"),
       "Plugin registry",
@@ -315,10 +315,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   note(
     [
       "Removed stale managed npm plugin package(s) shadowing bundled plugins:",
-      ...stale.map(
-        (plugin) =>
-          `- ${plugin.pluginId}: ${plugin.packageName}${plugin.version ? `@${plugin.version}` : ""}`,
-      ),
+      ...packageLines,
     ].join("\n"),
     "Plugin registry",
   );

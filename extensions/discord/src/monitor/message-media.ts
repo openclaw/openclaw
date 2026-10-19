@@ -23,7 +23,6 @@ import {
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
   resolveDiscordReferencedReplyMessage,
-  resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
 import { withAbortTimeout } from "./timeouts.js";
 
@@ -58,6 +57,10 @@ type DiscordMediaOperation = DiscordMediaResolveOptions & {
   endpointRuntime: DiscordEndpointRuntime | null;
   maxBytes: number;
   out: DiscordMediaInfo[];
+};
+
+type DiscordMediaSource = Parameters<typeof resolveDiscordMessageStickers>[0] & {
+  attachments?: APIAttachment[] | null;
 };
 
 function createDiscordMediaOperation(
@@ -134,7 +137,7 @@ function resolveDiscordMediaClassification(params: {
 }
 
 async function resolveMessageMedia(
-  message: Message,
+  message: DiscordMediaSource,
   operation: DiscordMediaOperation,
   errorPrefix: string,
 ): Promise<DiscordMediaInfo[]> {
@@ -152,7 +155,7 @@ async function resolveMessageMedia(
 }
 
 export async function resolveMediaList(
-  message: Message,
+  message: DiscordMediaSource,
   maxBytes: number,
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
@@ -172,16 +175,11 @@ export async function resolveForwardedMediaList(
   const operation = createDiscordMediaOperation(maxBytes, options);
   if (snapshots.length > 0) {
     for (const snapshot of snapshots) {
-      await appendResolvedMediaFromAttachments({
-        ...operation,
-        attachments: snapshot.message?.attachments,
-        errorPrefix: "discord: failed to download forwarded attachment",
-      });
-      await appendResolvedMediaFromStickers({
-        ...operation,
-        stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
-        errorPrefix: "discord: failed to download forwarded sticker",
-      });
+      await resolveMessageMedia(
+        snapshot.message ?? {},
+        operation,
+        "discord: failed to download forwarded",
+      );
     }
     return operation.out;
   }
@@ -244,16 +242,10 @@ async function appendResolvedMediaFromAttachments(
     errorPrefix: string;
   },
 ) {
-  const attachments = params.attachments;
-  if (!attachments || attachments.length === 0) {
-    return;
-  }
-  for (const attachment of attachments) {
+  for (const attachment of params.attachments ?? []) {
     const attachmentUrl = normalizeOptionalString(attachment.url);
     if (!attachmentUrl) {
-      logVerbose(
-        `${params.errorPrefix} ${attachment.id ?? attachment.filename ?? "attachment"}: missing url`,
-      );
+      logVerbose(`${params.errorPrefix} ${attachment.id ?? "attachment"}: missing url`);
       params.out.push(resolveDiscordMediaClassification({ attachment }));
       continue;
     }
@@ -273,14 +265,12 @@ async function appendResolvedMediaFromAttachments(
         fileName: attachment.filename,
         ...classification,
       });
-    } catch (err) {
-      const id = attachment.id ?? attachmentUrl;
+    } catch {
+      const id = attachment.id ?? "attachment";
       // Warn on the default path: the failed download becomes a path-less fact
       // that core drops from the media projection, so this log plus the body
       // notice are the only records of the missing attachment.
-      getChildLogger({ module: "discord-media" }).warn(
-        `${params.errorPrefix} ${id}: ${String(err)}`,
-      );
+      getChildLogger({ module: "discord-media" }).warn(`${params.errorPrefix} ${id}`);
       params.out.push(resolveDiscordMediaClassification({ attachment }));
     }
   }
@@ -296,20 +286,6 @@ function resolveStickerAssetCandidates(sticker: APIStickerItem): DiscordStickerA
     url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.${extension}${isLottie && extension === "png" ? "?size=160" : ""}`,
     fileName: `${baseName}.${extension}`,
   }));
-}
-
-function formatStickerError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  try {
-    return JSON.stringify(err) ?? "unknown error";
-  } catch {
-    return "unknown error";
-  }
 }
 
 function inferStickerContentType(sticker: APIStickerItem): string | undefined {
@@ -331,13 +307,9 @@ async function appendResolvedMediaFromStickers(
     errorPrefix: string;
   },
 ) {
-  const stickers = params.stickers;
-  if (!stickers || stickers.length === 0) {
-    return;
-  }
-  for (const sticker of stickers) {
+  for (const sticker of params.stickers ?? []) {
     const candidates = resolveStickerAssetCandidates(sticker);
-    let lastError: unknown;
+    let downloaded = false;
     for (const candidate of candidates) {
       try {
         const saved = await fetchDiscordMedia(params, {
@@ -352,17 +324,15 @@ async function appendResolvedMediaFromStickers(
           fileName: candidate.fileName,
           kind: "sticker",
         });
-        lastError = null;
+        downloaded = true;
         break;
-      } catch (err) {
-        lastError = err;
+      } catch {
+        // Try the next supported sticker format without logging response content.
       }
     }
-    if (lastError) {
+    if (!downloaded) {
       // Same visibility contract as failed attachments: path-less fact + warn.
-      getChildLogger({ module: "discord-media" }).warn(
-        `${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`,
-      );
+      getChildLogger({ module: "discord-media" }).warn(`${params.errorPrefix} ${sticker.id}`);
       params.out.push({
         contentType: inferStickerContentType(sticker),
         kind: "sticker",

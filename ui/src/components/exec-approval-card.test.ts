@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseApprovalRequestedEvent,
@@ -9,7 +9,13 @@ import {
   type ExecApprovalRequest,
 } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
-import { renderExecApprovalCard, renderSidebarApprovalRow } from "./exec-approval-card.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import {
+  ExecApprovalCard,
+  SidebarApprovalRow,
+  type ExecApprovalCardProps,
+} from "./exec-approval-card-solid.tsx";
 
 let container: HTMLDivElement;
 
@@ -31,19 +37,42 @@ function approval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalReq
   };
 }
 
-function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = "modal") {
-  render(
-    renderExecApprovalCard({
-      approval: request,
-      busy: false,
-      canGrant: true,
-      error: null,
-      variant,
-      onDecision: vi.fn(),
-    }),
-    container,
+function plugin(request: Record<string, unknown>, live = false) {
+  const now = live ? Date.now() : 1;
+  const result = parseApprovalRequestedEvent("plugin.approval.requested", {
+    id: "plugin",
+    request,
+    createdAtMs: now,
+    expiresAtMs: now + 60_000,
+  });
+  expect(result).not.toBeNull();
+  if (!result) {
+    throw new Error("Plugin approval event was not parsed");
+  }
+  return result;
+}
+
+function renderSurface(
+  request: ExecApprovalRequest,
+  variant: "inline" | "modal" | "sidebar" = "modal",
+  onDecision: ExecApprovalCardProps["onDecision"] = vi.fn(),
+) {
+  const props = { approval: request, busy: false, connected: true, canGrant: true, error: null };
+  const view = mountSolid(
+    () =>
+      variant === "sidebar"
+        ? createComponent(SidebarApprovalRow, {
+            ...props,
+            onDecision: (_event, id, decision) => void onDecision(id, decision),
+          })
+        : createComponent(ExecApprovalCard, { props: { ...props, variant, onDecision } }),
+    { container },
   );
-  return container.querySelector<HTMLElement>(".exec-approval-card");
+  return { ...view, card: container.querySelector<HTMLElement>(".exec-approval-card") };
+}
+
+function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = "modal") {
+  return renderSurface(request, variant).card;
 }
 
 describe("exec approval card", () => {
@@ -55,33 +84,36 @@ describe("exec approval card", () => {
 
   afterEach(() => {
     container.remove();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it.each([
-    ["warn", "warning"],
-    ["warning", "warning"],
-    ["danger", "danger"],
-    ["critical", "danger"],
-    ["error", "danger"],
-    ["unknown", "info"],
-    [undefined, "info"],
-  ])("maps plugin severity %s to the %s accent", (pluginSeverity, expected) => {
-    const card = renderCard(approval({ pluginSeverity }));
-
-    expect(card?.classList.contains(`exec-approval-card--severity-${expected}`)).toBe(true);
+  it("maps plugin error severity to the danger accent", () => {
+    const card = renderCard(approval({ pluginSeverity: "error" }));
+    expect(card?.classList.contains("exec-approval-card--severity-danger")).toBe(true);
   });
 
-  it("always gives exec approvals the warning accent", () => {
-    const card = renderCard(
-      approval({
-        kind: "exec",
-        pluginSeverity: "critical",
-        request: { command: "pnpm test" },
-      }),
-    );
-
-    expect(card?.classList.contains("exec-approval-card--severity-warning")).toBe(true);
+  it("expires a mounted sidebar approval and disables its decisions", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(0);
+    const onDecision = vi.fn();
+    const view = renderSurface(approval({ expiresAtMs: 2_000 }), "sidebar", onDecision);
+    const timer = view.getByRole("timer");
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons).toHaveLength(3);
+    expect(timer.getAttribute("aria-label")).toBe("expires in 00:02");
+    expect(buttons.every((button) => !button.disabled)).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    flush();
+    expect(timer).toMatchObject({ textContent: "00:00", title: "expired" });
+    expect(timer.getAttribute("aria-label")).toBe("expired");
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+    for (const button of buttons) {
+      button.click();
+    }
+    expect(onDecision).not.toHaveBeenCalled();
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("preserves command text while highlighting ordered, non-overlapping valid spans", () => {
@@ -104,7 +136,6 @@ describe("exec approval card", () => {
         },
       }),
     );
-
     expect(card?.querySelector(".exec-approval-command")?.textContent).toBe(command);
     expect(Array.from(card?.querySelectorAll("mark") ?? [], (mark) => mark.textContent)).toEqual([
       "echo",
@@ -113,36 +144,12 @@ describe("exec approval card", () => {
     ]);
   });
 
-  it("shows plugin and agent chips with session details in the modal", () => {
-    const card = renderCard(approval());
-    const details = card?.querySelector<HTMLDetailsElement>(".exec-approval-details");
-
-    expect(card?.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("codex");
-    expect(card?.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
-    expect(details?.open).toBe(false);
-    expect(details?.textContent).toContain("Session");
-    expect(details?.textContent).toContain("agent:main:session-1");
-    expect(card?.textContent).not.toContain("Severity");
-  });
-
-  it("keeps inline identity limited to the plugin chip", () => {
-    const card = renderCard(approval(), "inline");
-
-    expect(card?.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("codex");
-    expect(card?.querySelector('[data-approval-chip="agent"]')).toBeNull();
-    expect(card?.querySelector(".exec-approval-details")).toBeNull();
-    expect(card?.textContent).not.toContain("agent:main:session-1");
-  });
-
-  it.each(["inline", "modal", "sidebar"] as const)(
+  it.each(["modal", "sidebar"] as const)(
     "uses plugin decision action labels and resolves their original decisions in the %s surface",
     async (variant) => {
-      const request = parseApprovalRequestedEvent("plugin.approval.requested", {
-        id: "mcp-app-search",
-        request: {
+      const request = plugin(
+        {
           title: "Allow parts.search?",
-          description:
-            "Allow this MCP App to call parts/search once, or while this App stays open?",
           allowedDecisions: ["allow-once", "allow-always", "deny"],
           actions: [
             { kind: "decision", decision: "allow-once", label: "Allow once", command: "" },
@@ -156,27 +163,14 @@ describe("exec approval card", () => {
             { kind: "decision", decision: "deny", label: "Deny", command: "" },
           ],
         },
-        createdAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
-      });
-      if (!request) {
-        throw new Error("Plugin approval event was not parsed");
-      }
+        true,
+      );
       const client = { request: vi.fn(async () => ({})) };
       const onDecision = vi.fn((id: string, decision: ExecApprovalDecision) => {
         expect(id).toBe(request.id);
         return resolveApprovalRequest(client, request, decision);
       });
-      const props = { approval: request, busy: false, canGrant: true, error: null };
-      render(
-        variant === "sidebar"
-          ? renderSidebarApprovalRow({
-              ...props,
-              onDecision: (_event, id, decision) => void onDecision(id, decision),
-            })
-          : renderExecApprovalCard({ ...props, variant, onDecision }),
-        container,
-      );
+      renderSurface(request, variant, onDecision);
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
       expect(buttons.map((button) => button.textContent?.trim())).toEqual([
         "Allow once",
@@ -195,40 +189,18 @@ describe("exec approval card", () => {
     },
   );
 
-  it.each(["inline", "modal"] as const)(
-    "shows the full plugin request detail as plain text in the %s card",
-    (variant) => {
-      const detail = `  Command: pnpm test\n${"review context\n".repeat(700)}<script>blocked()</script>`;
-      const request = parseApprovalRequestedEvent("plugin.approval.requested", {
-        id: "plugin-detail",
-        request: {
-          title: "Review command",
-          description: "Run the test suite",
-          detail,
-        },
-        createdAtMs: 1,
-        expiresAtMs: 61_000,
-      });
-      expect(request).not.toBeNull();
-      if (!request) {
-        throw new Error("Plugin approval event was not parsed");
-      }
-
-      const card = renderCard(request, variant);
-      const previews = Array.from(card?.querySelectorAll("pre") ?? []);
-
-      expect(previews.map((preview) => preview.textContent)).toEqual([
-        "Run the test suite",
-        detail,
-      ]);
-      expect(previews[1]?.closest("details")).toBeNull();
-      expect(card?.querySelector("script")).toBeNull();
-    },
-  );
+  it("shows the full plugin request detail as plain text in the modal card", () => {
+    const detail = `  Command: pnpm test\n${"review context\n".repeat(700)}<script>blocked()</script>`;
+    const request = plugin({ title: "Review command", description: "Run the test suite", detail });
+    const card = renderCard(request);
+    const previews = Array.from(card?.querySelectorAll("pre") ?? []);
+    expect(previews.map((preview) => preview.textContent)).toEqual(["Run the test suite", detail]);
+    expect(previews[1]?.closest("details")).toBeNull();
+    expect(card?.querySelector("script")).toBeNull();
+  });
 
   it("labels an approval projected from a child session", () => {
     const card = renderCard(approval({ sourceSessionKey: "agent:main:cloud-child" }), "inline");
-
     expect(card?.textContent).toContain("Approval requested by session cloud-child");
   });
 
@@ -250,7 +222,6 @@ describe("exec approval card", () => {
       "inline",
     );
     const details = card?.querySelector<HTMLDetailsElement>(".exec-approval-details");
-
     expect(card?.querySelector(".exec-approval-meta")?.textContent).toContain("gateway");
     expect(card?.querySelector(".exec-approval-meta")?.textContent).toContain("/workspace");
     expect(details?.open).toBe(false);

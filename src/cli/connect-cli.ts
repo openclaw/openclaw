@@ -1,6 +1,8 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -10,7 +12,7 @@ import {
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig, mutateConfigFileWithRetry } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -105,7 +107,10 @@ async function fetchJoinPayload(
     });
     release = guarded.release;
     const response = guarded.response;
-    if (!response.ok || !response.headers.get("content-type")?.startsWith("application/json")) {
+    if (
+      !response.ok ||
+      normalizeMimeType(response.headers.get("content-type")) !== "application/json"
+    ) {
       await cancelUnreadResponseBody(response);
       throw new Error("Gateway join code was not found or has expired.");
     }
@@ -213,6 +218,9 @@ async function resolveConnectTarget(
       { cause: error },
     );
   }
+  if (!isUtf8(buffer)) {
+    throw new Error("Connect target file must be valid UTF-8.");
+  }
   const value = buffer.toString("utf8").trim();
   if (!value) {
     throw new Error("Connect target file is empty.");
@@ -249,7 +257,7 @@ async function runConnectCommand(
   }
   const joinCredentials = await resolveNodeHostCloudflareAccess({
     value: initialCloudflareAccess,
-    config: getRuntimeConfig(),
+    config: await captureRuntimeConfigAsyncReader()(),
     env: process.env,
   });
   const payload = joinTarget

@@ -36,6 +36,10 @@ describe.skipIf(process.platform === "win32")("architecture CI Go memory environ
         new URL("../../scripts/ci-additional-checks.sh", import.meta.url),
         join(harness, "ci-additional-checks.sh"),
       );
+      copyFileSync(
+        new URL("../../scripts/ci-collect-checks.sh", import.meta.url),
+        join(harness, "ci-collect-checks.sh"),
+      );
       writeExecutable(join(bin, "pnpm"), [
         "#!/usr/bin/env node",
         'const fs = require("node:fs");',

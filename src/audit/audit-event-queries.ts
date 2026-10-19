@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
@@ -12,7 +12,7 @@ type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
 type AuditEventRow = Selectable<AuditEventsTable>;
 export type AuditEventInsert = Required<Omit<Insertable<AuditEventsTable>, "sequence">>;
 
-function createAuditEventQueries(db: DatabaseSync) {
+function createAuditEventQueries(db: EngineConnection) {
   const database = getNodeSqliteKysely<AuditDatabase>(db);
   return {
     insert: prepareSqliteQueryTakeFirstSync<AuditEventInsert, { sequence: string }>(
@@ -52,7 +52,7 @@ function createAuditEventQueries(db: DatabaseSync) {
             message_ref: parameter((value) => value.message_ref),
             target_ref: parameter((value) => value.target_ref),
           })
-          .onConflict((conflict) => conflict.column("source_id").doNothing())
+          .onConflict((conflict) => conflict.doNothing())
           .returning((eb) => eb.cast<string>("sequence", "text").as("sequence")),
     ),
     read: prepareSqliteQueryTakeFirstSync<number, AuditEventRow>(db, (parameter) =>

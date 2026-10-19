@@ -8,6 +8,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -15,8 +16,13 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -29,7 +35,7 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const METHOD = "controlUi.sessionPullRequests.subscribe";
 export const sessionKey = "agent:main:guest-publication";
@@ -48,9 +54,11 @@ export const readerChanges = [
   "grant",
   "replacement grant",
 ] as const;
-export type Load = NonNullable<
-  Parameters<typeof createControlUiSessionPullRequestSubscriptions>[0]["load"]
->;
+export type Load = SessionPrLoader;
+
+function authority(access = new AbortController()) {
+  return { signal: access.signal, assertCurrent: () => access.signal.throwIfAborted() };
+}
 
 let fixtureSequence = 0;
 
@@ -67,19 +75,9 @@ export async function createFixture(
   const other = ensureProfileForEmail(`publication-owner-${fixtureId}@example.test`);
   const seeded = new Set<string>();
   const sessionId = `${sessionKey}-${fixtureId}`;
+  const readerRole = { agents: ["main"], sessions: { others: "view" as const }, scopes: [scope] };
   const cfg: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: {
-            agents: ["main"],
-            sessions: { others: "view" },
-            scopes: [scope],
-          },
-        },
-      },
-    },
+    gateway: { roles: { default: "reader", definitions: { reader: readerRole } } },
   };
   setUserProfileRole(profile.id, "reader");
   setRuntimeConfigSnapshot(cfg);
@@ -112,10 +110,7 @@ export async function createFixture(
     const access = new AbortController();
     client.internal = {
       ...client.internal,
-      operatorAccessAuthority: {
-        signal: access.signal,
-        assertCurrent: () => access.signal.throwIfAborted(),
-      },
+      operatorAccessAuthority: authority(access),
     };
     client.authenticatedUserProfile = {
       profileId: profile.id,
@@ -124,11 +119,14 @@ export async function createFixture(
       hasAvatar: false,
       updatedAt: 1,
     };
+    prepareGatewayRecipientProfile(client);
     connections.clients.add(client);
     return { client, socket, access };
   };
-  const reader = addReader("guest-publication-reader");
   const load = vi.fn<Load>(async () => snapshot);
+  if (!useDefaultLoader) {
+    spyOnSessionPrLoader(load);
+  }
   const subscriptions = createControlUiSessionPullRequestSubscriptions({
     scheduler,
     getSessionRowProjection: () => getSessionRowProjection(context),
@@ -137,7 +135,7 @@ export async function createFixture(
     prepareRead: async (connId, session) => {
       const client = connections.clients.getByConnectionId(connId);
       return client
-        ? await prepareControlUiSessionPrRead({
+        ? createControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,
@@ -146,12 +144,17 @@ export async function createFixture(
           })
         : undefined;
     },
-    ...(useDefaultLoader ? {} : { load }),
   });
   const context = createGatewayRequestContext(makeContextParams(connections));
   context.getRuntimeConfig = getRuntimeConfig;
   context.controlUiSessionPullRequests = subscriptions;
   await initializeSessionReadContext(context);
+  const reader = addReader("guest-publication-reader");
+  const projection = getSessionRowProjection(context);
+  if (!projection) {
+    throw new Error("Missing fixture session projection");
+  }
+  const detachProjection = connections.attachSessionRowProjection(projection);
   return {
     ...reader,
     clock,
@@ -166,20 +169,9 @@ export async function createFixture(
     context,
     async changeReader(change: (typeof readerChanges)[number], key = sessionKey) {
       if (change === "role") {
-        const roles = cfg.gateway!.roles!;
-        setRuntimeConfigSnapshot({
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            roles: {
-              ...roles,
-              definitions: {
-                ...roles.definitions,
-                reader: { ...roles.definitions.reader!, scopes: [] },
-              },
-            },
-          },
-        });
+        const revoked = structuredClone(cfg);
+        revoked.gateway!.roles!.definitions!.reader!.scopes = [];
+        setRuntimeConfigSnapshot(revoked);
       } else if (change === "connection") {
         reader.client.invalidated = true;
       } else if (change === "profile") {
@@ -189,25 +181,32 @@ export async function createFixture(
       } else if (change === "grant") {
         reader.access.abort(new Error("Original access retired"));
       } else if (change === "replacement grant") {
-        const replacement = new AbortController();
         reader.client.internal = {
           ...reader.client.internal,
-          operatorAccessAuthority: {
-            signal: replacement.signal,
-            assertCurrent: () => replacement.signal.throwIfAborted(),
-          },
+          operatorAccessAuthority: authority(),
         };
       }
+    },
+    async seedRepository(
+      key = sessionKey,
+      repo = "publication",
+      patch: Partial<SessionEntry> = {},
+      repoBranch = "guest-change",
+    ) {
+      const repository = await getSessionRepositoryWorkspaceStore().create({
+        agentId: "main",
+        sessionKey: key,
+        url: `https://github.com/synthetic/${repo}`,
+        branch: repoBranch,
+        assertCurrent: () => {},
+      });
+      await seed(key, profile.id, { ...patch, repositoryWorkspaceId: repository.workspaceId });
+      return repository;
     },
     async subscribe(keys = [sessionKey], client = reader.client) {
       const respond = vi.fn();
       await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "guest-publication-watch",
-          method: METHOD,
-          params: { sessionKeys: keys },
-        },
+        req: { type: "req", id: "watch", method: METHOD, params: { sessionKeys: keys } },
         client,
         context,
         isWebchatConnect: () => false,
@@ -219,6 +218,7 @@ export async function createFixture(
       await subscriptions.stop();
       await scheduler.stop();
       connections.clients.clear();
+      detachProjection();
       await disposeSessionReadContexts();
     },
     async removeSessions() {
@@ -227,7 +227,8 @@ export async function createFixture(
         if (original) {
           await deleteSessionEntryLifecycle({
             agentId: "main",
-            storePath: loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).storePath,
+            storePath: (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }))
+              .storePath,
             target: { canonicalKey: key, storeKeys: [key] },
             expectedSessionId: original.sessionId,
             archiveTranscript: false,

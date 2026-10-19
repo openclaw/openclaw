@@ -19,8 +19,7 @@ import {
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
-import {
-  controlUiBrowserOnlySharedModuleAliases,
+import controlUiViteConfig, {
   createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
   resolveControlUiModulePreloadDependencies,
@@ -59,12 +58,6 @@ vi.mock("vite", async (importOriginal) => {
 });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-type ResolveIdHandler = (
-  this: never,
-  source: string,
-  importer: string | undefined,
-  options: { custom: Record<string, never>; isEntry: boolean; ssr: boolean },
-) => unknown;
 
 function findStringAlias(key: string) {
   return resolveTsconfigPathAliasesForVite().find((alias) => alias.find === key);
@@ -134,12 +127,15 @@ async function executeControlUiLocaleModule(
 }
 
 describe("Control UI Vite config", () => {
-  it("emits Brotli and gzip variants only for bundled compressible assets", () => {
+  it("emits Brotli and gzip variants only for bundled compressible assets", async () => {
     const source = Array.from(
       { length: 200 },
       (_, index) => `console.log("startup-${index % 97}", ${index % 31});\n`,
     ).join("");
-    const variants = createControlUiPrecompressedAssetVariants("assets/app-AbCd1234.js", source);
+    const variants = await createControlUiPrecompressedAssetVariants(
+      "assets/app-AbCd1234.js",
+      source,
+    );
 
     expect(variants.map((variant) => variant.fileName)).toEqual([
       "assets/app-AbCd1234.js.br",
@@ -150,9 +146,11 @@ describe("Control UI Vite config", () => {
     expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
       "32dab2f3598992a8a8b595f5da60f10907fc181c2abfa27380d562d9b539b85d",
     );
-    expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
-    expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
-    expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+    expect(await createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
+    expect(await createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
+    expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual(
+      [],
+    );
   });
 
   it("filters only a locale target and its matching config-hint preload", () => {
@@ -218,6 +216,27 @@ describe("Control UI Vite config", () => {
         hostType: "js",
       }),
     ).toBe(nestedTarget);
+  });
+
+  it("uses the supplied artifact identity without reading Git metadata", () => {
+    const buildInfo = {
+      version: "2026.7.10",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T11:22:33.000Z",
+      builtAt: "2026-07-10T12:34:56.000Z",
+      branch: null,
+      dirty: null,
+      release: false,
+      buildId: "mock-artifact",
+    };
+    childProcessMocks.execFileSync.mockClear();
+
+    const config = controlUiViteConfig({ command: "serve", buildInfo });
+
+    expect(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]).toBe(
+      JSON.stringify(buildInfo),
+    );
+    expect(childProcessMocks.execFileSync).not.toHaveBeenCalled();
   });
 
   it("embeds one canonical artifact identity from explicit build inputs", () => {
@@ -565,6 +584,14 @@ describe("Control UI Vite config", () => {
     const rootAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core",
     );
+    const comparisonAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/session-key-comparison",
+    );
+    expect(aliases[comparisonAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/session-key-comparison",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/session-key-comparison.ts"),
+    });
+    expect(comparisonAliasIndex).toBeLessThan(rootAliasIndex);
     expect(aliases[resultAliasIndex]).toEqual({
       find: "@openclaw/normalization-core/result",
       replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),
@@ -615,28 +642,6 @@ describe("Control UI Vite config", () => {
     expect(broadOpenClawWildcardIndex).toBeGreaterThanOrEqual(0);
     expect(netPolicyIpIndex).toBeLessThan(netPolicyPackageIndex);
     expect(netPolicyWildcardIndex).toBeLessThan(broadOpenClawWildcardIndex);
-  });
-
-  it("uses a browser-safe redactor for shared tool display imports", async () => {
-    const plugin = controlUiBrowserOnlySharedModuleAliases();
-    const resolveIdHook = plugin.resolveId;
-    const resolveIdHandler = (
-      typeof resolveIdHook === "function" ? resolveIdHook : resolveIdHook?.handler
-    ) as ResolveIdHandler | undefined;
-    if (!resolveIdHandler) {
-      throw new Error("Expected browser-only shared module alias plugin to expose resolveId");
-    }
-
-    for (const importerSuffix of ["", "?browserv=123"]) {
-      const resolved = await resolveIdHandler.call(
-        {} as never,
-        "../logging/redact.js",
-        `${path.join(repoRoot, "src/agents/tool-display-common.ts")}${importerSuffix}`,
-        { custom: {}, isEntry: false, ssr: false },
-      );
-
-      expect(resolved).toBe(path.join(repoRoot, "ui/src/lib/browser-redact.ts"));
-    }
   });
 
   it("composes the complete source without registering runtime English", () => {

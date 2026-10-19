@@ -99,6 +99,9 @@ default agent.
 Search results add `v` only to numeric version labels, preserving existing prefixes
 and build names. JSON output keeps the registry's original version values.
 
+An unreadable or malformed saved ClawHub sign-in configuration is reported as a
+warning. Requests can continue anonymously; fix that configuration or sign in again.
+
 The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
 JSON output preserves tabs and line endings in descriptions and paths as escaped
@@ -144,7 +147,7 @@ settings use the separate `skills.install` request path instead.
 When `security.installPolicy` returns `warn` in an interactive terminal,
 OpenClaw prints the reason and findings, then asks `type: '<skill>' to install
 anyway` (or `update anyway`). If the fully rendered review exceeds 4,000
-characters, OpenClaw fails closed before prompting; reduce or coalesce the
+characters, OpenClaw stops before prompting; reduce or coalesce the
 policy output first. A matching answer evaluates the staged skill
 again before continuing. Declined and non-interactive direct CLI commands stop
 before commit; after review, `--acknowledge-install-policy-warning` is the
@@ -285,6 +288,9 @@ Import a ZIP privately:
 openclaw skills library import ./my-skill.zip --slug my-skill
 ```
 
+Local bundle directories are also accepted, including directory names ending in
+`.zip`. Directory imports include `SKILL.md` and supporting files.
+
 Import a ClawHub skill without publishing your library:
 
 ```bash
@@ -356,7 +362,9 @@ openclaw skills workshop restore release-notes --version <version-id>
 | `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.              |
 
 Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
-`restore` act as `user` in the change feed.
+`restore` act as `user` in the change feed. The printed archive Undo command
+includes the archived agent's `--agent <id>`, so it restores that agent even
+when your current directory selects a different agent.
 
 ## Related
 

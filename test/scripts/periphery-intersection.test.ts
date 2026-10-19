@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { compileFunction } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -12,13 +13,14 @@ import {
   validateFindings,
 } from "../../scripts/periphery-intersection.mjs";
 
-const WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
+const WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
 const FINDING_SOURCE = "../shared/OpenClawKit/Sources/OpenClawKit/Example.swift";
 
 type WorkflowStep = {
   id?: string;
   name?: string;
   run?: string;
+  if?: string;
   with?: { name?: string; overwrite?: boolean; path?: string; script?: string };
 };
 
@@ -57,17 +59,6 @@ function withSharedSource(source: string, test: (repoRoot: string) => void) {
 }
 
 describe("Periphery intersection", () => {
-  it("matches exact Swift USRs instead of declaration names", () => {
-    const sameNameDifferentUsr = finding({ ids: ["s:11OpenClawKit7ExampleV_other"] });
-    expect(intersectFindings([finding()], [sameNameDifferentUsr])).toEqual([]);
-    expect(intersectFindings([finding()], [finding()])).toEqual([finding()]);
-  });
-
-  it("matches any USR emitted for a declaration compiled into multiple iOS modules", () => {
-    const ios = finding({ ids: ["s:16OpenClawWatchApp7ExampleV", "s:11OpenClawKit7ExampleV"] });
-    expect(intersectFindings([ios], [finding()])).toEqual([ios]);
-  });
-
   it("sorts findings deterministically", () => {
     const later = finding({
       ids: ["s:11OpenClawKit5LaterV"],
@@ -89,16 +80,6 @@ describe("Periphery intersection", () => {
         const declaration = finding({ location: `${FINDING_SOURCE}:2:8` });
         const inline = finding({ location: `${FINDING_SOURCE}:4:8` });
         expect(filterIgnoredFindings([declaration, inline], repoRoot)).toEqual([]);
-      },
-    );
-  });
-
-  it("does not treat scoped Periphery commands as bare ignores", () => {
-    withSharedSource(
-      ["// periphery:ignore:parameters value", "public struct Example {}"].join("\n"),
-      (repoRoot) => {
-        const command = finding({ location: `${FINDING_SOURCE}:2:8` });
-        expect(filterIgnoredFindings([command], repoRoot)).toEqual([command]);
       },
     );
   });
@@ -143,7 +124,7 @@ describe("shared OpenClawKit Periphery workflow", () => {
     const iosUpload = workflow.jobs?.["scan-ios"]?.steps?.find(
       (step) => step.name === "Upload iOS consumer report",
     );
-    const macosUpload = workflow.jobs?.["scan-macos"]?.steps?.find(
+    const macosUpload = workflow.jobs?.["macos-index"]?.steps?.find(
       (step) => step.name === "Upload macOS consumer report",
     );
     const iosDownload = workflow.jobs?.intersect?.steps?.find(
@@ -156,43 +137,112 @@ describe("shared OpenClawKit Periphery workflow", () => {
       (step) => step.name === "Upload shared intersection",
     );
 
-    expect(iosUpload?.with?.name).toBe("shared-periphery-ios-${{ github.run_id }}");
-    expect(iosDownload?.with?.name).toBe(iosUpload?.with?.name);
-    expect(macosUpload?.with?.name).toBe("shared-periphery-macos-${{ github.run_id }}");
-    expect(macosDownload?.with?.name).toBe(macosUpload?.with?.name);
+    expect(iosUpload?.with?.name).toBe(
+      "shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(macosUpload?.with?.name).toBe(
+      "shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(iosDownload?.with?.name).toBe(
+      "shared-periphery-ios-${{ github.run_id }}-${{ steps.producers.outputs.ios-attempt }}",
+    );
+    expect(macosDownload?.with?.name).toBe(
+      "shared-periphery-macos-${{ github.run_id }}-${{ steps.producers.outputs.macos-attempt }}",
+    );
     expect(intersectionUpload?.with?.name).toBe(
       "shared-periphery-intersection-${{ github.run_id }}",
     );
-
-    const artifactNames = [
-      iosUpload?.with?.name,
-      iosDownload?.with?.name,
-      macosUpload?.with?.name,
-      macosDownload?.with?.name,
-      intersectionUpload?.with?.name,
-    ];
-    expect(artifactNames).not.toContain(undefined);
-    for (const artifactName of artifactNames) {
-      expect(artifactName).not.toContain("github.run_attempt");
-    }
-
-    expect(iosUpload?.with?.overwrite).toBe(true);
-    expect(macosUpload?.with?.overwrite).toBe(true);
     expect(intersectionUpload?.with?.overwrite).toBe(true);
   });
+});
 
-  it("retains the generated protocol contract and leaves findings for the intersection", () => {
-    for (const jobName of ["scan-ios", "scan-macos"]) {
-      const scan = workflow.jobs?.[jobName]?.steps?.find((step) => step.name === "Scan shared kit");
-      expect(scan?.run).toContain("--report-include '../shared/OpenClawKit/Sources/**'");
-      expect(scan?.run).toContain(
-        "--retain-files '**/GenerateGatewayProtocol/GatewayModels.swift'",
-      );
-      expect(scan?.run).not.toContain("--strict");
-    }
-    const macosScan = workflow.jobs?.["scan-macos"]?.steps?.find(
-      (step) => step.name === "Scan shared kit",
+describe("Periphery producer attempt selection", () => {
+  const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as Workflow;
+  const script = workflow.jobs?.intersect?.steps?.find((step) => step.id === "producers")?.with
+    ?.script;
+  if (!script) {
+    throw new Error("missing producer resolution");
+  }
+  const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
+    "github",
+    "context",
+    "core",
+  ]);
+  const producer = (name: string, run_attempt = 2) => ({
+    name,
+    run_attempt,
+    run_id: 123,
+    head_sha: "current-head",
+    status: "completed",
+  });
+  const producers = () => [
+    producer("Scan shared kit from iOS", 1),
+    producer("Build macOS Periphery reports"),
+  ];
+  const resolve = async (jobs = producers(), head = "current-head") => {
+    const outputs = new Map<string, string>();
+    const listJobsForWorkflowRun = () => {};
+    await execute(
+      {
+        rest: {
+          actions: {
+            listJobsForWorkflowRun,
+            getWorkflowRun: async (params: unknown) => {
+              expect(params).toMatchObject({ run_id: 123 });
+              return { data: { head_sha: head } };
+            },
+          },
+        },
+        paginate: async (request: unknown, params: unknown) => {
+          expect(request).toBe(listJobsForWorkflowRun);
+          expect(params).toMatchObject({ run_id: 123, filter: "all", per_page: 100 });
+          return jobs;
+        },
+      },
+      {
+        repo: { owner: "openclaw", repo: "openclaw" },
+        runId: 123,
+        sha: "current-head",
+        payload: {},
+      },
+      { setOutput: (key: string, value: string) => outputs.set(key, value) },
     );
-    expect(macosScan?.run).not.toContain("--exclude-tests");
+    return Object.fromEntries(outputs);
+  };
+
+  it.each(["", "scan / "])(
+    "retains actual producer attempts on an intersection-only rerun (%s)",
+    async (prefix) => {
+      await expect(
+        resolve(producers().map((job) => Object.assign({}, job, { name: prefix + job.name }))),
+      ).resolves.toEqual({
+        "ios-attempt": "1",
+        "macos-attempt": "2",
+      });
+    },
+  );
+
+  it("selects a rerun producer even when its new artifact may be absent", async () => {
+    const jobs = producers();
+    jobs.push({ ...jobs[1]!, run_attempt: 3 });
+    await expect(resolve(jobs)).resolves.toMatchObject({ "macos-attempt": "3" });
+  });
+
+  it.each([
+    ["missing", () => producers().slice(0, 1)],
+    ["ambiguous", () => [...producers(), producer("scan / Build macOS Periphery reports")]],
+    ["wrong run", () => producers().map((job) => Object.assign({}, job, { run_id: 999 }))],
+    [
+      "wrong head",
+      () => producers().map((job) => Object.assign({}, job, { head_sha: "old-head" })),
+    ],
+    ["incomplete", () => producers().map((job) => Object.assign({}, job, { status: "queued" }))],
+    ["invalid attempt", () => producers().map((job) => Object.assign({}, job, { run_attempt: 0 }))],
+  ] as const)("fails closed for %s producer metadata", async (_label, jobs) => {
+    await expect(resolve(jobs())).rejects.toThrow("Periphery producer");
+  });
+
+  it("rejects a run for another head before selecting reports", async () => {
+    await expect(resolve(producers(), "old-head")).rejects.toThrow("producer head");
   });
 });

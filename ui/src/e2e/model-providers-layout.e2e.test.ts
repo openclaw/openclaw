@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Models settings layout and discovery" });
@@ -77,19 +78,34 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/model-providers`);
           const primary = page.getByRole("button", { name: /^Model: GPT-5.5/ });
           await primary.waitFor();
-          await expect.poll(() => primary.textContent()).toContain("alex@example.com");
+          expect(await primary.textContent()).not.toContain("alex@example.com");
+          expect(await primary.locator(".picker-select__description").count()).toBe(0);
           const utility = page.getByRole("button", { name: /^Utility Model: Auto/ });
           await expect.poll(() => utility.textContent()).toContain("GPT-5 mini");
-          await expect.poll(() => utility.textContent()).toContain("alex@example.com");
+          expect(await utility.textContent()).not.toContain("alex@example.com");
+          await utility.click();
+          const utilityPicker = page.locator(
+            "openclaw-select-picker:has(#model-providers-utility-model)",
+          );
+          await expect
+            .poll(() =>
+              utilityPicker
+                .locator('[role="option"][aria-selected="true"] .picker-select__description')
+                .textContent(),
+            )
+            .toContain("alex@example.com");
+          await page.keyboard.press("Escape");
           const decision = page.locator(
             "openclaw-select-picker:has(#model-providers-decision-model)",
           );
           await expect
             .poll(() => decision.locator(".picker-select__trigger").textContent())
             .toContain("Jev");
+          await openPicker(decision);
           expect(
             await decision.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
           ).toBe(1);
+          await page.keyboard.press("Escape");
           const rows = await page
             .locator(".model-providers__defaults .settings-row")
             .evaluateAll((elements) =>
@@ -111,12 +127,13 @@ suite.define(() => {
           expect(rows.map((row) => row.role)).toEqual([
             "Model",
             "Utility Model",
+            "Utility Fallback Model",
             "Decision Model",
             "Fallback Model",
             "Thinking",
             "Fast Mode",
           ]);
-          expect(rows.every((row) => (width > 640 ? row.sideBySide : row.stacked))).toBe(true);
+          expect(rows.every((row) => (width > 768 ? row.sideBySide : row.stacked))).toBe(true);
           await page
             .locator(".settings-sidebar openclaw-agent-select")
             .waitFor({ state: "attached" });
@@ -152,6 +169,14 @@ suite.define(() => {
           await primary.click();
           await page.locator('.model-providers__defaults [role="listbox"]').first().waitFor();
           expect(await gateway.getRequests("models.list")).toEqual(requestsBeforeOpen);
+          expect(
+            await page
+              .locator(
+                '.model-providers__defaults [role="option"][data-value="openai/gpt-5.5"] .picker-select__description',
+              )
+              .first()
+              .textContent(),
+          ).toContain("alex@example.com");
           await gateway.setMethodResponse("models.list", {
             ...catalog,
             pendingProviders: ["openai"],
@@ -181,6 +206,7 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(await primary.getAttribute("aria-expanded")).toBe("true");
           expect(await primary.textContent()).toContain("GPT-5.5");
+          await openPicker(decision);
           expect(
             await decision.locator('[role="option"][data-value="openai/account-new"]').count(),
           ).toBe(0);

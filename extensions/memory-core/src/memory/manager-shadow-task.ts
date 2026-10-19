@@ -1,15 +1,13 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 
 export type MemoryShadowConnection = {
   fileIdentity: { device: string; inode: string };
   extensionPath?: string;
-  // Checkpoint cadence belongs to each connection's WAL maintenance owner, not to publication policy.
+  // The opener owns connection policy; publication only restores temporary transaction settings.
   pragmas: {
     busy_timeout: number;
-    synchronous: number;
     foreign_keys: number;
-    journal_size_limit: number;
-    checkpoint_fullfsync: number;
   };
 };
 
@@ -36,4 +34,19 @@ export function assertMemoryShadowIdentity(
   if (actual.device !== expected.device || actual.inode !== expected.inode) {
     throw new Error("Memory reindex shadow file changed during its owned lifetime");
   }
+}
+
+export function readMemoryConnectionPragmas(db: DatabaseSync, errorMessage: string) {
+  const read = (name: keyof MemoryShadowConnection["pragmas"]): number => {
+    const row = db.prepare(`PRAGMA ${name}`).get();
+    const value = row?.[name] ?? row?.timeout;
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(errorMessage);
+    }
+    return value;
+  };
+  return {
+    busy_timeout: read("busy_timeout"),
+    foreign_keys: read("foreign_keys"),
+  };
 }

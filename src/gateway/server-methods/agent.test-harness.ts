@@ -12,10 +12,24 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import {
+  resetSessionControllerStateForTest,
+  rpcSourceTesting,
+} from "../../sessions/session-lifecycle-admission.test-support.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
@@ -28,6 +42,7 @@ import { agentIdentityHandlers } from "./agent-identity.js";
 import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
 import { agentHandlers } from "./agent.js";
 import { resetSubagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -38,6 +53,7 @@ export {
 } from "./agent-clock.test-helpers.js";
 
 export { getAgentTestMocks } from "./agent.mocks.test-utils.js";
+export { expectRecordFields };
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -48,18 +64,33 @@ export const REAL_PNG = Buffer.from(
 
 export const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 
+async function disposeTestSources() {
+  const sources = [...rpcSourceTesting.values()];
+  const owners = sources.flatMap((ref) =>
+    ref.input.claim?.operation ? [ref.input.claim.operation.ownerSettlement] : [],
+  );
+  for (const ref of sources) {
+    ref.input.claim?.operation?.complete();
+    if (ref.input.claim) {
+      releaseSessionControllerClaim(ref.input.claim);
+    }
+    retireSessionControllerInput(ref.input);
+  }
+  await Promise.allSettled(owners);
+  resetSessionControllerStateForTest();
+}
+
 export const makeContext = (session?: {
   agentId: string;
   row: GatewaySessionRow;
 }): GatewayRequestContext => {
+  setRuntimeConfigSnapshot(resolveAgentTestConfig());
   const projection = createAgentTestSessionRowProjection(resolveAgentTestConfig, session);
-  return {
+  const context = {
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
@@ -70,6 +101,7 @@ export const makeContext = (session?: {
     getRuntimeConfig: () => resolveAgentTestConfig(),
     ...bindSessionRowProjection({}, () => projection),
   } as unknown as GatewayRequestContext;
+  return context;
 };
 
 type AgentHandler = NonNullable<typeof agentHandlers.agent>;
@@ -91,17 +123,6 @@ export function requireValue<T>(value: T | null | undefined, message: string): T
     throw new Error(message);
   }
   return value;
-}
-
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
 }
 
 export function expectStringFieldContains(
@@ -142,13 +163,15 @@ export function mockMainSessionEntry(
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
     agentId: "main",
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
     store: { "agent:main:main": sessionEntry },
     storeKeys: ["agent:main:main"],
     entry: sessionEntry,
     canonicalKey: "agent:main:main",
     legacyKey: undefined,
-  } satisfies ReturnType<typeof import("../session-utils.js").loadSessionEntry>);
+  } satisfies Awaited<
+    ReturnType<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
+  >);
 }
 
 export function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
@@ -243,7 +266,7 @@ function readLastAgentCommandCall(): AgentCommandCall | undefined {
   return call?.[0] as AgentCommandCall | undefined;
 }
 
-export function backendGatewayClient(): AgentHandlerArgs["client"] {
+export function backendGatewayClient(): NonNullable<AgentHandlerArgs["client"]> {
   return {
     connect: {
       minProtocol: 1,
@@ -256,7 +279,7 @@ export function backendGatewayClient(): AgentHandlerArgs["client"] {
       },
       scopes: ["operator.write"],
     },
-  } as AgentHandlerArgs["client"];
+  };
 }
 
 export function cronContinuationGatewayClient(): AgentHandlerArgs["client"] {
@@ -301,7 +324,7 @@ export function setupCronContinuationReleaseFixture() {
   };
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
     canonicalKey: sessionKey,
     entry,
   });
@@ -429,6 +452,27 @@ export function mockSessionResetSuccess(params: {
   );
 }
 
+/** Observe the real effect request while a fixture holds its lifecycle mutation. */
+export async function observeAgentLifecycleAdmission(runId: string) {
+  const requested = createDeferredCore();
+  const lifecycle = await import("../../sessions/session-controller.lifecycle.js");
+  const beginEffect = lifecycle.beginSessionEffect;
+  let receipt: ReturnType<typeof beginEffect> | undefined;
+  const observer = vi.spyOn(lifecycle, "beginSessionEffect").mockImplementation((params) => {
+    const pending = beginEffect(params);
+    if (params.sourceInput?.protocolRunId === runId && !receipt) {
+      receipt = pending;
+      requested.resolve();
+    }
+    return pending;
+  });
+  return {
+    requested: requested.promise,
+    getReceipt: () => expectDefined(receipt, "Expected agent lifecycle admission receipt"),
+    restore: () => observer.mockRestore(),
+  };
+}
+
 export async function invokeAgent(
   params: AgentParams,
   options?: {
@@ -517,6 +561,7 @@ export async function invokeAgentIdentityGet(
 }
 
 export const describe0AfterEach0 = async () => {
+  await disposeTestSources();
   mocks.userTurnStorePath = undefined;
   // Drain deferred broadcasts before retiring the test-owned row and runtime state.
   await flushPendingSessionsChangedEvents();
@@ -549,9 +594,12 @@ export const describe0AfterEach0 = async () => {
   mocks.lifecycleGeneration = "test-generation";
   setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 };
 
 async function resetIntegrationState() {
+  // Tests hold mocked commands indefinitely; retire their real selector claims between cases.
+  await disposeTestSources();
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   await resetSubagentRegistryForTests({ persist: false });
@@ -577,6 +625,7 @@ async function resetIntegrationState() {
   mocks.lifecycleGeneration = "test-generation";
   setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 }
 
 export const describe1BeforeEach0 = () => {

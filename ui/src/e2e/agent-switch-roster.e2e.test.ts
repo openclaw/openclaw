@@ -42,7 +42,7 @@ async function installAgentSwitchGateway(page: Page) {
 async function switchAgent(page: Page, agentId: string): Promise<void> {
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-  await sidebar.locator(`wa-dropdown-item[value="agent:${agentId}"]`).click();
+  await sidebar.locator(`[data-value="agent:${agentId}"]`).click();
 }
 
 function projectRow(page: Page, agentId: string) {

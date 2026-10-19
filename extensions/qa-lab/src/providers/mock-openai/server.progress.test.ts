@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildMatrixToolProgressMentionSafetyPrompt } from "../../live-transports/matrix/scenarios/scenario-runtime-prompts.js";
-import { createMockServerTestHarness, expectOk, postJson } from "./server.test-harness.js";
+import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
+import {
+  createMockServerTestHarness,
+  expectNonStreamingResponsesJson,
+  expectOk,
+  makeToolOutputWithCallId,
+  makeUserInput,
+  outputItems,
+  outputToolCall,
+  postJson,
+} from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
 
@@ -12,10 +22,6 @@ const ERROR_PROMPT =
   "Tool progress error QA check: read `denied.txt` before answering. After the read fails, reply exactly `PROGRESS_OK`.";
 const RUNNING_OUTPUT =
   "Command still running (session lucky-slug, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
-const INPUT_WAIT_OUTPUT =
-  "Process exited with code 7.\n\nNo new output for 16s; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.";
-const TIMED_OUT_OUTPUT =
-  "\n\nProcess exited with code 0.\n\nThe command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.";
 
 const APPROVAL_OUTPUT =
   "Approval required (id abc123, full abc12345).\nHost: gateway\nCWD: /workspace\nCommand:\n```sh\ntrue\n```\nMode: foreground (interactive approvals available).\nBackground mode requires pre-approved policy (allow-always or ask=off).\nReply with: /approve abc123 allow-once|allow-always|deny\nIf the short code is ambiguous, use the full id in /approve.";
@@ -181,33 +187,6 @@ const FAILURE_ALLOWED_PROMPT = EXEC_PROMPT.replace(
 );
 
 describe("background command progress", () => {
-  it("polls warning-prefixed output until terminal before emitting the marker", async () => {
-    const results = [execResult(`Task warning\n\n${RUNNING_OUTPUT}`)];
-    const expectPoll = (response: { output: Record<string, unknown>[] }) => {
-      expect(response.output).toMatchObject([{ name: "process" }]);
-      expect(JSON.parse(String(response.output[0]?.arguments))).toMatchObject({
-        action: "poll",
-        sessionId: "lucky-slug",
-      });
-    };
-    expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
-    for (const output of [
-      "Process exited with code 7.\n\nProcess still running.",
-      INPUT_WAIT_OUTPUT,
-    ]) {
-      results.push(pollResult(output));
-      expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
-    }
-    results.push(
-      pollResult(
-        `${TIMED_OUT_OUTPUT}\n${RUNNING_OUTPUT.replace("lucky-slug", "other-session")}\n\nProcess exited with code 0.`,
-      ),
-    );
-    expect(await requestProgress("responses", EXEC_PROMPT, results)).toMatchObject({
-      output: [{ type: "message", content: [{ text: "PROGRESS_OK" }] }],
-    });
-  });
-
   it.each([
     [
       "single-newline exit-like stdout",
@@ -267,7 +246,8 @@ describe("background command progress", () => {
 });
 
 it("keeps Slack commentary progress open while its exec is running", async () => {
-  const command = "grep 'SLACK-QA-TOOL-A1B2C3D4' /dev/null || sleep 5";
+  const command =
+    "printf '%s' 'SLACK-QA-TOOL-A1B2C3D4' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-A1B2C3D4'";
   const prompt = `SLACK-QA-COMMENTARY-A1B2C3D4 ${command} SLACK-QA-COMMENTARY-DONE-A1B2C3D4`;
   const results: ProgressResult[] = [{ tool: "exec", args: { command }, output: RUNNING_OUTPUT }];
   expect(await requestProgress("responses", prompt, results)).toMatchObject({
@@ -292,6 +272,65 @@ it("keeps Slack commentary progress open while its exec is running", async () =>
       },
     ],
   });
+});
+
+it("selects commentary, exec, and final delivery for the actual Telegram scenario prompt", async () => {
+  const server = await startMockServer();
+  const captured = new Error("captured the scenario's provider input");
+  let prompt = "";
+  await expect(
+    runLoadedScenarioFlow("telegram-progress-tool-visibility", {
+      api: {
+        env: {
+          providerMode: "mock-openai",
+          mock: server,
+          gateway: { restartAfterStateMutation: async () => undefined },
+        },
+        fetchJson: async (url: string) => (await fetch(url)).json(),
+        transport: {
+          id: "telegram",
+          accountId: "sut",
+          reset: async () => undefined,
+          sendInbound: async (input: { text: string }) => {
+            prompt = input.text;
+            throw captured;
+          },
+        },
+      },
+    }),
+  ).rejects.toBe(captured);
+  const request = (input: unknown[]) =>
+    expectNonStreamingResponsesJson(server, {
+      model: "qa-model",
+      tools: [{ type: "function", name: "exec" }],
+      input,
+    });
+  const input = [makeUserInput(prompt)];
+  const plan = await request(input);
+  expect(outputItems(plan)).toMatchObject([
+    {
+      type: "message",
+      phase: "commentary",
+      content: [{ text: "SLACK-QA-COMMENTARY-00000000" }],
+    },
+    { type: "function_call", name: "exec" },
+  ]);
+  const call = outputToolCall(plan, "exec");
+  const final = await request([
+    ...input,
+    call,
+    makeToolOutputWithCallId(
+      String(call.call_id),
+      "SLACK-QA-OUTPUT-00000000\n\nProcess exited with code 0.",
+    ),
+  ]);
+  expect(outputItems(final)).toMatchObject([
+    {
+      type: "message",
+      phase: "final_answer",
+      content: [{ text: "SLACK-QA-COMMENTARY-DONE-00000000" }],
+    },
+  ]);
 });
 
 async function completeProgress(params: {

@@ -10,6 +10,18 @@ export type ResponsesRequestLifecycle = {
 
 const lifecycleKey = Symbol("openclaw.responsesRequestLifecycle");
 
+const independentRequestKey = Symbol("openclaw.independentResponsesRequest");
+
+/** A full-input side request must neither consume nor replace a session's continuation. */
+export const independentResponsesRequest = {
+  set(options: object): void {
+    Object.defineProperty(options, independentRequestKey, { value: true, enumerable: true });
+  },
+  has(options: object | undefined): boolean {
+    return options !== undefined && Reflect.get(options, independentRequestKey) === true;
+  },
+};
+
 /** Private transport carrier: serialized options cannot mint host authority. */
 export const responsesRequestLifecycle = {
   set(options: object, lifecycle: ResponsesRequestLifecycle): void {

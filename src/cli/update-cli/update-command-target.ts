@@ -19,7 +19,6 @@ import {
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -38,6 +37,7 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -57,6 +57,7 @@ import {
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
@@ -72,7 +73,6 @@ import type { resolvePackageRuntimePreflight } from "./update-command-runtime-pr
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
-import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 
 /** A fresh profile must be initialized by an identified, schema-declaring target. */
 export async function resolveFreshUpdateMetadata(target: {
@@ -153,7 +153,7 @@ export async function resolveUpdateCommandTarget(
         timeoutMs,
       } = prepared;
       // Initialization and confirmations can outlive the earlier admission snapshot.
-      const pkgOwnership = createFreeBsdPkgOwnershipInspection(updateStepTimeoutMs);
+      const pkgOwnership = createSystemPackageOwnershipInspection(updateStepTimeoutMs);
       await pkgOwnership.assertUnowned(discoveredRoot);
       let { devTarget } = prepared;
       let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;
@@ -409,7 +409,6 @@ export async function resolveUpdateCommandTarget(
       if (updateInstallKind === "package") {
         recoveryState.triageTarget.root = root;
         recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
-        packageInstallEnv = await createGlobalInstallEnv();
         installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
         const manager = await resolveGlobalManager({
           root,
@@ -423,6 +422,7 @@ export async function resolveUpdateCommandTarget(
           }
           const report = {
             root,
+            before: { version: currentVersion },
             serviceRoot: managedServiceRoot,
             installKind,
             reason: error.reason,
@@ -452,6 +452,7 @@ export async function resolveUpdateCommandTarget(
           packageName: installedPackageName,
           pkgOwnership,
         });
+        packageInstallEnv = await createGlobalInstallEnv(undefined, packageInstallTarget);
         if (packageInstallTarget.manager === "npm") {
           const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
           if (destination.kind !== "owned" && destination.kind !== "empty") {

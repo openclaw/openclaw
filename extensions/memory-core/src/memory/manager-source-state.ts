@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildFileEntry,
@@ -12,7 +12,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -87,14 +87,14 @@ export async function inspectMemorySourceState(params: {
       ...Array.from(
         skippedRoots,
         (root) =>
-          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its resolved absolute directory instead`,
       ),
     ],
   };
 }
 
 export function loadMemorySourceFileState(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   source: MemorySource;
   paths?: readonly string[];
 }): MemorySourceFileStateRow[] {
@@ -109,7 +109,7 @@ export function loadMemorySourceFileState(params: {
 }
 
 export function refreshMemorySessionSourceState(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
 ): boolean {
   return (

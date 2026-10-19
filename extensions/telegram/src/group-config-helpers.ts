@@ -20,11 +20,7 @@ export function resolveTelegramScopedGroupConfig(
   const chatIdStr = String(chatId);
   const scopedConfigs = chatIdStr.startsWith("-") ? telegramCfg.groups : telegramCfg.direct;
   // Whole-entry selection: an exact chat hides every wildcard field.
-  const groupKey = Object.hasOwn(scopedConfigs ?? {}, chatIdStr)
-    ? chatIdStr
-    : Object.hasOwn(scopedConfigs ?? {}, "*")
-      ? "*"
-      : undefined;
+  const groupKey = [chatIdStr, "*"].find((key) => Object.hasOwn(scopedConfigs ?? {}, key));
   const groupConfig = groupKey ? scopedConfigs?.[groupKey] : undefined;
   const topics = messageThreadId == null ? undefined : groupConfig?.topics;
   const defaultConfig = topics?.["*"];
@@ -63,24 +59,25 @@ export function resolveTelegramGroupPromptSettings(params: {
     params.groupConfig?.systemPrompt?.trim() || null,
     params.topicConfig?.systemPrompt?.trim() || null,
   ].filter((entry): entry is string => Boolean(entry));
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-  return { skillFilter, groupSystemPrompt };
+  return { skillFilter, groupSystemPrompt: systemPromptParts.join("\n\n") || undefined };
 }
 
 export function resolveTelegramDirectToolPolicy(params: {
   directConfig?: Pick<TelegramDirectConfig, "tools" | "toolsBySender">;
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
 }): GroupToolPolicyConfig | undefined {
   return (
-    resolveToolsBySender({
-      toolsBySender: params.directConfig?.toolsBySender,
-      messageProvider: "telegram",
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-    }) ?? params.directConfig?.tools
+    (params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: params.directConfig?.toolsBySender,
+          messageProvider: "telegram",
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+        })) ?? params.directConfig?.tools
   );
 }

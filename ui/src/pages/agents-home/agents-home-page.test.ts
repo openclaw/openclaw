@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
@@ -15,17 +16,16 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
 import {
-  createApplicationContextProvider,
-  createApplicationGateway,
-} from "../../test-helpers/application-context.ts";
-import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
-import { AgentsHomePage } from "./agents-home-page.ts";
-
-const elementName = `test-agents-home-${crypto.randomUUID()}`;
-customElements.define(elementName, class extends AgentsHomePage {});
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { AgentsHomePage } from "./agents-home-page.tsx";
 
 const roster: AgentsListResult = {
   defaultId: "harbor",
@@ -140,20 +140,26 @@ function createPage() {
     agentIdentity,
     agentSelection,
     sessions: sessionCapability,
+    runtimeConfig: {
+      state: { configSnapshot: { sourceConfig: {} } },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["runtimeConfig"],
     navigate,
   };
   const baselineEventListeners = eventListeners.size;
-  const provider = createApplicationContextProvider(context);
-  const page = new (customElements.get(elementName) ?? AgentsHomePage)();
-  provider.append(page);
-  document.body.append(provider);
+  const provider = createSolidApplicationContextProvider(context);
+  const mountPage = () =>
+    mountSolid(() => createComponent(AgentsHomePage, {}), { wrapper: provider.wrapper });
+  const view = mountPage();
   disposers.push(() => {
     agents.dispose();
     sessionCapability.dispose();
   });
   return {
-    page,
-    provider,
+    page: view.container,
+    unmount: view.unmount,
+    mountPage,
     rosterListenerCount: () => eventListeners.size - baselineEventListeners,
     request,
     navigate,
@@ -176,7 +182,7 @@ beforeEach(async () => {
   await i18n.setLocale("en");
 });
 afterEach(() => {
-  document.body.replaceChildren();
+  cleanupSolid();
   for (const dispose of disposers.splice(0)) {
     dispose();
   }
@@ -184,22 +190,37 @@ afterEach(() => {
 });
 
 describe("AgentsHomePage", () => {
+  it("disables unavailable agent creation with its capability and recovery reason", async () => {
+    const { page, navigate } = createPage();
+    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    const create = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "New agent",
+    );
+
+    expect(create).toBeDefined();
+    expect(create?.disabled).toBe(true);
+    expect(create?.title).toContain("openclaw.chat");
+    expect(create?.title).toContain("operator.admin");
+    expect(create?.title).toContain("reconnect");
+    create?.click();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it("shows the configured roster, prioritizes work across sessions, and opens the canonical main chat", async () => {
     const { page, request, navigate } = createPage();
-    await vi.waitFor(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
 
     const cards = [...page.querySelectorAll(".agents-home__card")];
     expect(cards.map((card) => card.querySelector("h2")?.textContent)).toEqual(["Ember", "Harbor"]);
     expect(cards[0]?.textContent).toContain("Builds small tools");
-    expect(cards[0]?.textContent).toContain("example/model-small");
-    await vi.waitFor(() =>
+    expect(page.textContent).not.toContain("example/model-small");
+    expect(page.textContent).not.toMatch(/Working now|Active .* ago|No recent activity/u);
+    await waitForSolid(() =>
       expect(cards[0]?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
     );
     expect(cards[1]?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
       "⚓",
     );
-    expect(cards[0]?.querySelector(".agents-home__working")?.textContent).toBe("Working now");
-    expect(cards[1]?.querySelector(".agents-home__working")).toBeNull();
     expect(cards[0]?.querySelector(".agents-home__preview")?.textContent?.trim()).toBe(
       "The main chat summary.",
     );
@@ -212,18 +233,46 @@ describe("AgentsHomePage", () => {
 
     const openChat = cards[0]?.querySelector<HTMLElement>(".agents-home__open");
     expect(openChat?.textContent).toBe("Open chat");
+    expect(cards[0]?.tagName).toBe("A");
+    expect(cards[0]?.getAttribute("href")).toBe("/chat/ember");
+    expect(cards[0]?.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    const modifiedClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    });
+    openChat?.dispatchEvent(modifiedClick);
+    expect(modifiedClick.defaultPrevented).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
     openChat?.click();
     expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/ember" });
   });
 
+  it("keeps chats reachable when agents have no messages", async () => {
+    vi.useFakeTimers();
+    const { page, updateSessions, emitChange, navigate } = createPage();
+    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    updateSessions([]);
+    emitChange();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForSolid(() =>
+      expect(
+        [...page.querySelectorAll(".agents-home__preview")].map((preview) => preview.textContent),
+      ).toEqual(["No messages yet", "No messages yet"]),
+    );
+    expect(page.textContent).not.toContain("No recent activity");
+    page.querySelector<HTMLElement>('[data-agent-id="harbor"]')?.click();
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/harbor" });
+  });
+
   it("shares bounded activity loading between consumers and stops after the last detach", async () => {
     vi.useFakeTimers();
-    const { page, provider, request, rosterListenerCount, updateSessions, emitChange } =
+    const { page, mountPage, unmount, request, rosterListenerCount, updateSessions, emitChange } =
       createPage();
-    await vi.waitFor(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
-    const second = new (customElements.get(elementName) ?? AgentsHomePage)();
-    provider.append(second);
-    await vi.waitFor(() => expect(second.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    const secondView = mountPage();
+    const second = secondView.container;
+    await waitForSolid(() => expect(second.querySelectorAll(".agents-home__card")).toHaveLength(2));
     const calls = (method: string) =>
       request.mock.calls.filter(
         ([name, params]) =>
@@ -249,20 +298,21 @@ describe("AgentsHomePage", () => {
     request.mockClear();
     emitChange();
     await vi.advanceTimersByTimeAsync(5_000);
+    flush();
     expect(page.textContent).toContain("Activity 299");
     expect(second.textContent).toContain("Activity 299");
     expect(calls("sessions.list")).toHaveLength(3);
     expect(calls("sessions.subscribe")).toHaveLength(0);
     expect(page.textContent).not.toContain("Activity 300");
 
-    page.remove();
+    unmount();
     expect(rosterListenerCount()).toBe(0);
     request.mockClear();
     emitChange();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(calls("sessions.list")).toHaveLength(3);
     emitChange();
-    second.remove();
+    secondView.unmount();
     expect(rosterListenerCount()).toBe(0);
     request.mockClear();
     emitChange();
@@ -270,10 +320,10 @@ describe("AgentsHomePage", () => {
     expect(calls("sessions.list")).toHaveLength(0);
   });
 
-  it("refreshes live status and previews after session events and gateway reconnect", async () => {
+  it("refreshes previews and activity ordering after session events and gateway reconnect", async () => {
     vi.useFakeTimers();
     const { page, updateSessions, emitChange, setPhase } = createPage();
-    await vi.waitFor(() => expect(page.querySelector(".agents-home__working")).not.toBeNull());
+    await waitForSolid(() => expect(page.textContent).toContain("The main chat summary."));
     updateSessions([
       {
         key: "agent:ember:team-room",
@@ -287,11 +337,10 @@ describe("AgentsHomePage", () => {
     emitChange();
     emitChange();
     await vi.advanceTimersByTimeAsync(5_000);
-    await vi.waitFor(() => expect(page.textContent).toContain("The tool is finished."));
-    expect(page.querySelector(".agents-home__working")).toBeNull();
+    await waitForSolid(() => expect(page.textContent).toContain("The tool is finished."));
 
     setPhase("reconnecting");
-    await vi.waitFor(() => expect(page.textContent).toContain("Connect to the Gateway"));
+    await waitForSolid(() => expect(page.textContent).toContain("Connect to the Gateway"));
     updateSessions([
       {
         key: "agent:harbor:team-room",
@@ -304,8 +353,7 @@ describe("AgentsHomePage", () => {
       },
     ]);
     setPhase("connected");
-    await vi.waitFor(() => expect(page.textContent).toContain("The next schedule is ready."));
+    await waitForSolid(() => expect(page.textContent).toContain("The next schedule is ready."));
     expect(page.querySelector(".agents-home__card h2")?.textContent).toBe("Harbor");
-    expect(page.querySelector(".agents-home__working")?.textContent).toBe("Working now");
   });
 });

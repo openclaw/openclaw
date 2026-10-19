@@ -8,6 +8,7 @@ import type {
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
 import {
+  isPluginProviderEndpointClass,
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
 } from "../plugins/plugin-metadata-provider-facts.js";
@@ -60,6 +61,7 @@ export type ProviderEndpointClass =
   | "minimax-native"
   | "moonshot-native"
   | "modelstudio-native"
+  | "novita-native"
   | "nvidia-native"
   | "openai-public"
   | "openai"
@@ -150,6 +152,12 @@ const OPENAI_RESPONSES_APIS = new Set([
   "openai-chatgpt-responses",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const ENDPOINT_ATTRIBUTION_PROVIDERS = new Map<ProviderEndpointClass, string>([
+  ["openrouter", "openrouter"],
+  ["vercel-ai-gateway", "vercel-ai-gateway"],
+  ["nvidia-native", "nvidia"],
+  ["google-generative-ai", "google"],
+]);
 
 function resolveUrlHostname(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -182,14 +190,12 @@ function resolveProviderMetadataOwners(
   };
 }
 
-function resolveManifestProviderRequest(params: {
-  provider: string | undefined;
-  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
-}): PluginManifestProviderRequestProvider | undefined {
-  return params.provider
-    ? resolveProviderMetadataOwners(params.providerMetadataOwners).providerRequests.get(
-        params.provider,
-      )
+function resolveManifestProviderRequest(
+  provider: string | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
+): PluginManifestProviderRequestProvider | undefined {
+  return provider
+    ? resolveProviderMetadataOwners(providerMetadataOwners).providerRequests.get(provider)
     : undefined;
 }
 
@@ -206,20 +212,6 @@ function buildManifestEndpointResolution(
     hostname: host,
     ...(googleVertexRegion ? { googleVertexRegion } : {}),
   };
-}
-
-function resolveManifestProviderEndpoint(params: {
-  host: string;
-  normalizedBaseUrl?: string;
-  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
-}): ProviderEndpointResolution | undefined {
-  for (const endpoint of resolveProviderMetadataOwners(params.providerMetadataOwners)
-    .providerEndpoints) {
-    if (matchesPluginProviderEndpoint(endpoint, params)) {
-      return buildManifestEndpointResolution(endpoint, params.host);
-    }
-  }
-  return undefined;
 }
 
 function isLocalEndpointHost(host: string): boolean {
@@ -250,13 +242,10 @@ export function resolveProviderEndpoint(
     return { endpointClass: "invalid" };
   }
   const normalizedBaseUrl = normalizePluginProviderBaseUrl(baseUrl);
-  const manifestEndpoint = resolveManifestProviderEndpoint({
-    host,
-    normalizedBaseUrl,
-    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
-  });
-  if (manifestEndpoint) {
-    return manifestEndpoint;
+  for (const endpoint of resolveProviderMetadataOwners(providerMetadataOwners).providerEndpoints) {
+    if (matchesPluginProviderEndpoint(endpoint, { host, normalizedBaseUrl })) {
+      return buildManifestEndpointResolution(endpoint, host);
+    }
   }
   if (isLocalEndpointHost(host)) {
     return { endpointClass: "local", hostname: host };
@@ -268,10 +257,7 @@ function resolveKnownProviderFamily(
   provider: string | undefined,
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
 ): string {
-  const manifestFamily = resolveManifestProviderRequest({
-    provider,
-    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
-  })?.family;
+  const manifestFamily = resolveManifestProviderRequest(provider, providerMetadataOwners)?.family;
   if (manifestFamily) {
     return manifestFamily;
   }
@@ -357,6 +343,14 @@ function resolveProviderAttributionPolicy(
           "User-Agent": userAgent,
         },
       };
+    case "opencode":
+      return {
+        ...policy,
+        verification: "internal-runtime",
+        reviewNote:
+          "Identify OpenClaw on native OpenCode Zen requests without impersonating OpenCode.",
+        headers: { "User-Agent": userAgent },
+      };
     case "opencode-go":
       return {
         ...policy,
@@ -417,39 +411,22 @@ export function resolveProviderRequestPolicy(
       attributionProvider = "xai";
     }
   } else if (
-    provider === "opencode-go" &&
     policy?.enabledByDefault &&
-    endpointClass === "opencode-go-native"
+    ((provider === "opencode-go" && endpointClass === "opencode-go-native") ||
+      (provider === "opencode" && endpointClass === "opencode-native"))
   ) {
-    // The documented identification contract belongs to Go's native endpoint.
-    // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
-    attributionProvider = "opencode-go";
+    // Native OpenCode routes identify OpenClaw; custom proxies do not inherit attribution.
+    attributionProvider = provider;
   }
-  // OpenRouter and Vercel AI Gateway attribution follows the endpoint, so custom provider
-  // ids pointed at their hosts are attributed too; custom proxy baseUrls are withheld.
-  if (
-    !attributionProvider &&
-    (endpointClass === "openrouter" || (provider === "openrouter" && endpointClass === "default"))
-  ) {
-    attributionProvider = "openrouter";
-  }
-  if (
-    !attributionProvider &&
-    (endpointClass === "vercel-ai-gateway" ||
-      (provider === "vercel-ai-gateway" && endpointClass === "default"))
-  ) {
-    attributionProvider = "vercel-ai-gateway";
-  }
-  // Perplexity's API is only reached through its own plugin, which resolves the direct
-  // host as the provider default; any configured baseUrl is a proxy.
-  if (!attributionProvider && provider === "perplexity" && endpointClass === "default") {
-    attributionProvider = "perplexity";
-  }
-  if (!attributionProvider && endpointClass === "nvidia-native") {
-    attributionProvider = "nvidia";
-  }
-  if (!attributionProvider && endpointClass === "google-generative-ai") {
-    attributionProvider = "google";
+  if (!attributionProvider) {
+    // Endpoint-owned attribution also applies to custom provider ids on the native host.
+    // Perplexity's plugin uses the default route; any configured baseUrl is a proxy.
+    attributionProvider =
+      ENDPOINT_ATTRIBUTION_PROVIDERS.get(endpointClass) ??
+      (endpointClass === "default" &&
+      ["openrouter", "vercel-ai-gateway", "perplexity"].includes(provider)
+        ? provider
+        : undefined);
   }
 
   const attributionPolicy = attributionProvider
@@ -481,6 +458,21 @@ export function resolveProviderRequestPolicy(
   };
 }
 
+/** Catalog speed policy needs endpoint facts, without constructing request attribution. */
+export function resolveProviderFastModeRequestCapabilities(
+  input: ProviderRequestPolicyInput,
+  endpointClass = resolveProviderEndpoint(input.baseUrl, input.providerMetadataOwners)
+    .endpointClass,
+) {
+  return {
+    endpointClass,
+    allowsAnthropicServiceTier:
+      normalizeProviderId(input.provider ?? "") === "anthropic" &&
+      normalizeOptionalLowercaseString(input.api) === "anthropic-messages" &&
+      (endpointClass === "default" || endpointClass === "anthropic-public"),
+  };
+}
+
 export function resolveProviderRequestCapabilities(
   input: ProviderRequestCapabilitiesInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -490,36 +482,12 @@ export function resolveProviderRequestCapabilities(
   const api = normalizeOptionalLowercaseString(input.api);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
-    endpointClass === "anthropic-public" ||
-    endpointClass === "cerebras-native" ||
-    endpointClass === "chutes-native" ||
-    endpointClass === "deepseek-native" ||
-    endpointClass === "github-copilot-native" ||
-    endpointClass === "groq-native" ||
-    endpointClass === "meta-native" ||
-    endpointClass === "mistral-public" ||
-    endpointClass === "minimax-native" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native" ||
-    endpointClass === "nvidia-native" ||
-    endpointClass === "openai-public" ||
-    endpointClass === "openai" ||
-    endpointClass === "opencode-native" ||
-    endpointClass === "opencode-go-native" ||
-    endpointClass === "azure-openai" ||
-    endpointClass === "openrouter" ||
-    endpointClass === "xai-native" ||
-    endpointClass === "xiaomi-native" ||
-    endpointClass === "zai-native" ||
-    endpointClass === "google-generative-ai" ||
-    endpointClass === "google-vertex";
+    isPluginProviderEndpointClass(endpointClass) && endpointClass !== "vercel-ai-gateway";
 
-  const manifestProviderRequest = resolveManifestProviderRequest({
+  const manifestProviderRequest = resolveManifestProviderRequest(
     provider,
-    ...(input.providerMetadataOwners
-      ? { providerMetadataOwners: input.providerMetadataOwners }
-      : {}),
-  });
+    input.providerMetadataOwners,
+  );
   const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
   const isResponsesApi = api !== undefined && OPENAI_RESPONSES_APIS.has(api);
@@ -558,10 +526,7 @@ export function resolveProviderRequestCapabilities(
         api === "openai-responses" ||
         api === "openai-chatgpt-responses" ||
         api === "azure-openai-responses"),
-    allowsAnthropicServiceTier:
-      provider === "anthropic" &&
-      api === "anthropic-messages" &&
-      (endpointClass === "default" || endpointClass === "anthropic-public"),
+    ...resolveProviderFastModeRequestCapabilities(input, endpointClass),
     // This is intentionally the gate for emitting `store: false` on Responses
     // transports, not just a statement about vendor support in the abstract.
     supportsResponsesStoreField:
@@ -581,55 +546,4 @@ export function resolveProviderRequestCapabilities(
       manifestProviderRequest?.openAICompletions?.supportsStreamingUsage === true,
     compatibilityFamily,
   };
-}
-
-function describeProviderRequestRoutingPolicy(
-  policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "none" {
-  if (!policy.attributionProvider) {
-    return "none";
-  }
-  switch (policy.policy?.verification) {
-    case "vendor-hidden-api-spec":
-      return "hidden";
-    case "vendor-documented":
-      return "documented";
-    default:
-      return "none";
-  }
-}
-
-function describeProviderRequestRouteClass(
-  policy: ProviderRequestPolicyResolution,
-): "default" | "native" | "proxy-like" | "local" | "invalid" {
-  switch (policy.endpointClass) {
-    case "default":
-    case "invalid":
-    case "local":
-      return policy.endpointClass;
-    case "custom":
-    case "openrouter":
-      return "proxy-like";
-    default:
-      return "native";
-  }
-}
-
-export function describeProviderRequestRoutingSummary(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): string {
-  const policy = resolveProviderRequestPolicy(input, env);
-  const api = normalizeOptionalLowercaseString(input.api) ?? "unknown";
-  const provider = policy.provider ?? "unknown";
-  const routeClass = describeProviderRequestRouteClass(policy);
-  const routingPolicy = describeProviderRequestRoutingPolicy(policy);
-
-  return [
-    `provider=${provider}`,
-    `api=${api}`,
-    `endpoint=${policy.endpointClass}`,
-    `route=${routeClass}`,
-    `policy=${routingPolicy}`,
-  ].join(" ");
 }

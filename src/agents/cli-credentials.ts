@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -73,20 +74,25 @@ export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessE
   }
 }
 
-function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean {
+function readCodexAuthMode(data: Record<string, unknown>): string {
   const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (authMode) {
-    return authMode === "chatgpt" || authMode === "chatgptauthtokens";
-  }
-  return typeof data.OPENAI_API_KEY !== "string";
+  return authMode || (typeof data.OPENAI_API_KEY === "string" ? "api_key" : "chatgpt");
 }
 
-function codexAuthJsonUsesApiKey(data: Record<string, unknown>): boolean {
-  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (authMode) {
-    return authMode === "apikey" || authMode === "api_key";
+/** Presence is only a discovery hint; Codex verifies the login without exporting its tokens. */
+export function hasCodexCliAuthFile(codexHome?: string): boolean {
+  try {
+    const file = fs.statSync(
+      path.join(resolveCodexCliHomePath(codexHome), CODEX_CLI_AUTH_FILENAME),
+    );
+    return file.isFile() && file.size > 0;
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw error;
   }
-  return typeof data.OPENAI_API_KEY === "string";
 }
 
 function readFileMtimeMs(filePath: string): number | null {
@@ -212,7 +218,7 @@ function parseCodexOauthCredential(
   data: Record<string, unknown>,
   fallbackExpiry: number | undefined,
 ): CodexCliCredential | null {
-  if (!codexAuthJsonUsesChatGptTokens(data)) {
+  if (!["chatgpt", "chatgptauthtokens"].includes(readCodexAuthMode(data))) {
     return null;
   }
   const tokens = data.tokens as Record<string, unknown> | undefined;
@@ -243,7 +249,7 @@ function parseCodexOauthCredential(
 function parseCodexApiKeyCredential(
   data: Record<string, unknown>,
 ): CodexCliApiKeyCredential | null {
-  if (!codexAuthJsonUsesApiKey(data)) {
+  if (!["apikey", "api_key"].includes(readCodexAuthMode(data))) {
     return null;
   }
   const key = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY.trim() : "";

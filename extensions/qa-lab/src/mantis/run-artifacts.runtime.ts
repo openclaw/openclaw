@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaArtifactPath } from "../cli-paths.js";
@@ -44,10 +45,6 @@ type MantisOutputRoot = Pick<
   Awaited<ReturnType<typeof root>>,
   "exists" | "mkdir" | "move" | "remove" | "stat"
 >;
-
-function isNotFoundError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
 
 async function removeMantisOutputTree(
   outputRoot: MantisOutputRoot,
@@ -260,7 +257,7 @@ async function readNormalizedLaneResult(params: {
   try {
     rawSummary = await fs.readFile(summaryPath, "utf8");
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -350,25 +347,30 @@ export async function readMantisLaneResult(params: {
   };
 }
 
-export async function copyMantisLaneArtifact(params: {
-  kind: "screenshot" | "video";
+export async function copyMantisLaneArtifacts(params: {
   lane: "baseline" | "candidate";
   result: LaneResult;
-}): Promise<string | undefined> {
-  const artifactPath =
-    params.kind === "screenshot" ? params.result.screenshotPath : params.result.videoPath;
-  if (!artifactPath) {
-    return undefined;
+}): Promise<LaneResult> {
+  const copied = {
+    screenshotPath: params.result.screenshotPath,
+    videoPath: params.result.videoPath,
+  };
+  for (const [field, extension] of [
+    ["screenshotPath", "png"],
+    ["videoPath", "mp4"],
+  ] as const) {
+    const artifactPath = params.result[field];
+    if (!artifactPath) {
+      continue;
+    }
+    const source = path.isAbsolute(artifactPath)
+      ? artifactPath
+      : path.join(params.result.outputDir, artifactPath);
+    const target = path.join(params.result.outputDir, `${params.lane}.${extension}`);
+    await fs.copyFile(source, target);
+    copied[field] = target;
   }
-  const source = path.isAbsolute(artifactPath)
-    ? artifactPath
-    : path.join(params.result.outputDir, artifactPath);
-  const target = path.join(
-    params.result.outputDir,
-    `${params.lane}.${params.kind === "screenshot" ? "png" : "mp4"}`,
-  );
-  await fs.copyFile(source, target);
-  return target;
+  return { ...params.result, ...copied };
 }
 
 export async function stageMantisLaneOutput(sourceDir: string, targetDir: string): Promise<void> {

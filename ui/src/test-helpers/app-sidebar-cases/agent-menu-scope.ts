@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { patchSettings } from "../../app/settings.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -7,7 +8,7 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar agent menu scope", () => {
   it.each([0, 1])(
@@ -36,12 +37,12 @@ describe("AppSidebar agent menu scope", () => {
       await sidebar.updateComplete;
       const menu = sidebar.querySelector(".sidebar-agent-menu");
       expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-      expect(menu?.querySelector('[value="scope:all"]')).toBeNull();
-      expect(menu?.querySelectorAll('wa-dropdown-item[value^="agent:"]')).toHaveLength(count);
+      expect(menu?.querySelector('[data-value="scope:all"]')).toBeNull();
+      expect(menu?.querySelectorAll('[data-value^="agent:"]')).toHaveLength(count);
       expect(
-        [...(menu?.children ?? [])]
-          .filter((element) => element.localName === "wa-dropdown-item")
-          .map((element) => element.getAttribute("value")),
+        [...(menu?.querySelectorAll(':scope > [role^="menuitem"]') ?? [])].map((element) =>
+          element.getAttribute("data-value"),
+        ),
       ).toEqual([
         "command:new-agent",
         "command:agents-directory",
@@ -92,7 +93,7 @@ describe("AppSidebar agent menu scope", () => {
         ?.click();
       await sidebar.updateComplete;
       const item = sidebar.querySelector<HTMLElement>(
-        '.sidebar-agent-menu [value="command:' + value + '"]',
+        '.sidebar-agent-menu [data-value="command:' + value + '"]',
       );
       expect(item?.textContent?.trim()).toBe(label);
       expect(item?.hasAttribute("aria-checked")).toBe(false);
@@ -116,7 +117,7 @@ describe("AppSidebar agent menu scope", () => {
       );
       sidebar.activeRouteId = "skills";
       sidebar.connected = true;
-      sidebar.sidebarAgentsMode = "roster";
+      patchSettings({ sidebarAgentsMode: "roster" });
       context.agentSelection.setScope(null);
       await sidebar.updateComplete;
       sidebar.querySelector<HTMLButtonElement>(".sidebar-workspace-header__main")?.click();
@@ -124,10 +125,12 @@ describe("AppSidebar agent menu scope", () => {
       const menu = sidebar.querySelector(".sidebar-agent-menu")!;
       expect(menu.querySelector("[aria-checked], .session-menu__check")).toBeNull();
       expect(
-        menu.querySelector(".sidebar-agent-menu__agent-switch--active")?.getAttribute("value"),
+        menu.querySelector(".sidebar-agent-menu__agent-switch--active")?.getAttribute("data-value"),
       ).toBe("scope:all");
-      expect(menu.querySelector('[value="command:help"], [value="command:all-agents"]')).toBeNull();
-      menu.querySelector<HTMLElement>(`[value="agent:${agentId}"]`)?.click();
+      expect(
+        menu.querySelector('[data-value="command:help"], [data-value="command:all-agents"]'),
+      ).toBeNull();
+      menu.querySelector<HTMLElement>(`[data-value="agent:${agentId}"]`)?.click();
       await sidebar.updateComplete;
       expect(sidebar.sidebarAgentsMode).toBe("chip");
       expect(sidebar.activeRouteId).toBe("skills");
@@ -157,14 +160,16 @@ describe("AppSidebar agent menu scope", () => {
       await sidebar.updateComplete;
       const menu = sidebar.querySelector(".sidebar-agent-menu")!;
       expect(
-        menu.querySelector(".sidebar-agent-menu__agent-switch--active")?.getAttribute("value"),
+        menu.querySelector(".sidebar-agent-menu__agent-switch--active")?.getAttribute("data-value"),
       ).toBe(mode === "roster" ? "scope:all" : "agent:research");
       expect(
-        menu.querySelector('[aria-checked], .session-menu__check, [value="command:all-agents"]'),
+        menu.querySelector(
+          '[aria-checked], .session-menu__check, [data-value="command:all-agents"]',
+        ),
       ).toBeNull();
       expect(
-        [...menu.querySelectorAll('wa-dropdown-item[value^="command:"]')].map((item) =>
-          item.getAttribute("value"),
+        [...menu.querySelectorAll('[data-value^="command:"]')].map((item) =>
+          item.getAttribute("data-value"),
         ),
       ).toEqual([
         "command:new-agent",
@@ -174,7 +179,7 @@ describe("AppSidebar agent menu scope", () => {
       ]);
       menu
         .querySelector<HTMLElement>(
-          mode === "chip" ? '[value="scope:all"]' : '[value="agent:research"]',
+          mode === "chip" ? '[data-value="scope:all"]' : '[data-value="agent:research"]',
         )
         ?.click();
       await vi.waitFor(() =>

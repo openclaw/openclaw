@@ -1,9 +1,8 @@
-import type { APIAllowedMentions } from "discord-api-types/v10";
+import { AllowedMentionsTypes, type APIAllowedMentions } from "discord-api-types/v10";
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
   getGroupThreadDeliverySession,
-  hasFinalInboundReplyDispatch,
   readAgentRunTerminalOutcome,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -19,12 +18,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleepWithAbort,
-} from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
@@ -47,9 +41,9 @@ import {
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 import { resolveDiscordWebhookId } from "./sender-identity.js";
 
-const TARGETED_ONLY_ALLOWED_MENTIONS = {
-  parse: ["users", "roles"],
-} as APIAllowedMentions;
+const TARGETED_ONLY_ALLOWED_MENTIONS: APIAllowedMentions = {
+  parse: [AllowedMentionsTypes.User, AllowedMentionsTypes.Role],
+};
 
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
@@ -58,21 +52,12 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-type DiscordMessageProcessObserver = {
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
-  onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
-};
-
 type DiscordProviderDeliveryInfo = ReplyDispatchRuntimeInfo & {
   onPlatformSendDispatch: () => Promise<void>;
   assertPlatformSendAuthorized: () => void;
 };
 
-export async function processDiscordMessage(
-  ctx: DiscordMessagePreflightContext,
-  observer?: DiscordMessageProcessObserver,
-) {
+export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const dispatchStartedAt = Date.now();
   const {
     cfg,
@@ -165,24 +150,6 @@ export async function processDiscordMessage(
     log: logVerbose,
   });
   const replyReference = activeThreadRoute.replyReference;
-  observer?.onReplyPlanResolved?.({
-    createdThreadId: replyPlan.createdThreadId,
-    sessionKey: persistedSessionKey,
-  });
-
-  const replyRuntime = createDiscordMessageReplyRuntime({
-    ctx,
-    processContext,
-    replyReference,
-    sourceRepliesAreToolOnly,
-    shouldDisableCoreTypingKeepalive,
-    isRoomEvent,
-    dispatchStartedAt,
-    feedbackRest: reactions.feedbackRest,
-    deliveryRest: reactions.deliveryRest,
-    onFinalReplyStart: observer?.onFinalReplyStart,
-    onFinalReplyDelivered: observer?.onFinalReplyDelivered,
-  });
   const {
     replyPipeline,
     onModelSelected,
@@ -194,12 +161,23 @@ export async function processDiscordMessage(
     resolveCurrentTurnTranscriptFinalText,
     draftPreview,
     resolvedBlockStreamingEnabled,
-  } = replyRuntime;
+  } = createDiscordMessageReplyRuntime({
+    ctx,
+    processContext,
+    replyReference,
+    sourceRepliesAreToolOnly,
+    shouldDisableCoreTypingKeepalive,
+    isRoomEvent,
+    dispatchStartedAt,
+    feedbackRest: reactions.feedbackRest,
+    deliveryRest: reactions.deliveryRest,
+  });
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;
     await draftPreview.retarget(threadId);
   });
   const { lifecycle } = draftPreview;
+  const hasCompletedFinalReply = () => lifecycle.finalSucceeded || lifecycle.previewFinalized;
   const observeFinalDelivery = async () => {
     if (lifecycle.finalSucceeded) {
       return;
@@ -222,7 +200,7 @@ export async function processDiscordMessage(
         deliverySession: ReturnType<typeof getGroupThreadDeliverySession>;
       }
     | undefined;
-  const progress = createDiscordMessageProgressRuntime({
+  const progress = await createDiscordMessageProgressRuntime({
     ctx,
     sessionKey: ctxPayload.SessionKey,
     sourceRepliesAreToolOnly,
@@ -336,11 +314,7 @@ export async function processDiscordMessage(
       !options?.allowFallbackOnlyToolWarning &&
       isFallbackOnlyToolWarningFinal(payload)
     ) {
-      if (
-        !lifecycle.finalSucceeded &&
-        !lifecycle.previewFinalized &&
-        (!lifecycle.finalStarted || lifecycle.finalFailed)
-      ) {
+      if (!hasCompletedFinalReply() && (!lifecycle.finalStarted || lifecycle.finalFailed)) {
         // Root settlement can outlive this participant's dispatch scope.
         pendingToolWarningFinal = { payload, info, deliverySession };
       }
@@ -450,12 +424,7 @@ export async function processDiscordMessage(
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
-    if (
-      !pendingToolWarningFinal ||
-      lifecycle.finalSucceeded ||
-      lifecycle.previewFinalized ||
-      abortSignal?.aborted
-    ) {
+    if (!pendingToolWarningFinal || hasCompletedFinalReply() || abortSignal?.aborted) {
       return undefined;
     }
     const pending = pendingToolWarningFinal;
@@ -587,15 +556,5 @@ export async function processDiscordMessage(
       (finalReceipt?.failedBeforeSend ?? 0) + (finalReceipt?.failedAfterSend ?? 0) > 0;
     await draftPreview.cleanup({ failed: finalDeliveryFailed || dispatchError });
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
-  }
-  const finalDispatchResult = dispatchResult;
-  if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
-    return;
-  }
-  if (shouldLogVerbose()) {
-    const finalCount = finalDispatchResult.settledReceipt?.counts.final.delivered ?? 0;
-    logVerbose(
-      `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyPlan.replyTarget}`,
-    );
   }
 }

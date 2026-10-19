@@ -5,16 +5,8 @@ import {
 import { createDiscordSelectMenu } from "./components.builders.js";
 import { mapTextInputStyle } from "./components.parse.js";
 import type { DiscordModalEntry, DiscordModalFieldDefinition } from "./components.types.js";
-import {
-  CheckboxGroup,
-  Label,
-  Modal,
-  RadioGroup,
-  RoleSelectMenu,
-  StringSelectMenu,
-  TextInput,
-  UserSelectMenu,
-} from "./internal/discord.js";
+import { RoleSelectMenu, StringSelectMenu, UserSelectMenu } from "./internal/components.message.js";
+import { CheckboxGroup, Label, Modal, RadioGroup, TextInput } from "./internal/components.modal.js";
 
 function createModalFieldComponent(
   field: DiscordModalFieldDefinition,

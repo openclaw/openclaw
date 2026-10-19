@@ -1,6 +1,11 @@
 /**
  * Shared helpers for live provider tests and timeout-wrapped completions.
  */
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { Api, Model } from "../llm/types.js";
 
@@ -15,6 +20,12 @@ export {
 export type CompleteSimpleContent<TApi extends Api = Api> = Awaited<
   ReturnType<typeof completeSimple<TApi>>
 >["content"];
+
+/** Retain the fixture config through admission, reads, and owned runtime cleanup. */
+export function useLiveTestRuntimeConfig(config: OpenClawConfig): Disposable {
+  setRuntimeConfigSnapshot(config);
+  return { [Symbol.dispose]: clearRuntimeConfigSnapshot };
+}
 
 /** Resolve whether profile or env credentials should be tried first. */
 export function resolveLiveCredentialPrecedence(

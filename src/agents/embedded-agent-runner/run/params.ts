@@ -1,27 +1,19 @@
 import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
-import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
-import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
-import type { SkillLibraryAuthoringCapability } from "../../../skills/library/authoring.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
+import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type {
-  AgentRunClientContext,
+  AgentRunExecutionContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-  AgentRunModelOptions,
-  AgentRunInputContext,
-  AgentRunTranscriptContext,
-  AgentRunLifecycle,
   AgentStreamParams,
   ClientToolDefinition,
 } from "../../command/shared-types.js";
@@ -38,11 +30,10 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
-import type { ReplyDeliveryObserver, ReplyExpectation } from "../../reply-completion.js";
+import type { ReplyDeliveryObserver } from "../../reply-completion.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
-import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
-import type { SilentReplyPromptMode, PromptMode } from "../../system-prompt.types.js";
+import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -54,7 +45,29 @@ export type ResolvedToolPromptFinalizer = (params: {
   messageToolAvailable: boolean;
 }) => string;
 
-export type RunEmbeddedAgentParams = {
+export type RunEmbeddedAgentParams = Pick<
+  QueuedAgentRunParams,
+  | "toolBindings"
+  | "conversationRoutePeerId"
+  | "conversationToolPolicy"
+  | "memberRoleIds"
+  | "permissionMode"
+  | "sessionRoot"
+  | "modelSelectionLocked"
+  | "authProfileIdSource"
+  | "verboseLevel"
+  | "reasoningLevel"
+  | "trustedInternalHandoff"
+  | "runtimePluginToolGrant"
+  | "silentReplyPromptMode"
+  | "enforceFinalTag"
+  | "silentExpected"
+  | "terminalReplyExpectation"
+  | "suppressTranscriptOnlyAssistantPersistence"
+  | "skillLibraryAuthoring"
+> & {
+  /** Settles the session's initial workspace attribution before tools can act. */
+  awaitSessionDiffBaseline?: () => Promise<void>;
   /** Host-minted parent audience inherited by a trusted internal child run. */
   memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
@@ -67,10 +80,6 @@ export type RunEmbeddedAgentParams = {
   sandboxSessionKey?: string;
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
   sandboxAgentId?: string;
-  /** Out-of-band plugin bindings attached by the run initiator. */
-  toolBindings?: Readonly<Record<string, unknown>>;
-  /** Raw peer observed by the inbound routing owner, before identity linking. */
-  conversationRoutePeerId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
   /** Store-private runtime authority forwarded only by the cron execution owner. */
@@ -87,10 +96,6 @@ export type RunEmbeddedAgentParams = {
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;
-  /** Trusted channel-configured policy for the admitted conversation turn. */
-  conversationToolPolicy?: GroupToolPolicyConfig;
-  /** Trusted provider role ids for the requester in this group turn. */
-  memberRoleIds?: string[];
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
   isCanonicalWorkspace?: boolean;
   /** Transport-native chat/conversation ID for hook identity context. */
@@ -113,6 +118,8 @@ export type RunEmbeddedAgentParams = {
   modelRun?: boolean;
   /** Setup can reject unavailable endpoints without spending the session retry budget. */
   retryConnectionErrors?: boolean;
+  /** Auxiliary callers can defer transient provider failures to their own scheduler. */
+  retryTransientErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /**
@@ -120,7 +127,6 @@ export type RunEmbeddedAgentParams = {
    * view, and changes credit "review" with this originating session key as their provenance.
    */
   skillWorkshopReviewOf?: string;
-  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -137,8 +143,6 @@ export type RunEmbeddedAgentParams = {
   sessionFile?: string;
   /** Require file tools to stay within the task workspace without changing exec policy. */
   requireWorkspaceOnly?: true;
-  permissionMode?: SessionEntry["permissionMode"];
-  sessionRoot?: string;
   /** Context supplied by internal producers, separate from inbound prompt text. */
   runtimeContextFragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
   /** Finalizes caller-owned guidance after the submitted tool surface is known. */
@@ -158,17 +162,19 @@ export type RunEmbeddedAgentParams = {
   modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
-  /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */
-  modelSelectionLocked?: boolean;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;
   /** Verified setup continuation: pin both the harness and its local implementation. */
   expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
-  authProfileIdSource?: "auto" | "user";
+  /** Caller-owned credential lifetime; independent of interactive pin provenance. */
+  authProfileBinding?: {
+    profileId: string;
+    authRequirement: import("../../../plugin-sdk/provider-model-types.js").ProviderModelRouteAuthRequirement;
+    assertCurrent(): void;
+    revalidate(): Promise<void>;
+  };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
-  verboseLevel?: VerboseLevel;
-  reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** Bootstrap context mode for workspace file injection. */
@@ -177,10 +183,6 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
-  /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
-  runtimePluginToolGrant?: RuntimePluginToolGrant;
-  /** Consumed in-process subagent-completion capability; never derived from public input. */
-  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */
@@ -252,11 +254,8 @@ export type RunEmbeddedAgentParams = {
   deferTerminalLifecycleEnd?: boolean;
   enqueue?: CommandQueueEnqueueFn;
   gitCoauthorPrompt?: string;
-  silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   streamParams?: AgentStreamParams;
-  enforceFinalTag?: boolean;
-  silentExpected?: boolean;
   /** Skip per-chunk live visible-text parsing when no live stream consumer exists (e.g. subagents). */
   suppressLiveStreamOutput?: boolean;
   /**
@@ -264,11 +263,6 @@ export type RunEmbeddedAgentParams = {
    * An explicit required reply cannot be waived by this flag or model output.
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
-  /**
-   * Host-owned reply requirement for this input, independent of model output.
-   * Confirmed source delivery and pending custody prevent duplicate recovery.
-   */
-  terminalReplyExpectation?: ReplyExpectation;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
    * Use the provider's subscription CLI for one-shot helpers within plan limits.
@@ -282,18 +276,11 @@ export type RunEmbeddedAgentParams = {
    * Probe one transiently cooled profile when sibling models may still be available.
    */
   allowTransientCooldownProbe?: boolean;
-  suppressTranscriptOnlyAssistantPersistence?: boolean;
   assistantErrorTranscript?: AssistantErrorTranscript;
   /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersistenceInvalidated?: () => void;
-} & AgentRunClientContext &
-  AgentRunMessageContext &
-  AgentRunChannelContext &
-  AgentRunModelOptions &
-  AgentRunInputContext &
-  AgentRunTranscriptContext &
-  AgentRunLifecycle;
+} & AgentRunExecutionContext;
 
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,

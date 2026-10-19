@@ -1,7 +1,9 @@
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
+  loadTranscriptEventsSync,
   readSessionTranscriptWatermark,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -24,6 +26,7 @@ import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
+import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
 import type { ModelChangeEntry, ThinkingLevelChangeEntry } from "./session-manager-types.js";
 import * as writeAdmission from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
@@ -90,7 +93,7 @@ it("restores prepared session context without waiting for an unrelated database 
   });
 });
 
-it.each(["model", "thinking", "context loading"] as const)(
+it.each(["metadata", "context loading"] as const)(
   "rejects SDK exposure after retargeting during %s initialization",
   async (after) => {
     await withOpenClawTestState({ label: `sdk-metadata-${after}` }, async (state) => {
@@ -127,30 +130,26 @@ it.each(["model", "thinking", "context loading"] as const)(
           throw new Error("Expected the real append's committed metadata entry");
         }
         completed.entry = structuredClone(entry);
-        completed.records = await loadTranscriptEvents(original);
+        // Retarget after the real append commits, before the factory exposes its session.
+        completed.records = loadTranscriptEventsSync(original);
         completed.watermark = readSessionTranscriptWatermark(original);
         manager.setSessionTarget(replacement);
         return id;
       };
-      const appendModel = manager.appendModelChange.bind(manager);
-      const appendThinking = manager.appendThinkingLevelChange.bind(manager);
+      const appendInitial = manager[sessionManagerAppendInitialMetadata].bind(manager);
       const readInitialContext = manager[sessionManagerReadInitialContext].bind(manager);
       const intercepted =
-        after === "model"
+        after === "metadata"
           ? vi
-              .spyOn(manager, "appendModelChange")
-              .mockImplementation((provider, modelId) =>
-                retargetAfterAppend(() => appendModel(provider, modelId)),
+              .spyOn(manager, sessionManagerAppendInitialMetadata)
+              .mockImplementation((provider, modelId, level) =>
+                retargetAfterAppend(() => appendInitial(provider, modelId, level)),
               )
-          : after === "thinking"
-            ? vi
-                .spyOn(manager, "appendThinkingLevelChange")
-                .mockImplementation((level) => retargetAfterAppend(() => appendThinking(level)))
-            : vi.spyOn(manager, sessionManagerReadInitialContext).mockImplementation(async () => {
-                const context = await readInitialContext();
-                manager.setSessionTarget(replacement);
-                return context;
-              });
+          : vi.spyOn(manager, sessionManagerReadInitialContext).mockImplementation(async () => {
+              const context = await readInitialContext();
+              manager.setSessionTarget(replacement);
+              return context;
+            });
       const model = {
         ...testModel,
         id: "sdk-metadata-fixture",
@@ -199,7 +198,7 @@ it.each(["model", "thinking", "context loading"] as const)(
           return;
         }
         expect(completed.entry).toBeDefined();
-        expect(completed.records).toHaveLength(after === "model" ? 2 : 3);
+        expect(completed.records).toHaveLength(3);
         expect(await loadTranscriptEvents(original)).toEqual(completed.records);
         expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
         expect.soft(outcome.status).toBe("rejected");
@@ -229,7 +228,6 @@ it.each([
   { selection: "branch", timing: "before" },
   { selection: "reset", timing: "before" },
   { selection: "branch", timing: "during" },
-  { selection: "reset", timing: "during" },
 ] as const)(
   "preserves bounded $selection selection $timing SDK history loading",
   async ({ selection, timing }) => {
@@ -401,9 +399,13 @@ it("awaits extension entry, name, and label persistence before publishing their 
   });
 });
 
-it.each(["persistent", "detached"] as const)(
-  "rejects a queued %s extension persistence capability closed before admission",
-  async (storage) => {
+it.each(
+  (["persistent", "detached"] as const).flatMap((storage) =>
+    (["extension", "session"] as const).map((surface) => ({ storage, surface })),
+  ),
+)(
+  "rejects a queued $storage $surface persistence capability closed before admission",
+  async ({ storage, surface }) => {
     await withOpenClawTestState({ label: "extension-persistence-revoked" }, async (state) => {
       const target = {
         agentId: "main",
@@ -432,7 +434,10 @@ it.each(["persistent", "detached"] as const)(
         await release.promise;
       });
       await entered.promise;
-      const pending = api.appendEntryAsync("revoked-state", { count: 1 });
+      const pending =
+        surface === "extension"
+          ? api.appendEntryAsync("revoked-state", { count: 1 })
+          : session.setSessionNameAsync("revoked name");
       const rejected = expect(pending).rejects.toThrow("extension owner closed");
       runtime.invalidate("extension owner closed");
       release.resolve();
@@ -522,3 +527,127 @@ it("does not publish a committed session name into a manager retargeted before c
     }
   });
 });
+
+it.each(["SDK initialization", "model transition"] as const)(
+  "%s keeps relative-target metadata on its originally admitted physical database",
+  async (operation) => {
+    await withOpenClawTestState({ label: "metadata-relative-target" }, async (state) => {
+      const originalCwd = process.cwd();
+      const firstDir = state.path("cwd-a");
+      const secondDir = state.path("cwd-b");
+      await mkdir(firstDir, { recursive: true });
+      await mkdir(secondDir, { recursive: true });
+      const relativeTarget = {
+        agentId: "main",
+        sessionId: "relative-session",
+        sessionKey: "agent:main:relative-session",
+        storePath: "session-store.sqlite",
+      };
+      const first = { ...relativeTarget, storePath: path.join(firstDir, relativeTarget.storePath) };
+      const second = {
+        ...relativeTarget,
+        storePath: path.join(secondDir, relativeTarget.storePath),
+      };
+      await replaceSessionEntry(first, { sessionId: first.sessionId, updatedAt: 1 });
+      await replaceSessionEntry(second, { sessionId: second.sessionId, updatedAt: 1 });
+      SessionManager.open(second, secondDir).appendMessage({
+        role: "user",
+        content: "Leave the other physical database unchanged",
+        timestamp: 1,
+      });
+      const secondBefore = await loadTranscriptEvents(second);
+      let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+      let restoreAppend: (() => void) | undefined;
+      try {
+        process.chdir(firstDir);
+        const manager = SessionManager.open(relativeTarget, firstDir);
+        const capturedTarget = manager.getSessionTarget();
+        const reasoningModel = {
+          ...testModel,
+          id: "cwd-reasoning",
+          reasoning: true,
+          contextWindow: 32_768,
+          maxTokens: 8_192,
+        };
+        const plainModel = { ...reasoningModel, id: "cwd-plain", reasoning: false };
+        const authStorage = AuthStorage.inMemory();
+        authStorage.setRuntimeApiKey(testModel.provider, "synthetic-cwd-key");
+        const modelRegistry = ModelRegistry.inMemory(authStorage);
+        modelRegistry.registerProvider(testModel.provider, {
+          api: testModel.api,
+          baseUrl: testModel.baseUrl,
+          models: [reasoningModel, plainModel],
+        });
+        const create = () =>
+          createAgentSession({
+            systemPrompt: "Test session prompt",
+            cwd: firstDir,
+            sessionManager: manager,
+            model: reasoningModel,
+            thinkingLevel: "high",
+            modelRegistry,
+            tools: [],
+            settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "high" }),
+            resourceLoader: createResourceLoader(),
+          });
+        if (operation === "model transition") {
+          session = (await create()).session;
+        }
+        const append = manager.appendModelChange.bind(manager);
+        const appendInitial = manager[sessionManagerAppendInitialMetadata].bind(manager);
+        const completed: { records?: Awaited<ReturnType<typeof loadTranscriptEvents>> } = {};
+        const changeCwdAfterAppend = async (write: () => Promise<string>) => {
+          const id = await write();
+          completed.records = loadTranscriptEventsSync(first);
+          process.chdir(secondDir);
+          return id;
+        };
+        const intercepted =
+          operation === "SDK initialization"
+            ? vi
+                .spyOn(manager, sessionManagerAppendInitialMetadata)
+                .mockImplementation((provider, modelId, level) =>
+                  changeCwdAfterAppend(() => appendInitial(provider, modelId, level)),
+                )
+            : vi
+                .spyOn(manager, "appendModelChange")
+                .mockImplementation((provider, modelId) =>
+                  changeCwdAfterAppend(() => append(provider, modelId)),
+                );
+        restoreAppend = () => intercepted.mockRestore();
+        if (operation === "SDK initialization") {
+          session = (await create()).session;
+        } else {
+          if (!session) {
+            throw new Error("Expected the initialized AgentSession fixture");
+          }
+          await session.setModel(plainModel);
+        }
+
+        expect(intercepted).toHaveBeenCalledOnce();
+        expect(completed.records).toBeDefined();
+        expect(process.cwd()).toBe(secondDir);
+        const expectedTarget = { ...first, env: { OPENCLAW_STATE_DIR: state.stateDir } };
+        expect.soft(capturedTarget).toEqual(expectedTarget);
+        expect.soft(manager.getSessionTarget()).toEqual(expectedTarget);
+        expect(manager.getSessionId()).toBe(relativeTarget.sessionId);
+        const firstAfter = await loadTranscriptEvents(first);
+        expect(firstAfter.slice(0, completed.records?.length)).toEqual(completed.records);
+        const level = operation === "SDK initialization" ? "high" : "off";
+        if (operation === "SDK initialization") {
+          expect.soft(firstAfter).toEqual(completed.records);
+        } else {
+          expect
+            .soft(firstAfter.slice(completed.records?.length))
+            .toMatchObject([{ type: "thinking_level_change", thinkingLevel: level }]);
+        }
+        expect.soft(await loadTranscriptEvents(second)).toEqual(secondBefore);
+        expect(session?.thinkingLevel).toBe(level);
+      } finally {
+        process.chdir(originalCwd);
+        restoreAppend?.();
+        session?.dispose();
+      }
+    });
+  },
+);

@@ -2,6 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type {
+  DoctorMemoryDreamingConfig,
+  DoctorMemoryEmbeddingRuntimePayload,
+  DoctorMemoryStatusPayload,
+} from "../../../packages/gateway-protocol/src/doctor-memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
@@ -16,8 +21,8 @@ import {
   type ShortTermDreamingStats,
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
+import { readMemorySearchManagerStatus } from "../../memory-host-sdk/host/types.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
-import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
 import {
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
@@ -39,6 +44,11 @@ import {
 } from "./doctor-memory-target.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
+export type {
+  DoctorMemoryStatusPayload,
+  DoctorMemoryEmbeddingRuntimePayload,
+} from "../../../packages/gateway-protocol/src/doctor-memory.js";
+
 export type { DoctorMemoryDreamDiaryPayload } from "./doctor-memory-files.js";
 
 type DoctorMemoryCoreRuntime = Pick<
@@ -56,36 +66,6 @@ type DreamingStoreStats = Omit<ShortTermDreamingStats, "storePath" | "phaseSigna
   storePath?: string;
   phaseSignalPath?: string;
   storeError?: string;
-};
-
-type DoctorMemoryDreamingPayload = ReturnType<typeof resolveDreamingConfig> & DreamingStoreStats;
-
-export type DoctorMemoryStatusPayload = {
-  agentId: string;
-  searchRuntimeRegistered?: boolean;
-  provider?: string;
-  health?: MemoryHealth;
-  embedding: {
-    ok: boolean;
-    error?: string;
-    checked?: boolean;
-    cached?: boolean;
-    checkedAtMs?: number;
-    cacheExpiresAtMs?: number;
-  };
-  embeddingRuntime?: DoctorMemoryEmbeddingRuntimePayload;
-  dreaming?: DoctorMemoryDreamingPayload;
-};
-
-export type DoctorMemoryEmbeddingRuntimePayload = {
-  engine: "llama.cpp";
-  state: "ready" | "failed";
-  backend?: "metal" | "cpu";
-  buildInfo?: string;
-  model?: { id: string; path?: string };
-  capabilities?: { vision: boolean; draft: boolean };
-  endpoints?: Record<string, "ready" | "unavailable">;
-  loadError?: string;
 };
 
 export type { DoctorMemoryDreamActionPayload } from "./doctor-memory-target.js";
@@ -106,7 +86,7 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
     );
 }
 
-function resolveDreamingConfig(cfg: OpenClawConfig) {
+function resolveDreamingConfig(cfg: OpenClawConfig): DoctorMemoryDreamingConfig {
   const resolved = resolveMemoryDreamingConfig({
     pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
     cfg,
@@ -154,48 +134,41 @@ const DREAMING_ENTRY_LIST_LIMIT = 8;
 
 // Keep malformed persisted timestamps behind valid entries; returning NaN here
 // makes Array.sort preserve arbitrary input order and can hide valid diagnostics.
-function parseDreamingTimestampMs(value: string | undefined): number {
-  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
+function compareDreamingTimestamp(a: string | undefined, b: string | undefined): number {
+  const aMs = parseDateStringTimestampMs(a) ?? Number.NEGATIVE_INFINITY;
+  const bMs = parseDateStringTimestampMs(b) ?? Number.NEGATIVE_INFINITY;
+  return aMs === bMs ? 0 : bMs > aMs ? 1 : -1;
 }
 
 function compareDreamingEntryByRecency(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = parseDreamingTimestampMs(a.lastRecalledAt);
-  const bMs = parseDreamingTimestampMs(b.lastRecalledAt);
-  if (bMs !== aMs) {
-    return bMs > aMs ? 1 : -1;
-  }
-  if (b.totalSignalCount !== a.totalSignalCount) {
-    return b.totalSignalCount - a.totalSignalCount;
-  }
-  return a.path.localeCompare(b.path);
+  return (
+    compareDreamingTimestamp(a.lastRecalledAt, b.lastRecalledAt) ||
+    b.totalSignalCount - a.totalSignalCount ||
+    a.path.localeCompare(b.path)
+  );
 }
 
 function compareDreamingEntryBySignals(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  if (b.totalSignalCount !== a.totalSignalCount) {
-    return b.totalSignalCount - a.totalSignalCount;
-  }
-  if (b.phaseHitCount !== a.phaseHitCount) {
-    return b.phaseHitCount - a.phaseHitCount;
-  }
-  return compareDreamingEntryByRecency(a, b);
+  return (
+    b.totalSignalCount - a.totalSignalCount ||
+    b.phaseHitCount - a.phaseHitCount ||
+    compareDreamingEntryByRecency(a, b)
+  );
 }
 
 function compareDreamingEntryByPromotion(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = parseDreamingTimestampMs(a.promotedAt);
-  const bMs = parseDreamingTimestampMs(b.promotedAt);
-  if (bMs !== aMs) {
-    return bMs > aMs ? 1 : -1;
-  }
-  return compareDreamingEntryBySignals(a, b);
+  return (
+    compareDreamingTimestamp(a.promotedAt, b.promotedAt) || compareDreamingEntryBySignals(a, b)
+  );
 }
 
 async function loadDreamingStoreStats(
@@ -229,13 +202,14 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   };
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let lastPromotedAt: string | undefined;
-  const storePaths = new Set<string>();
-  const phaseSignalPaths = new Set<string>();
-  const storeErrors: string[] = [];
-  const phaseSignalErrors: string[] = [];
-  const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
-  const signalEntries: ShortTermDreamingStatsEntry[] = [];
-  const promotedEntries: ShortTermDreamingStatsEntry[] = [];
+  const storePaths = new Set(stats.flatMap((stat) => (stat.storePath ? [stat.storePath] : [])));
+  const phaseSignalPaths = new Set(
+    stats.flatMap((stat) => (stat.phaseSignalPath ? [stat.phaseSignalPath] : [])),
+  );
+  const storeErrors = stats.flatMap((stat) => (stat.storeError ? [stat.storeError] : []));
+  const phaseSignalErrors = stats.flatMap((stat) =>
+    stat.phaseSignalError ? [stat.phaseSignalError] : [],
+  );
 
   for (const stat of stats) {
     totals.shortTermCount += stat.shortTermCount;
@@ -248,21 +222,6 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
     totals.remPhaseHitCount += stat.remPhaseHitCount;
     totals.promotedTotal += stat.promotedTotal;
     totals.promotedToday += stat.promotedToday;
-    if (stat.storePath) {
-      storePaths.add(stat.storePath);
-    }
-    if (stat.phaseSignalPath) {
-      phaseSignalPaths.add(stat.phaseSignalPath);
-    }
-    if (stat.storeError) {
-      storeErrors.push(stat.storeError);
-    }
-    if (stat.phaseSignalError) {
-      phaseSignalErrors.push(stat.phaseSignalError);
-    }
-    shortTermEntries.push(...stat.shortTermEntries);
-    signalEntries.push(...stat.signalEntries);
-    promotedEntries.push(...stat.promotedEntries);
     const promotedAtMs = stat.lastPromotedAt ? Date.parse(stat.lastPromotedAt) : Number.NaN;
     if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
       latestPromotedAtMs = promotedAtMs;
@@ -273,17 +232,17 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   return {
     ...totals,
     shortTermEntries: sortAndLimitBy(
-      shortTermEntries,
+      stats.flatMap((stat) => stat.shortTermEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByRecency,
     ),
     signalEntries: sortAndLimitBy(
-      signalEntries,
+      stats.flatMap((stat) => stat.signalEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryBySignals,
     ),
     promotedEntries: sortAndLimitBy(
-      promotedEntries,
+      stats.flatMap((stat) => stat.promotedEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByPromotion,
     ),
@@ -399,13 +358,13 @@ export const createDoctorHandlers = (
     }
 
     try {
-      let status = manager.status();
+      let status = await readMemorySearchManagerStatus(manager);
       const shouldProbe = params.probe === true || params.deep === true;
       let embedding = shouldProbe
         ? await manager.probeEmbeddingAvailability()
         : (manager.getCachedEmbeddingAvailability?.() ?? SKIPPED_MEMORY_EMBEDDING_PROBE);
       if (shouldProbe) {
-        status = manager.status();
+        status = await readMemorySearchManagerStatus(manager);
       }
       if (!embedding.ok && !embedding.error) {
         embedding = { ok: false, error: "memory embeddings unavailable" };

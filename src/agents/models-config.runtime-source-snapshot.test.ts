@@ -30,9 +30,9 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 
-vi.mock("./models-config.providers.js", async () => {
-  const actual = await vi.importActual<typeof import("./models-config.providers.js")>(
-    "./models-config.providers.js",
+vi.mock("./models-config.providers.implicit.js", async () => {
+  const actual = await vi.importActual<typeof import("./models-config.providers.implicit.js")>(
+    "./models-config.providers.implicit.js",
   );
   return {
     ...actual,

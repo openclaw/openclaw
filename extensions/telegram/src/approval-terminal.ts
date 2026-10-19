@@ -7,7 +7,7 @@ import {
   buildSystemAgentApprovalResolvedText,
   formatApprovalDecisionLabel,
 } from "openclaw/plugin-sdk/approval-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const TELEGRAM_APPROVAL_DETAIL_MAX_CHARS = 2_800;
 const TELEGRAM_APPROVAL_ID_MAX_CHARS = 512;
@@ -25,11 +25,11 @@ function formatCanonicalResult(approval: ApprovalResolveResult["approval"]): str
 }
 
 function truncateApprovalText(value: string, maxChars: number, preserveWhitespace = false): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  const prefix = truncateUtf16Safe(value, maxChars - 1);
-  return `${preserveWhitespace ? prefix : prefix.trimEnd()}…`;
+  return truncateWithMarker(value, maxChars, {
+    marker: "…",
+    reserve: 1,
+    trimEnd: !preserveWhitespace,
+  });
 }
 
 function truncateDetail(value: string): string {
@@ -72,20 +72,17 @@ export function buildTelegramCanonicalApprovalTerminalText(params: {
     if (approval.status === "allowed") {
       return `✅ OpenClaw change approved. Applying: ${truncateDetail(approval.presentation.description)}`;
     }
-    if (approval.status === "cancelled") {
-      return "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.";
-    }
-    if (approval.status === "denied") {
-      return "❌ OpenClaw change denied. No change was made.";
-    }
-    if (approval.status === "expired") {
-      return "⏱️ OpenClaw change expired. No change was made.";
-    }
+    return {
+      cancelled:
+        "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.",
+      denied: "❌ OpenClaw change denied. No change was made.",
+      expired: "⏱️ OpenClaw change expired. No change was made.",
+    }[approval.status];
   }
   const approvalId = approval.id || params.fallbackApprovalId;
   const lines = [
     params.result.applied ? "✅ Approval resolved here" : "ℹ️ Approval already resolved",
-    `Canonical result: ${formatCanonicalResult(approval)}`,
+    `Recorded result: ${formatCanonicalResult(approval)}`,
     `ID: ${truncateApprovalId(approvalId)}`,
   ];
   if (approval.presentation) {
@@ -112,7 +109,7 @@ export function buildTelegramLegacyApprovalTerminalText(params: {
       : params.outcome === "no-longer-pending"
         ? [
             "ℹ️ Approval no longer pending",
-            "It was already resolved or expired; the canonical decision is unavailable here.",
+            "It was already resolved or expired; the recorded decision is unavailable here.",
           ]
         : [
             "ℹ️ Approval is no longer actionable from this button",
@@ -138,7 +135,7 @@ export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalVi
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [
     `✅ ${label} approval resolved`,
-    `Canonical result: ${formatApprovalDecision(view.decision)}`,
+    `Recorded result: ${formatApprovalDecision(view.decision)}`,
   ];
   if (view.resolvedBy?.trim()) {
     lines.push(`Resolved by: ${truncateDetail(view.resolvedBy.replace(/\s+/gu, " "))}`);
@@ -152,7 +149,7 @@ export function buildTelegramNativeExpiredApprovalText(view: ExpiredApprovalView
     return "⏱️ OpenClaw change expired. No change was made.";
   }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
-  const lines = [`⏱️ ${label} approval expired`, "Canonical result: Expired"];
+  const lines = [`⏱️ ${label} approval expired`, "Recorded result: Expired"];
   return finalizeNativeApprovalText(view, lines);
 }
 

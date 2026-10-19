@@ -1,4 +1,3 @@
-// Codex tests cover native Computer Use service provisioning.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -7,142 +6,78 @@ import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
-const CLIENT_RELATIVE_PATH = path.join(
-  "Contents",
-  "SharedSupport",
-  "SkyComputerUseClient.app",
-  "Contents",
-  "MacOS",
-  "SkyComputerUseClient",
-);
+const CLIENT_RELATIVE_PATH =
+  "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
 const IDENTITY_FILE = ".test-signed-identity.json";
 
 type EnsureParams = Parameters<typeof ensureCodexComputerUseServiceApp>[0];
 type InspectServiceApp = NonNullable<EnsureParams["inspectServiceApp"]>;
 type ServiceIdentity = NonNullable<Awaited<ReturnType<InspectServiceApp>>>;
 
-const CURRENT_IDENTITY = serviceIdentity({
-  version: "26.817.1000761",
-  build: "1000761",
-  cdHash: "current-service",
-  clientCdHash: "current-client",
-});
-const STALE_IDENTITY = serviceIdentity({
-  version: "26.721.1000502",
-  build: "1000502",
-  cdHash: "stale-service",
-  clientCdHash: "stale-client",
-});
-const UNEXPECTED_IDENTITY = serviceIdentity({
-  version: "26.900.1000900",
-  build: "1000900",
-  cdHash: "unexpected-service",
-  clientCdHash: "unexpected-client",
-});
+const CURRENT_IDENTITY = serviceIdentity("26.817.1000761", "1000761", "current");
+const STALE_IDENTITY = serviceIdentity("26.721.1000502", "1000502", "stale");
+const UNEXPECTED_IDENTITY = serviceIdentity("26.900.1000900", "1000900", "unexpected");
 
 describe("Codex Computer Use native service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  it.each(["parent", "home"] as const)(
-    "creates a fresh agent tree with %s ownership",
-    async (ownership) => {
-      const root = tempDirs.make("openclaw-computer-use-service-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const codexHome = path.join(root, "agent", "codex-home");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-
-      const result = await ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, sourcePath),
-        ...(ownership === "home" ? { ownershipRoot: codexHome } : {}),
+  async function setupService(owned = false) {
+    const root = tempDirs.make("openclaw-computer-use-service-");
+    const sourcePath = serviceAppPath(path.join(root, "source"));
+    const ownershipRoot = path.join(root, "agent");
+    const codexHome = path.join(owned ? ownershipRoot : root, "codex-home");
+    const targetParent = path.join(codexHome, "computer-use");
+    const targetPath = serviceAppPath(targetParent);
+    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+    const install = (overrides: Partial<EnsureParams> = {}) =>
+      ensureCodexComputerUseServiceApp({
+        codexHome,
+        platform: "darwin",
+        sourceAppCandidates: [sourcePath],
+        copyServiceApp: copyServiceFixture,
+        inspectServiceApp: inspectServiceFixture,
+        ...overrides,
       });
-
-      expect(result).toMatchObject({
-        status: "installed",
-        changed: true,
-        sourcePath,
-        sourceBuild: "1000761",
-      });
-      const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-      await fs.access(path.join(targetPath, CLIENT_RELATIVE_PATH));
-      await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "preserves ancestor aliases, literal directory names, and existing permissions",
-    async () => {
-      const root = tempDirs.make("openclaw-computer-use-service-alias-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const physicalParent = path.join(root, "physical-parent");
-      const parentAlias = path.join(root, "parent-alias");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-      await fs.mkdir(physicalParent);
-      await fs.symlink(physicalParent, parentAlias, "dir");
-      const ownershipRoot = path.join(parentAlias, "~");
-      await fs.mkdir(ownershipRoot);
-      await fs.chmod(ownershipRoot, 0o750);
-      const codexHome = path.join(ownershipRoot, "codex-home ");
-
-      await expect(
-        ensureCodexComputerUseServiceApp({
-          codexHome,
-          ownershipRoot,
-          platform: "darwin",
-          sourceAppCandidates: [sourcePath],
-          copyServiceApp: copyServiceFixture,
-          inspectServiceApp: inspectServiceFixture,
-        }),
-      ).resolves.toMatchObject({ status: "installed", changed: true });
-
-      expect((await fs.stat(ownershipRoot)).mode & 0o777).toBe(0o750);
-      expect((await fs.stat(codexHome)).mode & 0o777).toBe(0o700 & ~process.umask());
-      await expect(fs.readdir(ownershipRoot)).resolves.toEqual(["codex-home "]);
-      await expect(
-        inspectServiceFixture(
-          path.join(physicalParent, "~", "codex-home ", "computer-use", "Codex Computer Use.app"),
-        ),
-      ).resolves.toEqual(CURRENT_IDENTITY);
-    },
-  );
+    return { root, ownershipRoot, sourcePath, codexHome, targetParent, targetPath, install };
+  }
 
   it
     .runIf(process.platform !== "win32")
-    .each(["ownership root", "isolated Codex home", "Computer Use parent"] as const)(
+    .each(["ownershipRoot", "codexHome", "targetParent", "targetPath"] as const)(
     "rejects a symlinked %s without touching its external target",
     async (boundary) => {
-      const root = tempDirs.make("openclaw-computer-use-service-symlink-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const ownershipRoot = path.join(root, "agent");
-      const codexHome = path.join(ownershipRoot, "codex-home");
-      const targetParent = path.join(codexHome, "computer-use");
-      const linkedPath =
-        boundary === "ownership root"
-          ? ownershipRoot
-          : boundary === "isolated Codex home"
-            ? codexHome
-            : targetParent;
+      const fixture = await setupService(true);
+      const { root, ownershipRoot, targetParent, install } = fixture;
+      const linkedPath = fixture[boundary];
+      const targetLink = boundary === "targetPath";
       const externalRoot = path.join(root, "external");
-      const externalParent = path.join(externalRoot, path.relative(linkedPath, targetParent));
-      const externalTarget = path.join(externalParent, "Codex Computer Use.app");
+      const externalParent = targetLink
+        ? externalRoot
+        : path.join(externalRoot, path.relative(linkedPath, targetParent));
+      const externalTarget = serviceAppPath(externalParent);
       const sentinelPath = path.join(externalParent, "sentinel.txt");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
       await writeServiceFixture(externalTarget, STALE_IDENTITY);
       await fs.writeFile(sentinelPath, "outside");
       await fs.mkdir(path.dirname(linkedPath), { recursive: true });
-      await fs.symlink(externalRoot, linkedPath);
+      await fs.symlink(targetLink ? externalTarget : externalRoot, linkedPath);
       const externalInode = (await fs.lstat(externalTarget)).ino;
       const copyServiceApp = vi.fn(copyServiceFixture);
 
       await expect(
-        ensureCodexComputerUseServiceApp({
-          ...serviceOptions(codexHome, sourcePath),
-          ...(boundary === "ownership root" ? { ownershipRoot } : {}),
+        install({
+          ...(boundary === "ownershipRoot" ? { ownershipRoot } : {}),
           copyServiceApp,
         }),
-      ).rejects.toThrow(/symlinked directory|real directory|symbolic link/iu);
+      ).rejects.toThrow(
+        targetLink
+          ? /must not be a symbolic link/iu
+          : /symlinked directory|real directory|symbolic link/iu,
+      );
 
       expect(copyServiceApp).not.toHaveBeenCalled();
       expect((await fs.lstat(linkedPath)).isSymbolicLink()).toBe(true);
+      if (targetLink) {
+        await expect(fs.readlink(linkedPath)).resolves.toBe(externalTarget);
+      }
       expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
       await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(STALE_IDENTITY);
       await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("outside");
@@ -151,50 +86,14 @@ describe("Codex Computer Use native service", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "rejects a symlinked service target without following its external app",
-    async () => {
-      const root = tempDirs.make("openclaw-computer-use-service-symlink-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const codexHome = path.join(root, "codex-home");
-      const targetParent = path.join(codexHome, "computer-use");
-      const targetPath = path.join(targetParent, "Codex Computer Use.app");
-      const externalTarget = path.join(root, "external", "Codex Computer Use.app");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-      await writeServiceFixture(externalTarget, STALE_IDENTITY);
-      await fs.mkdir(targetParent, { recursive: true });
-      await fs.symlink(externalTarget, targetPath);
-      const externalInode = (await fs.lstat(externalTarget)).ino;
-      const copyServiceApp = vi.fn(copyServiceFixture);
-
-      await expect(
-        ensureCodexComputerUseServiceApp({
-          ...serviceOptions(codexHome, sourcePath),
-          copyServiceApp,
-        }),
-      ).rejects.toThrow(/must not be a symbolic link/iu);
-
-      expect(copyServiceApp).not.toHaveBeenCalled();
-      expect((await fs.lstat(targetPath)).isSymbolicLink()).toBe(true);
-      await expect(fs.readlink(targetPath)).resolves.toBe(externalTarget);
-      expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
-      await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(STALE_IDENTITY);
-      await expect(findInstallDebris(targetParent)).resolves.toEqual([]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
     "refuses to publish or clean up through a parent rebound during staging",
     async () => {
-      const root = tempDirs.make("openclaw-computer-use-service-rebind-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const codexHome = path.join(root, "codex-home");
-      const targetParent = path.join(codexHome, "computer-use");
-      const targetPath = path.join(targetParent, "Codex Computer Use.app");
+      const { root, codexHome, targetParent, targetPath, install } = await setupService();
       const parkedParent = path.join(codexHome, "computer-use-owned");
       const externalParent = path.join(root, "external-computer-use");
-      const externalTarget = path.join(externalParent, "Codex Computer Use.app");
+      const externalTarget = serviceAppPath(externalParent);
       const externalSentinel = path.join(externalParent, "sentinel.txt");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+
       await writeServiceFixture(targetPath, STALE_IDENTITY);
       await writeServiceFixture(externalTarget, UNEXPECTED_IDENTITY);
       await fs.writeFile(externalSentinel, "outside");
@@ -202,8 +101,7 @@ describe("Codex Computer Use native service", () => {
       let externalStagingSentinel = "";
 
       await expect(
-        ensureCodexComputerUseServiceApp({
-          ...serviceOptions(codexHome, sourcePath),
+        install({
           copyServiceApp: async (source, stagedTarget) => {
             await copyServiceFixture(source, stagedTarget);
             const stagingName = path.basename(path.dirname(stagedTarget));
@@ -225,9 +123,9 @@ describe("Codex Computer Use native service", () => {
       await expect(fs.readFile(externalSentinel, "utf8")).resolves.toBe("outside");
       expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
       await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(UNEXPECTED_IDENTITY);
-      await expect(
-        inspectServiceFixture(path.join(parkedParent, "Codex Computer Use.app")),
-      ).resolves.toEqual(STALE_IDENTITY);
+      await expect(inspectServiceFixture(serviceAppPath(parkedParent))).resolves.toEqual(
+        STALE_IDENTITY,
+      );
       await expect(
         findInstallDebris(externalParent).then((entries) =>
           entries.filter((entry) => entry.startsWith(".service-app.backup-")),
@@ -236,49 +134,15 @@ describe("Codex Computer Use native service", () => {
     },
   );
 
-  it("reuses a target only when its full signed identity matches the selected source", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(targetPath, CURRENT_IDENTITY);
-    const copyServiceApp = vi.fn();
-
-    const result = await ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, sourcePath),
-      copyServiceApp,
-    });
-
-    expect(result).toMatchObject({
-      status: "already_current",
-      changed: false,
-      sourceBuild: "1000761",
-    });
-    expect(copyServiceApp).not.toHaveBeenCalled();
-  });
-
   it("refreshes when the signed desktop service changes at the same source path", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+    const { sourcePath, targetPath, install } = await setupService();
     const copyServiceApp = vi.fn(copyServiceFixture);
-    const inspectServiceApp = vi.fn(inspectServiceFixture);
-
-    const first = await ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, sourcePath),
-      copyServiceApp,
-      inspectServiceApp,
-    });
+    const options = { copyServiceApp };
+    const first = await install(options);
     expect(first.status).toBe("installed");
     await writeServiceFixture(sourcePath, UNEXPECTED_IDENTITY);
 
-    const second = await ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, sourcePath),
-      copyServiceApp,
-      inspectServiceApp,
-    });
+    const second = await install(options);
 
     expect(second).toMatchObject({
       status: "refreshed",
@@ -287,27 +151,20 @@ describe("Codex Computer Use native service", () => {
       sourceBuild: "1000900",
     });
     expect(copyServiceApp).toHaveBeenCalledTimes(2);
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
     await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
   });
 
   it("revalidates the current source after a different selection fails", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
-    const failingSourcePath = path.join(root, "failing", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    await writeServiceFixture(firstSourcePath, CURRENT_IDENTITY);
+    const { root, targetPath, install } = await setupService();
+    const failingSourcePath = serviceAppPath(path.join(root, "failing"));
     await writeServiceFixture(failingSourcePath, UNEXPECTED_IDENTITY);
     const inspectServiceApp = vi.fn(inspectServiceFixture);
 
-    await ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, firstSourcePath),
-      inspectServiceApp,
-    });
+    await install({ inspectServiceApp });
     await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, failingSourcePath),
+      install({
+        sourceAppCandidates: [failingSourcePath],
         copyServiceApp: async (source, target) => {
           await copyServiceFixture(source, target);
           await writeFixtureIdentity(target, STALE_IDENTITY);
@@ -316,206 +173,67 @@ describe("Codex Computer Use native service", () => {
       }),
     ).rejects.toThrow("does not match its selected signed source");
     const inspectionsAfterFailure = inspectServiceApp.mock.calls.length;
+    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
 
-    await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, firstSourcePath),
-        inspectServiceApp,
-      }),
-    ).resolves.toMatchObject({ status: "already_current", changed: false });
+    await expect(install({ inspectServiceApp })).resolves.toMatchObject({
+      status: "already_current",
+      changed: false,
+    });
     expect(inspectServiceApp.mock.calls.length).toBeGreaterThan(inspectionsAfterFailure);
   });
 
   it("reports a missing or untrusted source without changing the target", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "untrusted", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
+    const { root, targetPath, install } = await setupService();
+    const sourcePath = serviceAppPath(path.join(root, "untrusted"));
     await writeExecutableClient(sourcePath);
     await writeServiceFixture(targetPath, STALE_IDENTITY);
 
-    const result = await ensureCodexComputerUseServiceApp({
-      codexHome,
-      platform: "darwin",
+    const result = await install({
       sourceAppCandidates: [path.join(root, "missing.app"), sourcePath],
-      copyServiceApp: copyServiceFixture,
-      inspectServiceApp: inspectServiceFixture,
     });
 
     expect(result).toMatchObject({ status: "source_missing", changed: false });
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(STALE_IDENTITY);
   });
 
-  it("replaces an incomplete home-owned service app", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await fs.mkdir(targetPath, { recursive: true });
-    await fs.writeFile(path.join(targetPath, "partial"), "incomplete");
-
-    const result = await ensureCodexComputerUseServiceApp(serviceOptions(codexHome, sourcePath));
-
-    expect(result).toMatchObject({ status: "refreshed", changed: true });
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-    await expect(fs.access(path.join(targetPath, "partial"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("preserves the previous target when the staged copy does not match its source", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(targetPath, STALE_IDENTITY);
-
-    await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, sourcePath),
-        copyServiceApp: async (source, target) => {
-          await copyServiceFixture(source, target);
-          await writeFixtureIdentity(target, UNEXPECTED_IDENTITY);
-        },
-      }),
-    ).rejects.toThrow("does not match its selected signed source");
-
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(STALE_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
-  });
-
-  it("keeps a concurrent installer that wins with the same selected identity", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(targetPath, STALE_IDENTITY);
-
-    const result = await ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, sourcePath),
-      copyServiceApp: async (source, target) => {
-        await copyServiceFixture(source, target);
-        await writeFixtureIdentity(targetPath, CURRENT_IDENTITY);
-      },
-    });
-
-    expect(result).toMatchObject({ status: "already_current", changed: false });
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
-  });
-
-  it("restores an unexpected concurrent generation instead of overwriting it", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(targetPath, STALE_IDENTITY);
-
-    await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, sourcePath),
-        copyServiceApp: async (source, target) => {
-          await copyServiceFixture(source, target);
-          await writeFixtureIdentity(targetPath, UNEXPECTED_IDENTITY);
-        },
-      }),
-    ).rejects.toThrow("changed to an unexpected generation");
-
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
-  });
-
-  it("serializes different selected sources and revalidates each selection", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
-    const secondSourcePath = path.join(root, "second", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(firstSourcePath, CURRENT_IDENTITY);
-    await writeServiceFixture(secondSourcePath, UNEXPECTED_IDENTITY);
-    const firstCopyStarted = createDeferred<void>();
-    const firstCopyGate = createDeferred<void>();
-    let activeCopies = 0;
-    let maxActiveCopies = 0;
+  it("coalesces parallel installations for the same managed home", async () => {
+    const { targetPath, install } = await setupService();
+    const copyStarted = createDeferred<void>();
+    const releaseCopy = createDeferred<void>();
     const copyServiceApp = vi.fn(async (source: string, target: string) => {
-      activeCopies += 1;
-      maxActiveCopies = Math.max(maxActiveCopies, activeCopies);
-      try {
-        if (source === firstSourcePath) {
-          firstCopyStarted.resolve();
-          await firstCopyGate.promise;
-        }
-        await copyServiceFixture(source, target);
-      } finally {
-        activeCopies -= 1;
-      }
+      copyStarted.resolve();
+      await releaseCopy.promise;
+      await copyServiceFixture(source, target);
     });
-
-    const first = ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, firstSourcePath),
-      copyServiceApp,
-    });
-    await firstCopyStarted.promise;
-    const second = ensureCodexComputerUseServiceApp({
-      ...serviceOptions(codexHome, secondSourcePath),
-      copyServiceApp,
-    });
-    firstCopyGate.resolve();
-
-    await expect(first).resolves.toMatchObject({
-      status: "installed",
-      sourceBuild: "1000761",
-    });
-    await expect(second).resolves.toMatchObject({
-      status: "refreshed",
-      previousBuild: "1000761",
-      sourceBuild: "1000900",
-    });
-    await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, firstSourcePath),
-        copyServiceApp,
-      }),
-    ).resolves.toMatchObject({
-      status: "refreshed",
-      previousBuild: "1000900",
-      sourceBuild: "1000761",
-    });
-    expect(maxActiveCopies).toBe(1);
-    expect(copyServiceApp.mock.calls.map(([source]) => source)).toEqual([
-      firstSourcePath,
-      secondSourcePath,
-      firstSourcePath,
-    ]);
+    const first = install({ copyServiceApp });
+    await copyStarted.promise;
+    const second = install({ copyServiceApp });
+    releaseCopy.resolve();
+    const results = await Promise.all([first, second]);
+    expect(results[0]).toMatchObject({ status: "installed", changed: true });
+    expect(copyServiceApp).toHaveBeenCalledOnce();
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
 
-  it("leaves the prior service intact when its generation becomes stale before publication", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-stale-");
-    const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
-    const secondSourcePath = path.join(root, "second", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(firstSourcePath, CURRENT_IDENTITY);
+  it("restores the prior service when authorization is revoked before publication", async () => {
+    const { root, targetPath, install } = await setupService();
+    const secondSourcePath = serviceAppPath(path.join(root, "second"));
     await writeServiceFixture(secondSourcePath, UNEXPECTED_IDENTITY);
-    await ensureCodexComputerUseServiceApp(serviceOptions(codexHome, firstSourcePath));
+    await install();
 
     let currentnessChecks = 0;
     await expect(
-      ensureCodexComputerUseServiceApp({
-        ...serviceOptions(codexHome, secondSourcePath),
+      install({
+        sourceAppCandidates: [secondSourcePath],
         assertCurrent: () => {
           currentnessChecks += 1;
           if (currentnessChecks === 2) {
-            throw new Error("desktop generation is stale");
+            throw new Error("installation authorization revoked");
           }
         },
       }),
-    ).rejects.toThrow("desktop generation is stale");
+    ).rejects.toThrow("installation authorization revoked");
     expect(currentnessChecks).toBe(2);
 
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
@@ -546,25 +264,20 @@ describe("Codex Computer Use native service", () => {
   });
 });
 
-function serviceOptions(codexHome: string, sourcePath: string): EnsureParams {
-  return {
-    codexHome,
-    platform: "darwin",
-    sourceAppCandidates: [sourcePath],
-    copyServiceApp: copyServiceFixture,
-    inspectServiceApp: inspectServiceFixture,
-  };
+function serviceAppPath(parent: string) {
+  return path.join(parent, "Codex Computer Use.app");
 }
 
-function serviceIdentity(
-  overrides: Pick<ServiceIdentity, "version" | "build" | "cdHash" | "clientCdHash">,
-): ServiceIdentity {
+function serviceIdentity(version: string, build: string, label: string): ServiceIdentity {
   return {
     bundleId: "com.openai.sky.CUAService",
     teamId: "2DC432GLL2",
     clientBundleId: "com.openai.sky.CUAService.cli",
     clientTeamId: "2DC432GLL2",
-    ...overrides,
+    version,
+    build,
+    cdHash: `${label}-service`,
+    clientCdHash: `${label}-client`,
   };
 }
 

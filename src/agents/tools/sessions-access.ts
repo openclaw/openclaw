@@ -106,6 +106,9 @@ function recordAdmittedSessionDecision(params: {
   } catch {
     return false;
   }
+  const representedProfileId = caller.personalToolIdentityScoped
+    ? caller.personalToolSelection?.operatorAuthority?.profileId
+    : caller.operatorAuthority?.profileId;
   const receiptId = `${params.owner}:${randomUUID()}`;
   return recordExecutionDecisionWork({
     workVersion: 1,
@@ -131,6 +134,15 @@ function recordAdmittedSessionDecision(params: {
       remediation: [],
     },
     refs: {
+      ...(representedProfileId
+        ? {
+            representedSubject: {
+              state: "present" as const,
+              kind: "person" as const,
+              rawPrincipalRef: representedProfileId,
+            },
+          }
+        : {}),
       target: {
         namespace: "session",
         value: JSON.stringify([params.targetAgentId, params.targetSessionKey]),
@@ -209,7 +221,7 @@ export async function resolveSessionToolAccess(params: {
   readConfig?: () => OpenClawConfig;
   sandboxed?: boolean;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void }> {
+}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void; basis?: "scoped-grant" }> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
@@ -251,7 +263,7 @@ export async function resolveSessionToolAccess(params: {
     targetSessionKey: authorizationTargetSessionKey,
   });
   if (scoped) {
-    return { allowed: true, expectedSessionId: scoped.expectedSessionId };
+    return { allowed: true, expectedSessionId: scoped.expectedSessionId, basis: "scoped-grant" };
   }
   const createChecker = () => {
     const cfg = params.readConfig?.();

@@ -62,22 +62,33 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   allowAdvancedLocalState?: boolean;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  additionalPaths?: ReadonlySet<string>;
 }): Promise<WorkerWorkspaceApplyResult | undefined> {
   const root = await fs.realpath(params.root);
   const preserveDirectories = new Set(
     reconciliationDirectories(
       params.current.directories,
       stagedInputDirectoriesFromEntries(params.current.entries),
+      params.current.buildCacheInputs,
     ),
   );
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
+  params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
+  const buildCacheInputs =
+    params.base.buildCacheInputs === undefined && params.current.buildCacheInputs === undefined
+      ? undefined
+      : new Set([
+          ...(params.base.buildCacheInputs ?? []),
+          ...(params.current.buildCacheInputs ?? []),
+        ]);
   const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
     preserveDirectories,
     includePaths,
+    buildCacheInputs,
   });
   if (actual.manifestRef !== params.expectedManifestRef && !params.allowAdvancedLocalState) {
     return undefined;
@@ -99,6 +110,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
       includePaths,
+      buildCacheInputs,
     }),
   };
 }
@@ -109,6 +121,7 @@ export async function assertActualWorkspaceManifest(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  buildCacheInputs?: ReadonlySet<string>;
 }): Promise<void> {
   const actual = await captureWorkspaceManifest(params);
   if (actual.manifestRef !== params.expectedRef) {
@@ -142,7 +155,17 @@ export async function applyWorkspaceDirectoryChanges(params: {
       baseNodes.get(entryPath)?.type === "directory" ||
       currentNodes.get(entryPath)?.type === "directory",
   );
-  for (const entryPath of directoryPaths.toSorted()) {
+  const retainedDirectories = new Set(directoryPaths);
+  // Git prunes empty ancestors when deleting their last leaf. Recreate only
+  // ancestors of admitted changes that the worker still retains as directories.
+  for (const entryPath of params.applyPaths) {
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      if (currentNodes.get(ancestor)?.type === "directory") {
+        retainedDirectories.add(ancestor);
+      }
+    }
+  }
+  for (const entryPath of [...retainedDirectories].toSorted()) {
     const currentDirectory = currentNodes.get(entryPath);
     if (currentDirectory?.type === "directory") {
       await workspaceRoot.mkdir(entryPath);
@@ -169,20 +192,6 @@ export async function applyWorkspaceDirectoryChanges(params: {
     }
     await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
-}
-
-export function hasReplacedBaseEntryAncestor(
-  entryPath: string,
-  baseByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-  currentByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-): boolean {
-  for (const ancestor of workspacePathAncestors(entryPath)) {
-    const baseEntry = baseByPath.get(ancestor);
-    if (baseEntry && !sameEntry(baseEntry, currentByPath.get(ancestor))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function retainedConflictPaths(

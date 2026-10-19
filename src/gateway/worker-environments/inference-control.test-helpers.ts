@@ -4,6 +4,7 @@ import {
   registerWorkerInferenceSessionControl,
   type WorkerInferenceSessionDrain,
 } from "./inference-control-internal.js";
+import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export function createWorkerInferenceDrainService(
   startDrain: (sessionId: string) => WorkerInferenceSessionDrain,
@@ -21,25 +22,21 @@ export function createWorkerInferenceDrainService(
       let started = false;
       const release = () => drain?.release();
       return {
-        assertReserved: () => {},
+        drained: completed.promise,
+        hasWork: () => drain?.hasWork() ?? false,
         release,
-        accept: () => ({
-          drained: completed.promise,
-          hasWork: () => drain?.hasWork() ?? false,
-          release,
-          start: () => {
-            if (started) {
-              return;
-            }
-            started = true;
-            try {
-              drain = startDrain(sessionId);
-              void drain.drained.then(completed.resolve, completed.reject);
-            } catch (error) {
-              completed.reject(error);
-            }
-          },
-        }),
+        start: () => {
+          if (started) {
+            return;
+          }
+          started = true;
+          try {
+            drain = startDrain(sessionId);
+            void drain.drained.then(completed.resolve, completed.reject);
+          } catch (error) {
+            completed.reject(error);
+          }
+        },
       };
     },
     captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
@@ -81,4 +78,43 @@ export function createWorkerInferenceCancellationService(
     },
   });
   return service;
+}
+
+/** Drain fixtures expose the full service contract and reject unrelated operations. */
+export function createWorkerInferenceServiceStub(): WorkerEnvironmentServiceContract {
+  const unexpected = (): never => {
+    throw new Error("Unexpected worker service operation during drain acquisition");
+  };
+  return {
+    getDedicatedNodeLeaseSignal: unexpected,
+    captureSessionAttachment: unexpected,
+    getSessionAttachment: unexpected,
+    findSessionAttachment: unexpected,
+    getSessionAttachmentStatus: unexpected,
+    assertSessionAttachment: unexpected,
+    touchSessionAttachment: unexpected,
+    execSessionAttachment: unexpected,
+    createSessionAttachment: unexpected,
+    destroySessionAttachment: unexpected,
+    openNodePortal: unexpected,
+    list: unexpected,
+    readPreparedPoolSummary: unexpected,
+    readReadyWorkerTarget: unexpected,
+    get: () => undefined,
+    inventoryVersion: unexpected,
+    readMachineShape: unexpected,
+    machineShapeVersion: unexpected,
+    supportsExecutionMode: unexpected,
+    readProviderDisplayId: unexpected,
+    listMachineOptions: unexpected,
+    listOperatingSystems: unexpected,
+    prepare: unexpected,
+    create: unexpected,
+    destroy: unexpected,
+    destroyUnattached: unexpected,
+    observeDesktop: unexpected,
+    launchDesktopApp: unexpected,
+    startTunnel: unexpected,
+    stopTunnel: unexpected,
+  };
 }

@@ -1,10 +1,12 @@
 name: Android Store Release
 
-run-name: Android ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'Internal testing distribution' || 'Store release' }}
+run-name: Android ${{ github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1' && 'Store release (weekly)' || (((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'internal') && 'Internal testing distribution' || 'Store release') }}
 
 on:
   schedule:
     - cron: "0 7 * * *"
+      timezone: America/Los_Angeles
+    - cron: "0 11 * * 1"
       timezone: America/Los_Angeles
   workflow_dispatch:
     inputs:
@@ -29,18 +31,34 @@ env:
   NODE_VERSION: "24.21.0"
 
 jobs:
-  release:
-    name: Prepare and upload Android release
+  qualify:
     if: >-
       github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
-      ((github.event_name == 'schedule' && vars.ANDROID_INTERNAL_ENABLED == 'true') ||
-      (github.event_name == 'workflow_dispatch' &&
-      (inputs.operation == 'release' || inputs.operation == 'internal')))
+      ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/android-release-e2e.yml
+    with:
+      target_sha: ${{ github.sha }}
+
+  release:
+    name: Prepare and upload Android release
+    needs: qualify
+    if: >-
+      !cancelled() &&
+      github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw' &&
+      ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *' && vars.ANDROID_INTERNAL_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'internal') ||
+      (needs.qualify.result == 'success' &&
+      ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))))
     permissions:
       contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    environment: ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
+    environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
     steps:
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,7 +74,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Prepare trusted Linux Android tooling
-        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
+        if: >-
+          (github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
+          (github.event_name == 'workflow_dispatch' && inputs.operation == 'release')
         shell: bash
         run: |
           set -euo pipefail
@@ -100,13 +120,13 @@ jobs:
         uses: ./.github/actions/setup-android-toolchain
         with:
           cache-mode: off
-          install-screenshot-emulators: ${{ (github.event_name == 'workflow_dispatch' && inputs.operation == 'release') && 'true' || 'false' }}
+          install-screenshot-emulators: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.operation == 'release')) && 'true' || 'false' }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
-          ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          ruby-version: "4.0.7"
+          bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/android
 
@@ -114,13 +134,13 @@ jobs:
         working-directory: apps/android
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.22_ install --jobs 4 --retry 3
+          bundle _4.0.22_ check
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.0"
 
       - name: Create apps-signing read token
         id: apps-signing-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -146,7 +166,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANDROID_RELEASE_DESTINATION: ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'internal' || 'play-store' }}
+          ANDROID_RELEASE_DESTINATION: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'internal') && 'internal' || 'play-store' }}
           GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
           FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA: ${{ secrets.FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA }}
           FIREBASE_APP_ID: "1:627614795142:android:3daa833ca787ca67959807"
@@ -171,7 +191,7 @@ jobs:
 
       - name: Retain release plan and notes
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -182,9 +202,11 @@ jobs:
           retention-days: 30
 
       - name: Retain screenshot diagnostics
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
+        if: >-
+          always() && ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') ||
+          (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-release-emulator-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -199,7 +221,7 @@ jobs:
       - name: Retain signed release artifacts
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

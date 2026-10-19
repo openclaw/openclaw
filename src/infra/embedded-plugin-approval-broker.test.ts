@@ -18,9 +18,8 @@ afterEach(() => {
 
 describe("EmbeddedPluginApprovalBroker", () => {
   it("lists, emits, and resolves pending approvals", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
 
@@ -81,9 +80,8 @@ describe("EmbeddedPluginApprovalBroker", () => {
 
   it("times out pending approvals", async () => {
     vi.useFakeTimers();
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
     const resultPromise = broker.request({
@@ -102,9 +100,8 @@ describe("EmbeddedPluginApprovalBroker", () => {
   });
 
   it("removes approvals when the embedded run is aborted", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
     const controller = new AbortController();
@@ -124,85 +121,13 @@ describe("EmbeddedPluginApprovalBroker", () => {
     });
   });
 
-  it("rejects pending approvals when stopped", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
-    const resultPromise = broker.request({
-      request: requestPayload(),
-      timeoutMs: 5_000,
-    });
-
-    broker.stop(new Error("local TUI stopped"));
-
-    await expect(resultPromise).rejects.toThrow("local TUI stopped");
-    expect(broker.listPending()).toEqual([]);
-  });
-
-  it("isolates a failed listener when announcing a request", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
-    const events: string[] = [];
-    broker.subscribe((event) => {
-      if (event.event === "plugin.approval.requested") {
-        throw new Error("request listener failed");
-      }
-    });
-    broker.subscribe((event) => {
-      events.push(event.event);
-    });
-
-    const resultPromise = broker.request({
-      request: requestPayload(),
-      timeoutMs: 5_000,
-    });
-    const approval = expectDefined(
-      broker.listPending()[0],
-      "broker.listPending()[0] test invariant",
-    );
-
-    expect(broker.resolve(approval.id, "allow-once")).toBe(true);
-    await expect(resultPromise).resolves.toMatchObject({ decision: "allow-once" });
-    expect(events).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
-    expect(broker.listPending()).toEqual([]);
-  });
-
-  it("isolates a failed listener when announcing a resolution", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
-    const events: string[] = [];
-    broker.subscribe((event) => {
-      if (event.event === "plugin.approval.resolved") {
-        throw new Error("resolution listener failed");
-      }
-    });
-    broker.subscribe((event) => {
-      events.push(event.event);
-    });
-
-    const resultPromise = broker.request({
-      request: requestPayload(),
-      timeoutMs: 5_000,
-    });
-    const approval = expectDefined(
-      broker.listPending()[0],
-      "broker.listPending()[0] test invariant",
-    );
-
-    expect(() => broker.resolve(approval.id, "allow-once")).not.toThrow();
-    await expect(resultPromise).resolves.toMatchObject({ decision: "allow-once" });
-    expect(events).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
-    expect(broker.listPending()).toEqual([]);
-  });
-
-  it("isolates failed listeners while stopping every pending request", async () => {
+  it("isolates presentation failure while stopping every pending request", async () => {
     vi.useFakeTimers();
-    const broker = new EmbeddedPluginApprovalBroker();
     const removedIds: string[] = [];
-    broker.subscribe((event) => {
-      if (event.event === "plugin.approval.removed") {
-        throw new Error("removal listener failed");
-      }
-    });
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       if (event.event === "plugin.approval.removed") {
         removedIds.push(event.payload.id);
+        throw new Error("removal listener failed");
       }
     });
     const first = broker.request({

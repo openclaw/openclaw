@@ -7,7 +7,7 @@ import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-mo
 import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime.errors.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   withCurrentReadAuthority,
@@ -67,13 +67,9 @@ export async function resolveModelsListOwner({
     : scope?.sessionEntry;
   const useRequesterDefaults = !scope?.sessionKey && !scope?.sessionEntry;
   draft?.assertCurrent();
-  const currentConfig =
-    source.kind === "gateway"
-      ? source.context.getRuntimeConfig
-      : (source.getConfig ?? getRuntimeConfig);
   const publishedOwner = source.kind === "published" ? source.owner : undefined;
-  const requestConfig = currentConfig();
-  const initialConfig = publishedOwner?.config ?? requestConfig;
+  const initialConfig =
+    source.kind === "published" ? source.owner.config : source.context.getRuntimeConfig();
   const initialAgentId = resolveAmbientOwnerAgentId(initialConfig, params.agentId);
   const profiles = resolveSessionCatalogProfiles(sessionEntry, initialConfig, initialAgentId);
   const view = params.params.view ?? "default";
@@ -118,7 +114,8 @@ export async function resolveModelsListOwner({
     throw new Error("Model catalog omitted its published snapshot");
   }
   const sourceOwner = publishedOwner ?? ownerSnapshot;
-  const cfg = sourceOwner?.config ?? initialConfig;
+  // Routing consumes one runtime/source pair instead of reprojecting it for every model.
+  const cfg = captureRuntimeConfig(sourceOwner?.config ?? initialConfig);
   const agentId = sourceOwner?.agentId ?? initialAgentId;
   const workspaceDir =
     sourceOwner?.workspaceDir ??
@@ -136,9 +133,7 @@ export async function resolveModelsListOwner({
     authority,
     sessionEntry,
     useRequesterDefaults,
-    currentConfig,
     publishedOwner,
-    requestConfig,
     profiles,
     view,
     refresh,

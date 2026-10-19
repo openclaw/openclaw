@@ -4,6 +4,8 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const PROFILES = {
+  "check-focused": { runner: "blacksmith-4vcpu-ubuntu-2404", minutes: 60 },
+  "check-routine": { runner: "blacksmith-8vcpu-ubuntu-2404", minutes: 120 },
   check: { runner: "blacksmith-16vcpu-ubuntu-2404", minutes: 240 },
   "check-memory": { runner: "blacksmith-32vcpu-ubuntu-2404", minutes: 240 },
   arm: { runner: "blacksmith-16vcpu-ubuntu-2404-arm", minutes: 120 },
@@ -46,7 +48,9 @@ export function planTestboxAdmission(
   ) {
     throw new Error(`Runner ${selectedRunner} is not allowed for the ${profile} Testbox profile.`);
   }
-  const defaultMinutes = profile === "check" ? DEFAULT_STANDARD_MINUTES : policy.minutes;
+  const defaultMinutes = ["check", "check-focused", "check-routine"].includes(profile)
+    ? DEFAULT_STANDARD_MINUTES
+    : policy.minutes;
   const timeout = minutes === undefined || minutes === "" ? defaultMinutes : Number(minutes);
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > policy.minutes) {
     throw new Error(`Testbox runtime must be an integer from 1 to ${policy.minutes} minutes.`);

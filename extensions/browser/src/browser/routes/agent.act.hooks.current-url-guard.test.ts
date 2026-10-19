@@ -1,8 +1,8 @@
-// Browser tests cover agent.act hook current-tab navigation guard behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { expectResponse, runRoute } from "./agent-route.test-support.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
-const chromeMcpMocks = vi.hoisted(() => ({
+const mcp = vi.hoisted(() => ({
   evaluateChromeMcpScript: vi.fn(async () => true),
   uploadChromeMcpFile: vi.fn(async () => {}),
 }));
@@ -22,16 +22,13 @@ const pwMocks = vi.hoisted(() => ({
   setInputFilesViaPlaywright: vi.fn(async () => {}),
 }));
 
-vi.mock("../chrome-mcp.js", () => ({
-  evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
-  uploadChromeMcpFile: chromeMcpMocks.uploadChromeMcpFile,
-}));
+// mock-isolation: Observe rejected hook effects without connecting to a live Chrome session.
+vi.mock("../chrome-mcp.js", () => mcp);
 
 vi.mock("../paths.js", () => pathMocks);
 
-vi.mock("../pw-ai-module.js", () => ({
-  getPwAiModule: vi.fn(async () => pwMocks),
-}));
+// mock-isolation: Keep hook effects in the controlled Playwright fixture without loading a browser.
+vi.mock("../pw-ai-module.js", () => ({ getPwAiModule: vi.fn(async () => pwMocks) }));
 
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
 
@@ -58,24 +55,6 @@ function createProfileContext(options?: {
   };
 }
 
-function createRouteContext(
-  profileCtx: ReturnType<typeof createProfileContext>,
-  options?: { allowPrivateNetwork?: boolean },
-) {
-  return {
-    forProfile: () => profileCtx,
-    state: () => ({
-      resolved: {
-        actionTimeoutMs: 60_000,
-        extraArgs: [],
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: options?.allowPrivateNetwork === true,
-        },
-      },
-    }),
-  };
-}
-
 async function callHook(params: {
   path: "/hooks/file-chooser" | "/hooks/dialog";
   body: Record<string, unknown>;
@@ -83,25 +62,26 @@ async function callHook(params: {
   allowPrivateNetwork?: boolean;
 }) {
   const { app, postHandlers } = createBrowserRouteApp();
-  registerBrowserAgentActHookRoutes(
-    app,
-    createRouteContext(params.profileCtx, {
-      allowPrivateNetwork: params.allowPrivateNetwork,
-    }) as never,
-  );
-  const handler = postHandlers.get(params.path);
-  expect(handler).toBeTypeOf("function");
+  registerBrowserAgentActHookRoutes(app, {
+    forProfile: () => params.profileCtx,
+    state: () => ({
+      resolved: {
+        actionTimeoutMs: 60_000,
+        extraArgs: [],
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork === true },
+      },
+    }),
+  } as never);
+  return await runRoute(postHandlers.get(params.path), { body: params.body });
+}
 
-  const response = createBrowserRouteResponse();
-  await handler?.(
-    {
-      params: {},
-      query: {},
-      body: params.body,
-    },
-    response.res,
-  );
-  return response;
+async function upload(profile: Parameters<typeof createProfileContext>[0]) {
+  return await callHook({
+    path: "/hooks/file-chooser",
+    body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
+    profileCtx: createProfileContext({ tabUrl: "http://127.0.0.1:8080/upload", ...profile }),
+    allowPrivateNetwork: true,
+  });
 }
 
 const blockedHookCases = [
@@ -111,7 +91,7 @@ const blockedHookCases = [
     body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
     sideEffects: [
       pathMocks.resolveExistingUploadPaths,
-      chromeMcpMocks.uploadChromeMcpFile,
+      mcp.uploadChromeMcpFile,
       pwMocks.armFileUploadViaPlaywright,
       pwMocks.uploadViaPlaywright,
       pwMocks.clickViaPlaywright,
@@ -122,19 +102,13 @@ const blockedHookCases = [
     label: "dialog",
     path: "/hooks/dialog" as const,
     body: { accept: true },
-    sideEffects: [chromeMcpMocks.evaluateChromeMcpScript, pwMocks.armDialogViaPlaywright],
+    sideEffects: [mcp.evaluateChromeMcpScript, pwMocks.armDialogViaPlaywright],
   },
 ];
 
 describe("agent act hook current URL guard", () => {
   beforeEach(() => {
-    for (const fn of Object.values(chromeMcpMocks)) {
-      fn.mockClear();
-    }
-    for (const fn of Object.values(pathMocks)) {
-      fn.mockClear();
-    }
-    for (const fn of Object.values(pwMocks)) {
+    for (const fn of Object.values({ ...mcp, ...pathMocks, ...pwMocks })) {
       fn.mockClear();
     }
   });
@@ -143,18 +117,12 @@ describe("agent act hook current URL guard", () => {
     "blocks $label hooks before page side effects on a disallowed current tab",
     async ({ path, body, sideEffects }) => {
       const profileCtx = createProfileContext();
-
-      const response = await callHook({
-        path,
-        body,
-        profileCtx,
-      });
-
-      expect(response.statusCode).toBe(400);
-      expect(response.body).toEqual({
-        error: "browser navigation blocked by policy",
-        reason: "navigation_blocked",
-      });
+      const response = await callHook({ path, body, profileCtx });
+      expectResponse(
+        response,
+        { error: "browser navigation blocked by policy", reason: "navigation_blocked" },
+        400,
+      );
       expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
       for (const sideEffect of sideEffects) {
         expect(sideEffect).not.toHaveBeenCalled();
@@ -162,29 +130,24 @@ describe("agent act hook current URL guard", () => {
     },
   );
 
-  it("keeps file chooser path handoff local for extension-backed profiles", async () => {
-    const profileCtx = createProfileContext({
-      driver: "extension",
-      tabUrl: "http://127.0.0.1:8080/upload",
-    });
-
-    const response = await callHook({
-      path: "/hooks/file-chooser",
-      body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
-      profileCtx,
-      allowPrivateNetwork: true,
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
-    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        browserFilesystemLocal: true,
-        ref: "upload-button",
-        paths: ["/tmp/upload.txt"],
-      }),
-    );
-  });
+  it.each([
+    { profile: { driver: "extension" as const }, fallback: true },
+    { profile: { attachOnly: true }, fallback: false },
+  ])(
+    "uploads byte payloads with oversized-path fallback=$fallback",
+    async ({ profile, fallback }) => {
+      // Store extensions cannot hand off local paths until the payload size cap.
+      expectResponse(await upload(profile), { ok: true });
+      expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          browserFilesystemLocal: false,
+          uploadPathsFallbackOnPayloadLimit: fallback,
+          ref: "upload-button",
+          paths: ["/tmp/upload.txt"],
+        }),
+      );
+    },
+  );
 
   it.each([
     { targeting: { ref: "upload-button" }, paths: ["first.txt"] },
@@ -202,37 +165,12 @@ describe("agent act hook current URL guard", () => {
       allowPrivateNetwork: true,
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
-    expect(chromeMcpMocks.uploadChromeMcpFile).toHaveBeenCalledWith(
+    expectResponse(response, { ok: true });
+    expect(mcp.uploadChromeMcpFile).toHaveBeenCalledWith(
       expect.objectContaining({
         targetId: "tab-1",
         uid: "upload-button",
         filePaths: resolvedPaths,
-      }),
-    );
-  });
-
-  it("sends loopback attach-only uploads as payloads for a separate browser filesystem", async () => {
-    const profileCtx = createProfileContext({
-      attachOnly: true,
-      tabUrl: "http://127.0.0.1:8080/upload",
-    });
-
-    const response = await callHook({
-      path: "/hooks/file-chooser",
-      body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
-      profileCtx,
-      allowPrivateNetwork: true,
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
-    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        browserFilesystemLocal: false,
-        ref: "upload-button",
-        paths: ["/tmp/upload.txt"],
       }),
     );
   });

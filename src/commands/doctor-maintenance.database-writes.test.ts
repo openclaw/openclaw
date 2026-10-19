@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { restoreFailedUpdateDatabases } from "../cli/update-cli/update-command-database-backup.js";
 import { recordUpdateDatabaseWrites } from "../cli/update-cli/update-command-database-receipts.js";
 import type { UpdateDatabaseBackup } from "../infra/update-database-backup.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -22,7 +22,7 @@ it("refuses rollback attribution for a foreign write during Doctor maintenance",
       const seed = new DatabaseSync(pathname);
       seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
       seed.close();
-      const databaseGenerations = readUpdateDatabaseGenerations([pathname]);
+      const databaseGenerations = await readUpdatePhysicalDatabaseGenerations([pathname]);
       const maintenance = await beginDoctorMaintenance({
         root: null,
         options: { repair: true, nonInteractive: true },
@@ -55,10 +55,6 @@ it("refuses rollback attribution for a foreign write during Doctor maintenance",
         };
         recordUpdateDatabaseWrites(backup, receipt, {
           name: "doctor",
-          command: "doctor --fix",
-          cwd: state.stateDir,
-          durationMs: 0,
-          exitCode: 1,
         });
         expect(backup.restoreRefusal).toContain("the writer is unknown");
         const result: UpdateRunResult = {

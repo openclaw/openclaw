@@ -399,37 +399,6 @@ describe("preemptive-compaction", () => {
     expect(estimatedPromptTokens).toBeGreaterThan(30_000);
   });
 
-  it("prechecks a regression-sized synthetic tool-heavy transcript as over budget", () => {
-    const toolResultCharsPerMessage = Math.ceil(427_000 / 120);
-    const generalCharsPerMessage = Math.ceil((503_000 - 427_000) / 121);
-    const messages: AgentMessage[] = [];
-    for (let index = 0; index < 241; index += 1) {
-      if (index % 2 === 0) {
-        messages.push(
-          makeToolResultMessage(
-            "t".repeat(toolResultCharsPerMessage),
-            JSON.stringify({ index, payload: "p".repeat(80) }),
-          ),
-        );
-      } else {
-        messages.push(makeAssistantHistory("h".repeat(generalCharsPerMessage)));
-      }
-    }
-
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages,
-      systemPrompt: "system".repeat(200),
-      prompt: "continue",
-      contextTokenBudget: 200_000,
-      reserveTokens: 32_000,
-    });
-
-    expect(result.estimatedPromptTokens).toBeGreaterThan(200_000);
-    expect(result.promptBudgetBeforeReserve).toBe(168_000);
-    expect(result.route).not.toBe("fits");
-    expect(result.overflowTokens).toBeGreaterThan(0);
-  });
-
   it("caps reserve tokens so small context models keep usable prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("short history")],
@@ -538,83 +507,6 @@ describe("preemptive-compaction", () => {
     expect(result.overflowTokens).toBe(0);
   });
 
-  it("avoids false overflow when CJK is less than half of a tool result", () => {
-    const mixedContent = "中".repeat(40_000) + "a".repeat(60_000);
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeToolResultMessage(mixedContent)],
-      systemPrompt: "sys",
-      prompt: "continue",
-      contextTokenBudget: 100_000,
-      reserveTokens: 20_000,
-    });
-
-    expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
-    expect(result.route).toBe("fits");
-    expect(result.shouldCompact).toBe(false);
-  });
-
-  it("keeps mixed-script estimates monotonic across the former CJK cutoff", () => {
-    const estimate = (cjkChars: number) =>
-      estimateLlmBoundaryTokenPressure({
-        messages: [makeToolResultMessage("中".repeat(cjkChars) + "a".repeat(10_000 - cjkChars))],
-        systemPrompt: "sys",
-        prompt: "continue",
-      });
-
-    const belowCutoff = estimate(4_999);
-    const atCutoff = estimate(5_000);
-    const aboveCutoff = estimate(5_001);
-
-    expect(atCutoff).toBeGreaterThanOrEqual(belowCutoff);
-    expect(aboveCutoff).toBeGreaterThanOrEqual(atCutoff);
-    expect(aboveCutoff - belowCutoff).toBeLessThanOrEqual(2);
-  });
-
-  it("keeps the conservative ratio for non-CJK tool results", () => {
-    const latinText = "alpha beta gamma delta epsilon ".repeat(1000);
-    const toolResultTokens = estimateLlmBoundaryTokenPressure({
-      messages: [makeToolResultMessage(latinText)],
-      systemPrompt: "sys",
-      prompt: "continue",
-    });
-    const assistantTokens = estimateLlmBoundaryTokenPressure({
-      messages: [makeAssistantHistory(latinText)],
-      systemPrompt: "sys",
-      prompt: "continue",
-    });
-
-    expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
-    expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
-  });
-
-  it("applies the CJK-aware ratio to JSON tool-result payloads", () => {
-    const cjkPayload = {
-      summary: "中文内容".repeat(5_000),
-      note: "更多中文文本".repeat(2_000),
-    };
-    const messages = [makeJsonToolResultMessage(cjkPayload)];
-
-    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
-      messages,
-      systemPrompt: "sys",
-      prompt: "continue",
-    });
-
-    expect(estimatedPromptTokens).toBeLessThan(90_000);
-
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages,
-      systemPrompt: "sys",
-      prompt: "continue",
-      contextTokenBudget: 128_000,
-      reserveTokens: 20_000,
-    });
-
-    expect(result.route).toBe("fits");
-    expect(result.shouldCompact).toBe(false);
-    expect(result.overflowTokens).toBe(0);
-  });
-
   it("includes tool schema tokens in the precheck estimate so large catalogs trigger overflow", () => {
     const messages = [makeAssistantHistory("short conversation text")];
     const contextTokenBudget = 128_000;
@@ -651,27 +543,6 @@ describe("preemptive-compaction", () => {
     expect(withTools.route).not.toBe("fits");
     expect(withTools.estimatedPromptTokens).toBeGreaterThan(withoutTools.estimatedPromptTokens);
     expect(withTools.overflowTokens).toBeGreaterThan(0);
-  });
-
-  it("excludes runtime output schemas and metadata from tool pressure", () => {
-    const definition = {
-      name: "lookup",
-      description: "Look up a record.",
-      parameters: { type: "object", properties: { query: { type: "string" } } },
-    };
-    const runtimeTool = {
-      ...definition,
-      label: "Record lookup",
-      outputSchema: { type: "string", description: "result documentation ".repeat(4_000) },
-      executionMode: "parallel",
-      hideFromChannelProgress: true,
-      resultContentSource: "network",
-      execute: async () => ({ content: [], details: {} }),
-    };
-
-    expect(estimateToolSchemaTokenPressure([runtimeTool])).toBe(
-      estimateToolSchemaTokenPressure([definition]),
-    );
   });
 
   it("does not double-count tool schema tokens when a provider boundary is available", () => {

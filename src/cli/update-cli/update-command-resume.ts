@@ -45,6 +45,7 @@ import {
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
+  readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -361,7 +362,7 @@ async function resumePostCoreUpdateInternal(
           }
         }
 
-        const configSnapshot = await readConfigFileSnapshot({
+        const configSnapshot = await readUpdateConfigFileSnapshot({
           skipPluginValidation: true,
           suppressFutureVersionWarning: true,
           observe: false,

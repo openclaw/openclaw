@@ -17,7 +17,6 @@ import type { SystemAgentOperation } from "./operations.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
 
 type WizardPrompter = import("../wizard/prompts.js").WizardPrompter;
-type HostedRuntime = typeof import("./hosted-setup.runtime.js");
 type HostedSetupCompletion = import("./hosted-setup.runtime.js").HostedSetupCompletion;
 type HostedMemoryImportOutcome = import("./hosted-setup.runtime.js").HostedMemoryImportOutcome;
 type HostedWizardRunResult = void | HostedSetupCompletion | HostedMemoryImportOutcome;
@@ -46,25 +45,6 @@ export type ChatWizardAnswerResult = ChatWizardResult & {
   userHistoryText: string;
 };
 
-type HostedSetupWizard = (
-  prompter: WizardPrompter,
-  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-) => Promise<void | HostedSetupCompletion>;
-
-export type ChatWizardHostDependencies = {
-  runChannelSetupWizard?: (
-    channel: string,
-    prompter: WizardPrompter,
-    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
-    assertPersistentEffectCurrent?: () => void,
-  ) => Promise<void | HostedSetupCompletion>;
-  runSkillsSetupWizard?: HostedSetupWizard;
-  runSearchSetupWizard?: HostedSetupWizard;
-  runGatewaySetupWizard?: HostedSetupWizard;
-  runMemoryImportWizard?: HostedRuntime["runHostedMemoryImport"];
-  appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
-};
-
 type ActiveWizardBridge = {
   session: WizardSession;
   step: WizardStep | null;
@@ -83,7 +63,6 @@ const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
 const HOSTED_SETUP = {
   skills: {
     label: "skills",
-    dependency: "runSkillsSetupWizard",
     runtime: "runHostedSkillsSetup",
     success: ["Done — skills dependency setup is complete."],
     operation: "skills.setup",
@@ -92,7 +71,6 @@ const HOSTED_SETUP = {
   },
   search: {
     label: "web search",
-    dependency: "runSearchSetupWizard",
     runtime: "runHostedSearchSetup",
     success: [
       "Done — web search setup is complete.",
@@ -104,7 +82,6 @@ const HOSTED_SETUP = {
   },
   gateway: {
     label: "gateway",
-    dependency: "runGatewaySetupWizard",
     runtime: "runHostedGatewaySetup",
     success: [
       "Done — gateway settings saved.",
@@ -276,12 +253,13 @@ export class SystemAgentWizardAnswerError extends Error {}
 
 export class ChatWizardHost {
   private bridge: ActiveWizardBridge | null = null;
+  private awaitingSetupChannel = false;
+  private lastSensitiveChannel: string | undefined;
 
   constructor(
     private readonly options: {
       surface?: "cli" | "gateway";
       beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
-      dependencies?: ChatWizardHostDependencies;
     },
   ) {}
 
@@ -296,6 +274,68 @@ export class ChatWizardHost {
   dispose(): void {
     this.bridge?.session.cancel();
     this.bridge = null;
+  }
+
+  clearHandoff(): void {
+    this.awaitingSetupChannel = false;
+    this.lastSensitiveChannel = undefined;
+  }
+
+  resolveChannelHandoffInput(
+    text: string,
+  ): SystemAgentChatReply | Extract<SystemAgentOperation, { kind: "open-setup" }> | null {
+    if (!this.awaitingSetupChannel) {
+      return null;
+    }
+    if (/^(cancel|abort|stop)$/i.test(text)) {
+      this.awaitingSetupChannel = false;
+      return { text: "Channel wizard handoff cancelled.", action: "none" };
+    }
+    if (!/^[a-z0-9_-]+$/i.test(text)) {
+      return {
+        text: "Reply with one channel id, such as `slack` or `telegram`, or say `cancel`.",
+        action: "none",
+      };
+    }
+    this.awaitingSetupChannel = false;
+    return { kind: "open-setup", target: "channels", channel: text.toLowerCase() };
+  }
+
+  openSetup(
+    operation: Extract<SystemAgentOperation, { kind: "open-setup" }>,
+  ): SystemAgentChatReply {
+    if (this.options.surface === "gateway") {
+      return {
+        text: "Open Settings to change your model or connect a channel. To change providers from a shell, run `openclaw onboard` on the machine running OpenClaw.",
+        action: "none",
+      };
+    }
+    if (!["channels", "search", "gateway"].includes(operation.target)) {
+      return {
+        text: "Setup can replace the inference route powering this session. Exit OpenClaw and run `openclaw onboard`; it saves only a route that passes a live test. Then start OpenClaw again.",
+        action: "none",
+      };
+    }
+    let handoff = operation;
+    if (handoff.target === "channels" && !handoff.channel) {
+      if (!this.lastSensitiveChannel) {
+        this.awaitingSetupChannel = true;
+        return {
+          text: "Which channel should I open in the masked terminal wizard?",
+          action: "none",
+        };
+      }
+      handoff = { ...handoff, channel: this.lastSensitiveChannel };
+      this.lastSensitiveChannel = undefined;
+    }
+    this.awaitingSetupChannel = false;
+    const label =
+      handoff.target === "channels"
+        ? `${handoff.channel ?? "channel"} setup`
+        : handoff.target === "search"
+          ? "web search setup"
+          : "Gateway setup";
+    return { text: `Opening the ${label} wizard.`, action: "open-setup", handoff };
   }
 
   decorateReply(reply: SystemAgentChatReply): SystemAgentChatReply {
@@ -376,7 +416,6 @@ export class ChatWizardHost {
   }
 
   async startChannel(channel: string): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runChannelSetupWizard;
     return await this.start({
       kind: "channel",
       label: channel,
@@ -387,32 +426,28 @@ export class ChatWizardHost {
           await this.options.beforePersistentApply(runtime);
           assertPersistentEffectCurrent();
         };
-        return run
-          ? await run(channel, prompter, beforePersistentApply, assertPersistentEffectCurrent)
-          : await (
-              await import("./hosted-setup.runtime.js")
-            ).runHostedChannelSetup(
-              channel,
-              prompter,
-              beforePersistentApply,
-              undefined,
-              assertPersistentEffectCurrent,
-            );
+        return await (
+          await import("./hosted-setup.runtime.js")
+        ).runHostedChannelSetup(
+          channel,
+          prompter,
+          beforePersistentApply,
+          undefined,
+          assertPersistentEffectCurrent,
+        );
       },
     });
   }
 
   async startSetup(kind: keyof typeof HOSTED_SETUP): Promise<ChatWizardResult> {
     const setup = HOSTED_SETUP[kind];
-    const run = this.options.dependencies?.[setup.dependency];
     const result = await this.start({
       kind,
       label: setup.label,
       run: async (prompter) =>
-        await (run ?? (await import("./hosted-setup.runtime.js"))[setup.runtime])(
-          prompter,
-          this.options.beforePersistentApply,
-        ),
+        await (
+          await import("./hosted-setup.runtime.js")
+        )[setup.runtime](prompter, this.options.beforePersistentApply),
     });
     if (kind !== "gateway" || this.options.surface !== "gateway" || !this.bridge) {
       return result;
@@ -425,17 +460,16 @@ export class ChatWizardHost {
   }
 
   async startMemoryImport(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runMemoryImportWizard;
     const providers: MemoryImportProviderOutcome[] = [];
     return await this.start({
       kind: "memory-import",
       label: "memory import",
       memoryImportProviders: providers,
       run: async (prompter) =>
-        await (run ?? (await import("./hosted-setup.runtime.js")).runHostedMemoryImport)(
-          prompter,
-          this.options.beforePersistentApply,
-          (value) => providers.push(value),
+        await (
+          await import("./hosted-setup.runtime.js")
+        ).runHostedMemoryImport(prompter, this.options.beforePersistentApply, (value) =>
+          providers.push(value),
         ),
     });
   }
@@ -450,6 +484,8 @@ export class ChatWizardHost {
       assertPersistentEffectCurrent: () => void,
     ) => Promise<HostedWizardRunResult>;
   }): Promise<ChatWizardResult> {
+    // A masked channel handoff belongs only to the immediately preceding wizard.
+    this.lastSensitiveChannel = undefined;
     const completion: ActiveWizardBridge["completion"] = {
       status: "applied",
       ...(params.memoryImportProviders
@@ -480,7 +516,11 @@ export class ChatWizardHost {
       completion,
       ...(params.autoSelectChannel ? { autoSelectChannel: params.autoSelectChannel } : {}),
     };
-    return await this.pump();
+    const result = await this.pump();
+    if (result.sensitiveChannel) {
+      this.lastSensitiveChannel = result.sensitiveChannel;
+    }
+    return result;
   }
 
   private tryAutoSelect(step: WizardStep): { value: unknown } | null {
@@ -510,25 +550,12 @@ export class ChatWizardHost {
       const label = bridge.label;
       if (result.status === "done") {
         if (bridge.kind === "memory-import") {
-          try {
-            return {
-              text: await (
-                await import("./hosted-setup.runtime.js")
-              ).renderMemoryImport(
-                bridge.completion.memoryImport,
-                this.options.dependencies?.appendAuditEntry,
-              ),
-              configWritten: false,
-            };
-          } catch (error) {
-            log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
-            return {
-              text: await (
-                await import("./hosted-setup.runtime.js")
-              ).renderMemoryImport(bridge.completion.memoryImport, async () => ""),
-              configWritten: false,
-            };
-          }
+          return {
+            text: await (
+              await import("./hosted-setup.runtime.js")
+            ).renderMemoryImport(bridge.completion.memoryImport),
+            configWritten: false,
+          };
         }
         if (bridge.completion.status === "kept-current") {
           return {
@@ -547,16 +574,9 @@ export class ChatWizardHost {
         return { text: success.join("\n"), configWritten: true };
       }
       if (bridge.kind === "memory-import") {
-        try {
-          await (
-            await import("./hosted-setup.runtime.js")
-          ).auditMemoryImport(
-            bridge.completion.memoryImportProviders ?? [],
-            this.options.dependencies?.appendAuditEntry,
-          );
-        } catch (error) {
-          log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
-        }
+        await (
+          await import("./hosted-setup.runtime.js")
+        ).auditMemoryImport(bridge.completion.memoryImportProviders ?? []);
       }
       if (result.status === "cancelled") {
         return {
@@ -621,9 +641,7 @@ export class ChatWizardHost {
           details: { capability: setup.capability },
         };
     try {
-      const append =
-        this.options.dependencies?.appendAuditEntry ??
-        (await import("./audit.js")).appendSystemAgentAuditEntry;
+      const append = (await import("./audit.js")).appendSystemAgentAuditEntry;
       await append(entry);
     } catch (error) {
       log.warn(`${kind} setup completed without audit entry: ${formatErrorMessage(error)}`);

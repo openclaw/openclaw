@@ -1,15 +1,6 @@
 // Continuation settlement tests cover status delivery and child-terminal handoff.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import {
-  OutboundDeliveryError,
-  PlatformMessageNotDispatchedError,
-} from "../../infra/outbound/deliver-types.js";
-import { withReplyDispatcher } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
-import type { ReplyPayload } from "../types.js";
-import { appendUsageLine } from "./agent-runner-usage-line.js";
-import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+// Register dispatch mocks before modules that consume them.
+// oxfmt-ignore
 import {
   createHookCtx,
   emptyConfig,
@@ -19,11 +10,29 @@ import {
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
+import { withReplyDispatcher } from "../dispatch-dispatcher.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
+import { appendUsageLine } from "./agent-runner-usage-line.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import {
+  createDispatchMemorySession,
+  dispatchMemorySessionScope,
+} from "./dispatch-memory-session.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import { assertSessionWriterDeliveryAuthorized } from "./session-writer-delivery-authority.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
+let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 
 const progressDraft = { push: () => undefined, retire: () => undefined };
 function pendingFinalDelivery(text: string, intentId = "intent-1") {
@@ -44,8 +53,7 @@ function pendingFinalReply(text: string, intentId = "intent-1"): ReplyPayload {
         deliveryId: "delivery-1",
         intentId,
         sessionId: "session-1",
-        sessionKey: "agent:test:session",
-        storePath: "/tmp/mock-sessions.json",
+        ...dispatchMemorySessionScope,
       },
     },
   );
@@ -55,13 +63,13 @@ beforeAll(async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({
-    testing: { resetReplyRunRegistry },
-  } = await import("./reply-run-registry.test-support.js"));
+    testing: { resetSessionControllerForTest },
+  } = await import("../../sessions/session-controller.test-support.js"));
 });
 
 beforeEach(() => {
   clearAgentHarnesses();
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   setDiscordTestRegistry();
   resetPluginTtsAndThreadMocks();
@@ -71,19 +79,14 @@ beforeEach(() => {
   sessionStoreMocks.loadSessionStoreEntry
     .mockReset()
     .mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-  sessionStoreMocks.readSessionEntry
-    .mockReset()
-    .mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore
     .mockReset()
     .mockReturnValue("/tmp/mock-sessions.json");
-  sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
   sessionStoreMocks.updateSessionEntry.mockClear();
 });
 
 afterEach(() => {
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   clearAgentHarnesses();
 });
@@ -102,12 +105,12 @@ describe("accepted continuation status delivery", () => {
         ...pendingFinalDelivery("durable answer"),
         deliveries: [{ id: "delivery-1", state: initial }],
       };
-      sessionStoreMocks.currentEntry = {
+      const memory = await createDispatchMemorySession({
         sessionId: "session-1",
-        sessionKey: "agent:test:session",
+        updatedAt: 1,
         pendingFinalDelivery: pending,
         restartRecoverySourceIngress: "channel",
-      };
+      });
       const error = new OutboundDeliveryError("retained for recovery", {
         cause: new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline") }),
       });
@@ -119,27 +122,27 @@ describe("accepted continuation status delivery", () => {
         return outcome === "ambiguous" ? { visibleReplySent: true, ambiguous: true } : undefined;
       });
       const dispatcher = createReplyDispatcher({ deliver });
-      await withReplyDispatcher({
-        dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx: createHookCtx(),
-            cfg: emptyConfig,
-            dispatcher,
-            replyResolver: async (_ctx, opts) => {
-              await opts?.onBlockReply?.({ text: "durable answer" });
-              return pendingFinalReply("durable answer");
-            },
-            replyOptions: { onBlockReplyQueued: vi.fn() },
-          }),
-      });
+      await memory.run(() =>
+        withReplyDispatcher({
+          dispatcher,
+          run: () =>
+            dispatchReplyFromConfig({
+              ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
+              cfg: emptyConfig,
+              dispatcher,
+              replyResolver: async (_ctx, opts) => {
+                await opts?.onBlockReply?.({ text: "durable answer" });
+                return pendingFinalReply("durable answer");
+              },
+              replyOptions: { onBlockReplyQueued: vi.fn() },
+            }),
+        }),
+      );
       expect(deliver).toHaveBeenCalledOnce();
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+      expect(memory.read()?.pendingFinalDelivery).toEqual(
         expected ? { ...pending, deliveries: [{ id: "delivery-1", state: expected }] } : undefined,
       );
-      expect(sessionStoreMocks.currentEntry?.restartRecoverySourceIngress).toBe(
-        expected ? "channel" : undefined,
-      );
+      expect(memory.read()?.restartRecoverySourceIngress).toBe(expected ? "channel" : undefined);
     },
   );
 
@@ -424,26 +427,34 @@ describe("accepted continuation status delivery", () => {
     },
   );
 
-  it("releases an accepted continuation when its status was removed from the batch", async () => {
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+  it.each(["empty", "silent", "pending"] as const)(
+    "settles an accepted continuation after a %s final without a status",
+    async (outcome) => {
+      const settle = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
 
-    await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyResolver: async (_ctx, opts) => {
-            opts?.onPendingContinuation?.({ settle });
-            return undefined;
-          },
-        }),
-    });
+      await withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async (_ctx, opts) => {
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion("required", outcome);
+              opts?.onPendingContinuation?.({ settle });
+              return undefined;
+            },
+          }),
+      });
 
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
+      expect(settle).toHaveBeenCalledExactlyOnceWith(outcome !== "empty");
+    },
+  );
 
   it.each(["resolver", "session metadata"])(
     "releases an accepted continuation when %s fails before finalization",
@@ -521,6 +532,11 @@ describe("accepted continuation status delivery", () => {
   });
 
   it("releases an accepted continuation when session-writer delivery is revoked", async () => {
+    const currentEntry = {
+      sessionId: "session-1",
+      lifecycleRevision: "revision-after-replacement",
+      activeWriterRunId: "run-after-replacement",
+    };
     let continuationOpen = true;
     const adopt = vi.fn(() => continuationOpen);
     const statusPayload = setReplyPayloadMetadata(
@@ -534,6 +550,7 @@ describe("accepted continuation status delivery", () => {
           },
         },
         sessionWriterDeliveryAuthority: {
+          readCurrentSession: () => currentEntry,
           agentId: "main",
           expectedLifecycleRevision: "revision-before-replacement",
           expectedSessionId: "session-1",
@@ -543,13 +560,14 @@ describe("accepted continuation status delivery", () => {
         },
       },
     );
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      lifecycleRevision: "revision-after-replacement",
-      activeWriterRunId: "run-after-replacement",
-    };
+    sessionStoreMocks.currentEntry = currentEntry;
     const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) =>
+        assertSessionWriterDeliveryAuthorized(
+          getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+        ),
+    });
 
     await withReplyDispatcher({
       dispatcher,
@@ -566,18 +584,14 @@ describe("accepted continuation status delivery", () => {
     });
 
     expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-    expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(adopt()).toBe(false);
   });
 
   it("clears pending final delivery when abort fires after a successful final send (#89115)", async () => {
-    sessionStoreMocks.currentEntry = {
+    const memory = await createDispatchMemorySession({
       sessionId: "session-1",
-      sessionKey: "agent:test:session",
+      updatedAt: 1,
       pendingFinalDelivery: pendingFinalDelivery("durable reply", "intent-89115"),
-    };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
     });
     const abortController = new AbortController();
     const deliver = vi.fn().mockResolvedValue(undefined);
@@ -589,22 +603,23 @@ describe("accepted continuation status delivery", () => {
       return queued;
     });
 
-    const result = await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyOptions: { abortSignal: abortController.signal },
-          replyResolver: async () => pendingFinalReply("durable reply", "intent-89115"),
-        }),
-    });
+    const result = await memory.run(() =>
+      withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
+            cfg: emptyConfig,
+            dispatcher,
+            replyOptions: { abortSignal: abortController.signal },
+            replyResolver: async () => pendingFinalReply("durable reply", "intent-89115"),
+          }),
+      }),
+    );
 
     expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(memory.read()?.pendingFinalDelivery).toBeUndefined();
   });
 });

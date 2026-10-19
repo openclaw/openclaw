@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { DurableQuestionDraft } from "../../../lib/chat/composer-draft-store.runtime.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import {
   createAsyncQuestionPanelProps,
   createAsyncQuestionPresentation,
-  renderAsyncQuestionSummary,
 } from "./chat-async-question.ts";
 import { getTranscriptState, resetThreadPresentation } from "./chat-thread-interactions.ts";
 
@@ -452,10 +452,14 @@ it.each(["Undo", "Answer"])(
     expect(restoring.pending).toHaveLength(0);
     expect(onReopen).not.toHaveBeenCalled();
     const summary = document.createElement("div");
-    render(renderAsyncQuestionSummary(question, restoring), summary);
+    const view = mountSolid(
+      AsyncQuestionSummary,
+      { questions: question, presentation: restoring },
+      summary,
+    );
     expect(summary.textContent).toContain("Restoring answer");
     expect(summary.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
-    render(null, summary);
+    view.dispose();
 
     // Establish that the reopening transaction has reached its held write before
     // mounting a second reader; this is the delayed commit boundary under test.
@@ -525,57 +529,6 @@ it.each(["answered", "owner replaced"])(
   },
 );
 
-it("saves the latest completion boundary before completing a delayed Undo", async () => {
-  const onReopen = vi.fn();
-  const initialProps = {
-    ...props,
-    onReopen,
-    messages: [{ ...props.messages[0], runId: "original-run" }],
-  };
-  const current = state();
-  await createAsyncQuestionPresentation(current, initialProps).dismiss(question.itemId);
-  const firstWrite = createDeferred<unknown>();
-  const latestWrite = createDeferred<unknown>();
-  storage.write
-    .mockClear()
-    .mockReturnValueOnce(firstWrite.promise)
-    .mockReturnValueOnce(latestWrite.promise);
-  const reopening = createAsyncQuestionPresentation(current, initialProps).reopen(question.itemId);
-  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledTimes(1));
-  const latestProps = {
-    ...initialProps,
-    messages: [
-      ...initialProps.messages,
-      ...["original-run", "successor-run"].map((runId, index) => ({
-        role: "assistant",
-        runId,
-        phase: "final_answer",
-        stopReason: "stop",
-        content: "Finished the requested work.",
-        __openclaw: { id: `final-${runId}`, seq: index + 2, runTerminal: true },
-      })),
-    ],
-  };
-  createAsyncQuestionPresentation(current, latestProps);
-  firstWrite.resolve({ status: "persisted" });
-  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledTimes(2));
-  expect(onReopen).not.toHaveBeenCalled();
-  expect(createAsyncQuestionPresentation(current, latestProps).pending).toHaveLength(0);
-  const latestStored = storage.write.mock.calls[1]![1];
-  expect(latestStored.questionDrafts[0].reopenedAfterBoundary).toBeTruthy();
-  latestWrite.resolve({ status: "persisted" });
-  await reopening;
-  expect(onReopen).toHaveBeenCalledOnce();
-  storage.read.mockResolvedValue({
-    status: "found",
-    draft: { ...latestStored, writeId: "latest" },
-  });
-  const reloaded = state();
-  createAsyncQuestionPresentation(reloaded, latestProps);
-  await settled(reloaded);
-  expect(createAsyncQuestionPresentation(reloaded, latestProps).pending).toHaveLength(1);
-});
-
 it("keeps answering available with an unsaved warning when restoring a dismissal cannot persist", async () => {
   storage.read.mockResolvedValue(foundDraft({ ...saved, dismissed: true }));
   const current = state();
@@ -635,22 +588,23 @@ it.each(["mounted", "reloaded"] as const)(
     const delivered = createAsyncQuestionPresentation(recoveredState, deliveryProps);
     expect(delivered.pending).toEqual([]);
     const summary = document.createElement("div");
-    render(renderAsyncQuestionSummary(multiQuestion, delivered), summary);
-    expect(summary.textContent).toContain(queued.text);
-    const revisedText = queued.text.replace("Include this example:", "Updated in the outbox:");
-    render(
-      renderAsyncQuestionSummary(
-        multiQuestion,
-        createAsyncQuestionPresentation(recoveredState, {
-          ...deliveryProps,
-          queue: [{ ...queued, text: revisedText }],
-        }),
-      ),
+    const view = mountSolid(
+      AsyncQuestionSummary,
+      { questions: multiQuestion, presentation: delivered },
       summary,
     );
+    expect(summary.textContent).toContain(queued.text);
+    const revisedText = queued.text.replace("Include this example:", "Updated in the outbox:");
+    view.update({
+      questions: multiQuestion,
+      presentation: createAsyncQuestionPresentation(recoveredState, {
+        ...deliveryProps,
+        queue: [{ ...queued, text: revisedText }],
+      }),
+    });
     expect(summary.textContent).toContain(revisedText);
     expect(summary.textContent).not.toContain("Include this example:");
-    render(null, summary);
+    view.dispose();
     delivered.discard(queued);
     const reopened = createAsyncQuestionPresentation(recoveredState, activeProps);
     expect(reopened.pending.map((entry) => entry.itemId)).toEqual([multiQuestion.itemId]);

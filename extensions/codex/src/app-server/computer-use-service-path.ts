@@ -60,7 +60,7 @@ export async function prepareOwnedServiceParent(params: {
   assertPathAtOrInside(
     rootIdentity.realPath,
     parentIdentity.realPath,
-    "canonical Computer Use service parent",
+    "resolved Computer Use service parent",
   );
   return parentIdentity;
 }

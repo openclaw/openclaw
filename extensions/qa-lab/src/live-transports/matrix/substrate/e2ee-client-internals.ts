@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { inheritMatrixQaReplacementRelation, type MatrixQaObservedEvent } from "./events.js";
 
 export type MatrixQaE2eeActorId = "driver" | "observer" | `driver-${string}` | `cli-${string}`;
@@ -10,107 +9,6 @@ export const MATRIX_QA_E2EE_SYNC_FILTER = {
     ephemeral: { not_types: ["m.receipt"] },
   },
 };
-
-async function withMatrixQaE2eeTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-  onTimeout?: () => void,
-): Promise<T> {
-  return await raceWithTimeout(
-    promise,
-    timeoutMs,
-    () => {
-      onTimeout?.();
-      throw new Error(message);
-    },
-    { ref: false },
-  );
-}
-
-export function createMatrixQaE2eeClientLifecycle(params: {
-  abortPendingRequests: () => void;
-  detachListeners: () => void;
-  drainPendingDecryptions: () => Promise<void>;
-  shutdownTimeoutMs: number;
-  stopAndPersist: () => Promise<void>;
-  stopWithoutPersist: () => Promise<void>;
-}) {
-  const activeOperations = new Set<Promise<unknown>>();
-  let shutdownStarted = false;
-  let stopPromise: Promise<void> | undefined;
-
-  const failShutdown = async (phase: string, cause: unknown): Promise<never> => {
-    try {
-      await params.stopWithoutPersist();
-    } catch {
-      // Preserve the lifecycle failure that explains why persistence was skipped.
-    }
-    throw new Error(
-      `Matrix E2EE client shutdown failed while ${phase}; crypto state was discarded. Retry the QA scenario with a fresh client.`,
-      { cause },
-    );
-  };
-  const stop = (): Promise<void> => {
-    if (stopPromise) {
-      return stopPromise;
-    }
-    shutdownStarted = true;
-    stopPromise = (async () => {
-      const deadline = Date.now() + params.shutdownTimeoutMs;
-      params.detachListeners();
-      if (activeOperations.size > 0) {
-        const graceMs = Math.min(1_000, Math.max(0, deadline - Date.now()));
-        await withMatrixQaE2eeTimeout(
-          Promise.allSettled(activeOperations),
-          graceMs,
-          "active Matrix SDK operations did not settle before shutdown",
-        ).catch(async (error: unknown) => {
-          params.abortPendingRequests();
-          // The grace deadline decides whether persistence is safe, not whether
-          // non-abortable work has settled. Requests are already canceled; join
-          // the admitted work before discard can destroy its client resources.
-          await Promise.allSettled(activeOperations);
-          return await failShutdown("waiting for active Matrix SDK operations", error);
-        });
-      }
-      await withMatrixQaE2eeTimeout(
-        params.drainPendingDecryptions(),
-        Math.max(0, deadline - Date.now()),
-        "pending Matrix decryptions did not drain before shutdown",
-      ).catch((error: unknown) => failShutdown("draining pending Matrix decryptions", error));
-      await params.stopAndPersist();
-    })();
-    return stopPromise;
-  };
-
-  const runMatrixQaE2eeClientOperation = async <T>(operation: {
-    label: string;
-    run: (assertActive: () => void) => Promise<T>;
-    timeoutMs: number;
-  }): Promise<T> => {
-    const assertActive = () => {
-      if (shutdownStarted) {
-        throw new Error(
-          `Matrix E2EE client shutdown has started; cannot start ${operation.label}. Retry the QA scenario with a fresh client.`,
-        );
-      }
-    };
-    assertActive();
-    const active = operation.run(assertActive);
-    activeOperations.add(active);
-    void active.finally(() => activeOperations.delete(active)).catch(() => undefined);
-
-    return withMatrixQaE2eeTimeout(
-      active,
-      operation.timeoutMs,
-      `${operation.label} timed out after ${operation.timeoutMs}ms`,
-      () => void stop().catch(() => undefined),
-    );
-  };
-
-  return { runOperation: runMatrixQaE2eeClientOperation, stop };
-}
 
 function shouldRecordMatrixQaObservedEventUpdate(params: {
   next: MatrixQaObservedEvent;

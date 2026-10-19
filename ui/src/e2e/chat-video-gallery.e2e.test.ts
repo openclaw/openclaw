@@ -19,8 +19,7 @@ type NativeControlNode = {
 // CDP is used only to locate Chromium's closed native controls. Input is real mouse input.
 async function nativeVideoControlBox(cdp: CDPSession, control: string) {
   const { result } = await cdp.send("Runtime.evaluate", {
-    expression:
-      'document.querySelector("openclaw-image-lightbox").shadowRoot.querySelector("video")',
+    expression: 'document.querySelector("openclaw-image-lightbox").querySelector("video")',
   });
   if (!result.objectId) {
     throw new Error("Missing expanded native player");
@@ -107,6 +106,8 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("chat.startup");
+          // Lazy media admission creates the expand button only near the viewport.
+          await page.getByText("before.mp4", { exact: true }).scrollIntoViewIfNeeded();
           const expand = page.getByRole("button", {
             name: "Expand before.mp4 in the media overlay",
             exact: true,
@@ -125,7 +126,7 @@ suite.define(() => {
           await page.screenshot({ path: `${dir}/expanded-first.png`, animations: "disabled" });
           expect(
             await viewer.evaluate((element) => {
-              const root = element.shadowRoot!;
+              const root = element;
               const videoBox = root.querySelector("video")!.getBoundingClientRect();
               return [...root.querySelectorAll(".actions, .navigation, .gallery-counter")].every(
                 (control) => {

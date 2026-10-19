@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
-import { render, type TemplateResult } from "lit";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import {
   agentsCapability,
   agentsList,
@@ -13,9 +13,10 @@ import {
   pageContext,
   settingsSelection,
   snapshot,
-  type TestAgentsPage,
+  createAgentsPage,
+  emitGatewaySnapshot,
 } from "./agents-page.test-support.ts";
-import "./agents-page.ts";
+import { Agents } from "./view.tsx";
 
 it.each([
   "file tabs",
@@ -97,14 +98,10 @@ it.each([
     ensureFiles: vi.fn(async (agentId: string) => fileList(agentId)),
     recordFile: vi.fn(),
   };
-  const page = document.createElement("openclaw-agents-page") as TestAgentsPage & {
-    render: () => TemplateResult;
-  };
-  page.context = {
+  const context = {
     ...pageContext(currentGateway, agents),
     basePath: "",
     settingsAgentSelection: selection,
-    gateway: { ...currentGateway, connection: { password: "" } },
     channels: { state: {}, subscribe: () => () => undefined },
     runtimeConfig: {
       state: { configForm: {}, configSnapshot: {} },
@@ -112,12 +109,13 @@ it.each([
     },
     navigation: { snapshot: { pinnedAgentIds: [] }, subscribe: () => () => undefined },
   } as unknown as ApplicationContext;
-  page.gateway.applySnapshot(connected, { initial: true, sourceChanged: false });
-  page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
-  page.subscriptions.hostConnected();
-  page.routeDataInitialized = true;
-  const container = document.createElement("div");
-  const paint = () => render(page.render(), container);
+  const page = createAgentsPage(
+    context,
+    agentsRouteData(currentGateway, roster, "main", selection),
+  );
+  const mounted = mountSolid(Agents, page.read());
+  const { container } = mounted;
+  const paint = () => mounted.update(page.read());
   const textarea = () => {
     paint();
     const input = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
@@ -126,18 +124,23 @@ it.each([
   };
   const settle = async () => {
     await vi.waitFor(() => {
-      expect(page.agentFileEditors[page.agentFileActive ?? ""]?.content).toBeDefined();
-      expect(page.agentFilesList?.agentId).toBe(selection.state.selectedId);
-      expect(page.agentFilesLoading).toBe(false);
+      expect(
+        page.read().agentFiles.agentFileEditors[page.read().agentFiles.agentFileActive ?? ""]
+          ?.content,
+      ).toBeDefined();
+      expect(page.read().agentFiles.agentFilesList?.agentId).toBe(selection.state.selectedId);
+      expect(page.read().agentFiles.agentFilesLoading).toBe(false);
       paint();
       expect(container.querySelector(".agent-file-textarea")).not.toBeNull();
     });
   };
   const tab = (name: string) => {
     paint();
-    const target = container.querySelector(`[panel="${name}"]`);
+    const target = container.querySelector<HTMLButtonElement>(
+      `.agent-file-tabs [role="tab"][data-tab-value="${name}"]`,
+    );
     expect(target).not.toBeNull();
-    target!.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    target!.click();
   };
   const save = () => {
     paint();
@@ -146,7 +149,6 @@ it.each([
     return button!;
   };
   try {
-    await page.loadAgentFiles("main");
     await settle();
     expect(textarea().value).toBe(mainContent);
     const editor = textarea();
@@ -193,20 +195,14 @@ it.each([
       } else if (transition === "connection replacement") {
         mainContent = "replacement Gateway instructions";
         const replacement = { request } as unknown as GatewayBrowserClient;
-        page.gateway.applySnapshot(
-          { ...connected, client: replacement },
-          { initial: false, sourceChanged: false },
-        );
+        emitGatewaySnapshot(currentGateway, { ...connected, client: replacement });
         await settle();
       }
       selection.set("main");
       await settle();
     } else {
-      page.gateway.applySnapshot(
-        { ...connected, phase: "reconnecting" },
-        { initial: false, sourceChanged: false },
-      );
-      page.gateway.applySnapshot(connected, { initial: false, sourceChanged: false });
+      emitGatewaySnapshot(currentGateway, { ...connected, phase: "reconnecting" });
+      emitGatewaySnapshot(currentGateway, connected);
       await settle();
     }
     expect(textarea().value).toBe(transition === "connection replacement" ? mainContent : draft);
@@ -216,7 +212,7 @@ it.each([
       expect(save().disabled).toBe(true);
     }
     if (transition === "external update" || transition === "missing file") {
-      expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
+      expect(page.read().agentFiles.agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
       save().click();
       await vi.waitFor(() => {
         paint();
@@ -242,7 +238,9 @@ it.each([
       next.value = "next edit";
       next.dispatchEvent(new Event("input", { bubbles: true }));
       save().click();
-      await vi.waitFor(() => expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("next edit"));
+      await vi.waitFor(() =>
+        expect(page.read().agentFiles.agentFileEditors["AGENTS.md"]?.content).toBe("next edit"),
+      );
       expect(save().disabled).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",
@@ -253,8 +251,8 @@ it.each([
     }
   } finally {
     pendingSave.resolve();
-    page.subscriptions.hostDisconnected();
+    page.dispose();
     selection.dispose();
-    render(null, container);
+    mounted.dispose();
   }
 });

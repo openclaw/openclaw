@@ -1,4 +1,3 @@
-// Pure helpers for custom session groups and their sidebar section tokens.
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
 import type {

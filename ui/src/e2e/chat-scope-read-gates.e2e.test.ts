@@ -2,12 +2,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import type { ApplicationContext } from "../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
   publicationMethods,
   waitForWatchedSessionKey,
@@ -41,6 +42,13 @@ suite.define(() => {
             },
             pullRequest: { numbers: [42], state: "open" },
             sharingRole: "owner",
+            owner: {
+              actor: {
+                type: "human",
+                id: "synthetic-scope-viewer",
+                label: "Synthetic scope viewer",
+              },
+            },
             visibility: "shared",
             spawnedCwd: "/synthetic/scope-review",
           },
@@ -96,6 +104,7 @@ suite.define(() => {
         const chatChip = page.locator(
           '.chat-pr__link[href="https://github.com/synthetic/repo/pull/42"]',
         );
+        await openDetailsPullRequests(page);
         await chatChip.waitFor();
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           await writeFile(
@@ -126,12 +135,9 @@ suite.define(() => {
         expect(await chatChip.count()).toBe(0);
         expect(await indicator.count()).toBe(0);
         expect(
-          await page.evaluate(() => {
-            const app = document.querySelector<
-              HTMLElement & { runtime: { context: ApplicationContext } }
-            >("openclaw-app");
-            const snapshot = app?.runtime.context.gateway.snapshot;
-            return { phase: snapshot?.phase, scopes: snapshot?.hello?.auth?.scopes };
+          await evaluateControlUiContext(page, (context) => {
+            const snapshot = context.gateway.snapshot;
+            return { phase: snapshot.phase, scopes: snapshot.hello?.auth?.scopes };
           }),
         ).toEqual({
           phase: "connected",

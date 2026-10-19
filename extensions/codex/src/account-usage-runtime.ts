@@ -2,9 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { z } from "zod";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { isCodexAppServerProxyLaunch } from "./app-server/launch-args.js";
 import { buildCodexAppServerUsageSnapshot } from "./app-server/rate-limits.js";
 import { readCodexAppServerUsage } from "./app-server/request.js";
@@ -35,27 +36,37 @@ export async function handleCodexAccountUsage({
   }
   try {
     const agentDir = resolveAgentDir(config, agentId);
-    const readStore = () =>
-      resolveCodexAppServerAuthProfileStore({ agentDir, authProfileId: profileId, config });
-    const store = structuredClone(readStore());
+    const store = structuredClone(
+      await resolveCodexAppServerAuthProfileStore({ agentDir, authProfileId: profileId, config }),
+    );
     const credential = store.profiles[profileId];
     if (!credential || credential.provider !== "openai" || credential.type === "api_key") {
       invalid("Select a saved Codex subscription login.");
       return;
     }
+    // Recheck the selected credential at disclosure, after the asynchronous usage request.
     const assertCurrent = () => {
       if (
         signal?.aborted ||
         hasCurrentClientAuthority?.() === false ||
         context.getRuntimeConfig() !== config ||
-        !isDeepStrictEqual(readStore().profiles[profileId], store.profiles[profileId])
+        !isDeepStrictEqual(
+          ensureAuthProfileStore(agentDir, {
+            profileId,
+            allowKeychainPrompt: false,
+            config,
+            externalCliProviderIds: ["openai"],
+            externalCliProfileIds: [profileId],
+          }).profiles[profileId],
+          store.profiles[profileId],
+        )
       ) {
         throw new Error("Account credentials changed. Refresh Models and try again.");
       }
     };
     assertCurrent();
     const { start } = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: config.plugins?.entries?.codex?.config,
+      pluginConfig: readCodexPluginConfig(config.plugins?.entries?.codex?.config),
     });
     if (isCodexAppServerProxyLaunch(start.args)) {
       throw new Error(

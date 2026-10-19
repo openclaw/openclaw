@@ -18,7 +18,6 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -71,10 +70,11 @@ const loadSignalApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
 );
 
-async function resolveSignalSendContext(params: {
+async function createSignalOutboundSender(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   accountId?: string | null;
   deps?: { [channelId: string]: unknown };
+  assertDirectAdapterHandoff?: () => void;
 }) {
   const send =
     resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ??
@@ -83,7 +83,21 @@ async function resolveSignalSendContext(params: {
     cfg: params.cfg,
     resolveChannelLimitMb: () => resolveSignalAccount(params).config.mediaMaxMb,
   });
-  return { send, maxBytes };
+  return async (
+    to: string,
+    text: string,
+    { replyToId, ...options }: Omit<Parameters<SignalSendFn>[2], "cfg" | "maxBytes" | "accountId">,
+  ) => {
+    const replyOptions = await resolveSignalReplyOptions({ ...params, to, replyToId });
+    return await send(to, text, {
+      cfg: params.cfg,
+      ...options,
+      maxBytes,
+      accountId: params.accountId ?? undefined,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      ...replyOptions,
+    });
+  };
 }
 
 function resolveSignalSendTarget(params: {
@@ -113,25 +127,14 @@ async function sendSignalOutbound(params: {
   replyToId?: string | null;
   assertDirectAdapterHandoff?: () => void;
 }) {
-  const accountId = params.accountId ?? undefined;
-  const { send, maxBytes } = await resolveSignalSendContext(params);
+  const send = await createSignalOutboundSender(params);
   const to = resolveSignalSendTarget(params);
-  const replyOptions = await resolveSignalReplyOptions({
-    cfg: params.cfg,
-    to,
-    accountId,
-    replyToId: params.replyToId,
-  });
   return await send(to, params.text, {
-    cfg: params.cfg,
+    replyToId: params.replyToId,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
-    maxBytes,
-    accountId,
-    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-    ...replyOptions,
   });
 }
 
@@ -250,7 +253,7 @@ function resolveSignalOutboundSessionRoute(params: {
 async function sendFormattedSignalText(
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendFormattedText"]>>[0],
 ) {
-  const { send, maxBytes } = await resolveSignalSendContext(ctx);
+  const send = await createSignalOutboundSender(ctx);
   const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
     fallbackLimit: 4000,
   });
@@ -281,21 +284,10 @@ async function sendFormattedSignalText(
   const results = [];
   for (const chunk of chunks) {
     ctx.abortSignal?.throwIfAborted();
-    const replyToId = nextReplyToId();
-    const replyOptions = await resolveSignalReplyOptions({
-      cfg: ctx.cfg,
-      to,
-      accountId: ctx.accountId,
-      replyToId,
-    });
     const result = await send(to, chunk.text, {
-      cfg: ctx.cfg,
-      maxBytes,
-      accountId: ctx.accountId ?? undefined,
+      replyToId: nextReplyToId(),
       textMode: "plain",
       textStyles: chunk.styles,
-      assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-      ...replyOptions,
     });
     const deliveryResult = attachChannelToResult(
       "signal",
@@ -311,7 +303,7 @@ async function sendFormattedSignalMedia(
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendFormattedMedia"]>>[0],
 ) {
   ctx.abortSignal?.throwIfAborted();
-  const { send, maxBytes } = await resolveSignalSendContext(ctx);
+  const send = await createSignalOutboundSender(ctx);
   const to = resolveSignalSendTarget(ctx);
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
@@ -324,24 +316,14 @@ async function sendFormattedSignalMedia(
     text: ctx.text,
     styles: [],
   };
-  const replyOptions = await resolveSignalReplyOptions({
-    cfg: ctx.cfg,
-    to,
-    accountId: ctx.accountId,
-    replyToId: ctx.replyToId,
-  });
   const result = await send(to, formatted.text, {
-    cfg: ctx.cfg,
+    replyToId: ctx.replyToId,
     mediaUrl: ctx.mediaUrl,
     ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
     mediaLocalRoots: ctx.mediaLocalRoots,
     ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
-    maxBytes,
-    accountId: ctx.accountId ?? undefined,
     textMode: "plain",
     textStyles: formatted.styles,
-    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-    ...replyOptions,
   });
   return attachChannelToResult("signal", attachSignalVisibleText(result, formatted.text));
 }
@@ -358,9 +340,9 @@ async function registerDeliveredSignalApprovalPayloadForReactions(
   if (!targetAuthor && !targetAuthorUuid) {
     return;
   }
-  const { registerSignalReactionTargetsForDeliveredPayload } =
-    await import("./reaction-targets.js");
-  await registerSignalReactionTargetsForDeliveredPayload({
+  const { registerSignalApprovalReactionTargetForDeliveredPayload } =
+    await loadSignalApprovalReactionsModule();
+  await registerSignalApprovalReactionTargetForDeliveredPayload({
     cfg: params.cfg,
     target: { ...params.target, accountId: account.accountId },
     payload: params.payload,
@@ -385,13 +367,6 @@ async function renderSignalApprovalPayloadForReactions(
   const { addSignalApprovalReactionHintToStructuredPayload } =
     await loadSignalApprovalReactionsModule();
   const payload = materializeSignalPresentationFallback(params.payload, params.presentation);
-  const questionPayload = questionGatewayRuntime.prepareReactionPayloadForDelivery({
-    payload: params.payload,
-    presentation: params.presentation,
-  });
-  if (questionPayload) {
-    return questionPayload;
-  }
   return addSignalApprovalReactionHintToStructuredPayload({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId ?? undefined,

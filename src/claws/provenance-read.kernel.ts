@@ -1,6 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { readTableColumns, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { CLAW_SCHEMA_VERSION } from "./manifest-contract.js";
 import {
@@ -10,28 +12,35 @@ import {
   type ClawPackageRefStatus,
 } from "./package-extension-provenance.js";
 import { decodeClawAgentOwnership } from "./provenance-agent-origin.js";
-import { clawBootstrapProvenanceFromRow } from "./provenance-bootstrap.js";
+import {
+  clawBootstrapProvenanceFromRow,
+  selectClawBootstrapProvenanceColumns,
+} from "./provenance-bootstrap.js";
 import * as installRecordSchema from "./provenance-schema-version.js";
-import type {
-  ClawInstallStatus,
-  ClawOrphanWorkspace,
-  PersistedClawInstall,
-} from "./provenance-types.js";
+import type { ClawOrphanWorkspace, PersistedClawInstall } from "./provenance-types.js";
 
 type ClawInstallRow = Omit<
   DB["claw_installs"],
   "source_byte_length" | "manifest_schema_version" | "added_at_ms" | "updated_at_ms"
 > & {
-  source_kind: "package" | "development";
-  integrity_kind: "artifact" | "development-snapshot";
   source_byte_length: number | bigint;
   manifest_schema_version: number | bigint;
-  status: ClawInstallStatus;
   added_at_ms: number | bigint;
   updated_at_ms: number | bigint;
 };
 
-function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
+function clawInstallRecordFromRow(row: ClawInstallRow): PersistedClawInstall {
+  if (
+    (row.source_kind !== "package" && row.source_kind !== "development") ||
+    (row.integrity_kind !== "artifact" && row.integrity_kind !== "development-snapshot") ||
+    (row.status !== "pending" &&
+      row.status !== "workspace_ready" &&
+      row.status !== "config_committed" &&
+      row.status !== "complete" &&
+      row.status !== "partial")
+  ) {
+    throw new Error("Claw install record has invalid source or status fields.");
+  }
   const ownership = decodeClawAgentOwnership(row.agent_owned_paths_json, row.schema_version);
   const manifestSchemaVersion = sqliteNumber(row.manifest_schema_version);
   if (manifestSchemaVersion !== CLAW_SCHEMA_VERSION) {
@@ -63,14 +72,15 @@ function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
   };
 }
 
-function selectClawInstallRow(db: DatabaseSync, agentId: string): ClawInstallRow | undefined {
+function selectClawInstallRow(db: EngineConnection, agentId: string): ClawInstallRow | undefined {
+  const bootstrapColumns = selectClawBootstrapProvenanceColumns(db);
   return (
     db /* sqlite-allow-raw: this Claw prototype state-table read is scoped to one owned row. */
       .prepare(
         `SELECT agent_id, schema_version, source_kind, claw_name, claw_version,
               package_root, manifest_path, integrity_kind, integrity, source_byte_length,
               manifest_schema_version, plan_integrity, workspace, agent_config_digest,
-              agent_owned_paths_json, bootstrap_source_path, bootstrap_content_digest,
+              agent_owned_paths_json, ${bootstrapColumns},
               status, added_at_ms, updated_at_ms
          FROM claw_installs
         WHERE agent_id = ?`,
@@ -81,21 +91,22 @@ function selectClawInstallRow(db: DatabaseSync, agentId: string): ClawInstallRow
 }
 
 export function readClawInstallRecordFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   agentId: string,
 ): PersistedClawInstall | undefined {
   const row = selectClawInstallRow(db, agentId);
-  return row ? rowToRecord(row) : undefined;
+  return row ? clawInstallRecordFromRow(row) : undefined;
 }
 
-export function readClawInstallRecordsInDatabase(db: DatabaseSync): PersistedClawInstall[] {
+export function readClawInstallRecordsInDatabase(db: EngineConnection): PersistedClawInstall[] {
+  const bootstrapColumns = selectClawBootstrapProvenanceColumns(db);
   const rows =
     db /* sqlite-allow-raw: read-only Claw install inventory ordered by stable agent id. */
       .prepare(
         `SELECT schema_version, source_kind, claw_name, claw_version, package_root,
               manifest_path, integrity_kind, integrity, source_byte_length,
               manifest_schema_version, plan_integrity, agent_id, workspace,
-              agent_config_digest, agent_owned_paths_json, bootstrap_source_path, bootstrap_content_digest,
+              agent_config_digest, agent_owned_paths_json, ${bootstrapColumns},
               status, added_at_ms,
               updated_at_ms
          FROM claw_installs
@@ -103,10 +114,11 @@ export function readClawInstallRecordsInDatabase(db: DatabaseSync): PersistedCla
       )
       // SAFETY: This inventory uses the same admitted install projection as the exact-row reader.
       .all() as ClawInstallRow[];
-  return rows.map(rowToRecord);
+  return rows.map(clawInstallRecordFromRow);
 }
 
 export type ClawPackageRefQuery = {
+  readOnly?: boolean;
   agentId?: string;
   kind?: PersistedClawPackageRef["kind"];
   source?: PersistedClawPackageRef["source"];
@@ -117,9 +129,15 @@ export type ClawPackageRefQuery = {
 };
 
 export function readClawPackageRefsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   options: ClawPackageRefQuery = {},
 ): PersistedClawPackageRef[] {
+  if (isPostgresSqlConnection(db)) {
+    throw new Error("Claw package provenance requires SQLite named-parameter support.");
+  }
+  if (options.readOnly && !tableExists(db, "claw_package_refs")) {
+    return [];
+  }
   const conditions: string[] = [];
   const params: Record<string, string> = {};
   for (const [column, value] of [
@@ -137,13 +155,23 @@ export function readClawPackageRefsInDatabase(
     }
   }
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+  const availableColumns = readTableColumns(db, "claw_package_refs");
+  const extensionColumns = [
+    "extension_id",
+    "extension_format",
+    "extension_detected_format",
+    "extension_mapped_json",
+    "extension_unavailable_json",
+    "extension_adapter_identity",
+  ]
+    .map((column) => (availableColumns.has(column) ? column : `NULL AS ${column}`))
+    .join(", ");
   const rows =
     db /* sqlite-allow-raw: read-only Claw package reference lookup with closed column filters. */
       .prepare(
         `SELECT schema_version, agent_id, claw_name, package_kind, package_source,
               package_ref, package_version, package_integrity, package_status, relationship, origin,
-              independent_owner, extension_id, extension_format, extension_detected_format,
-              extension_mapped_json, extension_unavailable_json, extension_adapter_identity,
+              independent_owner, ${extensionColumns},
               installed_at_ms,
               updated_at_ms
          FROM claw_package_refs${where}
@@ -155,7 +183,7 @@ export function readClawPackageRefsInDatabase(
 }
 
 export function readClawOrphanWorkspaceInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   agentId: string,
 ): ClawOrphanWorkspace | undefined {
   const row = executeSqliteQueryTakeFirstSync(

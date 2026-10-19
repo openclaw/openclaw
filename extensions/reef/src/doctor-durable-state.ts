@@ -317,7 +317,7 @@ async function importReefRuntimeRecords<T>(params: {
   for (const { key, value } of records) {
     const existing = canonical.get(key);
     if (existing && !params.matches(existing, value)) {
-      throw new Error(`canonical ${params.recordLabel} ${key} differs`);
+      throw new Error(`current ${params.recordLabel} ${key} differs`);
     }
   }
   const missing = records.filter(({ key }) => !canonical.has(key));
@@ -327,15 +327,7 @@ async function importReefRuntimeRecords<T>(params: {
     );
   }
   for (const { key, value } of missing) {
-    await store.registerIfAbsent(key, value);
-  }
-  for (const entry of canonicalEntries) {
-    if (JSON.stringify(await store.lookup(entry.key)) !== JSON.stringify(entry.value)) {
-      throw new Error(`canonical ${params.recordLabel} ${entry.key} changed during import`);
-    }
-  }
-  for (const { key, value } of missing) {
-    if (!params.matches(await store.lookup(key), value)) {
+    if (!(await store.registerIfAbsent(key, value))) {
       throw new Error(params.persistedMismatch(key));
     }
   }
@@ -395,7 +387,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
             ? canonical.length === 0
             : canonical.length !== pending.expectedEntries
         ) {
-          throw new Error("canonical audit trail does not match the verified import");
+          throw new Error("saved audit trail does not match the verified import");
         }
         await migrationStore.delete(REEF_AUDIT_MIGRATION_KEY);
         changes.push("Verified Reef audit trail; cleared completed migration marker");
@@ -422,7 +414,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       canonical = await readStoredReefAudit(store, headStore);
     } catch (error) {
       warnings.push(
-        `Failed reading canonical Reef audit trail: ${String(error)}; left legacy source in place`,
+        `Failed reading saved Reef audit trail: ${String(error)}; left legacy source in place`,
       );
       return { changes, warnings };
     }
@@ -448,7 +440,9 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
           if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
             throw new Error(`conflicting audit entry ${entry.entryHash}`);
           }
-          await store.registerIfAbsent(key, record);
+          if (!existing && !(await store.registerIfAbsent(key, record))) {
+            throw new Error(`conflicting audit entry ${entry.entryHash}`);
+          }
         }
         const last = retained.at(-1)!;
         const first = retained[0]!;
@@ -467,11 +461,6 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
         return { changes, warnings };
       }
     }
-    const persisted = await readStoredReefAudit(store, headStore);
-    if (JSON.stringify(persisted) !== JSON.stringify(retained)) {
-      warnings.push("Failed verifying Reef audit trail after import; left source in place");
-      return { changes, warnings };
-    }
     changes.push(
       `Migrated ${legacy.length} Reef audit ${legacy.length === 1 ? "entry" : "entries"} -> plugin state`,
     );
@@ -479,7 +468,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
     // distinguish an interrupted empty import from a missing legacy source.
     await migrationStore.register(REEF_AUDIT_MIGRATION_KEY, {
       pending: true,
-      expectedEntries: persisted.length,
+      expectedEntries: retained.length,
     });
     const warningCount = warnings.length;
     await archiveLegacyStateSource({
@@ -488,9 +477,9 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       changes,
       warnings,
     });
-    if (persisted.length < legacy.length && warnings.length === warningCount) {
+    if (retained.length < legacy.length && warnings.length === warningCount) {
       changes.push(
-        `Retained the newest ${persisted.length} Reef audit entries in SQLite; preserved the complete ${legacy.length}-entry chain in the archived legacy source`,
+        `Retained the newest ${retained.length} Reef audit entries in SQLite; preserved the complete ${legacy.length}-entry chain in the archived legacy source`,
       );
     }
     if (warnings.length === warningCount) {
@@ -592,14 +581,9 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
       for (const [digest, record] of retained) {
         const existing = await store.lookup(digest);
         if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
-          throw new Error(`canonical review ${digest} differs`);
+          throw new Error(`saved review ${digest} differs`);
         }
-        if (!existing) {
-          await store.registerIfAbsent(digest, record);
-        }
-      }
-      for (const [digest, record] of retained) {
-        if (JSON.stringify(await store.lookup(digest)) !== JSON.stringify(record)) {
+        if (!existing && !(await store.registerIfAbsent(digest, record))) {
           throw new Error(`persisted review ${digest} differs`);
         }
       }

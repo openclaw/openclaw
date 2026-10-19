@@ -2,20 +2,21 @@
  * Browser plugin registration helpers. This file keeps registration lazy while
  * advertising Browser tools, services, node-host commands, and audits.
  */
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
+  OpenClawPluginGatewayEvents,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { registerBrowserCliMetadata } from "./cli-metadata.js";
-import { bindBrowserDashboardEvents } from "./src/browser-dashboard-events.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
@@ -25,7 +26,10 @@ import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
 } from "./src/browser-node-commands.js";
-import { getOptionalBrowserStateRuntime } from "./src/browser-runtime-state.js";
+import {
+  getBrowserStateRuntime,
+  getOptionalBrowserStateRuntime,
+} from "./src/browser-runtime-state.js";
 import { createBrowserToolDefinition } from "./src/browser-tool-description.js";
 import { getGatewayExtensionRelayModule } from "./src/browser/extension-relay.runtime.js";
 import {
@@ -62,16 +66,8 @@ function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
 ): "direct" | "group" | "channel" | undefined {
   const tokens = new Set(sessionKey?.toLowerCase().split(":") ?? []);
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
-  }
-  return undefined;
+  const chatType = (["group", "channel", "direct"] as const).find((kind) => tokens.has(kind));
+  return chatType ?? (tokens.has("dm") ? "direct" : undefined);
 }
 
 type BrowserToolOptions = NonNullable<
@@ -189,6 +185,111 @@ export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollecto
     return collectBrowserSecurityAuditFindings(ctx);
   },
 ];
+
+/** One service subscription owns discovery and reconciliation through shutdown. */
+function bindBrowserDashboardEvents(
+  events: OpenClawPluginGatewayEvents,
+  onWarn: (message: string) => void,
+): () => Promise<void> {
+  const runtime = getBrowserStateRuntime();
+  const pendingSessions = new Set<string>();
+  const pendingAgentSessions = new Set<string>();
+  let reconciliation: Promise<void> | undefined;
+  let accepting = true;
+  const isCurrentRuntime = () => getOptionalBrowserStateRuntime() === runtime;
+  const clearPending = () => {
+    pendingSessions.clear();
+    pendingAgentSessions.clear();
+  };
+  const reconcilePending = () => {
+    if (reconciliation || pendingSessions.size === 0 || !isCurrentRuntime()) {
+      return;
+    }
+    reconciliation = (async () => {
+      while (pendingSessions.size > 0 && isCurrentRuntime()) {
+        const sessions = new Set(pendingSessions);
+        const agentSessions = new Set(pendingAgentSessions);
+        clearPending();
+        const dashboards = await readBrowserDashboardSessionOwners();
+        if (!isCurrentRuntime()) {
+          return;
+        }
+        const sessionKeys = new Set<string>();
+        for (const dashboard of dashboards) {
+          if (
+            sessions.has(dashboard.sessionKey) ||
+            (dashboard.agentId &&
+              agentSessions.has(
+                JSON.stringify([
+                  dashboard.agentId,
+                  parseAgentSessionKey(dashboard.sessionKey)?.rest,
+                ]),
+              ))
+          ) {
+            sessionKeys.add(dashboard.sessionKey);
+          }
+        }
+        if (sessionKeys.size === 0) {
+          continue;
+        }
+        const { reconcileBrowserDashboards } = await import("./src/browser-dashboard.js");
+        if (!isCurrentRuntime()) {
+          return;
+        }
+        await reconcileBrowserDashboards({ sessionKeys: [...sessionKeys], onWarn });
+      }
+    })()
+      .catch((error: unknown) => {
+        clearPending();
+        onWarn(`Browser dashboard reconciliation failed: ${String(error)}`);
+      })
+      .finally(() => {
+        reconciliation = undefined;
+        if (accepting && isCurrentRuntime()) {
+          reconcilePending();
+        } else {
+          clearPending();
+        }
+      });
+  };
+  runtime.dashboardEvents = events;
+  const onBoardChanged: Parameters<typeof events.onSessionsChanged>[0] = (event) => {
+    if (!accepting || !isCurrentRuntime() || event.reason !== "board") {
+      return;
+    }
+    for (const dashboard of runtime.sessionDashboards?.values() ?? []) {
+      if (
+        dashboard.definition.sessionKey === event.sessionKey ||
+        (dashboard.definition.agentId === event.agentId &&
+          parseAgentSessionKey(dashboard.definition.sessionKey)?.rest === event.sessionKey)
+      ) {
+        void dashboard.assertDefinitionCurrent().catch(() => {});
+      }
+    }
+    pendingSessions.add(event.sessionKey);
+    if (event.agentId) {
+      pendingAgentSessions.add(JSON.stringify([normalizeAgentId(event.agentId), event.sessionKey]));
+    }
+    reconcilePending();
+  };
+  // Board publishers run outside the service's instance-local runtime scope.
+  let unsubscribe: (() => void) | undefined = events.onSessionsChanged(
+    AsyncLocalStorage.bind(onBoardChanged),
+  );
+  return async () => {
+    accepting = false;
+    unsubscribe?.();
+    unsubscribe = undefined;
+    if (runtime.dashboardEvents === events) {
+      runtime.dashboardEvents = undefined;
+    }
+    await reconciliation;
+    await Promise.allSettled(
+      [...(runtime.sessionDashboards?.values() ?? [])].map((dashboard) => dashboard.close()),
+    );
+    clearPending();
+  };
+}
 
 function createLazyBrowserPluginService(
   runtime: ReturnType<typeof initializeBrowserSessionTabStore>,
@@ -318,7 +419,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
       return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
     },
-    { name: "browser" },
+    { name: "browser", workspaceAccess: false },
   );
   registerBrowserCliMetadata(api);
   api.registerGatewayMethod(
@@ -342,40 +443,39 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
     },
   );
-  // Remote extension relay: lets the Chrome extension connect directly to this
-  // gateway over wss:// (no node host on the browser machine). auth:"plugin"
-  // with no nodeCapability means the gateway does not pre-enforce token auth;
-  // the handler self-validates the host-local relay secret. Path kept in sync
-  // with GATEWAY_EXTENSION_RELAY_PATH (hardcoded here to stay lazy).
-  api.registerHttpRoute({
-    path: "/browser/extension",
-    auth: "plugin",
-    match: "exact",
-    handler: (_req: IncomingMessage, res: ServerResponse) => {
-      res.writeHead(426, { "Content-Type": "text/plain" });
-      res.end("Upgrade Required: connect the OpenClaw Chrome extension over WebSocket.");
+  for (const { path, client, loadUpgrade } of [
+    {
+      // Keep the relay path in sync with GATEWAY_EXTENSION_RELAY_PATH without eager loading.
+      path: "/browser/extension",
+      client: "the OpenClaw Chrome extension",
+      loadUpgrade: async () =>
+        (await getGatewayExtensionRelayModule()).handleGatewayExtensionUpgrade,
     },
-    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      // Direct relay activity prepares the teardown module consumed by lazy service shutdown.
-      await loadBrowserRegistrationRuntimeModule();
-      const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
-      return await handleGatewayExtensionUpgrade(req, socket, head);
+    {
+      path: "/browser/screencast",
+      client: "the browser screencast",
+      loadUpgrade: async () =>
+        (await import("./src/browser/screencast/upgrade.js")).handleBrowserScreencastUpgrade,
     },
-  });
-  api.registerHttpRoute({
-    path: "/browser/screencast",
-    auth: "plugin",
-    match: "exact",
-    handler: (_req: IncomingMessage, res: ServerResponse) => {
-      res.writeHead(426, { "Content-Type": "text/plain" });
-      res.end("Upgrade Required: connect the browser screencast over WebSocket.");
-    },
-    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      await loadBrowserRegistrationRuntimeModule();
-      const { handleBrowserScreencastUpgrade } =
-        await import("./src/browser/screencast/upgrade.js");
-      return await handleBrowserScreencastUpgrade(req, socket, head);
-    },
-  });
+  ]) {
+    api.registerHttpRoute({
+      path,
+      // Each upgrade handler validates its own authority before admitting the socket.
+      auth: "plugin",
+      match: "exact",
+      handler: (_req, res) => {
+        res.writeHead(426, { "Content-Type": "text/plain" });
+        res.end(`Upgrade Required: connect ${client} over WebSocket.`);
+      },
+      handleUpgrade: async (req, socket, head) => {
+        // Direct socket activity prepares teardown consumed by lazy service shutdown.
+        await loadBrowserRegistrationRuntimeModule();
+        await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+        const upgrade = await loadUpgrade();
+        await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+        return await upgrade(req, socket, head);
+      },
+    });
+  }
   api.registerService(createLazyBrowserPluginService(runtime));
 }

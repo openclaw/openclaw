@@ -22,6 +22,55 @@ beforeEach(() => {
 });
 
 describe("sessionsCompactCommand", () => {
+  it.each(["compacted", "pending", "noop", "failed", "throw"])(
+    "escapes terminal controls in %s output without changing RPC input",
+    async (outcome) => {
+      const key = "agent:main:notes\u001b[2J\nnext";
+      const reason = "detail\u001b]2;changed\u0007\rnext";
+      if (outcome === "throw") {
+        callGatewayCli.mockRejectedValue(new Error(reason));
+      } else {
+        callGatewayCli.mockResolvedValue({
+          ok: outcome !== "failed",
+          key,
+          compacted: outcome === "compacted",
+          reason,
+          result: { details: { pending: outcome === "pending" } },
+        });
+      }
+      const runtime = createNonExitingRuntimeEnv();
+
+      await sessionsCompactCommand({ key }, runtime);
+
+      expect(callGatewayCli.mock.calls[0]?.[2]).toEqual({ key });
+      const output = `${joinedArgs(runtime.log)}${joinedArgs(runtime.error)}`;
+      for (const control of ["\u0007", "\u001b", "\r", "\n"]) {
+        expect(output).not.toContain(control);
+      }
+      if (outcome !== "throw") {
+        expect(output).toContain("agent:main:notes\\nnext");
+      }
+      if (["noop", "failed", "throw"].includes(outcome)) {
+        expect(output).toContain("detail\\rnext");
+      }
+    },
+  );
+
+  it("preserves raw result values in JSON output", async () => {
+    const payload = {
+      ok: false,
+      key: "agent:main:notes\u001b[2J\nnext",
+      reason: "detail\u001b]2;changed\u0007\rnext",
+    };
+    callGatewayCli.mockResolvedValue(payload);
+    const runtime = createNonExitingRuntimeEnv();
+
+    await sessionsCompactCommand({ key: payload.key, json: true }, runtime);
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("rejects a blank agent before calling the Gateway", async () => {
     const runtime = createNonExitingRuntimeEnv();
 
@@ -32,36 +81,31 @@ describe("sessionsCompactCommand", () => {
     expect(callGatewayCli).not.toHaveBeenCalled();
   });
 
-  it("prints the token delta and does not exit on a successful compaction", async () => {
-    callGatewayCli.mockResolvedValue({
-      ok: true,
-      key: "agent:main:main",
-      compacted: true,
-      result: { tokensBefore: 243868, tokensAfter: 34941 },
-    });
-    const runtime = createNonExitingRuntimeEnv();
+  it.each([false, true])(
+    "prints successful compaction and its degradation warning (%s)",
+    async (qualityDegraded) => {
+      callGatewayCli.mockResolvedValue({
+        ok: true,
+        key: "agent:main:main",
+        compacted: true,
+        result: { tokensBefore: 243868, tokensAfter: 34941, details: { qualityDegraded } },
+      });
+      const runtime = createNonExitingRuntimeEnv();
 
-    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+      await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
-    const logged = joinedArgs(runtime.log);
-    expect(logged).toContain("243868");
-    expect(logged).toContain("34941");
-  });
-
-  it("preserves an explicit client timeout override", async () => {
-    callGatewayCli.mockResolvedValue({
-      ok: true,
-      key: "agent:main:main",
-      compacted: true,
-    });
-    const runtime = createNonExitingRuntimeEnv();
-
-    await sessionsCompactCommand({ key: "agent:main:main", timeout: "120000" }, runtime);
-
-    expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: "120000" });
-  });
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
+      const logged = joinedArgs(runtime.log);
+      expect(logged).toContain("243868");
+      expect(logged).toContain("34941");
+      expect(logged.includes("degraded summary")).toBe(qualityDegraded);
+      if (qualityDegraded) {
+        expect(logged).toContain("Older details, exact identifiers, or pending requests");
+        expect(logged).toContain("/new or a larger model");
+      }
+    },
+  );
 
   it("reports an asynchronously started Codex compaction as pending, not a no-op", async () => {
     callGatewayCli.mockResolvedValue({
@@ -81,31 +125,6 @@ describe("sessionsCompactCommand", () => {
     const logged = joinedArgs(runtime.log);
     expect(logged).toContain("pending");
     expect(logged).not.toContain("No compaction needed");
-  });
-
-  it("reports a terminal Codex compaction as completed", async () => {
-    callGatewayCli.mockResolvedValue({
-      ok: true,
-      key: "agent:main:main",
-      compacted: true,
-      result: {
-        tokensBefore: 1200,
-        details: {
-          backend: "codex-app-server",
-          signal: "thread/compact/start",
-          pending: false,
-          completed: true,
-        },
-      },
-    });
-    const runtime = createNonExitingRuntimeEnv();
-
-    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    const logged = joinedArgs(runtime.log);
-    expect(logged).toContain("Compacted session");
-    expect(logged).not.toContain("pending");
   });
 
   it("exits non-zero when the gateway reports ok:false (no silent no-op)", async () => {

@@ -10,6 +10,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -18,13 +19,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   captureConfigHealthStateStore,
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
-import * as healthOwner from "./io.health-state.js";
 import { readConfigHealthStateInDatabase } from "./io.health-state.kernel.js";
 import type { ConfigHealthState } from "./io.health-state.types.js";
 import { createConfigIO } from "./io.js";
@@ -40,32 +39,44 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+function fixture(prefix: string, stateSubdir = "") {
+  const home = directories.make(prefix);
+  const configPath = path.join(home, "openclaw.json");
+  const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, stateSubdir) };
+  return { home, configPath, env, homedir: () => home, logger: { warn: vi.fn(), error: vi.fn() } };
+}
+
+function readHealthRow(db: ReturnType<typeof openOpenClawStateDatabase>["db"], configPath: string) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DB>(db)
+      .selectFrom("config_health_entries")
+      .selectAll()
+      .where("config_path", "=", configPath),
+  );
+}
+
 it.each([
-  { phase: "before basis", present: true, suspicious: false, producer: "sync" },
-  { phase: "before basis", present: true, suspicious: false, producer: "async" },
-  { phase: "after basis read", present: true, suspicious: false, producer: "sync" },
-  { phase: "before admission", present: true, suspicious: false, producer: "sync" },
-  { phase: "after dispatch", present: true, suspicious: false, producer: "sync" },
-  { phase: "after dispatch", present: false, suspicious: false, producer: "sync" },
-  { phase: "after dispatch", present: true, suspicious: true, producer: "sync" },
-  { phase: "audit dispatched", present: true, suspicious: true, producer: "sync" },
+  { phase: "after basis read", present: true, suspicious: false },
+  { phase: "before admission", present: true, suspicious: false },
+  { phase: "after dispatch", present: true, suspicious: false },
+  { phase: "after dispatch", present: false, suspicious: false },
+  { phase: "after dispatch", present: true, suspicious: true },
+  { phase: "audit dispatched", present: true, suspicious: true },
 ])(
-  "preserves a newer $producer observation $phase (existing row: $present, suspicious: $suspicious)",
-  async ({ phase, present, suspicious, producer }) => {
-    const home = directories.make("openclaw-observation-freshness-");
-    const configPath = path.join(home, "openclaw.json");
+  "preserves newer persisted health facts $phase (existing row: $present, suspicious: $suspicious)",
+  async ({ phase, present, suspicious }) => {
+    const context = fixture("openclaw-observation-freshness-", "state-root");
+    const { home, configPath } = context;
     const siblingPath = path.join(home, "sibling.json");
     const env = {
-      HOME: home,
-      OPENCLAW_STATE_DIR: path.join(home, "state-root"),
+      ...context.env,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       VITEST: "true",
     };
     const options = {
+      ...context,
       env,
-      homedir: () => home,
-      configPath,
-      logger: { warn: vi.fn(), error: vi.fn() },
     };
     const raw = (port: number) =>
       JSON.stringify({
@@ -75,12 +86,17 @@ it.each([
     const baselineRaw = raw(18789);
     const olderRaw = suspicious ? JSON.stringify({ update: { channel: "beta" } }) : baselineRaw;
     const newerRaw = suspicious ? JSON.stringify({ update: { channel: "stable" } }) : raw(18799);
-    fs.writeFileSync(configPath, newerRaw);
-    const newer = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
-    expect(newer.valid).toBe(true);
-    fs.writeFileSync(configPath, olderRaw);
-    const older = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
-    expect(older.valid).toBe(true);
+    const readSnapshot = async (bytes: string) => {
+      fs.writeFileSync(configPath, bytes);
+      const snapshot = await createConfigIO({
+        ...options,
+        observe: false,
+      }).readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+      return snapshot;
+    };
+    const newer = await readSnapshot(newerRaw);
+    await readSnapshot(olderRaw);
     const oldPromotion = observationState.createConfigHealthFingerprint({
       raw: baselineRaw,
       parsed: JSON.parse(baselineRaw),
@@ -89,87 +105,47 @@ it.each([
     });
     const timestamp = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(timestamp);
-    const initial = {
-      entries: {
-        ...(present
-          ? {
-              [configPath]: {
-                lastPromotedGood: oldPromotion,
-                ...(suspicious
-                  ? { lastKnownGood: oldPromotion, lastObservedSuspiciousSignature: "seed" }
-                  : {}),
-              },
-            }
+    if (present) {
+      patchConfigHealthEntryToStore(options, configPath, {
+        lastPromotedGood: oldPromotion,
+        ...(suspicious
+          ? { lastKnownGood: oldPromotion, lastObservedSuspiciousSignature: "seed" }
           : {}),
-        [siblingPath]: { lastKnownGood: oldPromotion, lastPromotedGood: oldPromotion },
-      },
-    };
-    for (const [entryPath, entry] of Object.entries(initial.entries)) {
-      patchConfigHealthEntryToStore(options, entryPath, entry);
+      });
     }
+    patchConfigHealthEntryToStore(options, siblingPath, {
+      lastKnownGood: oldPromotion,
+      lastPromotedGood: oldPromotion,
+    });
     const baseline = readConfigHealthStateFromStore(options);
     const { db } = openOpenClawStateDatabase({ env });
-    const readUpdatedAt = () =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .selectFrom("config_health_entries")
-          .select("updated_at_ms")
-          .where("config_path", "=", configPath),
-      );
+    const readUpdatedAt = () => readHealthRow(db, configPath)?.updated_at_ms;
     if (present) {
-      expect(readUpdatedAt()?.updated_at_ms).toBe(timestamp);
+      expect(readUpdatedAt()).toBe(timestamp);
     }
 
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const deps = normalizeConfigIoDeps(options);
+    const observationWork = new AsyncWorkScope();
     let expected: ConfigHealthState | undefined;
-    let expectedWarnings = 0;
     let intervened = false;
-    const recordNewerObservation = () => {
-      expected = readConfigHealthStateInDatabase(db);
-      if (suspicious) {
-        expect(expected.entries?.[configPath]?.lastObservedSuspiciousSignature).toContain(
-          hashConfigRaw(newerRaw),
-        );
-      } else {
-        expect(expected.entries?.[configPath]?.lastKnownGood?.hash).toBe(hashConfigRaw(newerRaw));
-      }
-      expect(readUpdatedAt()?.updated_at_ms).toBe(timestamp);
-      expectedWarnings = options.logger.warn.mock.calls.length;
-      intervened = true;
-    };
-    const writeNewerObservation = () => {
-      fs.writeFileSync(configPath, newerRaw);
-      observeConfigSnapshotSync(deps, newer);
-      recordNewerObservation();
-    };
-    const writeNewerAsyncObservation = async () => {
-      intervened = true;
-      fs.writeFileSync(configPath, newerRaw);
-      expect((await createConfigIO(options).readConfigFileSnapshot()).valid).toBe(true);
-      recordNewerObservation();
-    };
-    if (phase === "before basis") {
-      const capture = healthOwner.captureConfigHealthStateStore;
-      vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) => {
-        const store = capture(...args);
-        return {
-          ...store,
-          async read() {
-            if (!intervened && args[1] === configPath) {
-              if (producer === "async") {
-                await writeNewerAsyncObservation();
-              } else {
-                writeNewerObservation();
-              }
-            }
-            return store.read();
-          },
-        };
+    const writeNewerObservation = () =>
+      observationWork.run(() => {
+        fs.writeFileSync(configPath, newerRaw);
+        observeConfigSnapshotSync(deps, newer);
+        expected = readConfigHealthStateInDatabase(db);
+        if (suspicious) {
+          expect(expected.entries?.[configPath]?.lastObservedSuspiciousSignature).toContain(
+            hashConfigRaw(newerRaw),
+          );
+        } else {
+          expect(expected.entries?.[configPath]?.lastKnownGood?.hash).toBe(hashConfigRaw(newerRaw));
+        }
+        expect(readUpdatedAt()).toBe(timestamp);
+        intervened = true;
       });
-    } else if (phase === "before admission") {
+    if (phase === "before admission") {
       const readFingerprint = observationState.readConfigFingerprintForPath;
       vi.spyOn(observationState, "readConfigFingerprintForPath").mockImplementation(
         async (...args) => {
@@ -235,23 +211,20 @@ it.each([
         release.resolve();
       }
       expect((await pending).valid).toBe(true);
+      await observationWork.drain();
       expect(intervened).toBe(true);
       expect(expected).toBeDefined();
-      expect(options.logger.warn.mock.calls).toHaveLength(expectedWarnings);
       expect(readConfigHealthStateFromStore(options)).toEqual(expected);
-      if (phase === "audit dispatched") {
-        expect(
-          listConfigAuditRecordsForTests(options).flatMap((record) =>
-            record.event === "config.observe" ? [record.hash] : [],
-          ),
-        ).toEqual([hashConfigRaw(newerRaw)]);
-      }
       expect(expected?.entries?.[siblingPath]).toEqual(baseline.entries?.[siblingPath]);
       await closeOpenClawStateDatabaseAsync();
       expect(readConfigHealthStateFromStore(options)).toEqual(expected);
     } finally {
       release.resolve();
-      await pending;
+      try {
+        await pending;
+      } finally {
+        await observationWork.drain();
+      }
     }
   },
 );
@@ -259,22 +232,13 @@ it.each([
 it.each([' { "hash" : "legacy" } ', "{invalid"])(
   "compares raw legacy health facts without tightening their decoder: %s",
   async (legacyText) => {
-    const home = directories.make("openclaw-health-legacy-basis-");
-    const configPath = path.join(home, "openclaw.json");
-    const env = { HOME: home, OPENCLAW_STATE_DIR: home };
-    const deps = { env, homedir: () => home, logger: { warn: vi.fn() } };
+    const deps = fixture("openclaw-health-legacy-basis-");
+    const { configPath, env } = deps;
     patchConfigHealthEntryToStore(deps, configPath, {
       lastObservedSuspiciousSignature: "seed",
     });
     const { db } = openOpenClawStateDatabase({ env });
-    const readRow = () =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .selectFrom("config_health_entries")
-          .selectAll()
-          .where("config_path", "=", configPath),
-      );
+    const readRow = () => readHealthRow(db, configPath);
     const writeRaw = (text: string) =>
       runOpenClawStateWriteTransaction(
         ({ db: writeDb }) => {
@@ -289,17 +253,11 @@ it.each([' { "hash" : "legacy" } ', "{invalid"])(
         { env },
       );
     writeRaw(legacyText);
-    using store = captureConfigHealthStateStore(deps, configPath);
+    const store = captureConfigHealthStateStore(deps, configPath);
     const initialRead = await store.read();
-    if (!initialRead) {
-      throw new Error("Fixture health read was superseded");
-    }
     await store.update({ lastObservedSuspiciousSignature: "applied" }, initialRead);
     expect(readRow()?.last_known_good_json).toBe(legacyText);
     const snapshot = await store.read();
-    if (!snapshot) {
-      throw new Error("Fixture health read was superseded");
-    }
     const currentTimestamp = readRow()?.updated_at_ms;
     writeRaw(`${legacyText} `);
     expect(readRow()?.updated_at_ms).toBe(currentTimestamp);

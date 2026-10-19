@@ -1,18 +1,19 @@
-// Launchd integration tests cover daemon CLI behavior in macOS-like scenarios.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { LOOPBACK_PORT_PROBE_HOSTS, probePortUsage } from "../infra/ports-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { waitForPidToExit } from "../test-utils/process-tree.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import {
   installLaunchAgent,
   readLaunchAgentRuntime,
@@ -26,197 +27,101 @@ import {
 import type { GatewayServiceEnv } from "./service-types.js";
 import { readGatewayServiceState, resolveGatewayService, startGatewayService } from "./service.js";
 
-const WAIT_INTERVAL_MS = 200;
-const WAIT_TIMEOUT_MS = 30_000;
 const STARTUP_TIMEOUT_MS = 45_000;
+const GUI_DOMAIN = `gui/${process.getuid?.() ?? 501}`;
 
 function canRunLaunchdIntegration(): boolean {
-  if (process.platform !== "darwin") {
+  if (process.platform !== "darwin" || typeof process.getuid !== "function") {
     return false;
   }
-  if (typeof process.getuid !== "function") {
-    return false;
-  }
-  const domain = `gui/${process.getuid()}`;
-  const probe = spawnSync("launchctl", ["print", domain], { encoding: "utf8" });
-  if (probe.error) {
-    return false;
-  }
-  return probe.status === 0;
+  const probe = spawnSync("launchctl", ["print", GUI_DOMAIN], { encoding: "utf8" });
+  return !probe.error && probe.status === 0;
 }
 
 const describeLaunchdIntegration = canRunLaunchdIntegration() ? describe : describe.skip;
 
-function resolveGuiDomain(): string {
-  return `gui/${process.getuid?.() ?? 501}`;
-}
-
-async function waitForRunningRuntime(params: {
-  env: GatewayServiceEnv;
-  pidNot?: number;
-  timeoutMs?: number;
-}): Promise<{ pid: number }> {
-  const timeoutMs = params.timeoutMs ?? WAIT_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = "unknown";
-  let lastPid: number | undefined;
+async function waitForRuntime(
+  env: GatewayServiceEnv,
+  ready: (runtime: Awaited<ReturnType<typeof readLaunchAgentRuntime>>) => boolean,
+) {
+  const deadline = Date.now() + 30_000;
+  let runtime: Awaited<ReturnType<typeof readLaunchAgentRuntime>> | undefined;
   while (Date.now() < deadline) {
-    const runtime = await readLaunchAgentRuntime(params.env);
-    lastStatus = runtime.status ?? "unknown";
-    lastPid = runtime.pid;
-    if (
-      runtime.status === "running" &&
-      typeof runtime.pid === "number" &&
-      runtime.pid > 1 &&
-      (params.pidNot === undefined || runtime.pid !== params.pidNot)
-    ) {
-      return { pid: runtime.pid };
+    runtime = await readLaunchAgentRuntime(env);
+    if (ready(runtime)) {
+      return runtime;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, WAIT_INTERVAL_MS);
-    });
+    await delay(200);
   }
   throw new Error(
-    `Timed out waiting for launchd runtime (status=${lastStatus}, pid=${lastPid ?? "none"})`,
+    `Timed out waiting for launchd runtime (status=${runtime?.status ?? "unknown"}, pid=${runtime?.pid ?? "none"})`,
   );
 }
 
-async function waitForNotRunningRuntime(params: {
-  env: GatewayServiceEnv;
-  timeoutMs?: number;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? WAIT_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = "unknown";
-  let lastPid: number | undefined;
-  while (Date.now() < deadline) {
-    const runtime = await readLaunchAgentRuntime(params.env);
-    lastStatus = runtime.status ?? "unknown";
-    lastPid = runtime.pid;
-    if (runtime.status !== "running" && runtime.pid === undefined) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, WAIT_INTERVAL_MS);
-    });
-  }
-  throw new Error(
-    `Timed out waiting for launchd runtime to stop (status=${lastStatus}, pid=${lastPid ?? "none"})`,
+async function waitForRunningRuntime(env: GatewayServiceEnv, pidNot?: number) {
+  const runtime = await waitForRuntime(
+    env,
+    ({ status, pid }) =>
+      status === "running" && typeof pid === "number" && pid > 1 && pid !== pidNot,
   );
+  return { pid: expectDefined(runtime.pid, "running runtime PID") };
 }
 
-function launchEnvOrThrow(env: GatewayServiceEnv | undefined): GatewayServiceEnv {
-  if (!env) {
-    throw new Error("launchd integration env was not initialized");
-  }
-  return env;
+async function waitForNotRunningRuntime(env: GatewayServiceEnv) {
+  await waitForRuntime(env, ({ status, pid }) => status !== "running" && pid === undefined);
 }
 
-async function initializeLaunchdRuntime(launchEnv: GatewayServiceEnv, stdout: PassThrough) {
-  await withTimeout(
-    (async () => {
-      await installLaunchAgent({
-        env: launchEnv,
-        stdout,
-        programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
-      });
-      await waitForRunningRuntime({ env: launchEnv });
-    })(),
-    STARTUP_TIMEOUT_MS,
-    { message: "Timed out initializing launchd integration runtime" },
-  );
+async function launchFixture(id: string, overrides: GatewayServiceEnv = {}) {
+  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${id}-`));
+  const env: GatewayServiceEnv = {
+    HOME: homeDir,
+    OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.${id}`,
+    OPENCLAW_LOG_PREFIX: `gateway-${id}`,
+    ...overrides,
+  };
+  return { homeDir, env };
 }
 
-async function writeLaunchAgentProbeScript(params: {
-  eventsPath: string;
-  scriptPath: string;
-}): Promise<void> {
-  await fs.writeFile(
-    params.scriptPath,
-    [
-      'const fs = require("node:fs");',
-      `const eventsPath = ${JSON.stringify(params.eventsPath)};`,
-      "fs.appendFileSync(eventsPath, `start ${process.pid}\\n`);",
-      'for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {',
-      "  process.on(signal, () => {",
-      "    fs.appendFileSync(eventsPath, `${signal} ${process.pid}\\n`);",
-      "    process.exit(0);",
-      "  });",
-      "}",
-      "setInterval(() => {}, 1000);",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-}
-
-async function expectRuntimePidReplaced(params: {
-  env: GatewayServiceEnv;
-  previousPid: number;
-}): Promise<void> {
-  const after = await waitForRunningRuntime({
-    env: params.env,
-    pidNot: params.previousPid,
-  });
-  expect(after.pid).toBeGreaterThan(1);
-  expect(after.pid).not.toBe(params.previousPid);
-  await fs.access(resolveLaunchAgentPlistPath(params.env));
+async function expectRuntimePidReplaced(env: GatewayServiceEnv, previousPid: number) {
+  // The polling predicate requires a live PID distinct from the previous process.
+  await waitForRunningRuntime(env, previousPid);
+  await fs.access(resolveLaunchAgentPlistPath(env));
 }
 
 describeLaunchdIntegration("launchd integration", () => {
-  let env: GatewayServiceEnv | undefined;
+  let env: GatewayServiceEnv;
   let homeDir = "";
   const stdout = new PassThrough();
+  const launchArgs = (
+    launchEnv: GatewayServiceEnv,
+    programArguments = [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+  ) => ({ env: launchEnv, stdout, programArguments });
 
   it("real launchctl: node-host LaunchAgent stop/restart survives a co-located busy Gateway port (#124296)", async () => {
-    // Real-world proof for https://github.com/openclaw/openclaw/issues/124296:
-    // this drives actual `launchctl` LaunchAgents (no mocked port-inspection
-    // or launchctl calls) to reproduce the reported false-positive
-    // "gateway port is still busy" failure and confirm the fix resolves it.
+    // #124296: real launchctl jobs and TCP probes, with no port-inspection mocks.
     const testId = randomUUID().slice(0, 8);
     const gatewayPort = 19_500 + (Number.parseInt(testId.slice(0, 4), 16) % 400);
 
-    // Real "gateway" LaunchAgent that genuinely binds the scratch port, so
-    // the port really is busy for the whole test — no port mocking at all.
-    const gatewayHomeDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), `openclaw-launchd-int-gw-${testId}-`),
-    );
-    const gatewayEnv: GatewayServiceEnv = {
-      HOME: gatewayHomeDir,
-      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-gw-${testId}`,
-      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-gw-${testId}`,
+    const gateway = await launchFixture(`launchd-int-gw-${testId}`, {
       OPENCLAW_GATEWAY_PORT: String(gatewayPort),
-    };
+    });
 
-    // Real "node-host" LaunchAgent, co-located on the same machine, tagged
-    // with the node service kind. It never binds the gateway port itself.
-    const nodeHomeDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), `openclaw-launchd-int-node-${testId}-`),
-    );
-    const nodeEnv: GatewayServiceEnv = {
-      HOME: nodeHomeDir,
-      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-node-${testId}`,
-      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-node-${testId}`,
+    const node = await launchFixture(`launchd-int-node-${testId}`, {
       OPENCLAW_SERVICE_KIND: "node",
       OPENCLAW_GATEWAY_PORT: String(gatewayPort),
-    };
+    });
 
     try {
-      await installLaunchAgent({
-        env: gatewayEnv,
-        stdout,
-        programArguments: [
+      await installLaunchAgent(
+        launchArgs(gateway.env, [
           process.execPath,
           "-e",
           `require("node:http").createServer((_req,res)=>res.end("ok")).listen(${gatewayPort}, "127.0.0.1", () => {}); setInterval(() => {}, 1000);`,
-        ],
-      });
-      await waitForRunningRuntime({ env: gatewayEnv });
+        ]),
+      );
+      await waitForRunningRuntime(gateway.env);
 
-      // Prove the gateway port is genuinely bound right now via a real TCP
-      // probe (no launchd-status inference) before exercising the node-host
-      // lifecycle against it. This closes the gap where a LaunchAgent could
-      // report "running" before its listener has actually bound the port.
+      // launchd can report running before the listener binds.
       await expect
         .poll(() => probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS), {
           timeout: 10_000,
@@ -224,75 +129,41 @@ describeLaunchdIntegration("launchd integration", () => {
         })
         .toBe("busy");
 
-      await installLaunchAgent({
-        env: nodeEnv,
-        stdout,
-        programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
-      });
-      const nodeBefore = await waitForRunningRuntime({ env: nodeEnv });
+      await installLaunchAgent(launchArgs(node.env));
+      const nodeBefore = await waitForRunningRuntime(node.env);
 
-      // Re-confirm the port is still genuinely busy immediately before the
-      // stop call, so the assertion below is tied to a real, current probe.
       await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
 
-      // The gateway port is genuinely still bound by the co-located gateway
-      // LaunchAgent right now. Stopping the node-host LaunchAgent must not
-      // fail with the false-positive "gateway port is still busy" error.
-      await expect(stopLaunchAgent({ env: nodeEnv, stdout })).resolves.not.toThrow();
-      await waitForNotRunningRuntime({ env: nodeEnv });
+      await expect(stopLaunchAgent({ env: node.env, stdout })).resolves.not.toThrow();
+      await waitForNotRunningRuntime(node.env);
 
-      // Confirm the co-located gateway is genuinely untouched throughout.
-      const gatewayStillRunning = await readLaunchAgentRuntime(gatewayEnv);
-      expect(gatewayStillRunning.status).toBe("running");
+      expect(await readLaunchAgentRuntime(gateway.env)).toMatchObject({ status: "running" });
 
-      // Re-install (stop leaves it uninstalled-from-runtime-state in some
-      // paths depending on service semantics) and exercise restart too.
-      await installLaunchAgent({
-        env: nodeEnv,
-        stdout,
-        programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
-      });
-      await waitForRunningRuntime({ env: nodeEnv, pidNot: nodeBefore.pid });
-      const nodeRunningBeforeRestart = await readLaunchAgentRuntime(nodeEnv);
+      await installLaunchAgent(launchArgs(node.env));
+      await waitForRunningRuntime(node.env, nodeBefore.pid);
+      const nodeRunningBeforeRestart = await readLaunchAgentRuntime(node.env);
 
-      // Re-probe immediately before restart too: the port must still be
-      // genuinely busy (real TCP probe, not inferred from launchd status)
-      // for this to be a valid proof of the restart-guard fix.
       await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
 
-      await expect(restartLaunchAgent({ env: nodeEnv, stdout })).resolves.not.toThrow();
-      await expectRuntimePidReplaced({
-        env: nodeEnv,
-        previousPid: nodeRunningBeforeRestart.pid ?? nodeBefore.pid,
-      });
+      await expect(restartLaunchAgent({ env: node.env, stdout })).resolves.not.toThrow();
+      await expectRuntimePidReplaced(node.env, nodeRunningBeforeRestart.pid ?? nodeBefore.pid);
 
-      const gatewayStillRunningAfterRestart = await readLaunchAgentRuntime(gatewayEnv);
-      expect(gatewayStillRunningAfterRestart.status).toBe("running");
+      expect(await readLaunchAgentRuntime(gateway.env)).toMatchObject({ status: "running" });
     } finally {
-      await uninstallLaunchAgent({ env: nodeEnv, stdout }).catch(() => {});
-      await uninstallLaunchAgent({ env: gatewayEnv, stdout }).catch(() => {});
-      await fs.rm(nodeHomeDir, { recursive: true, force: true });
-      await fs.rm(gatewayHomeDir, { recursive: true, force: true });
+      await uninstallLaunchAgent({ env: node.env, stdout }).catch(() => {});
+      await uninstallLaunchAgent({ env: gateway.env, stdout }).catch(() => {});
+      await fs.rm(node.homeDir, { recursive: true, force: true });
+      await fs.rm(gateway.homeDir, { recursive: true, force: true });
     }
   }, 90_000);
 
   beforeAll(async () => {
-    const testId = randomUUID().slice(0, 8);
-    homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-launchd-int-${testId}-`));
-    env = {
-      HOME: homeDir,
-      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-${testId}`,
-      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-${testId}`,
-    };
+    ({ homeDir, env } = await launchFixture(`launchd-int-${randomUUID().slice(0, 8)}`));
   });
 
   afterAll(async () => {
     if (env) {
-      try {
-        await uninstallLaunchAgent({ env, stdout });
-      } catch {
-        // Best-effort cleanup in case launchctl state already changed.
-      }
+      await uninstallLaunchAgent({ env, stdout }).catch(() => {});
     }
     if (homeDir) {
       await fs.rm(homeDir, { recursive: true, force: true });
@@ -359,10 +230,12 @@ describeLaunchdIntegration("launchd integration", () => {
           requireEffective: true,
           requireLoadedCommand: true,
         });
-        expect(selected.installed).toBe(false);
-        expect(selected.command).toBeNull();
-        expect(selected.loadState.status).toBe("not-loaded");
-        expect(selected.runtime?.missingUnit).toBe(true);
+        expect(selected).toMatchObject({
+          installed: false,
+          command: null,
+          loadState: { status: "not-loaded" },
+          runtime: { missingUnit: true },
+        });
         expect(await probePortUsage(portClaim.port, LOOPBACK_PORT_PROBE_HOSTS)).toBe("free");
         await expect(fs.access(resolveLaunchAgentPlistPath(siblingEnv))).rejects.toMatchObject({
           code: "ENOENT",
@@ -370,17 +243,15 @@ describeLaunchdIntegration("launchd integration", () => {
         expect((await readLaunchAgentRuntime(siblingEnv)).missingUnit).toBe(true);
         nativeAttempted = true;
         await installLaunchAgent({
-          env: siblingEnv,
+          ...launchArgs(siblingEnv, [process.execPath, entry, "gateway"]),
           environment: {
             HOME: home,
             OPENCLAW_PROFILE: siblingProfile,
             OPENCLAW_SERVICE_KIND: "gateway",
           },
-          stdout,
-          programArguments: [process.execPath, entry, "gateway"],
           workingDirectory: checkout,
         });
-        const before = await waitForRunningRuntime({ env: siblingEnv });
+        const before = await waitForRunningRuntime(siblingEnv);
         servicePid = before.pid;
         commandAttempted = true;
         const result = await runNodeScript(
@@ -390,24 +261,25 @@ describeLaunchdIntegration("launchd integration", () => {
           { cwd: checkout, signal, requireProcessTreeExit: true, maxBuffer: 128 * 1024 },
         );
         commandSettled = result.error === undefined && result.status !== null;
-        expect(result.error).toBeUndefined();
-        expect(result.status, result.stderr).toBe(1);
+        expect(result, result.stderr).toMatchObject({ error: undefined, status: 1 });
+        expect(result.stderr).toContain(`Cannot replace ${checkout}: another managed Gateway`);
         expect(result.stderr).toContain(
-          `Refusing to rebuild dist while a managed Gateway (profile ${siblingProfile})`,
+          `/${siblingEnv.OPENCLAW_LAUNCHD_LABEL}" loaded from "${resolveLaunchAgentPlistPath(siblingEnv)}"`,
         );
-        expect(result.stderr).toContain(entry);
-        expect(result.stderr).toContain(`openclaw gateway stop --profile ${siblingProfile}`);
+        expect(result.stderr).toContain(
+          "Stop that Gateway through its own service manager or Startup process",
+        );
         expect(result.stderr).not.toContain("Building TypeScript");
         expect((await fs.readdir(dist)).toSorted()).toEqual([...files.keys()].toSorted());
         for (const [name, bytes] of files) {
           expect(await fs.readFile(path.join(dist, name), "utf8")).toBe(bytes);
         }
-        expect((await waitForRunningRuntime({ env: siblingEnv })).pid).toBe(before.pid);
+        expect((await waitForRunningRuntime(siblingEnv)).pid).toBe(before.pid);
       },
       async () => {
         if (nativeAttempted) {
           await uninstallLaunchAgent({ env: siblingEnv, stdout });
-          await waitForNotRunningRuntime({ env: siblingEnv });
+          await waitForNotRunningRuntime(siblingEnv);
           await expect(fs.access(resolveLaunchAgentPlistPath(siblingEnv))).rejects.toMatchObject({
             code: "ENOENT",
           });
@@ -435,13 +307,31 @@ describeLaunchdIntegration("launchd integration", () => {
     );
   }, 90_000);
 
-  it("restarts launchd service and keeps it running with a new pid", async () => {
-    const launchEnv = launchEnvOrThrow(env);
-    await initializeLaunchdRuntime(launchEnv, stdout);
-    const before = await waitForRunningRuntime({ env: launchEnv });
-    await restartLaunchAgent({ env: launchEnv, stdout });
-    await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
-  }, 60_000);
+  it.each(["restart", "SIGTERM", "stop/start", "stop/restart"] as const)(
+    "keeps launchd supervision and replaces the PID after %s",
+    async (action) => {
+      const before = await withTimeout(
+        (async () => {
+          await installLaunchAgent(launchArgs(env));
+          return waitForRunningRuntime(env);
+        })(),
+        STARTUP_TIMEOUT_MS,
+        { message: "Timed out initializing launchd integration runtime" },
+      );
+      if (action.startsWith("stop/")) {
+        await stopLaunchAgent({ env, stdout });
+        await waitForNotRunningRuntime(env);
+      }
+      if (action === "SIGTERM") {
+        process.kill(before.pid, "SIGTERM");
+      } else {
+        const activate = action === "stop/start" ? startLaunchAgent : restartLaunchAgent;
+        await activate({ env, stdout });
+      }
+      await expectRuntimePidReplaced(env, before.pid);
+    },
+    60_000,
+  );
 
   it("manages a named profile through the guarded host-service lifecycle", async () => {
     const testId = randomUUID().slice(0, 8);
@@ -461,25 +351,18 @@ describeLaunchdIntegration("launchd integration", () => {
     await withEnvAsync(profileEnv, async () => {
       const service = resolveGatewayService();
       try {
-        await service.install({
-          env: profileEnv,
-          stdout,
-          programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
-        });
-        const installed = await waitForRunningRuntime({ env: profileEnv });
+        await service.install(launchArgs(profileEnv));
+        const installed = await waitForRunningRuntime(profileEnv);
 
         await service.stop({ env: profileEnv, stdout });
-        await waitForNotRunningRuntime({ env: profileEnv });
+        await waitForNotRunningRuntime(profileEnv);
 
         const startResult = await startGatewayService(service, { env: profileEnv, stdout });
         expect(startResult.outcome).toBe("started");
-        const started = await waitForRunningRuntime({
-          env: profileEnv,
-          pidNot: installed.pid,
-        });
+        const started = await waitForRunningRuntime(profileEnv, installed.pid);
 
         await service.restart({ env: profileEnv, stdout });
-        await expectRuntimePidReplaced({ env: profileEnv, previousPid: started.pid });
+        await expectRuntimePidReplaced(profileEnv, started.pid);
       } finally {
         try {
           await service.uninstall({ env: profileEnv, stdout });
@@ -504,13 +387,9 @@ describeLaunchdIntegration("launchd integration", () => {
     try {
       await withEnvAsync(relocatedEnv, async () => {
         const service = resolveGatewayService();
-        await expect(
-          service.install({
-            env: relocatedEnv,
-            stdout,
-            programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
-          }),
-        ).rejects.toThrow("service management skipped: non-default state dir or config path");
+        await expect(service.install(launchArgs(relocatedEnv))).rejects.toThrow(
+          "service management skipped: non-default state dir or config path",
+        );
         await expect(fs.access(resolveLaunchAgentPlistPath(relocatedEnv))).rejects.toThrow();
       });
     } finally {
@@ -518,69 +397,43 @@ describeLaunchdIntegration("launchd integration", () => {
     }
   });
 
-  it("keeps LaunchAgent supervision after a raw SIGTERM", async () => {
-    const launchEnv = launchEnvOrThrow(env);
-    await initializeLaunchdRuntime(launchEnv, stdout);
-
-    const before = await waitForRunningRuntime({ env: launchEnv });
-    process.kill(before.pid, "SIGTERM");
-    await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
-  }, 60_000);
-
-  it("stops persistently without reinstall and starts later", async () => {
-    const launchEnv = launchEnvOrThrow(env);
-    await initializeLaunchdRuntime(launchEnv, stdout);
-
-    const before = await waitForRunningRuntime({ env: launchEnv });
-    await stopLaunchAgent({ env: launchEnv, stdout });
-    await waitForNotRunningRuntime({ env: launchEnv });
-    await startLaunchAgent({ env: launchEnv, stdout });
-    await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
-  }, 60_000);
-
-  it("stops persistently without reinstall and restarts later", async () => {
-    const launchEnv = launchEnvOrThrow(env);
-    await initializeLaunchdRuntime(launchEnv, stdout);
-
-    const before = await waitForRunningRuntime({ env: launchEnv });
-    await stopLaunchAgent({ env: launchEnv, stdout });
-    await waitForNotRunningRuntime({ env: launchEnv });
-    await restartLaunchAgent({ env: launchEnv, stdout });
-    await expectRuntimePidReplaced({ env: launchEnv, previousPid: before.pid });
-  }, 60_000);
-
   it("repairs a missing bootstrap without kickstarting the fresh LaunchAgent", async () => {
-    const launchEnv = launchEnvOrThrow(env);
     const eventsPath = path.join(homeDir, "repair-probe.events.log");
     const scriptPath = path.join(homeDir, "repair-probe.cjs");
-    await writeLaunchAgentProbeScript({ eventsPath, scriptPath });
-    await installLaunchAgent({
-      env: launchEnv,
-      stdout,
-      programArguments: [process.execPath, scriptPath],
-    });
-    await waitForRunningRuntime({ env: launchEnv });
+    await fs.writeFile(
+      scriptPath,
+      `const fs = require("node:fs");
+const eventsPath = ${JSON.stringify(eventsPath)};
+fs.appendFileSync(eventsPath, \`start \${process.pid}\\n\`);
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    fs.appendFileSync(eventsPath, \`\${signal} \${process.pid}\\n\`);
+    process.exit(0);
+  });
+}
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    await installLaunchAgent(launchArgs(env, [process.execPath, scriptPath]));
+    await waitForRunningRuntime(env);
     const bootout = spawnSync(
       "launchctl",
-      ["bootout", resolveGuiDomain(), resolveLaunchAgentPlistPath(launchEnv)],
+      ["bootout", GUI_DOMAIN, resolveLaunchAgentPlistPath(env)],
       { encoding: "utf8" },
     );
     expect(bootout.status).toBe(0);
-    await waitForNotRunningRuntime({ env: launchEnv });
-    await fs.access(resolveLaunchAgentPlistPath(launchEnv));
+    await waitForNotRunningRuntime(env);
+    await fs.access(resolveLaunchAgentPlistPath(env));
     await fs.writeFile(eventsPath, "", "utf8");
 
-    const repair = await withTimeout(
-      repairLaunchAgentBootstrap({ env: launchEnv }),
-      STARTUP_TIMEOUT_MS,
-      { message: "Timed out repairing launchd integration runtime" },
-    );
-    expect(repair).toEqual({ ok: true, status: "repaired" });
-    await waitForRunningRuntime({ env: launchEnv });
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_500);
+    const repair = await withTimeout(repairLaunchAgentBootstrap({ env }), STARTUP_TIMEOUT_MS, {
+      message: "Timed out repairing launchd integration runtime",
     });
+    expect(repair).toEqual({ ok: true, status: "repaired" });
+    await waitForRunningRuntime(env);
+
+    await delay(1_500);
     const events = await fs.readFile(eventsPath, "utf8");
     const trimmedEvents = events.trim();
     const lines = trimmedEvents.length > 0 ? trimmedEvents.split(/\r?\n/) : [];

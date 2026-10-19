@@ -80,12 +80,7 @@ function setCurrentManifestPlugins(
 }
 
 function setManifestPlugins(plugins: ReturnType<typeof createMistralManifestPlugin>[]) {
-  const byPluginDir = new Map(
-    plugins.map((plugin) => {
-      const id = plugin.id;
-      return [`/fixtures/${id}`, plugin];
-    }),
-  );
+  const byPluginDir = new Map(plugins.map((plugin) => [`/fixtures/${plugin.id}`, plugin]));
   manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue(
     [...byPluginDir].map(([pluginDir, plugin]) => ({
       pluginDir,
@@ -99,6 +94,18 @@ function setManifestPlugins(plugins: ReturnType<typeof createMistralManifestPlug
       ? { ok: true, manifest: plugin }
       : { ok: false, error: "missing manifest", manifestPath: `${pluginDir}/openclaw.plugin.json` };
   });
+}
+
+function expectNoManifestReads() {
+  expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
+  expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
+}
+
+function expectReplacedModel(resolve: ReturnType<typeof createBundledStaticCatalogModelResolver>) {
+  expect(resolve(mistralLookup)).toBeUndefined();
+  expect(resolve({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
+    "Mistral Medium Next",
+  );
 }
 
 function personalProviderConfig(baseUrl: string) {
@@ -229,12 +236,8 @@ describe("bundled static model catalog snapshot cache", () => {
     );
     setCurrentManifestPlugins([replacementPlugin]);
 
-    expect(resolveModel(mistralLookup)).toBeUndefined();
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
-      "Mistral Medium Next",
-    );
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
+    expectReplacedModel(resolveModel);
+    expectNoManifestReads();
   });
 
   it("pins lifecycle lookups to the supplied plugin generation", () => {
@@ -259,28 +262,7 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(resolveModel({ provider: "mistral", modelId: "latest" })?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
-  });
-
-  it("uses the matching configured workspace snapshot", () => {
-    const cfg = {};
-    const workspaceDir = "/configured-workspace";
-    setCurrentManifestPlugins([createMistralManifestPlugin()]);
-
-    expect(
-      resolveBundledStaticCatalogModel({
-        ...mistralLookup,
-        cfg,
-        workspaceDir,
-      })?.id,
-    ).toBe("mistral-medium-3-5");
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-      workspaceDir,
-    });
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
+    expectNoManifestReads();
   });
 
   it("uses the Gateway inventory even when a run supplies its own environment", () => {
@@ -296,8 +278,7 @@ describe("bundled static model catalog snapshot cache", () => {
         workspaceDir: "/run-workspace",
       })?.id,
     ).toBe("mistral-medium-3-5");
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
+    expectNoManifestReads();
   });
 
   it("refreshes a retained no-snapshot resolver at the plugin metadata lifecycle boundary", () => {
@@ -317,10 +298,7 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     clearPluginMetadataLifecycleCaches();
 
-    expect(resolveModel(mistralLookup)).toBeUndefined();
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
-      "Mistral Medium Next",
-    );
+    expectReplacedModel(resolveModel);
     expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(2);
   });
 });

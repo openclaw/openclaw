@@ -30,7 +30,7 @@ describe.runIf("__vitest_browser__" in globalThis)("mounted appearance glyph", (
     expect(onError).not.toHaveBeenCalled();
     const renderedColor = (index = 0) => {
       const glyph = container.querySelectorAll("openclaw-appearance-glyph")[index];
-      const svg = glyph?.shadowRoot?.querySelector("svg");
+      const svg = glyph?.querySelector("svg");
       return svg ? getComputedStyle(svg).color : null;
     };
 
@@ -49,18 +49,18 @@ describe.runIf("__vitest_browser__" in globalThis)("mounted appearance glyph", (
     const svgIcon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="#206040"/></svg>')}`;
     handle.update({ ...props, icon: svgIcon });
     const glyph = () => container.querySelector("openclaw-appearance-glyph");
-    const image = () => glyph()?.shadowRoot?.querySelector("img");
+    const image = () => glyph()?.querySelector("img");
     await expect.poll(() => image()?.naturalWidth).toBe(24);
     expect(image()?.naturalHeight).toBe(12);
     expect(image()?.getAttribute("src")).toBe(svgIcon);
     expect(image()?.alt).toBe("");
-    expect(glyph()?.shadowRoot?.querySelector("svg")).toBeNull();
+    expect(glyph()?.querySelector("svg")).toBeNull();
     expect(getComputedStyle(image()!).objectFit).toBe("contain");
     expect(image()?.getBoundingClientRect().width).toBe(glyph()?.getBoundingClientRect().width);
     expect(renderedColor(1)).toBe("rgb(32, 96, 64)");
 
     handle.update({ ...props, icon: null });
-    await expect.poll(() => glyph()?.shadowRoot?.textContent?.trim()).toBe("B");
+    await expect.poll(() => glyph()?.textContent?.trim()).toBe("B");
     expect(image()).toBeNull();
     expect(renderedColor(1)).toBe("rgb(32, 96, 64)");
 

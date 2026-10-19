@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
@@ -18,6 +19,7 @@ import {
   applyConfigSnapshot,
   serializeFormForSubmit,
   type ConfigWriteAck,
+  type ConfigPatchAck,
 } from "./config-draft-model.ts";
 import {
   configMutationFailure,
@@ -29,7 +31,6 @@ import {
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
   isCurrentRequest,
-  nextRequestVersion,
   resolveEditableSnapshotConfig,
   type ConfigRead,
   type ConfigGatewayClient,
@@ -77,11 +78,6 @@ export type ConfigPatchOptions = {
 
 export type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
 type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
-// Gateway commitGatewayConfigWrite returns persisted hashes; only a no-op patch omits one.
-export type ConfigPatchAck =
-  | { noop: true; config: Record<string, unknown> }
-  | (ConfigWriteAck & { noop?: false });
-
 export type RuntimeConfigExternalMutationResult<T> =
   | {
       ok: true;
@@ -234,9 +230,12 @@ export async function executeConfigExternalMutation<T>(
     if (!refreshed.ok) {
       return refreshFailure(refreshed.error);
     }
-    if (receipt?.noop === true) {
-      // A no-op has no write revision. Reconcile only the source admitted by
-      // the read owner, without invalidating its successors as a new write.
+    if (
+      receipt?.noop === true ||
+      (!receipt && state.configFormMode === "form" && state.configFormDirty)
+    ) {
+      // Refresh-only mutations have no write receipt. Reconcile Form edits
+      // against the admitted source; overlapping changes still conflict.
       const snapshot = state.configSnapshot;
       const config = resolveEditableSnapshotConfig(snapshot);
       if (!config || !snapshot?.hash) {
@@ -271,7 +270,7 @@ function startConfigLoad(
   isCurrentLoad: () => boolean = () => true,
 ): ConfigRead | null {
   const client = state.client;
-  if (!client || !state.connected) {
+  if (!client || !state.connected || !hasOperatorReadAccess(client.auth)) {
     return null;
   }
   const read = beginConfigRead(state, client);
@@ -322,7 +321,7 @@ async function readConfig(
   isCurrentLoad: () => boolean,
 ): Promise<Result<void, string>> {
   const isCurrent = () =>
-    isCurrentLoad() && isCurrentRequest(state, "config", version, client, connectionEpoch);
+    isCurrentLoad() && isCurrentRequest(state, version, client, connectionEpoch);
   if (!options.background) {
     state.configLoading = true;
   }
@@ -393,7 +392,7 @@ async function readConfig(
     }
     return failure(outcome.message);
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (isCurrentRequest(state, version, client, connectionEpoch)) {
       state.configLoading = false;
     }
   }
@@ -401,32 +400,33 @@ async function readConfig(
 
 export async function loadConfigSchema(state: RuntimeConfigState) {
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.configSchemaLoading) {
+  if (
+    !client ||
+    !state.connected ||
+    state.configSchemaLoading ||
+    !hasOperatorReadAccess(client.auth)
+  ) {
     return;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
-  const version = nextRequestVersion(state, "schema");
   state.configSchemaLoading = true;
   try {
     const res = await client.request<ConfigSchemaResponse>("config.schema", {});
-    if (!isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return;
     }
     state.configSchema = res.schema ?? null;
     state.configUiHints = res.uiHints ?? {};
     state.configSchemaVersion = res.version ?? null;
   } catch (err) {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.lastError = formatUiError(err);
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
     }
   } finally {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.configSchemaLoading = false;
     }
   }

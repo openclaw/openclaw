@@ -26,6 +26,10 @@ export function registerRecoveredSubagentSessionEventTest({
     const entry = createSubagentRunRecord({
       runId: "run-recovered-subscriber",
       childSessionKey: "agent:main:subagent:recovered-subscriber",
+      childSessionIdentity: {
+        sessionId: "sess-recovered-subscriber",
+        lifecycleRevision: "recovered-subscriber-revision",
+      },
       requesterSessionKey: "agent:main:parent",
       requesterDisplayKey: "parent",
       task: "finish recovered child work",
@@ -37,6 +41,7 @@ export function registerRecoveredSubagentSessionEventTest({
       entries: {
         [entry.childSessionKey]: {
           sessionId: "sess-recovered-subscriber",
+          lifecycleRevision: "recovered-subscriber-revision",
           spawnedBy: entry.requesterSessionKey,
           updatedAt: Date.now(),
         },
@@ -62,6 +67,7 @@ export function registerRecoveredSubagentSessionEventTest({
       notifyContextEngineSubagentEnded: vi.fn(async () => {}),
       retireSupersededRun: vi.fn(async () => {}),
       resumeSubagentRun: vi.fn(),
+      confirmProvisionalKill: vi.fn(),
       callGateway: async <T = Record<string, unknown>>() => ({}) as T,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
       runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),

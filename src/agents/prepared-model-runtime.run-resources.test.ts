@@ -46,6 +46,15 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runt
 
 const providerId = "run-owner-provider";
 const siblingId = "run-owner-sibling";
+const model = {
+  id: "model",
+  name: "Fixture model",
+  reasoning: false,
+  input: ["text" as const],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8192,
+  maxTokens: 1024,
+};
 
 type Registration = {
   id: string;
@@ -65,6 +74,7 @@ async function withRunFixture(
     acquire: (
       options?: Parameters<typeof acquireAgentRunPreparedModelRuntime>[1],
       workspace?: string,
+      inputPatch?: Partial<Parameters<typeof acquireAgentRunPreparedModelRuntime>[0]>,
     ) => Promise<PreparedModelRuntimeLease>;
     original: () => Registration;
     finishDisposal: ReturnType<typeof createDeferredCore<void>>;
@@ -163,7 +173,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       await bridge.finishCatalog.promise;
       if (database.prepare("SELECT value FROM answer").get().value !== 42) throw new Error("catalog lost registration state");
       if (bridge.catalog === "reject") throw new Error("fixture static catalog failed");
-      return { provider: { api: "openai-completions", baseUrl: "https://fixture.invalid/v1", models: [{ id: "model", name: "Fixture model", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024 }] } };
+      return { provider: { api: "openai-completions", baseUrl: "https://fixture.invalid/v1", models: [${JSON.stringify(model)}] } };
     } } } : {})
   };
   bridge.providers[api.id] = provider;
@@ -191,20 +201,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               api: "openai-completions" as const,
               apiKey: "synthetic-run-key",
               baseUrl: "https://fixture.invalid/v1",
-              models:
-                options.catalog && id === providerId
-                  ? []
-                  : [
-                      {
-                        id: "model",
-                        name: "Fixture model",
-                        reasoning: false,
-                        input: ["text" as const],
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                        contextWindow: 8192,
-                        maxTokens: 1024,
-                      },
-                    ],
+              models: options.catalog && id === providerId ? [] : [structuredClone(model)],
             },
           ]),
         ),
@@ -233,9 +230,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
             config,
             input,
             registrations,
-            acquire: async (leaseOptions, workspace) => {
+            acquire: async (leaseOptions, workspace, inputPatch) => {
               const lease = await acquireAgentRunPreparedModelRuntime(
-                { ...input, ...(workspace ? { workspaceDir: workspace } : {}) },
+                {
+                  ...input,
+                  ...inputPatch,
+                  ...(workspace ? { workspaceDir: workspace } : {}),
+                },
                 leaseOptions,
               );
               leases.push(lease);
@@ -282,6 +283,10 @@ function readAnswer(record: Registration): unknown {
   return record.database.prepare("SELECT value FROM answer").get()?.value;
 }
 
+function expectRetained(record: Registration) {
+  expect([readAnswer(record), record.disposals]).toEqual([42, 0]);
+}
+
 function expectReopened(record: Registration) {
   const reopened = new DatabaseSync(record.file, { readOnly: true });
   try {
@@ -306,16 +311,14 @@ it("retains a replaced RUN generation without letting its release retire the rep
       registrations.find((record) => record.id === providerId && record !== old),
       "replacement registration",
     );
-    expect(readAnswer(old)).toBe(42);
-    expect(old.disposals).toBe(0);
+    expectRetained(old);
     await first[Symbol.asyncDispose]();
     await expect.poll(() => old.disposals).toBe(1);
     expect(readAnswer(replacement)).toBe(42);
     const third = await acquire();
     expect(third.snapshot === second.snapshot).toBe(true);
     await second[Symbol.asyncDispose]();
-    expect(readAnswer(replacement)).toBe(42);
-    expect(replacement.disposals).toBe(0);
+    expectRetained(replacement);
     await third[Symbol.asyncDispose]();
     await expect.poll(() => replacement.disposals).toBe(1);
   });
@@ -375,7 +378,6 @@ it("process close waits for admitted registration disposal and rejects new RUN a
         ]);
         expect(readAnswer(original())).toBe(42);
         expect(closed).toBe(false);
-        original().instance.reserveReplacement()();
         expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
       } finally {
         finishDisposal.resolve();
@@ -414,8 +416,7 @@ it("publishes a replacement while an idle RUN registration is still disposing", 
         await nextTurn();
         expect.soft(published).toBe(true);
         expect.soft(readConfig).toBe(config);
-        expect(readAnswer(original())).toBe(42);
-        expect(original().disposals).toBe(0);
+        expectRetained(original());
       } finally {
         finishDisposal.resolve();
         await Promise.all([publication, reader]);
@@ -434,17 +435,17 @@ it("preserves eight Gateway RUN retention entries without closing an evicted liv
       catalogMode: "static",
     });
     const configuredCount = registrations.length;
-    const first = await acquire({}, `${input.workspaceDir}/run-0`);
+    const uncovered = { loadRuntimePlugins: true } as const;
+    const first = await acquire({}, `${input.workspaceDir}/run-0`, uncovered);
     const oldest = expectDefined(
       registrations.slice(configuredCount).find((record) => record.id === providerId),
       "first dynamic registration",
     );
     for (let index = 1; index < 9; index++) {
-      const lease = await acquire({}, `${input.workspaceDir}/run-${index}`);
+      const lease = await acquire({}, `${input.workspaceDir}/run-${index}`, uncovered);
       await lease[Symbol.asyncDispose]();
     }
-    expect(readAnswer(oldest)).toBe(42);
-    expect(oldest.disposals).toBe(0);
+    expectRetained(oldest);
     await first[Symbol.asyncDispose]();
     await expect.poll(() => oldest.disposals).toBe(1);
     expect(
@@ -478,7 +479,6 @@ it.each(["hold", "reject"] as const)(
             }),
           ]);
           expect(readAnswer(original())).toBe(42);
-          original().instance.reserveReplacement()();
           expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           if (catalog === "hold") {
             abort.abort(new Error("fixture admission cancelled"));
@@ -546,8 +546,7 @@ it("joins registered plugin disposal after cache retirement during catalog acqui
         });
         await nextTurn();
         expect(closed).toBe(false);
-        expect(original().disposals).toBe(0);
-        expect(readAnswer(original())).toBe(42);
+        expectRetained(original());
         finishCatalog.resolve();
         await Promise.race([
           disposalStarted.promise,
@@ -558,8 +557,7 @@ it("joins registered plugin disposal after cache retirement during catalog acqui
         await nextTurn();
         await metadataRetired.promise;
         expect(closed).toBe(false);
-        expect(original().disposals).toBe(0);
-        expect(readAnswer(original())).toBe(42);
+        expectRetained(original());
         finishDisposal.resolve();
         await closing;
         expect((await acquisition)[0]?.status).toBe("rejected");
@@ -587,8 +585,7 @@ it("retains a managed RUN source borrowed after matching standalone publication 
     const borrowed = await acquirePublishedPreparedModelRuntime(input);
     try {
       await first[Symbol.asyncDispose]();
-      expect(readAnswer(original())).toBe(42);
-      expect(original().disposals).toBe(0);
+      expectRetained(original());
     } finally {
       await borrowed[Symbol.asyncDispose]();
     }

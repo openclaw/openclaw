@@ -2,18 +2,17 @@ import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
-import {
-  readSessionEntryCount,
-  readSessionEntryStore,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
+import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
+import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   collectProjectedReferencedSessionIds,
   collectSessionStateIdsForEntry,
-  planSessionStateDeleteIfUnreferenced,
   readSessionGenerationIdsForKeys,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
@@ -35,13 +34,12 @@ import {
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
-import {
-  resolveSessionMaintenancePreserveKeys,
-  type SessionMaintenancePreservationSnapshot,
-} from "./store-maintenance-preserve-snapshot.js";
+import { resolveSessionMaintenancePreserveKeys } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import { shouldRunSessionEntryMaintenance } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -56,7 +54,9 @@ export function readSessionTranscriptJsonlBytesInDatabase(
       .select([
         "session_id",
         /* kysely-allow-raw: exact JSONL bytes bound maintenance worker batches. */
-        sql<number | bigint>`SUM(${transcriptEventReadBytesSql()} + 1)`.as("jsonl_bytes"),
+        sql<number | bigint>`CAST(SUM(${transcriptEventReadBytesSql()} + 1) AS BIGINT)`.as(
+          "jsonl_bytes",
+        ),
       ])
       .where("session_id", "in", sessionIds)
       .groupBy("session_id"),
@@ -65,6 +65,10 @@ export function readSessionTranscriptJsonlBytesInDatabase(
 }
 
 export function refreshSessionPlannerStatisticsInDatabase(database: OpenClawAgentDatabase): void {
+  if (isPostgresSqlConnection(database.db)) {
+    // PostgreSQL's server owns planner statistics and native page maintenance.
+    return;
+  }
   // SAFETY: SQLite returns this fixed numeric column for PRAGMA analysis_limit.
   const row = database.db.prepare("PRAGMA analysis_limit").get() as
     | { analysis_limit?: unknown }
@@ -91,27 +95,6 @@ export function emptySessionEntryMaintenancePlan(): SessionEntryMaintenancePlan 
   };
 }
 
-/** Only a current age fact can avoid planning; pressure and force still require a pass. */
-function canSkipSessionEntryMaintenanceInDatabase(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  params: Pick<SessionEntryMaintenanceInput, "maintenance" | "forceMaintenance">,
-  entryCount: number,
-): boolean {
-  if (params.forceMaintenance) {
-    return false;
-  }
-  const ageFact = readSessionEntryMaintenanceAgeFact(database.db, params.maintenance);
-  return (
-    ageFact !== undefined &&
-    Date.now() < ageFact.next.at &&
-    !shouldRunSessionEntryMaintenance({
-      entryCount,
-      maxEntries: params.maintenance.maxEntries,
-      force: params.forceMaintenance,
-    })
-  );
-}
-
 /** Inline callers already hold their transaction; workers prepare before the write transaction. */
 export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
@@ -119,15 +102,23 @@ export function applySessionEntryMaintenanceInDatabase(
   readPreservation: () => SessionMaintenancePreservationSnapshot,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
+  postimages?: SessionEntryWritePostimages,
 ): SessionEntryMaintenancePlan {
   let preservation: SessionMaintenancePreservationSnapshot | undefined;
-  return prepareSessionEntryMaintenanceInDatabase(
+  const prepared = prepareSessionEntryMaintenanceInDatabase(
     database,
     params,
     () => (preservation ??= readPreservation()),
     refreshCandidates,
-  )(database, onArchived);
+  );
+  return prepared(database, onArchived, postimages);
 }
+
+type SessionEntryMaintenanceApply = (
+  database: OpenClawAgentDatabase,
+  onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
+  postimages?: SessionEntryWritePostimages,
+) => SessionEntryMaintenancePlan;
 
 /** Prepare before the write transaction; compare selected rows and protection dependencies inside it. */
 export function prepareSessionEntryMaintenanceInDatabase(
@@ -135,10 +126,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
-): (
-  database: OpenClawAgentDatabase,
-  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
-) => SessionEntryMaintenancePlan {
+): SessionEntryMaintenanceApply {
   const maintenance = params.maintenance;
   if (maintenance.mode === "warn") {
     return emptySessionEntryMaintenancePlan;
@@ -147,8 +135,17 @@ export function prepareSessionEntryMaintenanceInDatabase(
   // Key projections and indexed age candidates keep unrelated entry payloads out
   // of automatic maintenance. Exact full entries load only for rows selected to change.
   const entryCount = readSessionEntryCount(reader, { includeArchived: false });
-  if (canSkipSessionEntryMaintenanceInDatabase(reader, params, entryCount)) {
-    return emptySessionEntryMaintenancePlan;
+  const retainedAgeFact = readSessionEntryMaintenanceAgeFact(reader.db, maintenance);
+  if (
+    !params.forceMaintenance &&
+    retainedAgeFact &&
+    Date.now() < retainedAgeFact.next.at &&
+    !shouldRunSessionEntryMaintenance({ entryCount, maxEntries: maintenance.maxEntries })
+  ) {
+    return (database) => {
+      stageSessionEntryMaintenanceAgeFact(database.db, { ...retainedAgeFact, entryCount });
+      return emptySessionEntryMaintenancePlan();
+    };
   }
   invalidateSessionEntryMaintenanceAgeFact(reader.db);
   const plannedAt = Date.now();
@@ -161,16 +158,23 @@ export function prepareSessionEntryMaintenanceInDatabase(
     NonNullable<SessionEntryMaintenancePlan["entryRemovals"][number]["maintenanceReason"]>
   >();
   const archivedKeys = new Set<string>();
+  let durableNoCandidates = false;
   let preserveKeys: ReadonlySet<string> | undefined;
   let baseKeys: string[] = [];
   const readPreserveKeys = () => {
     if (!preserveKeys) {
       const snapshot = readPreservation();
-      const keyProjection = readSessionMaintenanceKeyProjection(reader);
-      baseKeys = collectSqliteSessionMaintenanceBaseKeys(keyProjection, activeSessionKeys);
+      const keyProjection =
+        snapshot.workIdentities.length > 0 || snapshot.lifecycleIdentities.length > 0
+          ? readSessionMaintenanceKeyProjection(reader)
+          : undefined;
+      baseKeys = collectSqliteSessionMaintenanceBaseKeys(
+        (keys) => keyProjection ?? readSessionMaintenanceKeyProjection(reader, keys),
+        activeSessionKeys,
+      );
       preserveKeys = resolveSessionMaintenancePreserveKeys({
         snapshot,
-        store: keyProjection,
+        store: keyProjection ?? {},
         baseKeys,
       });
     }
@@ -183,22 +187,30 @@ export function prepareSessionEntryMaintenanceInDatabase(
       forceMaintenance: params.forceMaintenance,
       readPreserveKeys,
       log: false,
-      readAgeCandidates: (minimumAgeMs) =>
+      readAgeCandidates: (minimumAgeMs, modelRunPruneAfterMs) =>
         readSessionMaintenanceAgeCandidates({
           database: reader,
           minimumAgeMs,
           pruneAfterMs: maintenance.pruneAfterMs,
+          archiveDashboardAfterMs: maintenance.archiveDashboardAfterMs,
+          modelRunPruneAfterMs,
         }),
       readCapCandidates: (remainingEntryCount) => {
-        const overflow = Math.max(0, remainingEntryCount - maintenance.maxEntries);
+        const overflow = Math.min(
+          Math.max(0, remainingEntryCount - maintenance.maxEntries),
+          params.maxCapEntries ?? Infinity,
+        );
         if (overflow > 0) {
-          const capStore = readSessionMaintenanceCapCandidates({
+          const candidates = readSessionMaintenanceCapCandidates({
             database: reader,
+            activeSessionKeys,
             overflow,
-            preserveKeys: readPreserveKeys(),
+            readPreserveKeys,
             preserveRecentMs: maintenance.preserveRecentMs,
             excludedKeys: new Set([...removalReasons.keys(), ...archivedKeys]),
           });
+          durableNoCandidates = candidates.durableNoCandidates;
+          const capStore = candidates.store;
           return { store: capStore, maxEntries: Object.keys(capStore).length - overflow };
         }
         return undefined;
@@ -206,8 +218,20 @@ export function prepareSessionEntryMaintenanceInDatabase(
       onRemoved: ({ key }, reason) => removalReasons.set(key, reason),
       onArchived: ({ key }) => archivedKeys.add(key),
     });
-  const ageFact = recordSessionEntryMaintenanceAgeFact(reader, maintenance, plannedAt);
+  const ageFact = recordSessionEntryMaintenanceAgeFact(reader, maintenance, plannedAt, entryCount);
   const selectedKeys = uniqueStrings([...archivedKeys, ...removalReasons.keys()]);
+  if (selectedKeys.length === 0) {
+    const value = emptySessionEntryMaintenancePlan();
+    if (durableNoCandidates) {
+      value.durableNoCandidates = true;
+    }
+    return (database) => {
+      stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
+      return value;
+    };
+  }
+  // Selected victims have not changed yet; their future age hint is not committed.
+  invalidateSessionEntryMaintenanceAgeFact(reader.db);
   const readInputs = (database: Pick<OpenClawAgentDatabase, "db">) => {
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(
@@ -234,39 +258,43 @@ export function prepareSessionEntryMaintenanceInDatabase(
       ).rows,
     };
   };
-  const expected = selectedKeys.length > 0 ? readInputs(reader) : undefined;
-  return (database, onArchived) => {
+  const expected = readInputs(reader);
+  return (database, onArchived, postimages) => {
     if (
-      expected &&
-      (!isDeepStrictEqual(expected, readInputs(database)) ||
-        (capArchived + capped > 0 &&
-          readSessionEntryCount(database, { includeArchived: false }) < entryCount))
+      !isDeepStrictEqual(expected, readInputs(database)) ||
+      (capArchived + capped > 0 &&
+        readSessionEntryCount(database, { includeArchived: false }) < entryCount)
     ) {
       throw new SqliteReclamationInputsChangedError(
         "SQLite maintenance candidate rows changed before commit",
       );
     }
-    const selectedEntries = readSessionEntryStore(database, { sessionKeys: selectedKeys });
+    const readSelected = prepareExactSessionEntryRowReads(
+      database,
+      selectedKeys,
+      "full",
+      "canonical",
+      postimages
+        ? { includeWindowFacts: true, includeBoardPresence: true, includeMembership: true }
+        : { projectParticipants: false },
+    );
+    const selectedEntries: Record<string, SessionEntry> = {};
+    const selectedRows = new Map<string, NonNullable<ReturnType<typeof readSelected>>>();
+    for (const key of selectedKeys) {
+      const selected = readSelected(key);
+      if (selected) {
+        selectedEntries[key] = selected.entry;
+        selectedRows.set(key, selected);
+      }
+    }
     if (selectedKeys.length > 0) {
       // Admission refreshes live protection after planning. Reread only its active
       // ancestry under the writer lock; unrelated activity cannot invalidate victims.
-      const currentBaseKeys = new Set(baseKeys);
-      let pending = uniqueStrings([
-        params.activeSessionKey ?? "",
-        ...(params.activeSessionKeys ?? []),
-      ]);
-      while (pending.length > 0) {
-        pending = pending
-          .map(normalizeStoreSessionKey)
-          .filter((key) => key && !currentBaseKeys.has(key));
-        if (pending.length === 0) {
-          break;
-        }
-        pending.forEach((key) => currentBaseKeys.add(key));
-        pending = Object.values(readSessionMaintenanceKeyProjection(database, pending)).flatMap(
-          (entry) => (entry.parentSessionKey ? [entry.parentSessionKey] : []),
-        );
-      }
+      const currentBaseKeys = collectSqliteSessionMaintenanceBaseKeys(
+        (keys) => readSessionMaintenanceKeyProjection(database, keys),
+        [params.activeSessionKey ?? "", ...(params.activeSessionKeys ?? [])],
+        baseKeys,
+      );
       const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
         snapshot: refreshCandidates ? refreshCandidates(selectedKeys) : readPreservation(),
         store: selectedEntries,
@@ -291,8 +319,16 @@ export function prepareSessionEntryMaintenanceInDatabase(
         archiveReason: planned.archiveReason,
       };
       delete entry.archivedBy;
-      writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
-      onArchived?.(key, previousEntry, entry);
+      const selected = selectedRows.get(key);
+      const previousFacts = selected && captureSessionEntrySnapshot(selected);
+      const written = writeSessionEntry(database, key, entry, {
+        canonicalPreviousEntry: previousEntry,
+        canonicalPreviousRow: selected?.row,
+        canonicalPreviousWindow: previousFacts?.window,
+        canonicalPreviousSideTables: previousFacts?.sideTables,
+        postimages,
+      });
+      onArchived?.(key, previousEntry, written);
       archivedEntries.push({ sessionKey: key, sessionId: entry.sessionId });
     }
     const removals = [...removalReasons].flatMap(([sessionKey, maintenanceReason]) => {

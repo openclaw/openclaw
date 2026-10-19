@@ -1,21 +1,23 @@
 // @vitest-environment jsdom
-import { render } from "lit";
+import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { retryQueuedChatMessage, steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { readPendingSendStatus } from "./chat-thread-items.ts";
-import { renderChatQueue } from "./components/chat-composer-queue.ts";
-import { renderChatSendStatus } from "./components/chat-message-send-status.ts";
+import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
+import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
@@ -24,12 +26,13 @@ import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-messa
 
 useChatSendBrowserFixture();
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
 });
 
-it.each(["custody", "receipt", "retry", "remount"] as const)(
-  "keeps a queued steer once at the live edge through %s and history",
+it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount"] as const)(
+  "reconciles steering placement through %s and history",
   async (ackMode) => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -110,6 +113,26 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
     const recovery = document.createElement("div");
     document.body.append(container, recovery);
     let sending: Promise<void> | undefined;
+    const [queueProps, setQueueProps] = createSignal<Parameters<typeof renderChatQueueSolid>[0]>({
+      queue: [],
+      onQueueRemove: vi.fn(),
+    });
+    mountSolid(() => createComponent(renderChatQueueSolid, merge(queueProps)), { container });
+    const [sendState, setSendState] = createSignal<ReturnType<typeof readPendingSendStatus>>(null);
+    mountSolid(
+      () =>
+        createComponent(ChatSendStatus, {
+          get status() {
+            return sendState();
+          },
+          actions: {
+            onRetryQueuedMessage: (id) => {
+              sending = retryQueuedChatMessage(host, id);
+            },
+          },
+        }),
+      { container: recovery },
+    );
     const snapshot = () => {
       const pending = getChatPendingInputs(host);
       const inputs = pending
@@ -124,18 +147,15 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
         }
         return extractText(message);
       };
-      render(
-        renderChatQueue({
-          canAbort: true,
-          queue: host.chatQueue,
-          displayQueue: [...buildPendingInputQueueItems(display.queuedInputs), ...display.queue],
-          onQueueSteer: (id) => {
-            sending = steerQueuedChatMessage(host, id);
-          },
-          onQueueRemove: vi.fn(),
-        }),
-        container,
-      );
+      setQueueProps({
+        canAbort: true,
+        queue: host.chatQueue,
+        displayQueue: [...buildPendingInputQueueItems(display.queuedInputs), ...display.queue],
+        onQueueSteer: (id) => {
+          sending = steerQueuedChatMessage(host, id);
+        },
+        onQueueRemove: vi.fn(),
+      });
       const thread = projectTranscriptChain(
         buildChatItems({
           paneId: "queue-steer-lifecycle",
@@ -166,14 +186,8 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
                 group.messages.map(({ message }) => messageText(message)),
               ),
       );
-      render(
-        renderChatSendStatus(sendStatus, {
-          onRetryQueuedMessage: (id) => {
-            sending = retryQueuedChatMessage(host, id);
-          },
-        }),
-        recovery,
-      );
+      setSendState(sendStatus);
+      flush();
       return {
         thread,
         queue: [...container.querySelectorAll(".chat-queue__item")].map((item) =>
@@ -188,10 +202,13 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       });
       container.querySelector<HTMLButtonElement>(".chat-queue__steer")!.click();
       await requested.promise;
-      const delivered = [original.content, "Already visible output.", queued.text];
+      const delivered = [original.content, queued.text, "Already visible output."];
       expect.soft(snapshot(), "request dispatch").toEqual({ thread: delivered, queue: [] });
+      let deferred = false;
+      let consumed = false;
       let continued = false;
       let prefixPersisted = false;
+      let steerProjected = true;
       const continueOutput = () => {
         continued = true;
         history.inFlightRun!.text = prefixPersisted
@@ -207,16 +224,21 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       const expected = () => ({
         thread: [
           original.content,
+          ...(prefixPersisted ? ["Already visible output."] : []),
+          ...(!deferred && steerProjected ? [queued.text] : []),
           ...(prefixPersisted
-            ? ["Already visible output.", ...(continued ? ["Later output."] : [])]
+            ? continued
+              ? ["Later output."]
+              : []
             : [continued ? "Already visible output. Later output." : "Already visible output."]),
-          queued.text,
+          ...(!deferred && !steerProjected ? [queued.text] : []),
         ],
-        queue: [],
+        queue: deferred && !consumed ? [queued.text] : [],
       });
       if (ackMode === "retry") {
         ack.reject(new Error("Steer rejected"));
         await transport.promise;
+        steerProjected = false;
         expect.soft(snapshot(), "rejected delivery").toEqual(expected());
         expect
           .soft(host.chatQueue, "rejected source")
@@ -228,6 +250,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
         transport = createDeferred();
         retry!.click();
         await retryRequested.promise;
+        steerProjected = true;
         expect.soft(snapshot(), "retry retains original run ownership").toEqual(expected());
       }
       (ackMode === "retry" ? retryAck : ack).resolve({
@@ -238,7 +261,8 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       await transport.promise;
       expect(host.chatRunId).toBe("active-run");
       expect.soft(snapshot(), "ACK").toEqual(expected());
-      if (ackMode === "custody" || ackMode === "retry") {
+      if (ackMode === "custody" || ackMode === "retry" || ackMode.startsWith("deferred")) {
+        deferred = ackMode.startsWith("deferred");
         history.pendingInputs = {
           items: [
             {
@@ -247,18 +271,18 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
               message: { role: "user", content: queued.text, timestamp: 10_000 },
               acceptedAt: 10_000,
               state: "queued",
-              queued: true,
+              ...(deferred ? { queued: true as const } : {}),
             },
           ],
           total: 1,
-          queuedCount: 1,
+          queuedCount: deferred ? 1 : 0,
         };
       }
       await loadChatHistory(host);
       expect.soft(snapshot(), "history before persisted copy").toEqual(expected());
-      if (ackMode === "remount") {
+      if (ackMode === "remount" || ackMode === "deferred-remount") {
         // The producer has persisted the prefix; an older page still omits the
-        // consumed steer when the pane is recreated from its actual cache.
+        // submitted steer when the pane is recreated from its actual cache.
         history.messages = [
           original,
           {
@@ -286,10 +310,9 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
         previous.sessions.dispose();
         applyChatCacheSnapshot(host, cached!);
         await loadChatHistory(host);
-        expect
-          .soft(snapshot(), "new pane keeps explicit local steer ownership")
-          .toEqual(expected());
+        expect.soft(snapshot(), "new pane keeps authoritative input placement").toEqual(expected());
       }
+      consumed = true;
       history.pendingInputs = { items: [], total: 0, queuedCount: 0 };
       history.inputReceipts = [
         {
@@ -315,6 +338,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
           steerTargetRunId: "active-run",
         },
       };
+      deferred = false;
       applySessionMessagePayload(host, { message: steer }, true, {
         kind: "live",
         activeRunId: "active-run",
@@ -352,7 +376,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       };
       await loadChatHistory(host);
       expect.soft(snapshot(), "finished history").toEqual({
-        thread: [original.content, "Already visible output.", "Later output.", queued.text],
+        thread: [original.content, "Already visible output.", queued.text, "Later output."],
         queue: [],
       });
     } finally {

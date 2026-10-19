@@ -76,13 +76,9 @@ function readUserText(message: Extract<AgentMessage, { role: "user" }>): string 
   ) {
     return undefined;
   }
-  const content = message.content;
-  if (typeof content === "string") {
-    return content.length <= MAX_DECISION_CONTEXT_CHARS &&
-      detectImageReferences(content).length === 0
-      ? stripUserEnvelopeForDisplay(content).trim()
-      : undefined;
-  }
+  const rawContent = message.content;
+  const content =
+    typeof rawContent === "string" ? [{ type: "text" as const, text: rawContent }] : rawContent;
   if (content.length > MAX_CONTENT_BLOCKS || content.some((block) => block.type !== "text")) {
     return undefined;
   }

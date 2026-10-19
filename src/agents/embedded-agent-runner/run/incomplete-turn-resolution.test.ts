@@ -7,7 +7,6 @@ import {
   resolveIncompleteTurnPayloadText,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
-  resolveSilentToolResultReplyPayload,
 } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -64,7 +63,7 @@ describe("incomplete-turn terminal metadata", () => {
         attempt,
       }),
     ).toBe(
-      "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+      "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
     );
   });
 
@@ -97,29 +96,6 @@ describe("incomplete-turn terminal metadata", () => {
     expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(false);
   });
 
-  it("uses the current completed assistant instead of stale session tool-use evidence", () => {
-    const staleAssistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
-    const currentAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "Here is the final answer." }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: ["Analysis...", "Here is the final answer."],
-      toolMetas: [{ toolName: "update_plan" }],
-      lastAssistant: staleAssistant,
-      currentAttemptAssistant: currentAssistant,
-    });
-
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 1,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
-  });
-
   it("keeps completed tool-use evidence incomplete when the current transcript slice is absent", () => {
     const assistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const attempt = makeEmbeddedRunnerAttempt({
@@ -138,10 +114,12 @@ describe("incomplete-turn terminal metadata", () => {
         timedOut: false,
         attempt,
       }),
-    ).toContain("couldn't generate a response");
+    ).toBe(
+      "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
+    );
   });
 
-  it("emits a silent cron reply from the trailing current-attempt tool result", () => {
+  it("does not treat a tool result token as an assistant final", () => {
     const attempt = makeEmbeddedRunnerAttempt({
       toolMetas: [{ toolName: "exec" }],
       messagesSnapshot: [
@@ -150,46 +128,17 @@ describe("incomplete-turn terminal metadata", () => {
           content: [{ type: "text", text: "NO_REPLY" }],
           details: { aggregated: "NO_REPLY" },
         } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-        buildEmbeddedRunnerAssistant({}),
       ],
     });
-
     expect(
-      resolveSilentToolResultReplyPayload({
-        isCronTrigger: true,
+      resolveIncompleteTurnPayloadText({
         payloadCount: 0,
         aborted: false,
+        externalAbort: false,
         timedOut: false,
         attempt,
       }),
-    ).toEqual({ text: "NO_REPLY" });
-  });
-
-  it("does not reuse an older silent tool result without current tool activity", () => {
-    const attempt = makeEmbeddedRunnerAttempt({
-      toolMetas: [],
-      messagesSnapshot: [
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: "NO_REPLY" }],
-        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-        {
-          role: "user",
-          content: [{ type: "text", text: "Current cron prompt" }],
-        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-        buildEmbeddedRunnerAssistant({}),
-      ],
-    });
-
-    expect(
-      resolveSilentToolResultReplyPayload({
-        isCronTrigger: true,
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
+    ).not.toBeNull();
   });
 
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
@@ -212,6 +161,32 @@ describe("incomplete-turn terminal metadata", () => {
 describe("tool-authored source replies", () => {
   // A `canDeliverSourceReply` tool wrote the final answer; the host delivers it, so a
   // tool-use stop with no post-tool assistant text is not an incomplete turn.
+  it("does not let an earlier authored reply complete an unfinished later input", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "later-call", name: "read", arguments: {} }],
+    });
+    const result = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      attempt: makeEmbeddedRunnerAttempt({
+        lastAssistant: assistant,
+        sourceReplyDeliveryState: "missing",
+        messagingToolSourceReplyPayloads: [
+          {
+            text: "Earlier answer.",
+            sourceReplyFinal: true,
+            toolAuthored: true,
+            toolAuthoredForToolCallId: "earlier-call",
+          },
+        ],
+      }),
+    });
+    expect(result).toBe("No answer was returned. Ask again if you still need one.");
+  });
+
   it("treats a final tool-authored source reply as a complete tool-use turn", () => {
     expect(
       resolveIncompleteTurnPayloadText({
@@ -229,6 +204,7 @@ describe("tool-authored source replies", () => {
               text: "Pedido SO1 creado.",
               sourceReplyFinal: true,
               toolAuthored: true,
+              toolAuthoredForToolCallId: "tool_1",
             },
           ],
           lastAssistant: buildEmbeddedRunnerAssistant({

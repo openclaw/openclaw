@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -19,11 +19,12 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  VideoGenerationModeCapabilities,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationSourceAsset,
+import {
+  normalizeVideoGenerationDuration,
+  type VideoGenerationModeCapabilities,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+  type VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_PIXVERSE_MODEL_ID,
@@ -117,13 +118,6 @@ function resolvePixVerseQuality(req: VideoGenerationRequest): string {
     : DEFAULT_PIXVERSE_QUALITY;
 }
 
-function resolvePixVerseDurationSeconds(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 5;
-  }
-  return Math.max(1, Math.min(MAX_DURATION_SECONDS, Math.round(value)));
-}
-
 function readPixVerseSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: PIXVERSE_SEED_MAX });
 }
@@ -196,7 +190,10 @@ function buildVideoBody(
 ): Record<string, unknown> {
   const options = req.providerOptions ?? {};
   const body: Record<string, unknown> = {
-    duration: resolvePixVerseDurationSeconds(req.durationSeconds),
+    duration: Math.min(
+      MAX_DURATION_SECONDS,
+      normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds }) ?? 5,
+    ),
     model,
     prompt: req.prompt,
     quality: resolvePixVerseQuality(req),
@@ -281,7 +278,8 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     defaultModel: DEFAULT_PIXVERSE_MODEL_ID,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [...PIXVERSE_VIDEO_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
+    isConfiguredAsync: (ctx) =>
+      isProviderApiKeyConfiguredAsync({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: buildPixVerseModeCapabilities(),
       imageToVideo: {

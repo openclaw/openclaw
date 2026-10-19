@@ -16,12 +16,18 @@ import {
 import { classifyAcpToolApproval } from "./approval-classifier.js";
 
 type PermissionResolverDeps = {
-  prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
-  log?: (line: string) => void;
   cwd?: string;
+  signal?: AbortSignal;
 };
 
-function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
+function promptUserPermission(
+  toolName: string | undefined,
+  toolTitle?: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) {
+    return Promise.resolve(false);
+  }
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
     console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
     return Promise.resolve(false);
@@ -39,10 +45,15 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
       }
       settled = true;
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", onClose);
+      rl.off("close", onClose);
       rl.close();
       resolve(approved);
     };
 
+    const onClose = () => finish(false);
+    rl.once("close", onClose);
+    signal?.addEventListener("abort", onClose, { once: true });
     const timeout = setTimeout(() => {
       console.error(`\n[permission timeout] denied: ${toolName ?? "unknown"}`);
       finish(false);
@@ -65,8 +76,9 @@ export async function resolvePermissionRequest(
   params: RequestPermissionRequest,
   deps: PermissionResolverDeps = {},
 ): Promise<RequestPermissionResponse> {
-  const log = deps.log ?? ((line: string) => console.error(line));
-  const prompt = deps.prompt ?? promptUserPermission;
+  if (deps.signal?.aborted) {
+    return { outcome: { outcome: "cancelled" } };
+  }
   const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
   const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
@@ -78,7 +90,7 @@ export async function resolvePermissionRequest(
       : classification.approvalClass;
 
   if (options.length === 0) {
-    log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
+    console.error(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
     return { outcome: { outcome: "cancelled" } };
   }
 
@@ -90,17 +102,20 @@ export async function resolvePermissionRequest(
     options.find((option) => option.kind === "reject_always");
   if (classification.autoApprove) {
     if (!allowOption) {
-      log(`[permission cancelled] ${toolName ?? "unknown"}: missing allow option`);
+      console.error(`[permission cancelled] ${toolName ?? "unknown"}: missing allow option`);
       return { outcome: { outcome: "cancelled" } };
     }
-    log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
+    console.error(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
     return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
   }
 
-  log(
+  console.error(
     `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
   );
-  const approved = await prompt(toolName, toolTitle);
+  const approved = await promptUserPermission(toolName, toolTitle, deps.signal);
+  if (deps.signal?.aborted) {
+    return { outcome: { outcome: "cancelled" } };
+  }
 
   if (approved && allowOption) {
     return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
@@ -109,7 +124,7 @@ export async function resolvePermissionRequest(
     return { outcome: { outcome: "selected", optionId: rejectOption.optionId } };
   }
 
-  log(
+  console.error(
     `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
   );
   return { outcome: { outcome: "cancelled" } };

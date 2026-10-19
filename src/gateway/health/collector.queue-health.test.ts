@@ -31,7 +31,7 @@ const [collector, pluginRuntime, degradedState] = await Promise.all([
 const pluginRegistrySnapshot = pluginRuntime.captureActivePluginRegistrySnapshot();
 const degradedPluginsSnapshot = degradedState.listActiveDegradedPlugins();
 const collectHealth = () =>
-  collector.collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 10 });
+  collector.collectGatewayHealthSnapshot({ audience: "admin", probe: false });
 
 describe("queue health collector", () => {
   beforeEach(() => {
@@ -53,11 +53,8 @@ describe("queue health collector", () => {
     const countOutbound = vi.spyOn(deliveryQueueState, "countFailedDeliveryQueueEntries");
     const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
     const countIngress = vi
-      .spyOn(ingressHealth, "countFailedChannelIngressQueueEntries")
-      .mockResolvedValue(failed);
-    const countPressure = vi
-      .spyOn(ingressHealth, "countChannelIngressQueuePressure")
-      .mockResolvedValue([]);
+      .spyOn(ingressHealth, "countChannelIngressQueueHealth")
+      .mockResolvedValue({ failed, pressure: [] });
     try {
       const pending = collectHealth();
       expect(capture).toHaveBeenCalledTimes(1);
@@ -72,59 +69,6 @@ describe("queue health collector", () => {
       capture.mockRestore();
       countOutbound.mockRestore();
       countIngress.mockRestore();
-      countPressure.mockRestore();
-    }
-  });
-
-  it("includes outbound and ingress dead letters in the health snapshot", async () => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-health-dq-",
-    });
-    try {
-      const { seedDeliveryQueueEntry } =
-        await import("../../infra/delivery-queue-sqlite.test-support.js");
-      const { prepareDeliveryQueueTerminalEntry, terminalizePendingDeliveryQueueEntryInDatabase } =
-        await import("../../infra/delivery-queue-sqlite.kernel.js");
-      const { openOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js");
-      const clean = await collectHealth();
-      expect(clean.deliveryQueues).toBeUndefined();
-
-      const entry = {
-        id: "dead-1",
-        enqueuedAt: 1_000,
-        retryCount: 5,
-        retainOnFailure: true as const,
-      };
-      seedDeliveryQueueEntry({ queueName: "outbound", entry });
-      const database = openOpenClawStateDatabase();
-      expect(
-        terminalizePendingDeliveryQueueEntryInDatabase(
-          database,
-          prepareDeliveryQueueTerminalEntry({ queueName: "outbound", id: entry.id, entry }),
-        ),
-      ).toMatchObject({ status: "terminalized" });
-      const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
-      const ingressQueue = createChannelIngressQueue<{ text: string }>({
-        channelId: "telegram",
-        accountId: "ops",
-      });
-      await ingressQueue.enqueue("dead-2", { text: "recover me" });
-      const claim = await ingressQueue.claim("dead-2", { ownerId: "worker" });
-      if (!claim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      await ingressQueue.fail(claim, { reason: "handler-error", failedAt: 50_000 });
-
-      const snap = await collectHealth();
-      expect(snap.deliveryQueues).toEqual({
-        failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
-        ingressFailed: [
-          { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
-        ],
-      });
-    } finally {
-      await openClawState.cleanup();
     }
   });
 

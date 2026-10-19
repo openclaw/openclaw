@@ -35,10 +35,24 @@ export function rethrowTelegramSendError(err: unknown): never {
     throw new PlatformMessageNotDispatchedError("Telegram request not started", { cause: err });
   }
   const migrationRejection = describeTelegramSupergroupMigration(err);
-  if (migrationRejection === undefined) {
-    throw err;
+  if (migrationRejection !== undefined) {
+    throw new PlatformMessageNotDispatchedError(migrationRejection, {
+      cause: err,
+      retryable: false,
+    });
   }
-  throw new PlatformMessageNotDispatchedError(migrationRejection, { cause: err, retryable: false });
+  // These exact Bot API errors reject chat/topic validation before sending, even
+  // for albums. Other 400s can follow partial album acceptance; nested failures
+  // cannot prove that every physical request was rejected.
+  if (
+    isRecord(err) &&
+    err.error_code === 400 &&
+    (err.description === "Bad Request: chat not found" ||
+      err.description === "Bad Request: message thread not found")
+  ) {
+    throw new PlatformMessageNotDispatchedError(formatErrorMessage(err), { cause: err });
+  }
+  throw err;
 }
 
 const TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES = new Set([
@@ -94,27 +108,19 @@ function collectTelegramErrorCandidates(err: unknown) {
   });
 }
 
-function normalizeCode(code?: string): string {
+function normalizedErrorCode(err: unknown): string {
+  let code = extractErrorCode(err);
+  if (!code && err && typeof err === "object") {
+    const errno = (err as { errno?: unknown }).errno;
+    if (typeof errno === "string" || typeof errno === "number") {
+      code = String(errno);
+    }
+  }
   return code?.trim().toUpperCase() ?? "";
 }
 
-function getErrorCode(err: unknown): string | undefined {
-  const direct = extractErrorCode(err);
-  if (direct) {
-    return direct;
-  }
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const errno = (err as { errno?: unknown }).errno;
-  if (typeof errno === "string" || typeof errno === "number") {
-    return String(errno);
-  }
-  return undefined;
-}
-
 function classifyTelegramTransientNetworkError(err: unknown) {
-  const code = normalizeCode(getErrorCode(err));
+  const code = normalizedErrorCode(err);
   return (
     classifyTransientNetworkErrorCode(code) ??
     (TELEGRAM_ADDITIONAL_PRE_CONNECT_ERROR_CODES.has(code)
@@ -122,6 +128,12 @@ function classifyTelegramTransientNetworkError(err: unknown) {
       : TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES.has(code)
         ? "ambiguous"
         : undefined)
+  );
+}
+
+export function hasTelegramNetworkErrorCode(err: unknown): boolean {
+  return collectTelegramErrorCandidates(err).some(
+    (candidate) => classifyTelegramTransientNetworkError(candidate) !== undefined,
   );
 }
 
@@ -169,7 +181,7 @@ function describeTelegramSupergroupMigration(err: unknown): string | undefined {
 
 export function isTelegramMisdirectedRequestError(err: unknown): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    const code = normalizeCode(getErrorCode(candidate));
+    const code = normalizedErrorCode(candidate);
     if (code === "421" || getNumericHttpStatus(candidate) === 421) {
       return true;
     }

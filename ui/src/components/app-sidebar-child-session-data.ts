@@ -3,7 +3,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
-import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
 import { preserveRosterPresentationMetadata } from "../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -27,6 +27,15 @@ export type SidebarChildSessionRead = {
   reconcile: (
     row: GatewaySessionRow,
   ) => { status: "not-selected" } | { status: "selected"; row: GatewaySessionRow | null };
+};
+
+export type SidebarChildSessionQuery = {
+  observation?: ReturnType<SessionCapability["observeList"]>;
+  result?: SessionsListResult;
+  loading?: boolean;
+  childRead?: SidebarChildSessionRead;
+  hydration?: Promise<void>;
+  refresh?: Promise<void>;
 };
 
 function lineageRowCacheKey(row: GatewaySessionRow, key = row.key): string {
@@ -254,7 +263,7 @@ export function scheduleSidebarChildSessions(
 }
 
 /** Publish an observed child window through the sidebar's existing lineage admission. */
-export async function hydrateSidebarChildSessions(params: {
+async function hydrateSidebarChildSessions(params: {
   owner: {
     childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
     loadedChildSessionKeys: ReadonlySet<string>;
@@ -303,6 +312,106 @@ export async function hydrateSidebarChildSessions(params: {
   }
 }
 
+/** Admit the observed child window before publishing its sidebar presentation. */
+export function applySidebarChildSessionSnapshot(
+  params: {
+    owner: Parameters<typeof retireStaleChildSessionRows>[0];
+    sessions: SessionCapability;
+    parentKey: string;
+    query: SidebarChildSessionQuery;
+    retry: boolean;
+    isCurrent: () => boolean;
+    captureChildRead: () => SidebarChildSessionRead;
+    selectedKey: () => string | null;
+    finishLoad: () => void;
+  },
+  snapshot: SessionListSnapshot,
+): void {
+  const { owner, sessions, parentKey, query } = params;
+  if (!params.isCurrent()) {
+    return;
+  }
+  if (snapshot.loading) {
+    if (!query.loading) {
+      query.childRead = params.captureChildRead();
+    }
+    query.loading = true;
+    owner.loadingChildSessionKeys = new Set([...owner.loadingChildSessionKeys, parentKey]);
+    owner.requestSessionDataUpdate();
+    return;
+  }
+  if (snapshot.error) {
+    if (params.retry && !query.observation) {
+      return;
+    }
+    query.loading = false;
+    owner.childSessionErrorsByParent = new Map(owner.childSessionErrorsByParent).set(
+      parentKey,
+      snapshot.error,
+    );
+    params.finishLoad();
+    return;
+  }
+  const result = snapshot.result;
+  const refreshed = query.loading || !query.result;
+  query.loading = false;
+  if (!result) {
+    return;
+  }
+  if (!refreshed) {
+    // A sibling observation can update held row fields without a new page.
+    // Project those facts without restarting pagination or read admission.
+    const rows = owner.childSessionRowsByParent[parentKey];
+    if (rows) {
+      const current = sessions.projectRows(rows);
+      if (current.some((row, index) => row !== rows[index])) {
+        owner.childSessionRowsByParent = {
+          ...owner.childSessionRowsByParent,
+          [parentKey]: current,
+        };
+        owner.requestSessionDataUpdate();
+      }
+    }
+    return;
+  }
+  query.result = result;
+  if (query.hydration) {
+    return;
+  }
+  query.hydration = hydrateSidebarChildSessions({
+    owner,
+    parentKey,
+    sessions,
+    initialResult: result,
+    childRead: query.childRead ?? params.captureChildRead(),
+    ownsQuery: params.isCurrent,
+    selectedKey: params.selectedKey,
+  }).finally(() => {
+    if (params.isCurrent()) {
+      query.hydration = undefined;
+      params.finishLoad();
+    }
+  });
+}
+
+export function finishSidebarChildSessionLoad(
+  owner: Parameters<typeof retireStaleChildSessionRows>[0],
+  queries: Map<string, SidebarChildSessionQuery>,
+  parentKey: string,
+): void {
+  if (owner.childSessionErrorsByParent.has(parentKey)) {
+    const loaded = new Set(owner.loadedChildSessionKeys);
+    loaded.delete(parentKey);
+    owner.loadedChildSessionKeys = loaded;
+    queries.get(parentKey)?.observation?.dispose();
+    queries.delete(parentKey);
+  }
+  const next = new Set(owner.loadingChildSessionKeys);
+  next.delete(parentKey);
+  owner.loadingChildSessionKeys = next;
+  owner.requestSessionDataUpdate();
+}
+
 export function discardEmptyChildSessionSnapshot(
   owner: {
     childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
@@ -332,7 +441,16 @@ export function retireStaleChildSessionRows(
   },
   sessionKey: string | null,
   revalidating: ReadonlySet<string>,
+  queries: Map<string, SidebarChildSessionQuery>,
+  finishLoad: (parentKey: string) => void,
 ): void {
+  for (const [key, query] of queries) {
+    if (!revalidating.has(key) && !query.refresh && !query.hydration) {
+      query.observation?.dispose();
+      queries.delete(key);
+      finishLoad(key);
+    }
+  }
   const lineage = preserveActiveSessionLineageRows(sessionKey, owner.childSessionRowsByParent);
   const next = { ...owner.childSessionRowsByParent };
   let changed = false;
@@ -360,6 +478,23 @@ export function retireStaleChildSessionRows(
     owner.childSessionRowsByParent = next;
     owner.requestSessionDataUpdate();
   }
+}
+
+export function retrySidebarChildSessions(
+  owner: Parameters<typeof retireStaleChildSessionRows>[0] & {
+    loadChildSessions(parentKey: string, retry: boolean): Promise<void>;
+  },
+  finishLoad: (parentKey: string) => void,
+  sessionKey: string,
+): void {
+  const retry = owner.childSessionErrorsByParent.has(sessionKey);
+  if (retry) {
+    finishLoad(sessionKey);
+    const errors = new Map(owner.childSessionErrorsByParent);
+    errors.delete(sessionKey);
+    owner.childSessionErrorsByParent = errors;
+  }
+  void owner.loadChildSessions(sessionKey, retry);
 }
 
 type SessionLineageOwner = {
@@ -464,37 +599,16 @@ export function publishActiveSessionRow(
   inheritRow: SessionCapability["inheritRow"],
   isCurrent: () => boolean,
 ): GatewaySessionRow | null {
-  // Routed descriptors share the capability's freshness and placement owner;
-  // both lineage and child-list completions must publish its accepted row.
   const sessions = owner.context?.sessions;
   if (!isCurrent()) {
     return null;
   }
-  const rowIsCurrent =
-    reconcile(row, owner.sessionsResult?.defaults, { archivedFilter: "all" }) === true;
-  if (!isCurrent()) {
-    return null;
+  if (reconcile(row, owner.sessionsResult?.defaults, { archivedFilter: "all" }) !== true) {
+    return owner.activeSessionLineageSelectedRow;
   }
-  const currentRow = () =>
-    sessions?.state.result?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, row.key),
-    );
-  if (!rowIsCurrent) {
-    // Primary can lag a newer managed row; use the owner's existing admission checks.
-    const current = [currentRow(), owner.activeSessionLineageSelectedRow].find(
-      (candidate) =>
-        candidate &&
-        isCurrent() &&
-        sessions?.reconcile(candidate, undefined, { archivedFilter: "all" }) === true,
-    );
-    if (!isCurrent()) {
-      return null;
-    }
-    if (!current) {
-      return owner.activeSessionLineageSelectedRow;
-    }
-  }
-  const accepted = currentRow();
+  const accepted = sessions?.state.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, row.key),
+  );
   if (accepted) {
     // A current request can still contain a timestamp-rejected row.
     const previous = owner.activeSessionLineageSelectedRow ?? undefined;
@@ -508,7 +622,6 @@ export function publishActiveSessionLineage(
   owner: SessionLineageOwner,
   sessionKey: string,
   lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
-  sourceCanonicalListRevision: number,
   inheritRow: SessionCapability["inheritRow"],
   isCurrent: () => boolean,
 ): void {
@@ -548,8 +661,6 @@ export function publishActiveSessionLineage(
     rowsByParent,
   );
   owner.activeSessionLineageRoot = topmostRow;
-  // Actual describes keep their issuance receipt; cached lineage still selects
-  // the newest held row before applying its primary-list fence.
   const selectedRow =
     lineage.selectedObservation?.row ??
     [
@@ -571,10 +682,7 @@ export function publishActiveSessionLineage(
     const reconcile: SessionCapability["reconcile"] =
       lineage.selectedObservation?.reconcile ??
       ((row, defaults, options) =>
-        owner.context?.sessions.reconcile(row, defaults, {
-          ...options,
-          sourceCanonicalListRevision,
-        }) ?? false);
+        owner.context?.sessions.reconcile(row, defaults, options) ?? false);
     publishActiveSessionRow(owner, selectedRow, reconcile, inheritRow, isCurrent);
   } else {
     owner.activeSessionLineageSelectedRow = lineage.lookupFailed ? previousSelectedRow : null;

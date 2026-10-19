@@ -17,11 +17,7 @@ import {
 } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
-import {
-  configContentConflicts,
-  configFormContentConflicts,
-  replayConfigDraftEdits,
-} from "./config-draft-replay.ts";
+import { configContentConflicts, replayConfigDraftEdits } from "./config-draft-replay.ts";
 import {
   resolveAgentConfigEntryTarget,
   resolveEditableSnapshotConfig,
@@ -312,6 +308,11 @@ export type ConfigSubmittedDraft = {
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
 
+// Gateway writes return persisted hashes; only a no-op patch omits one.
+export type ConfigPatchAck =
+  | { noop: true; config: Record<string, unknown> }
+  | (ConfigWriteAck & { noop?: false });
+
 export function isConfigWriteAck(value: unknown): value is ConfigWriteAck {
   return (
     isRecord(value) &&
@@ -354,11 +355,11 @@ export function adoptConfigWriteAck(
     currentForm &&
     state.configFormOriginal &&
     previous &&
-    configFormContentConflicts(state.configFormOriginal, currentForm, previous),
+    configContentConflicts(state.configFormOriginal, currentForm, previous, "form"),
   );
   const draft =
     currentRaw === submitted.raw
-      ? structuredClone(ack.config)
+      ? ack.config
       : staleForm
         ? null
         : replayConfigDraftEdits(submitted.form, currentForm, ack.config);
@@ -397,7 +398,7 @@ export function adoptConfigWriteAck(
     return state.configAutoSaveStatus;
   }
   setConfigRawOriginal(state, acknowledgedRaw);
-  state.configFormOriginal = structuredClone(ack.config);
+  state.configFormOriginal = ack.config;
   state.configForm = draft;
   state.configRaw = serializeConfigForm(draft);
   state.configFormDirty = state.configRaw !== serializeConfigForm(ack.config);
@@ -511,18 +512,13 @@ function mutateConfigForm(
     }
     base = parsedRawDraft;
   } else {
+    // Saved receipts and clean drafts share a tree; this is the mutation boundary.
     base = structuredClone(
       state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
     );
   }
   mutate(base);
   syncConfigDraft(state, base);
-}
-
-function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
-  const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
-  pluginIds.add(pluginId);
-  autoAllowlistedPluginIdsByState.set(state, pluginIds);
 }
 
 function untrackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
@@ -567,7 +563,9 @@ function syncEnabledPluginAllowlist(
       return;
     }
     setPathValue(draft, ["plugins", "allow"], [...allow, pluginId]);
-    trackAutoAllowlistedPluginId(state, pluginId);
+    const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
+    pluginIds.add(pluginId);
+    autoAllowlistedPluginIdsByState.set(state, pluginIds);
     return;
   }
   const autoAllowlistedPluginIds = autoAllowlistedPluginIdsByState.get(state);
@@ -613,7 +611,7 @@ export function updateConfigRawValue(
     resetConfigPendingChanges(state);
   } else {
     // The refreshed snapshot may contain the pending write, not this raw revert.
-    state.configForm = structuredClone(state.configFormOriginal ?? {});
+    state.configForm = state.configFormOriginal ?? {};
     clearConfigDraftTracking(state);
   }
   // Raw edits own submission; a clean revert also restores the saved form
@@ -626,7 +624,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   // A retained draft can predate a reconnect snapshot. Adopt its document and
   // revision together; pairing old originals with the new hash bypasses CAS.
-  state.configFormOriginal = structuredClone(editableConfig ?? {});
+  state.configFormOriginal = editableConfig ?? {};
   const raw =
     state.configSnapshot?.raw ??
     (editableConfig ? serializeConfigForm(editableConfig) : state.configRawOriginal);
@@ -636,7 +634,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
 
 export function resetConfigPendingChanges(state: RuntimeConfigState) {
   rebaseConfigDraft(state);
-  state.configForm = structuredClone(state.configFormOriginal ?? {});
+  state.configForm = state.configFormOriginal ?? {};
   state.configRaw = state.configRawOriginal;
   state.configFormDirty = false;
   state.configFormMode = "form";
@@ -674,12 +672,12 @@ export function discardConfigFormValue(state: RuntimeConfigState, path: Array<st
   if (previous === undefined) {
     removePathValue(current, path);
   } else {
-    setPathValue(current, path, structuredClone(previous));
+    setPathValue(current, path, previous);
   }
   // Restore absence with the submission owner's existing empty-container rules;
   // otherwise Cancel alone leaves a dirty draft and schedules a redundant write.
   current = pruneEmptyConfigForm(current, original);
-  if (configFormContentConflicts(original, current, canonical)) {
+  if (configContentConflicts(original, current, canonical, "form")) {
     state.configAutoSaveStatus = "conflict";
     state.lastError = "config changed since last load; re-run config.get and retry";
     return false;

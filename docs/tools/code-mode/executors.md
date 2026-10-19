@@ -44,6 +44,12 @@ the Code Mode tool bridge retain OpenClaw's normal policy, approvals, hooks,
 and session ownership under either executor. These checks mediate tool calls;
 they cannot contain hostile code that escapes a Node VM context.
 
+Session sandboxing does not move Code Mode cells into the sandbox. Under the
+Node executor, a cell from a sandboxed session, including one created by a
+[role that requires sandboxing](/gateway/operator-scopes#named-operator-roles),
+still runs in the Gateway process. Use QuickJS on Gateways where untrusted
+people can start sessions on the built-in runtime.
+
 ## Set the executor
 
 In the web interface, open **Settings → Agents & Tools → Labs** and use
@@ -109,8 +115,43 @@ heap. Saved JSON results retain their shared memory/snapshot data allowance.
 best-effort V8 worker heap budget across the old and young generations, subject
 to engine minimums. That budget includes worker runtime allocations and
 excludes external buffers; it is not a per-context heap measurement or security
-boundary. Neither executor's
-setting caps total Gateway RSS. Worker overhead and host-side tool results also
+boundary. Node stops an execution with `runtime_unavailable` when sustained
+major garbage collections leave the worker near its heap limit, then retires
+that worker, even when individual collections are cheap. The same guard retires
+pressured suspended or warm workers. Output emitted before heap exhaustion or GC retirement remains
+available within the configured output limit. Synchronous code that prevents GC notifications remains bounded
+by the host execution deadline. Paginate or narrow large tool results and avoid
+retaining large arrays; inspect completed actions before retrying. Captured Node
+output retains only a bounded prefix, including when a cell emits many entries
+without yielding. Fresh cells get fresh globals even when a worker is reused.
+Settled input and guest errors release their cell context and keep healthy workers
+available for reuse. Native failures, interrupted execution, and cancellation
+still retire the worker.
+
+Node keeps at most four completed workers warm. Surplus workers expire after
+30 seconds; one can remain warm for five minutes.
+GC storms above 600 major collections per minute across two consecutive windows
+of at least 10 seconds also retire warm workers. The pool admits at most one
+storm retirement per minute. Active cells and parked continuations drain through
+completion or their existing timeout or expiry before retirement; draining workers
+never return to the warm pool. The next cell acquires a healthy worker on demand.
+Diagnostic memory samples and stability logs expose the cumulative `workerLifecycle`
+counters. Prometheus exports
+`openclaw_worker_started_total{script="code-mode-node.worker.js"}` and
+`openclaw_worker_retired_total` with bounded retirement reasons: `eviction` for
+the warm-cache limit, `idle-expiry` for idle deadlines, `dispose` for explicit
+continuation or standalone cleanup, `shutdown` for host closure, `crash` for
+native worker errors, `gc-thrash` for the near-limit GC watchdog, and `gc-storm`
+for sustained storm containment. Memory pressure and runtime replacement retain
+`memory_pressure` and `rotation`.
+Retirement counts advance only after native exit; cleanup retries keep the first
+recorded reason. Start counts remain grouped by script, since a new worker has
+no retirement reason yet.
+
+Node Code Mode leaves garbage collection to V8 instead of requesting inspector
+full collections between cells or while a cell is suspended. Its heap limit,
+execution deadline, GC-pressure detection, and worker retirement still apply.
+Neither executor's setting caps total Gateway RSS. Worker overhead and host-side tool results also
 consume memory. A retained Node context can use more total host memory than a
 size-limited QuickJS snapshot. The shared limit of 64 suspended cells and
 reserved resume slots still applies; there is no separate global memory quota. See

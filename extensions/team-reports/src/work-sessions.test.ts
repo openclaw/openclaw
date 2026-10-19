@@ -56,7 +56,7 @@ describe("report work sessions", () => {
     expect(JSON.stringify(result)).not.toContain("agent:writer:private");
   });
 
-  it.each([{ ok: false }, { ok: true, payload: {} }])(
+  it.each([{ ok: false }])(
     "distinguishes failed discovery from an empty list (%j)",
     async (response) => {
       vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce(response);
@@ -72,10 +72,15 @@ describe("report work sessions", () => {
 
 describe("per-member current work", () => {
   beforeEach(() => vi.mocked(dispatchGatewayMethod).mockReset());
-  const profile = (id: string, login: string | null, mergedInto: string | null = null) => ({
+  const profile = (
+    id: string,
+    login: string | null,
+    mergedInto: string | null = null,
+    host?: string,
+  ) => ({
     id,
     mergedInto,
-    githubIdentity: login ? { login } : null,
+    githubIdentity: login ? { ...(host ? { host } : {}), login } : null,
   });
   const identities = (profiles: ReturnType<typeof profile>[]) => {
     vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload: { profiles } });
@@ -97,6 +102,11 @@ describe("per-member current work", () => {
 
   it.each([
     { profiles: [profile("name-only", null)], aliases: ["name-only"], reason: "unlinked" },
+    {
+      profiles: [profile("enterprise", "Alice", null, "ghe.example.test")],
+      aliases: ["alice"],
+      reason: "unlinked",
+    },
     { profiles: [profile("a", "Alice", "missing")], aliases: ["alice"], reason: "ambiguous" },
     {
       profiles: [profile("a", "Alice", "b"), profile("b", null, "a")],
@@ -113,6 +123,35 @@ describe("per-member current work", () => {
         reason,
       });
       expect(sessions).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "github.com"])(
+    "discovers only the public member work across a login collision (host=%s)",
+    async (host) => {
+      identities([
+        profile("enterprise", "Alice", null, "ghe.example.test"),
+        profile("public", "ALICE", null, host),
+      ]);
+      vi.mocked(dispatchGatewayMethod).mockResolvedValue({
+        ok: true,
+        payload: { sessions: [{ key: "agent:writer:public" }] },
+      });
+
+      const result = await listMemberWorkSessions(
+        [{ github: ["alice"] }],
+        createPersonWorkSessions(listWorkSessions),
+      );
+      expect(dispatchGatewayMethod).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({
+          profileRelation: { profileId: "public", relationship: "owned" },
+        }),
+      );
+      expect(result.get("alice")).toEqual({
+        available: true,
+        sessions: [{ key: "agent:writer:public" }],
+      });
     },
   );
 

@@ -4,13 +4,14 @@ import {
   isUnresolvedShellReference,
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
   resolveGatewayServiceDescription,
 } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
+import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
@@ -25,7 +26,6 @@ import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
   type GatewayServiceEnv,
-  type GatewayServiceEnvironmentValueSource,
   type GatewayServiceInstallArgs,
   type GatewayServiceManageArgs,
 } from "./service-types.js";
@@ -70,58 +70,6 @@ const SYSTEMD_GATEWAY_CREDENTIAL_KEYS = new Set([
 function restrictSystemdArtifactMode(mode: number | undefined): number {
   const ownerOnly = (mode ?? 0o600) & 0o700;
   return ownerOnly || 0o600;
-}
-
-function collectSystemdInlineManagedKeys(params: {
-  environment?: GatewayServiceEnv;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-}): Set<string> {
-  const keys = readManagedServiceEnvKeysFromEnvironment(params.environment);
-  for (const key of collectSystemdFileManagedKeys(params.environmentValueSources)) {
-    keys.delete(key);
-  }
-  for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
-    // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
-    if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
-      continue;
-    }
-    const key = normalizeServiceEnvKey(rawKey);
-    if (!key) {
-      continue;
-    }
-    const source = readEnvironmentValueSource(params.environmentValueSources, rawKey);
-    if (hasInlineEnvironmentSource(source) && !hasEnvironmentFileSource(source)) {
-      keys.add(key);
-    }
-  }
-  return keys;
-}
-
-function collectSystemdFileManagedKeys(
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>,
-): Set<string> {
-  return normalizeServiceEnvKeys(
-    Object.entries(environmentValueSources ?? {})
-      .filter(([, source]) => isEnvironmentFileOnlySource(source))
-      .map(([key]) => key),
-  );
-}
-
-function collectSystemdFileBackedEnvironment(params: {
-  environment?: GatewayServiceEnv;
-  fileManagedKeys: ReadonlySet<string>;
-}): Record<string, string> {
-  const environment: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(params.environment ?? {})) {
-    if (typeof rawValue !== "string" || !rawValue.trim()) {
-      continue;
-    }
-    const key = normalizeServiceEnvKey(rawKey);
-    if (key && params.fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
-      environment[rawKey] = rawValue;
-    }
-  }
-  return environment;
 }
 
 function removeSystemdInlineEnvironmentKeys(content: string, keys: ReadonlySet<string>): string {
@@ -206,12 +154,9 @@ export async function refreshLegacySystemdServiceMetadata(
   const deadlineAt = performance.now() + Math.max(1, timeoutMs);
   const remainingTimeoutMs = () => Math.max(1, deadlineAt - performance.now());
   const unitPath = resolveSystemdUnitPath(env);
-  const current = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const current = await fs
+    .readFile(unitPath, "utf8")
+    .catch((error: unknown) => ignoreMissingPath(error) ?? null);
   if (current === null || removeLegacyGatewayVersionMetadata(current) === current) {
     return false;
   }
@@ -222,7 +167,9 @@ export async function refreshLegacySystemdServiceMetadata(
     env,
     async (mutation) => {
       const snapshot = mutation.snapshots.get(unitPath) ?? null;
-      if (!snapshot) {
+      // Legacy unsafe modes need the full installer: back up and regenerate policy
+      // together instead of publishing the same unit with only its version removed.
+      if (!snapshot || snapshot.requiresRegeneration) {
         return false;
       }
       const previous = snapshot.contents.toString("utf8");
@@ -302,11 +249,29 @@ async function writeSystemdUnit(
             return typeof inlineValue !== "string" || inlineValue.trim() === value.trim();
           }),
         );
-        const inlineManagedKeys = collectSystemdInlineManagedKeys({
-          environment,
-          environmentValueSources,
-        });
-        const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
+        const inlineManagedKeys = readManagedServiceEnvKeysFromEnvironment(environment);
+        const fileManagedKeys = normalizeServiceEnvKeys(
+          Object.entries(environmentValueSources ?? {})
+            .filter(([, source]) => isEnvironmentFileOnlySource(source))
+            .map(([key]) => key),
+        );
+        for (const key of fileManagedKeys) {
+          inlineManagedKeys.delete(key);
+        }
+        for (const [rawKey, value] of Object.entries(environment ?? {})) {
+          // Clearing NODE_OPTIONS must also remove stale env-file flags that override inline values.
+          if (typeof value !== "string" || (!value.trim() && rawKey !== "NODE_OPTIONS")) {
+            continue;
+          }
+          const key = normalizeServiceEnvKey(rawKey);
+          if (!key) {
+            continue;
+          }
+          const source = readEnvironmentValueSource(environmentValueSources, rawKey);
+          if (hasInlineEnvironmentSource(source) && !hasEnvironmentFileSource(source)) {
+            inlineManagedKeys.add(key);
+          }
+        }
         const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
 
         const backupSource = existingUnit ?? existingBackup;
@@ -321,7 +286,16 @@ async function writeSystemdUnit(
             restrictSystemdArtifactMode(backupSource.mode),
           );
         }
-        const incoming = collectSystemdFileBackedEnvironment({ environment, fileManagedKeys });
+        const incoming: Record<string, string> = {};
+        for (const [rawKey, rawValue] of Object.entries(environment ?? {})) {
+          if (typeof rawValue !== "string" || !rawValue.trim()) {
+            continue;
+          }
+          const key = normalizeServiceEnvKey(rawKey);
+          if (key && fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
+            incoming[rawKey] = rawValue;
+          }
+        }
         for (const [key, value] of Object.entries(incoming)) {
           if (/[\r\n]/.test(value)) {
             throw new Error(
@@ -450,7 +424,10 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   let existingFile: Awaited<ReturnType<typeof readSystemdEnvironmentFile>>;
   try {
     existingFile = await readSystemdEnvironmentFile(envFilePath);
-  } catch {
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
     return;
   }
   const remaining = Object.fromEntries(
@@ -546,7 +523,12 @@ export async function installSystemdService(
   const { unitPath, backedUp } = await writeSystemdUnit(args, load);
   if (
     args.warn &&
-    hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))
+    hasGatewayServiceLauncherOverride(
+      await readSystemdServiceExecStart(args.env).catch((error: unknown) => {
+        assertServiceInspectionFallbackAllowed(error);
+        return null;
+      }),
+    )
   ) {
     args.warn(
       "Systemd drop-in overrides the managed service command or working directory; inspect, update, or remove the drop-in because reinstalling the base unit does not change the effective launcher.",
@@ -575,14 +557,13 @@ export async function uninstallSystemdService({
     }
     // Unit file was already absent; still clean generated node env state below.
   }
-  await fs.unlink(`${unitPath}.bak`).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  });
+  await fs.unlink(`${unitPath}.bak`).catch(ignoreMissingPath);
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
+    // The manager keeps a deleted unit loaded until it reloads. A retry after a
+    // failed reload finds no unit file and skips this; accepted, rare.
+    await reloadSystemdUserManager(env);
   } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }

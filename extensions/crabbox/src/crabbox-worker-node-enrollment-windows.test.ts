@@ -13,13 +13,10 @@ const leaseId = "cbx_windows_replay_fixture";
 const stateDir = path.win32.join(home, ".openclaw", "cloud-workers", leaseId);
 const runtimeDir = path.win32.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
 const cli = path.win32.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
-const launcher = path.win32.join(
-  programFiles,
-  "Crabbox",
-  "bin",
-  "Start-CrabboxDetachedProcess.ps1",
-);
+const launcher = path.win32.join(programFiles, "Crabbox/bin/Start-CrabboxDetachedProcess.ps1");
 const startTime = "2026-09-09T12:00:00.1234567Z";
+const session = { sessionId: 2, userSid: "S-1-5-21-1001" };
+const stateFile = (name: string) => path.win32.join(stateDir, name);
 const replayError =
   "Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker";
 
@@ -37,6 +34,22 @@ type ReplayOptions = {
 };
 
 async function replay(options: ReplayOptions = {}) {
+  const interruptedPath = options.interrupted
+    ? stateFile(options.interrupted === "receipt-only" ? "node-launch.json" : "runtime")
+    : undefined;
+  const identity = { pid: 123, startTime, ...(options.desktop ? session : {}) };
+  const files = new Map([
+    [
+      path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
+    ],
+    [stateFile("node.pid"), "123\n"],
+    [
+      stateFile("node-launch.json"),
+      options.recordOutput ??
+        JSON.stringify({ ...identity, runtimeDir, stateDir, cli, ...options.launchRecord }),
+    ],
+  ]);
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId,
     desktop: options.desktop,
@@ -70,56 +83,29 @@ async function replay(options: ReplayOptions = {}) {
     symlinkSync: vi.fn(),
     rmSync: vi.fn(),
     existsSync: (file: string) =>
-      (file === path.win32.join(stateDir, "node.pid") && !options.interrupted) ||
+      (file === stateFile("node.pid") && !options.interrupted) ||
       file === runtimeDir ||
       (file === launcher && !options.missingLauncher),
     lstatSync: (file: string) => {
       if (file === runtimeDir) {
         return { isDirectory: () => true };
       }
-      if (
-        (file === path.win32.join(stateDir, "runtime") &&
-          options.interrupted &&
-          options.interrupted !== "receipt-only") ||
-        (file === path.win32.join(stateDir, "node-launch.json") &&
-          options.interrupted === "receipt-only")
-      ) {
-        return { isSymbolicLink: () => file === path.win32.join(stateDir, "runtime") };
+      if (file === interruptedPath) {
+        return { isSymbolicLink: () => file === stateFile("runtime") };
       }
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
     },
     readFileSync: (file: string) => {
-      if (file === path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json")) {
-        return JSON.stringify({ name: "openclaw", version: "2026.8.1" });
+      const content = files.get(file);
+      if (content === undefined) {
+        throw new Error(`Unexpected file read: ${file}`);
       }
-      if (file === path.win32.join(stateDir, "node.pid")) {
-        return "123\n";
-      }
-      if (file === path.win32.join(stateDir, "node-launch.json")) {
-        return (
-          options.recordOutput ??
-          JSON.stringify({
-            pid: 123,
-            startTime,
-            runtimeDir,
-            stateDir,
-            cli,
-            ...(options.desktop ? { sessionId: 2, userSid: "S-1-5-21-1001" } : {}),
-            ...options.launchRecord,
-          })
-        );
-      }
-      throw new Error(`Unexpected file read: ${file}`);
+      return content;
     },
-    realpathSync: (file: string) => {
-      if (options.canonicalizePaths && file.toLowerCase() === node.toLowerCase()) {
-        return node;
-      }
-      if (options.canonicalizePaths && file.toLowerCase() === home.toLowerCase()) {
-        return home;
-      }
-      return file;
-    },
+    realpathSync: (file: string) =>
+      options.canonicalizePaths
+        ? ([node, home].find((canonical) => canonical.toLowerCase() === file.toLowerCase()) ?? file)
+        : file,
   };
   const spawn = vi.fn(() => {
     throw new Error("Replay must not launch another node");
@@ -133,9 +119,7 @@ async function replay(options: ReplayOptions = {}) {
       expect(processFixture.env).not.toHaveProperty("CRABBOX_WORKER_SETUP_CODE");
       return {
         status: 0,
-        stdout: JSON.stringify(
-          options.currentSession ?? { sessionId: 2, userSid: "S-1-5-21-1001" },
-        ),
+        stdout: JSON.stringify(options.currentSession ?? session),
       };
     }
     expect(binary).toBe("powershell.exe");
@@ -151,11 +135,9 @@ async function replay(options: ReplayOptions = {}) {
       stdout:
         options.processOutput ??
         JSON.stringify({
-          pid: 123,
-          startTime,
+          ...identity,
           executablePath: node,
           commandLine: `"${node}" "${cli}" connect --ephemeral`,
-          ...(options.desktop ? { sessionId: 2, userSid: "S-1-5-21-1001" } : {}),
           ...options.processEntry,
         }),
     };
@@ -163,26 +145,18 @@ async function replay(options: ReplayOptions = {}) {
   const encoded = setup.command.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/u)?.[1];
   expect(encoded).toBeDefined();
   const script = Buffer.from(encoded!, "base64").toString("utf8");
+  const modules: Record<string, unknown> = {
+    "node:fs": fs,
+    "node:path": path.win32,
+    "node:os": {
+      homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home),
+      tmpdir: () => path.win32.join(home, "Temp"),
+    },
+    "node:child_process": { spawn, spawnSync },
+  };
   await runInNewContext(script, {
     Buffer,
-    require: (name: string) => {
-      if (name === "node:fs") {
-        return fs;
-      }
-      if (name === "node:path") {
-        return path.win32;
-      }
-      if (name === "node:os") {
-        return {
-          homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home),
-          tmpdir: () => path.win32.join(home, "Temp"),
-        };
-      }
-      if (name === "node:child_process") {
-        return { spawn, spawnSync };
-      }
-      return require(name);
-    },
+    require: (name: string) => (Object.hasOwn(modules, name) ? modules[name] : require(name)),
     process: processFixture,
     console: { error: (line: string) => output.push(line) },
   });
@@ -271,11 +245,8 @@ describe("native Windows desktop enrollment replay", () => {
     { name: "a different process account", processEntry: { userSid: "S-1-5-21-2001" } },
     { name: "stale recorded session", launchRecord: { sessionId: 3 } },
     { name: "stale recorded account", launchRecord: { userSid: "S-1-5-21-2001" } },
-    { name: "changed active session", currentSession: { sessionId: 3, userSid: "S-1-5-21-1001" } },
-    {
-      name: "failed active-session lookup",
-      currentSession: { sessionId: 0, userSid: "S-1-5-21-1001" },
-    },
+    { name: "changed active session", currentSession: { ...session, sessionId: 3 } },
+    { name: "failed active-session lookup", currentSession: { ...session, sessionId: 0 } },
   ])("rejects $name", async ({ name: _name, ...options }) => {
     expect(await replay({ desktop: true, ...options })).toMatchObject({
       code: 1,

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
+  openUrlPrivately: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   resolveGatewayPort: vi.fn(),
@@ -28,6 +29,11 @@ vi.mock("../onboard-helpers.js", () => ({
 
 vi.mock("../../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
+}));
+
+vi.mock("../../infra/browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/browser-handoff.js")>()),
+  openUrlPrivately: mocks.openUrlPrivately,
 }));
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
@@ -206,7 +212,7 @@ describe("dashboardCommand --json", () => {
     );
   });
 
-  it("prints one failure object and exits non-zero when not ready", async () => {
+  it("prints JSON and actionable stderr before exiting when not ready", async () => {
     mocks.ensureDashboardGatewayReady.mockResolvedValue({
       ready: false,
       reason: "Gateway is not running.",
@@ -224,11 +230,18 @@ describe("dashboardCommand --json", () => {
     );
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "Gateway is not running." },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "Gateway is not running." },
+        reason: "Gateway is not running.",
+      },
       0,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway is not running.\nRun `openclaw gateway status --deep` for details, then retry `openclaw dashboard --json`.",
+    );
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
@@ -272,7 +285,11 @@ describe("dashboardCommand --json", () => {
     );
     expect(runtime.writeJson).toHaveBeenCalledOnce();
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "Control UI assets are still preparing." },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "Control UI assets are still preparing." },
+        reason: "Control UI assets are still preparing.",
+      },
       0,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -288,7 +305,11 @@ describe("dashboardCommand --json", () => {
     await dashboardCommand(runtime, { json: true });
 
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "Gateway TLS certificate fingerprint mismatch." },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "Gateway TLS certificate fingerprint mismatch." },
+        reason: "Gateway TLS certificate fingerprint mismatch.",
+      },
       0,
     );
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
@@ -300,9 +321,38 @@ describe("dashboardCommand --json", () => {
     await dashboardCommand(runtime, { json: true });
 
     expect(runtime.writeJson).toHaveBeenCalledWith(
-      { ok: false, reason: "state store unavailable" },
+      {
+        ok: false,
+        error: { type: "cli_error", message: "state store unavailable" },
+        reason: "state store unavailable",
+      },
       0,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps the shared error envelope when loopback ownership cannot be verified", async () => {
+    mocks.inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [
+        { pid: 4242, commandLine: "openclaw-gateway", address: "10.0.0.5:18789" },
+        { pid: 4343, commandLine: "other-process", address: "127.0.0.1:18789" },
+      ],
+      hints: [],
+    });
+
+    await dashboardCommand(runtime, { json: true });
+
+    const reason = "Dashboard loopback listener could not be verified as the configured Gateway.";
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      { ok: false, error: { type: "cli_error", message: reason }, reason },
+      0,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.waitForControlUiDocument).not.toHaveBeenCalled();
+    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
   });
 });

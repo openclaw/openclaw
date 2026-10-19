@@ -1,7 +1,6 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
@@ -28,6 +27,7 @@ type ChatHistoryLoadState =
       connectionEpoch: number;
       key: string;
       sessions: ChatHistorySessions;
+      request: Promise<ObservedChatHistoryResult | undefined>;
       promise: Promise<ObservedChatHistoryResult | undefined>;
       refresh?: {
         promise: Promise<ObservedChatHistoryResult | undefined>;
@@ -64,23 +64,23 @@ type ChatHistoryPaneRequests = {
       agentId?: string;
     }
   >;
-  pendingSubscriptionReleases: Set<SessionMessageSubscription>;
   historyLoad: ChatHistoryLoadState;
-  acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
+  acceptedHistory: Extract<ChatHistoryLoadState, { phase: "committed" }> | undefined;
   initialSnapshotHydration?: InitialChatSnapshotHydration;
 };
 
 export type InitialChatSnapshotHydration = {
   sessionKey: string;
-  startedBeforeReady: boolean;
+  connected: boolean;
   promise: Promise<void>;
-  readyAt?: number;
   wait?: Promise<boolean>;
   complete?: () => void;
   cancel?: () => void;
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
+// Bound the initial data read so an unavailable cache cannot stall history requests.
+const INITIAL_CHAT_SNAPSHOT_WAIT_MS = 2_000;
 
 export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   let requests = chatHistoryPaneRequests.get(owner);
@@ -89,9 +89,9 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
       historyVersion: 0,
       branchVersion: 0,
       subscriptionGeneration: 0,
-      pendingSubscriptionReleases: new Set(),
       syncRetries: new Map(),
       historyLoad: { phase: "idle" },
+      acceptedHistory: undefined,
     };
     chatHistoryPaneRequests.set(owner, requests);
   }
@@ -143,8 +143,8 @@ export function synchronizeInitialChatSnapshotConnection(state: ChatState): void
     return;
   }
   if (state.connected) {
-    hydration.readyAt ??= Date.now();
-  } else if (hydration.readyAt !== undefined) {
+    hydration.connected = true;
+  } else if (hydration.connected) {
     retireInitialChatSnapshot(state);
   }
 }
@@ -155,38 +155,26 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
   if (!hydration) {
     return undefined;
   }
-  if (
-    !hydration.startedBeforeReady ||
-    !areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)
-  ) {
+  if (!areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)) {
     retireInitialChatSnapshot(state);
     return undefined;
   }
   if (hydration.wait) {
     return hydration.wait;
   }
-  const readyAt = (hydration.readyAt ??= Date.now());
-  // The connection owns the budget; mounting offline must not spend it.
-  const remaining = Math.max(0, 300 - (Date.now() - readyAt));
-  if (remaining === 0) {
-    retireInitialChatSnapshot(state);
-    return undefined;
-  }
   hydration.wait = new Promise<boolean>((resolve) => {
     const finish = (current: boolean) => {
-      clearTimeout(timer);
+      clearTimeout(timeout);
       if (requests.initialSnapshotHydration === hydration) {
         delete requests.initialSnapshotHydration;
       }
       resolve(current);
     };
-    hydration.complete = () => finish(true);
+    const timeout = setTimeout(() => finish(true), INITIAL_CHAT_SNAPSHOT_WAIT_MS);
+    const complete = () => finish(true);
+    hydration.complete = complete;
     hydration.cancel = () => finish(false);
-    const timer = setTimeout(() => finish(true), remaining);
-    void hydration.promise.then(
-      () => finish(true),
-      () => finish(true),
-    );
+    void hydration.promise.then(complete, complete);
   });
   return hydration.wait;
 }
@@ -239,7 +227,6 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
       startup: load.startup,
     };
     state.chatLoading = true;
-    state.requestUpdate?.();
   }
   return requests.historyLoad;
 }
@@ -358,7 +345,8 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
-  delete requests.acceptedHistory;
+  // Keep the presentation accessor installed when clearing accepted history.
+  requests.acceptedHistory = undefined;
   setChatHistoryLoad(state, { phase: "idle" });
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });
@@ -368,14 +356,10 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
 }
 
 export function setChatError(
-  state: { lastError?: string | null; chatError?: string | null; requestUpdate?: () => void },
+  state: { lastError?: string | null; chatError?: string | null },
   error: string | null,
-  requestUpdate = false,
 ) {
   const message = error === null ? null : formatUiError(error);
   state.lastError = message;
   state.chatError = message;
-  if (requestUpdate) {
-    state.requestUpdate?.();
-  }
 }

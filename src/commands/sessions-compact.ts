@@ -1,4 +1,6 @@
 // Failed compaction must exit nonzero so automation cannot mistake a silent no-op for success.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { createCompactionNoticePayload } from "../auto-reply/reply/compaction-notice.js";
 import { rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,6 +35,7 @@ type SessionsCompactResult = {
       signal?: string;
       pending?: boolean;
       completed?: boolean;
+      qualityDegraded?: true;
     };
   };
 };
@@ -40,13 +43,13 @@ type SessionsCompactResult = {
 type SessionsCompactRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 function describeCompaction(result: SessionsCompactResult, fallbackKey: string): string {
-  const sessionKey = result.key ?? fallbackKey;
+  const sessionKey = sanitizeTerminalText(result.key ?? fallbackKey);
   if (!result.compacted) {
     const details = result.result?.details;
     if (details?.pending === true) {
       return `Compaction started for session ${sessionKey} (pending; completion is reported asynchronously by the backend).`;
     }
-    const reason = result.reason ? ` (${result.reason})` : "";
+    const reason = result.reason ? ` (${sanitizeTerminalText(result.reason)})` : "";
     return `No compaction needed for session ${sessionKey}${reason}.`;
   }
   const before = result.result?.tokensBefore;
@@ -57,7 +60,11 @@ function describeCompaction(result: SessionsCompactResult, fallbackKey: string):
   } else if (typeof result.kept === "number") {
     detail = ` (kept ${result.kept} lines)`;
   }
-  return `Compacted session ${sessionKey}${detail}.`;
+  const notice =
+    result.result?.details?.qualityDegraded === true
+      ? `\n${createCompactionNoticePayload({ phase: "degraded" }).text}`
+      : "";
+  return `Compacted session ${sessionKey}${detail}.${notice}`;
 }
 
 export async function sessionsCompactCommand(
@@ -94,7 +101,7 @@ export async function sessionsCompactCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, { ok: false, key: opts.key, error: message });
     } else {
-      runtime.error(`Compaction failed: ${message}`);
+      runtime.error(`Compaction failed: ${sanitizeTerminalText(message)}`);
     }
     runtime.exit(1);
     return;
@@ -113,8 +120,8 @@ export async function sessionsCompactCommand(
   }
 
   if (failed) {
-    const sessionKey = result?.key ?? opts.key;
-    const reason = result?.reason ? `: ${result.reason}` : "";
+    const sessionKey = sanitizeTerminalText(result?.key ?? opts.key);
+    const reason = result?.reason ? `: ${sanitizeTerminalText(result.reason)}` : "";
     runtime.error(`Compaction failed for session ${sessionKey}${reason}.`);
     runtime.exit(1);
     return;

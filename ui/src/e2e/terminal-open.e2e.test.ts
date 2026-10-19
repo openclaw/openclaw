@@ -1,14 +1,12 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectRequestCount } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal open",
@@ -92,20 +90,7 @@ suite.define(() => {
             exitCode: 0,
             signal: null,
           });
-          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-            const dir = createControlUiE2eArtifactDir(`terminal-logout-${dock}`);
-            const region = page.locator(".sidebar-region").first();
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              region,
-              [page.locator(".chat-side-panel-toggle")],
-              { animations: "disabled" },
-            );
-            await writeFile(
-              path.join(dir, keepFiles ? "other-panel.png" : "last-terminal.png"),
-              frame.png,
-            );
-          }
+
           await expect.poll(() => panel.count()).toBe(0);
           const side = page.locator(".sidebar-region__right-runtime .side-panel");
           await expect.poll(() => side.isVisible()).toBe(keepFiles);
@@ -181,9 +166,9 @@ suite.define(() => {
           .toBe("light");
         expect(await canvas.getAttribute("data-theme-sync-identity")).toBe("original");
 
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await expect.poll(() => canvas.isVisible()).toBe(false);
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await canvas.waitFor({ state: "visible" });
         await expect
           .poll(() => panel.evaluate((element) => Reflect.get(element, "themeMode")))
@@ -228,7 +213,7 @@ suite.define(() => {
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
 
       await retry.click();
-      await expect.poll(async () => (await gateway.getRequests("terminal.open")).length).toBe(2);
+      await expectRequestCount(gateway, "terminal.open", 2);
       await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });

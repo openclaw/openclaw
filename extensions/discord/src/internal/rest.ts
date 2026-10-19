@@ -1,4 +1,3 @@
-import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
 import {
   captureChannelReadAuthority,
@@ -43,9 +42,11 @@ type RequestDispatchData = {
   effect: ReturnType<typeof captureEffectAuthority>;
 };
 
+export const DISCORD_REST_TIMEOUT_MS = 15_000;
+
 const defaultOptions = {
   baseUrl: "https://discord.com/api",
-  timeout: 15_000,
+  timeout: DISCORD_REST_TIMEOUT_MS,
   queueRequests: true,
 };
 
@@ -102,7 +103,6 @@ export class RequestClient {
   protected token: string;
   protected customFetch: DiscordEndpointRuntime["fetch"] | undefined;
   private readonly guardedEndpoint: boolean;
-  protected requestControllers = new Set<AbortController>();
   private scheduler: RestScheduler<RequestDispatchData>;
 
   constructor(token: string, options?: RequestClientOptions) {
@@ -203,7 +203,6 @@ export class RequestClient {
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;
-    this.requestControllers.add(controller);
     try {
       assertCurrent?.();
       const init = { method, headers, body, signal };
@@ -216,7 +215,14 @@ export class RequestClient {
       const response = this.guardedEndpoint
         ? await effect.run(request)
         : await effect.initiate(request);
-      const text = await readResponseBodyText(response, this.options.timeout);
+      const text = await readResponseBodyText(response, this.options.timeout).catch(
+        (error: unknown) => {
+          if (response.ok) {
+            throw error;
+          }
+          return "";
+        },
+      );
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {
@@ -235,14 +241,8 @@ export class RequestClient {
         throw new DiscordError(response, parsed);
       }
       return parsed;
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error(`Discord request failed: ${inspect(error)}`, { cause: error });
     } finally {
       clearTimeout(timeout);
-      this.requestControllers.delete(controller);
     }
   }
 
@@ -252,14 +252,6 @@ export class RequestClient {
 
   get queueSize(): number {
     return this.scheduler.queueSize;
-  }
-
-  abortAllRequests(): void {
-    this.scheduler.abortPending();
-    for (const controller of this.requestControllers) {
-      controller.abort();
-    }
-    this.requestControllers.clear();
   }
 }
 

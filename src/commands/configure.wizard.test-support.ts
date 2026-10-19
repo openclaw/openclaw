@@ -6,6 +6,8 @@ import { committedConfigFiles } from "./committed-config.test-support.js";
 const wizardTestMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn<(config: OpenClawConfig) => Promise<void>>();
   return {
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    isTerminalInteractive: vi.fn(),
     clackIntro: vi.fn(),
     clackOutro: vi.fn(),
     clackSelect: vi.fn(),
@@ -15,6 +17,7 @@ const wizardTestMocks = vi.hoisted(() => {
     resolveSearchProviderOptions: vi.fn(),
     resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
+    runMemorySetupFlow: vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(),
     setupPluginConfig:
       vi.fn<typeof import("../wizard/setup.plugin-config.js").configurePluginConfig>(),
     setupSkills: vi.fn<typeof import("./onboard-skills.js").setupSkills>(),
@@ -63,6 +66,19 @@ const wizardTestMocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime },
+  };
+});
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: wizardTestMocks.isTerminalInteractive,
+}));
+
 vi.mock("@clack/prompts", () => ({
   intro: wizardTestMocks.clackIntro,
   outro: wizardTestMocks.clackOutro,
@@ -70,6 +86,11 @@ vi.mock("@clack/prompts", () => ({
   text: wizardTestMocks.clackText,
   confirm: wizardTestMocks.clackConfirm,
   password: wizardTestMocks.clackPassword,
+}));
+
+vi.mock("../flows/memory-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/memory-setup.js")>()),
+  runMemorySetupFlow: wizardTestMocks.runMemorySetupFlow,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -230,6 +251,7 @@ const { runConfigureWizard } = await import("./configure.wizard.js");
 export { runConfigureWizard, wizardTestMocks };
 
 export function setupWizardTestDefaults() {
+  wizardTestMocks.isTerminalInteractive.mockReturnValue(true);
   committedConfigFiles.clear();
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
@@ -266,15 +288,8 @@ export const EMPTY_CONFIG_SNAPSHOT = {
   issues: [],
 };
 
-export function createWizardTestRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
+  wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });
@@ -319,30 +334,4 @@ export function queueWizardTestPrompts(params: {
   wizardTestMocks.clackText.mockResolvedValue(params.text ?? "");
   wizardTestMocks.clackIntro.mockResolvedValue(undefined);
   wizardTestMocks.clackOutro.mockResolvedValue(undefined);
-}
-
-export function createEnabledWebSearchConfig(
-  provider: string,
-  pluginEntry: Record<string, unknown>,
-) {
-  return (cfg: OpenClawConfig) => ({
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      web: {
-        ...cfg.tools?.web,
-        search: {
-          provider,
-          enabled: true,
-        },
-      },
-    },
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        [provider]: pluginEntry,
-      },
-    },
-  });
 }

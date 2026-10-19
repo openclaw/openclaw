@@ -1,42 +1,74 @@
 import type { WorkerConfig } from "./config.js";
 import type { ModelCache } from "./model-loader.js";
 import { UnsupportedInputError } from "./models/types.js";
-import { OnnxWorkerError, parseWorkerRequest, type WorkerReply } from "./protocol.js";
+import { OnnxWorkerError, type WorkerReply, type WorkerRequest } from "./protocol.js";
 
-let config: WorkerConfig | undefined;
+let config: WorkerConfig;
 let cache: ModelCache | undefined;
-let busy = false;
+let stopping = false;
+let finalExitCode = 0;
+let activeTask: Promise<void> | undefined;
+
+function stop(code: number): void {
+  if (code !== 0) {
+    finalExitCode = code;
+  }
+  if (stopping) {
+    return;
+  }
+  stopping = true;
+  process.off("message", onMessage);
+  // Native inference is synchronous inside its async API. Let admitted work
+  // settle before releasing its sessions; the parent owns forced cancellation.
+  void Promise.resolve(activeTask)
+    .catch(() => undefined)
+    .then(() => cache?.close())
+    .catch(() => {
+      finalExitCode = 1;
+    })
+    .finally(() => {
+      if (process.connected && typeof process.disconnect === "function") {
+        process.disconnect();
+      }
+      process.exitCode = finalExitCode;
+    });
+}
 
 function send(reply: WorkerReply): void {
+  if (stopping) {
+    return;
+  }
   if (!process.connected || !process.send) {
-    process.exit(1);
+    stop(1);
+    return;
   }
   process.send(reply, (error) => {
     if (error) {
-      process.exit(1);
+      stop(1);
     }
   });
 }
 
-process.on("disconnect", () => process.exit(0));
-process.on("message", (value: unknown) => {
-  void handle(value).catch(() => process.exit(1));
-});
-
-async function handle(value: unknown): Promise<void> {
-  const request = parseWorkerRequest(value);
-  if (request.kind === "init") {
-    if (config || busy) {
-      throw new Error("Already initialized");
-    }
-    config = request.config;
-    send({ kind: "ready" });
+function onMessage(request: WorkerRequest): void {
+  if (stopping) {
     return;
   }
-  if (!config || busy) {
-    throw new Error("Invalid worker admission");
+  if (request.kind === "init") {
+    // The private parent sends initialization before operations on the same FIFO IPC channel.
+    config = request.config;
+    return;
   }
-  busy = true;
+  activeTask = handle(request);
+  void activeTask
+    .catch(() => stop(1))
+    .finally(() => {
+      activeTask = undefined;
+    });
+}
+process.on("disconnect", () => stop(0));
+process.on("message", onMessage);
+
+async function handle(request: Exclude<WorkerRequest, { kind: "init" }>): Promise<void> {
   try {
     if (!cache) {
       let implementation;
@@ -49,21 +81,26 @@ async function handle(value: unknown): Promise<void> {
     }
     if (request.kind === "warm") {
       for (const model of request.models) {
+        if (stopping) {
+          return;
+        }
         await cache.get(model);
       }
-      send({ kind: "warmed", id: request.id });
+      send({ kind: "warmed" });
     } else {
       const model = await cache.get(request.model);
       const results = [];
       for (const input of request.inputs) {
+        if (stopping) {
+          return;
+        }
         results.push(await model.classify(input));
       }
-      send({ kind: "results", id: request.id, results });
+      send({ kind: "results", results });
     }
   } catch (error) {
     send({
       kind: "error",
-      id: request.id,
       code:
         error instanceof UnsupportedInputError
           ? "unsupported-input"
@@ -71,7 +108,5 @@ async function handle(value: unknown): Promise<void> {
             ? error.code
             : "runtime",
     });
-  } finally {
-    busy = false;
   }
 }

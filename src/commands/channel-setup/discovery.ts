@@ -6,46 +6,20 @@ import { normalizeChannelMeta } from "../../channels/plugins/meta-normalization.
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../../channels/plugins/types.public.js";
 import { isStaticallyChannelConfigured } from "../../config/channel-configured-shared.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
-import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
+  listManifestInstalledChannelIds,
   listSetupDiscoveryChannelPluginCatalogEntries,
   listTrustedChannelPluginCatalogEntries,
 } from "./trusted-catalog.js";
 
-/** Return true when channel metadata should appear in setup/onboarding choices. */
 export function shouldShowChannelInSetup(meta: Pick<ChannelMeta, "exposure">): boolean {
   return isChannelVisibleInSetup(meta);
 }
 
 function resolveWorkspaceDir(cfg: OpenClawConfig, workspaceDir?: string): string | undefined {
   return workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-}
-
-/** List channel ids contributed by currently installed manifest-backed plugins. */
-export function listManifestInstalledChannelIds(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  index?: InstalledPluginIndex;
-}): Set<ChannelChoice> {
-  const resolvedConfig = applyPluginAutoEnable({
-    config: params.cfg,
-    env: params.env ?? process.env,
-  }).config;
-  const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
-  return new Set(
-    listPluginContributionIds({
-      contribution: "channels",
-      config: resolvedConfig,
-      workspaceDir,
-      env: params.env ?? process.env,
-      ...(params.index ? { index: params.index } : {}),
-    }),
-  );
 }
 
 /** Return true when a trusted catalog channel is already installed through plugin manifests. */
@@ -102,16 +76,9 @@ export function resolveChannelSetupEntries(params: {
   const installedCatalogEntries = catalogEntries(installedCatalogEntriesSource, true);
   const installableCatalogEntries = catalogEntries(installableCatalogEntriesSource, false);
 
-  const metaById = new Map<string, ChannelMeta>();
-  for (const meta of listChatChannels()) {
-    metaById.set(
-      meta.id,
-      normalizeChannelMeta({
-        id: meta.id,
-        meta,
-      }),
-    );
-  }
+  const metaById = new Map<string, ChannelMeta>(
+    listChatChannels().map((meta) => [meta.id, normalizeChannelMeta({ id: meta.id, meta })]),
+  );
   for (const plugin of params.installedPlugins) {
     metaById.set(
       plugin.id,

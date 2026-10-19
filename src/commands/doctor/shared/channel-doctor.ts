@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   getBundledChannelPlugin,
@@ -27,27 +28,6 @@ type ChannelDoctorLookupContext = {
   env?: NodeJS.ProcessEnv;
 };
 
-const channelDoctorFunctionKeys = new Set<keyof ChannelDoctorAdapter>([
-  "normalizeCompatibilityConfig",
-  "collectPreviewWarnings",
-  "collectMutableAllowlistWarnings",
-  "repairConfig",
-  "runConfigSequence",
-  "cleanStaleConfig",
-  "collectEmptyAllowlistExtraWarnings",
-  "shouldSkipDefaultEmptyGroupAllowlistWarning",
-]);
-
-const channelDoctorBooleanKeys = new Set<keyof ChannelDoctorAdapter>([
-  "groupAllowFromFallbackToAllowFrom",
-  "warnOnEmptyGroupSenderAllowlist",
-]);
-
-const channelDoctorEnumValues: Partial<Record<keyof ChannelDoctorAdapter, ReadonlySet<string>>> = {
-  dmAllowFromMode: new Set(["topOnly", "topOrNested", "nestedOnly"]),
-  groupModel: new Set(["sender", "route", "hybrid"]),
-};
-
 export type ChannelDoctorEmptyAllowlistPolicyHooks = {
   extraWarningsForAccount: NonNullable<ChannelDoctorAdapter["collectEmptyAllowlistExtraWarnings"]>;
 } & Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">>;
@@ -58,7 +38,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
     skipWhenPluginsDisabled: true,
     excludeExplicitlyDisabled: true,
     sort: "codepoint",
-  }).filter((channelId) => !isChannelDoctorBlockedByConfig(channelId, cfg));
+  });
 }
 
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {
@@ -69,11 +49,7 @@ function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig):
   if (cfg.plugins?.entries?.[normalizedChannelId]?.enabled === false) {
     return true;
   }
-  const channelEntry = (cfg.channels as Record<string, unknown> | undefined)?.[normalizedChannelId];
-  return (
-    Boolean(channelEntry && typeof channelEntry === "object" && !Array.isArray(channelEntry)) &&
-    (channelEntry as { enabled?: unknown }).enabled === false
-  );
+  return asOptionalRecord(cfg.channels?.[normalizedChannelId])?.enabled === false;
 }
 
 function safelyResolveChannelPlugin<T>(id: string, resolve: (id: string) => T): T | undefined {
@@ -103,41 +79,19 @@ function listReadOnlyChannelDoctorsById(
 function mergeDoctorAdapters(
   adapters: Array<ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorAdapter | undefined {
-  const merged: Partial<Record<keyof ChannelDoctorAdapter, unknown>> = {};
+  const merged: ChannelDoctorAdapter = {};
   for (const adapter of adapters) {
     if (!adapter) {
       continue;
     }
-    for (const [key, value] of Object.entries(adapter) as Array<
-      [keyof ChannelDoctorAdapter, unknown]
-    >) {
+    for (const [key, value] of Object.entries(adapter)) {
       // Earlier adapters win so read-only installed plugins can override bundled fallbacks.
-      if (merged[key] === undefined && isValidChannelDoctorAdapterValue(key, value)) {
-        merged[key] = value;
+      if (value !== undefined && !(key in merged)) {
+        Object.assign(merged, { [key]: value });
       }
     }
   }
-  return Object.keys(merged).length > 0 ? (merged as ChannelDoctorAdapter) : undefined;
-}
-
-function isValidChannelDoctorAdapterValue(
-  key: keyof ChannelDoctorAdapter,
-  value: unknown,
-): boolean {
-  if (channelDoctorFunctionKeys.has(key)) {
-    return typeof value === "function";
-  }
-  if (channelDoctorBooleanKeys.has(key)) {
-    return typeof value === "boolean";
-  }
-  const enumValues = channelDoctorEnumValues[key];
-  if (enumValues) {
-    return typeof value === "string" && enumValues.has(value);
-  }
-  if (key === "legacyConfigRules") {
-    return Array.isArray(value);
-  }
-  return false;
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function listChannelDoctorEntries(
@@ -276,7 +230,6 @@ export function collectChannelDoctorCompatibilityMutations(
   return mutation.changes.length || mutation.warnings?.length ? [mutation] : [];
 }
 
-/** Collect stale channel config cleanup mutations from configured channel doctor adapters. */
 export async function collectChannelDoctorStaleConfigMutations(
   cfg: OpenClawConfig,
   options: { env?: NodeJS.ProcessEnv; channelIds?: readonly string[] } = {},
@@ -288,7 +241,6 @@ export async function collectChannelDoctorStaleConfigMutations(
   );
 }
 
-/** Collect channel-specific doctor preview warnings for configured channels. */
 export async function collectChannelDoctorPreviewWarnings(
   params: Parameters<NonNullable<ChannelDoctorAdapter["collectPreviewWarnings"]>>[0],
 ): Promise<string[]> {

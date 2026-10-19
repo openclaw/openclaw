@@ -30,7 +30,7 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
   const configuredEnabled = compactionCfg?.enabled;
 
-  const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
+  const configuredKeepRecentTokens = compactionCfg?.keepRecentTokens;
   const contextTokenBudget = toPositiveInt(params.contextTokenBudget);
   const requestedReserveTokens = Math.max(
     currentReserveTokens,
@@ -71,7 +71,7 @@ export function resolveEffectiveCompactionMode(cfg?: OpenClawConfig): AgentCompa
   if (compaction?.provider) {
     return "safeguard";
   }
-  return compaction?.mode === "safeguard" ? "safeguard" : "default";
+  return compaction?.mode ?? "default";
 }
 
 // z.ai-style silent overflow can compact a successful turn before our provider call (#75799).
@@ -82,18 +82,14 @@ export function isSilentOverflowProneModel(model: {
   modelId?: string | null;
   baseUrl?: string | null;
 }): boolean {
-  const provider = normalizeProviderId(typeof model.provider === "string" ? model.provider : "");
+  const provider = normalizeProviderId(model.provider ?? "");
   if (provider === "zai") {
     return true;
   }
-  if (
-    typeof model.baseUrl === "string" &&
-    model.baseUrl.length > 0 &&
-    resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native"
-  ) {
+  if (model.baseUrl && resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native") {
     return true;
   }
-  const normalized = typeof model.modelId === "string" ? model.modelId.toLowerCase() : "";
+  const normalized = model.modelId?.toLowerCase() ?? "";
   return (
     normalized.startsWith("z-ai/") ||
     normalized.startsWith("openrouter/z-ai/") ||

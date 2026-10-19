@@ -21,7 +21,6 @@
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface));
-  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
 
@@ -88,12 +87,12 @@
 
 .chat-queue__item {
   --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+  --chat-queue-leading-columns: var(--chat-stack-icon-size) var(--chat-queue-avatar-size, 20px);
 
   position: relative;
   display: grid;
-  grid-template-columns: var(--chat-stack-icon-size) var(
-      --chat-queue-avatar-size,
-      20px
+  grid-template-columns: var(--chat-queue-leading-columns) var(
+      --chat-queue-image-column,
     ) [copy] minmax(0, 1fr) [actions] auto;
   align-items: center;
   column-gap: 8px;
@@ -112,21 +111,11 @@
 }
 
 .chat-queue__item--no-avatar {
-  grid-template-columns: var(--chat-stack-icon-size) [copy] minmax(0, 1fr) [actions] auto;
+  --chat-queue-leading-columns: var(--chat-stack-icon-size);
 }
 
 .chat-queue__item--with-images {
-  grid-template-columns: var(--chat-stack-icon-size) var(
-      --chat-queue-avatar-size,
-      20px
-    ) [images] 24px [copy] minmax(0, 1fr) [actions] auto;
-}
-
-.chat-queue__item--no-avatar.chat-queue__item--with-images {
-  grid-template-columns: var(--chat-stack-icon-size) [images] 24px [copy] minmax(
-      0,
-      1fr
-    ) [actions] auto;
+  --chat-queue-image-column: [images] 24px;
 }
 
 .chat-queue__images {
@@ -469,23 +458,18 @@
   height: 15px;
 }
 
-.chat-queue__overflow::part(panel) {
-  width: 132px;
+.chat-queue__overflow .oc-menu {
   min-width: 132px;
 }
 
-.chat-queue__overflow wa-dropdown-item {
+.chat-queue__overflow .oc-menu-item {
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
   font-size: 12px;
 }
 
-.chat-queue__overflow wa-dropdown-item span[slot="icon"] {
-  display: inline-flex;
-}
-
-.chat-queue__overflow wa-dropdown-item svg {
+.chat-queue__overflow .oc-menu-item svg {
   width: 14px;
   height: 14px;
 }

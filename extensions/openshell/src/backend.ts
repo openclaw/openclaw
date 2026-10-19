@@ -9,6 +9,7 @@ import {
 import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   CreateSandboxBackendParams,
   OpenClawConfig,
@@ -40,7 +41,7 @@ import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { createOpenShellSshSession, runOpenShellCli, type OpenShellExecContext } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
-import { createOpenShellFsBridge } from "./fs-bridge.js";
+import { OpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
   replaceDirectoryContents,
@@ -70,21 +71,6 @@ type OpenShellWorkspaceLease = {
 const openShellWorkspaceOperations = new KeyedAsyncQueue();
 let openShellDetachedCreateSupport: { key: string; promise: Promise<boolean> } | undefined;
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
-function buildOpenShellDirectoryUploadArgs(params: {
-  sandboxName: string;
-  localPath: string;
-  remotePath: string;
-}): string[] {
-  return [
-    "sandbox",
-    "upload",
-    "--no-git-ignore",
-    params.sandboxName,
-    params.localPath,
-    `${normalizeRemotePath(params.remotePath)}/`,
-  ];
-}
-
 // Prints "0" when every managed root is missing or empty, "1" otherwise. Any
 // content in a managed root means the remote workspace was already seeded (or
 // holds operator data) and re-seeding would destroy remote-canonical state.
@@ -284,16 +270,13 @@ class OpenShellSandboxBackendImpl {
   }
 
   private createMirrorFsBridge(sandbox: OpenShellFsBridgeContext): SandboxFsBridge {
-    const bridge = createOpenShellFsBridge({
-      sandbox,
-      backend: {
-        remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
-        mkdirpRemotePath: (remotePath, signal) => this.mkdirpRemotePath(remotePath, signal),
-        removeRemotePath: (remotePath, params) => this.removeRemotePath(remotePath, params),
-        renameRemotePath: (from, to, signal) => this.renameRemotePath(from, to, signal),
-        syncLocalPathToRemote: (localPath, remotePath) =>
-          this.syncLocalPathToRemote(localPath, remotePath),
-      },
+    const bridge = new OpenShellFsBridge(sandbox, {
+      remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
+      mkdirpRemotePath: (remotePath, signal) => this.mkdirpRemotePath(remotePath, signal),
+      removeRemotePath: (remotePath, params) => this.removeRemotePath(remotePath, params),
+      renameRemotePath: (from, to, signal) => this.renameRemotePath(from, to, signal),
+      syncLocalPathToRemote: (localPath, remotePath) =>
+        this.syncLocalPathToRemote(localPath, remotePath),
     });
     // Hold one lease across validation and both commits, not just the remote step.
     // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
@@ -423,25 +406,23 @@ class OpenShellSandboxBackendImpl {
     await this.ensureSandboxExists();
     const sshSession = await createOpenShellSshSession({ context: this.params.execContext });
     try {
+      let root = this.params.remoteWorkspaceDir;
+      try {
+        root = this.resolveRemoteTarget(workdir).root;
+      } catch {
+        // Invalid workdirs are checked against the workspace root by the remote validator.
+      }
       const result = await runSshSandboxCommand({
         session: sshSession,
         remoteCommand: buildRemoteWorkdirValidationCommand({
           workdir,
-          root: this.resolveWorkdirValidationRoot(workdir),
+          root,
         }),
         allowFailure: true,
       });
       return result.code === 0 ? result.stdout.toString("utf8").trim() || null : null;
     } finally {
       await disposeSshSandboxSession(sshSession);
-    }
-  }
-
-  private resolveWorkdirValidationRoot(workdir: string): string {
-    try {
-      return this.resolveRemoteTarget(workdir).root;
-    } catch {
-      return this.params.remoteWorkspaceDir;
     }
   }
 
@@ -485,7 +466,7 @@ class OpenShellSandboxBackendImpl {
       let local = root.local;
       for (const part of root.local === skillsWorkspaceDir ? ["", ...parts] : parts) {
         local = path.join(local, part);
-        const stats = await fs.lstat(local).catch(() => null);
+        const stats = await lstatIfExists(local, "ENOENT");
         if (!stats?.isDirectory()) {
           return null;
         }
@@ -608,7 +589,7 @@ class OpenShellSandboxBackendImpl {
     await this.ensureSandboxExists();
     await this.maybeSeedRemoteWorkspace();
     const target = this.resolveRemoteTarget(remotePath);
-    const stats = await fs.lstat(localPath).catch(() => null);
+    const stats = await lstatIfExists(localPath, "ENOENT");
     if (!stats || stats.isSymbolicLink()) {
       await this.removeRemotePath(remotePath, { recursive: true, ignoreMissing: true });
       return;
@@ -626,9 +607,12 @@ class OpenShellSandboxBackendImpl {
           : path.posix.dirname(target.relativePath),
       ],
     });
-    const result = await runOpenShellCli({
-      context: this.params.execContext,
-      args: [
+    await this.uploadFileToRemote(localPath, remotePath);
+  }
+
+  private async uploadFileToRemote(localPath: string, remotePath: string): Promise<void> {
+    await this.runCli(
+      [
         "sandbox",
         "upload",
         "--no-git-ignore",
@@ -636,11 +620,21 @@ class OpenShellSandboxBackendImpl {
         localPath,
         remotePath,
       ],
+      "openshell sandbox upload failed",
+    );
+  }
+
+  private async runCli(args: string[], failureMessage?: string, timeoutMs?: number) {
+    const result = await runOpenShellCli({
+      context: this.params.execContext,
+      args,
       cwd: this.params.createParams.workspaceDir,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+    if (failureMessage && result.code !== 0) {
+      throw new Error(result.stderr.trim() || failureMessage);
     }
+    return result;
   }
 
   private async runPinnedRemotePathMutation(params: {
@@ -710,11 +704,7 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async ensureSandboxExistsInner(): Promise<void> {
-    const getResult = await runOpenShellCli({
-      context: this.params.execContext,
-      args: ["sandbox", "get", this.params.execContext.sandboxName],
-      cwd: this.params.createParams.workspaceDir,
-    });
+    const getResult = await this.runCli(["sandbox", "get", this.params.execContext.sandboxName]);
     if (getResult.code === 0) {
       if (this.params.legacyRuntimeAdopted) {
         const phase = await this.resolveLegacyRuntimePhase();
@@ -764,15 +754,11 @@ class OpenShellSandboxBackendImpl {
       ...this.params.execContext.config.providers.flatMap((provider) => ["--provider", provider]),
       ...(detachedCreateSupported ? ["--detach", "--", "sleep", "infinity"] : ["--", "true"]),
     ];
-    const createResult = await runOpenShellCli({
-      context: this.params.execContext,
-      args: createArgs,
-      cwd: this.params.createParams.workspaceDir,
-      timeoutMs: Math.max(this.params.execContext.config.timeoutMs, 300_000),
-    });
-    if (createResult.code !== 0) {
-      throw new Error(createResult.stderr.trim() || "openshell sandbox create failed");
-    }
+    await this.runCli(
+      createArgs,
+      "openshell sandbox create failed",
+      Math.max(this.params.execContext.config.timeoutMs, 300_000),
+    );
     this.remoteSeedPending = true;
   }
 
@@ -790,16 +776,10 @@ class OpenShellSandboxBackendImpl {
         : undefined;
     if (!support) {
       support = (async () => {
-        const result = await runOpenShellCli({
-          context: this.params.execContext,
-          args: ["sandbox", "create", "--help"],
-          cwd: this.params.createParams.workspaceDir,
-        });
-        if (result.code !== 0) {
-          throw new Error(
-            result.stderr.trim() || "openshell sandbox create capability check failed",
-          );
-        }
+        const result = await this.runCli(
+          ["sandbox", "create", "--help"],
+          "openshell sandbox create capability check failed",
+        );
         // Older supported CLIs run and await trailing commands; newer ones require a live main.
         return /^\s*--detach(?:\s|$)/mu.test(result.stdout);
       })();
@@ -818,20 +798,16 @@ class OpenShellSandboxBackendImpl {
   private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
     const pageSize = 100;
     for (let offset = 0; ; offset += pageSize) {
-      const listResult = await runOpenShellCli({
-        context: this.params.execContext,
-        args: [
-          "sandbox",
-          "list",
-          "--limit",
-          String(pageSize),
-          "--offset",
-          String(offset),
-          "--output",
-          "json",
-        ],
-        cwd: this.params.createParams.workspaceDir,
-      });
+      const listResult = await this.runCli([
+        "sandbox",
+        "list",
+        "--limit",
+        String(pageSize),
+        "--offset",
+        String(offset),
+        "--output",
+        "json",
+      ]);
       if (listResult.code !== 0) {
         throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
       }
@@ -918,11 +894,11 @@ class OpenShellSandboxBackendImpl {
     const remoteSkillsWorkspaceDir = resolveRemoteMaterializedSkillsWorkspaceDir(
       this.params.remoteWorkspaceDir,
     );
+    const stats = await lstatIfExists(this.params.createParams.skillsWorkspaceDir, "ENOENT");
     await this.runRemoteShellScriptInternal({
       script: `${ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
       args: [remoteSkillsWorkspaceDir, this.params.remoteWorkspaceDir],
     });
-    const stats = await fs.lstat(this.params.createParams.skillsWorkspaceDir).catch(() => null);
     if (!stats?.isDirectory() || stats.isSymbolicLink()) {
       return;
     }
@@ -946,14 +922,10 @@ class OpenShellSandboxBackendImpl {
       await withTempWorkspace(
         { rootDir: resolveOpenShellTmpRoot(), prefix: "openclaw-openshell-sync-" },
         async ({ dir: tmpDir }) => {
-          const result = await runOpenShellCli({
-            context: this.params.execContext,
-            args: ["sandbox", "download", this.params.execContext.sandboxName, root.remote, tmpDir],
-            cwd: this.params.createParams.workspaceDir,
-          });
-          if (result.code !== 0) {
-            throw new Error(result.stderr.trim() || "openshell sandbox download failed");
-          }
+          await this.runCli(
+            ["sandbox", "download", this.params.execContext.sandboxName, root.remote, tmpDir],
+            "openshell sandbox download failed",
+          );
           const preservedShadows: PreservedLocalShadow[] = [];
           const failures: unknown[] = [];
           try {
@@ -1051,18 +1023,10 @@ class OpenShellSandboxBackendImpl {
           excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
         });
         for (const entry of (await fs.readdir(stagedRoot)).toSorted()) {
-          const result = await runOpenShellCli({
-            context: this.params.execContext,
-            args: buildOpenShellDirectoryUploadArgs({
-              sandboxName: this.params.execContext.sandboxName,
-              localPath: path.join(stagedRoot, entry),
-              remotePath,
-            }),
-            cwd: this.params.createParams.workspaceDir,
-          });
-          if (result.code !== 0) {
-            throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
-          }
+          await this.uploadFileToRemote(
+            path.join(stagedRoot, entry),
+            `${normalizeRemotePath(remotePath)}/`,
+          );
         }
       },
     );
@@ -1189,7 +1153,7 @@ async function removeDownloadedWorkspacePath(
   let cursor = tmpDir;
   for (const [index, part] of parts.entries()) {
     const next = path.join(cursor, part);
-    const stats = await fs.lstat(next).catch(() => null);
+    const stats = await lstatIfExists(next, "ENOENT");
     if (!stats) {
       return;
     }
@@ -1214,11 +1178,11 @@ async function moveLocalShadowAside(params: {
   preservedShadows: PreservedLocalShadow[];
 }): Promise<void> {
   const shadowPath = path.join(params.workspaceDir, ...params.relativeParts);
-  const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
+  const parentStats = await lstatIfExists(path.dirname(shadowPath), "ENOENT");
   if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
     return;
   }
-  const shadowStats = await fs.lstat(shadowPath).catch(() => null);
+  const shadowStats = await lstatIfExists(shadowPath, "ENOENT");
   if (!shadowStats || shadowStats.isSymbolicLink()) {
     return;
   }
@@ -1255,7 +1219,7 @@ async function restoreLocalShadow(preserved: PreservedLocalShadow): Promise<Erro
   const { shadowPath, receipt } = preserved;
   const assertBackup = () => assertPreservedShadowIdentity(receipt);
   const parentPath = path.dirname(shadowPath);
-  const parentStats = await fs.lstat(parentPath).catch(() => null);
+  const parentStats = await lstatIfExists(parentPath, "ENOENT");
   if (parentStats?.isSymbolicLink()) {
     throw new Error(`Refusing to restore workspace shadow through symlink parent: ${parentPath}`);
   }

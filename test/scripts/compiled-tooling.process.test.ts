@@ -3,6 +3,7 @@ import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.tes
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -17,7 +18,7 @@ it("loads installed tooling when the prepared CLI validates native Vitest option
       "--",
       "--invalid-native-vitest-option",
     ],
-    { ...process.env, TMPDIR: directory, TMP: directory, TEMP: directory },
+    testRunnerFixtureEnv({ TMPDIR: directory, TMP: directory, TEMP: directory }),
     5_000,
     { signal, requireProcessTreeExit: process.platform !== "win32" },
   );

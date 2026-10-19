@@ -16,7 +16,8 @@ function missingAdminAudit(drift = false) {
   expect(f.record()).toMatchObject({ phase: "merged", route: "admin", accepted: true });
   expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
   expect(existsSync(join(f.worktree, ".local/merge-crabbox-parent-audit.json"))).toBe(false);
-  expect(f.recover()).toBe(true);
+  // The drained failure already released the process lock.
+  expect(f.recover()).toBe(false);
   f.save({ ...f.state(), audit: false });
   return f;
 }

@@ -123,7 +123,7 @@ export function readWorktreeSourceDependencies(
       worktreeIds.add(id);
     }
   }
-  return { worktreeIds: [...worktreeIds], complete };
+  return { worktreeIds: [...worktreeIds], ownedPaths, complete };
 }
 
 export async function prepareWorktreeEvictionRepositories(

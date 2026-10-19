@@ -5,7 +5,6 @@ import {
   prepareDoctorConfigReferenceSource,
   restoreDoctorConfigEnvRefs,
 } from "../../commands/doctor/shared/config-flow-steps.js";
-import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import { assertInstalledPluginIdRecoveryCurrent } from "../../commands/doctor/shared/installed-plugin-id-recovery.js";
 import { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { resolvePostCoreConvergenceEnv } from "../../commands/doctor/shared/update-phase.js";
@@ -30,6 +29,7 @@ import {
 } from "../../plugins/installed-plugin-index-records.js";
 import { listPersistedBundledPluginLocationBridges } from "../../plugins/location-bridges.js";
 import { isTrustedOfficialPluginInstallRecord } from "../../plugins/official-external-install-records.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../plugins/official-runtime-plugins.js";
 import type { MissingPluginInstallPayload } from "../../plugins/payload-verification.js";
 import {
   withPluginLifecycleLease,
@@ -574,6 +574,11 @@ async function updatePluginsAfterCoreUpdateWithLease(
       parts.push(`${skipped} skipped`);
     }
     runtime.log(theme.muted(`Plugin updates: ${parts.join(", ")}.`));
+  }
+  for (const outcome of finalPluginOutcomes) {
+    if (outcome.status === "skipped") {
+      runtime.log(theme.muted(`${outcome.pluginId}: ${outcome.message}`));
+    }
   }
 
   for (const message of uniqueStrings(

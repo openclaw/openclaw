@@ -3,6 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as downloads from "../../lib/download.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageJsonExport } from "./types.ts";
 import {
   cacheSnapshot,
@@ -78,7 +79,6 @@ it.each([
             ...result,
             sessions: sessions.map((session) =>
               Object.assign({}, session, {
-                usage: { ...session.usage, totalTokens: 9999 },
                 contextWeight: contextWeight(session.label),
               }),
             ),
@@ -94,6 +94,7 @@ it.each([
     page
       .querySelector<HTMLButtonElement>(`.session-bar-selection[aria-label="${label}"]`)!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: index > 0 }));
+    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
     await page.updateComplete;
   }
   if (query) {
@@ -101,6 +102,7 @@ it.each([
     input.value = query;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
     await page.updateComplete;
   }
   // Selection narrows accounting and exports, not the roster available for comparison.
@@ -115,7 +117,7 @@ it.each([
   );
   const menu = page.querySelector(".usage-export-menu")!;
   for (const value of ["sessions-csv", "json"]) {
-    expect(menu.querySelector(`[value="${value}"]`)!.hasAttribute("disabled")).toBe(
+    expect(menu.querySelector(`[data-value="${value}"]`)!.hasAttribute("disabled")).toBe(
       expected.length === 0,
     );
   }
@@ -123,10 +125,19 @@ it.each([
     expect(download).not.toHaveBeenCalled();
     return;
   }
-  for (const value of ["sessions-csv", "json"]) {
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+  for (const [index, value] of ["sessions-csv", "json", "daily-csv"].entries()) {
+    await selectUsageExport(menu, value);
+    await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(index + 1));
+    const sent = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1];
+    expect(sent).toMatchObject(
+      value === "daily-csv"
+        ? { projection: "overview", limit: 50 }
+        : { limit: Number.MAX_SAFE_INTEGER, includeContextWeight: value === "json" },
+    );
+    if (value !== "daily-csv") {
+      expect(sent).not.toHaveProperty("projection");
+    }
   }
-  await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(2));
   const csv = download.mock.calls.find(([filename]) => filename.endsWith(".csv"))![1];
   const [header, ...rows] = csv.split("\n").map((row) => row.split(","));
   const keys = expected

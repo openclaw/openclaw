@@ -3,7 +3,7 @@ import type {
   ChannelApprovalKind,
   PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildPluginApprovalPendingReplyPayload,
@@ -28,6 +28,7 @@ import {
   buildTelegramNativeResolvedApprovalText,
 } from "./approval-terminal.js";
 import { normalizeTelegramButtonStyle, resolveTelegramInlineButtons } from "./button-types.js";
+import { normalizeControlUiBasePath } from "./control-ui-base-path.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
@@ -47,28 +48,12 @@ const log = createSubsystemLogger("telegram/approvals");
 const terminalizedSystemAgentApprovals = new Set<string>();
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-type PendingMessage = {
-  chatId: string;
-  messageId: string;
-};
 type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
 };
-type TelegramFinalDelivery = {
-  text: string;
-};
-
-type TelegramExecApprovalHandlerDeps = {
-  sendTyping?: typeof sendTypingTelegram;
-  sendMessage?: typeof sendMessageTelegram;
-  editMessage?: typeof editMessageTelegram;
-  editReplyMarkup?: typeof editMessageReplyMarkupTelegram;
-};
-
 type TelegramApprovalHandlerContext = {
   token: string;
-  deps?: TelegramExecApprovalHandlerDeps;
 };
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext) {
@@ -99,8 +84,9 @@ function buildPendingPayload(params: {
     const origin = resolveGatewayPublicOrigin(params.cfg);
     const reviewUrl =
       origin && params.cfg.gateway?.controlUi?.enabled !== false
-        ? `${origin}${normalizeTelegramControlUiBasePath(
-            params.cfg.gateway?.controlUi?.basePath,
+        ? `${origin}${normalizeControlUiBasePath(
+            params.cfg.gateway?.controlUi?.basePath?.trim() ?? "",
+            "one",
           )}/approve/${encodeURIComponent(params.request.id)}`
         : undefined;
     const lines = [
@@ -157,12 +143,12 @@ function buildPendingPayload(params: {
   };
 }
 
-export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   TelegramPendingDelivery,
   { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
-  PendingMessage,
+  { chatId: string; messageId: string },
   never,
-  TelegramFinalDelivery
+  { text: string }
 >({
   eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
@@ -217,16 +203,14 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!resolved) {
         return null;
       }
-      const sendTyping = resolved.context.deps?.sendTyping ?? sendTypingTelegram;
-      const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
       const options = {
         ...resolved.options(),
         ...(preparedTarget.messageThreadId != null
           ? { messageThreadId: preparedTarget.messageThreadId }
           : {}),
       };
-      await sendTyping(preparedTarget.chatId, options).catch(() => {});
-      const result = await sendMessage(preparedTarget.chatId, pendingPayload.text, {
+      await sendTypingTelegram(preparedTarget.chatId, options).catch(() => {});
+      const result = await sendMessageTelegram(preparedTarget.chatId, pendingPayload.text, {
         ...options,
         buttons: pendingPayload.buttons,
         ...(preparedTarget.directMessagesTopicId != null
@@ -243,10 +227,9 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!resolved) {
         return;
       }
-      const editMessage = resolved.context.deps?.editMessage ?? editMessageTelegram;
       let editError: unknown;
       try {
-        await editMessage(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
+        await editMessageTelegram(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
           ...resolved.options(),
           textMode: "html",
           buttons: [],
@@ -273,10 +256,9 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
             (entry.chatId !== originChatId || editError !== undefined) &&
             !terminalizedSystemAgentApprovals.has(request.id)
           ) {
-            const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
             const originTo =
               parsedOrigin?.directMessagesTopicId != null ? originTarget! : originChatId;
-            await sendMessage(originTo, escapeTelegramHtml(payload.text), {
+            await sendMessageTelegram(originTo, escapeTelegramHtml(payload.text), {
               ...resolved.options(),
               textMode: "html",
               ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
@@ -296,9 +278,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!resolved) {
         return;
       }
-      const editReplyMarkup =
-        resolved.context.deps?.editReplyMarkup ?? editMessageReplyMarkupTelegram;
-      await editReplyMarkup(entry.chatId, entry.messageId, [], resolved.options());
+      await editMessageReplyMarkupTelegram(entry.chatId, entry.messageId, [], resolved.options());
     },
   },
   observe: {
@@ -312,12 +292,3 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
 });
-
-function normalizeTelegramControlUiBasePath(value?: string | null): string {
-  const trimmed = value?.trim() ?? "";
-  if (!trimmed || trimmed === "/") {
-    return "";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
-}

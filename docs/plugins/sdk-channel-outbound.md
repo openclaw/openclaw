@@ -45,8 +45,11 @@ The required options are:
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
 the transport callback instead of dispatching an event that was not made
-durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
-rejects an id or lane mismatch before delivery. Set optional `inspectAsync(raw, context)` when inspection needs asynchronous
+durable. At claim time it decodes the versioned payload and normally re-runs
+`inspect`, rejecting an id or lane mismatch before delivery. Monitors may
+[reuse fresh admission facts](/plugins/sdk-channel-plugins/durable-ingress)
+when claim inspection neither prepares delivery data nor authorizes effects.
+Set optional `inspectAsync(raw, context)` when inspection needs asynchronous
 preparation. Supporting hosts prefer it over `inspect` in both admission and
 claim validation. Keep `inspect` as a synchronous fallback for older hosts, which
 ignore the companion. Both callbacks must derive the same identity and lane.
@@ -64,6 +67,15 @@ duplicates. `context.isNew` is `true` if and only if this admission inserted the
 `(queue_name, event_id)` row. It does not indicate claim ownership or eventual
 delivery. If retention previously pruned the row, a later admission may insert
 it again and report `isNew: true`.
+
+Pass an existing transport batch to `admitBatch(rawEvents)`. The core queue commits
+all inspected events in one worker request, with set-based inserts and durable
+deduplication; results preserve input order and the first payload for each event
+ID. Acknowledgments run after that commit, before the drain can dispatch the batch.
+If an acknowledgment fails, the committed rows remain recoverable and transport
+replays deduplicate normally. This does not add a buffering or coalescing window.
+Plugin-supplied queues can implement optional `enqueueBatch(events)` with the same
+atomic contract; queues exposing only `enqueue` retain individual admission.
 
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
 `onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
@@ -114,8 +126,8 @@ Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
 The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
-`stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the idempotent
-`ensureQueueAvailable()` check when plugin-owned migration or preparation must
+`stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the
+`ensureQueueAvailable()` check (safe to repeat) when plugin-owned migration or preparation must
 run after the queue opens but before the drain starts. `stop` first settles
 accepted admissions, then aborts and disposes the drain, waits for the pump and
 active deliveries, and disposes again to close the lazy-creation race.
@@ -324,6 +336,11 @@ final dispatch boundary may make this assertion. Never use the marker after a
 finalization/send call begins or returns an ambiguous result; false marking can
 duplicate messages.
 
+For a permanent local preflight rejection, such as an unresolved account owner,
+pass `{ cause: error, retryable: false }`. The delivery failed without dispatch;
+it is not an ambiguous send and should not be retried until the configuration
+is corrected.
+
 ## Existing outbound adapters
 
 If the channel already has a compatible `outbound` adapter, derive the
@@ -418,19 +435,19 @@ the concrete transport branches the plugin can prove, such as `text` or
 Omitting the map means the callback claims every selected branch, so prefer an
 explicit map for new plugins.
 
-The callback must use provider-owned idempotency or authoritative readback to
+The callback must use provider-side duplicate prevention or authoritative readback to
 return `sent` with the actual provider receipt, `not_sent` only when a fresh
 send is provably safe, or `unresolved` when neither outcome can be proven.
 When reconciliation is explicitly required, unsupported prepared shapes fail
 before provider I/O. During recovery, missing, incomplete, or mismatched
-provider proof must fail closed rather than replaying content that could
+provider proof must stop recovery rather than replaying content that could
 already be visible.
 
 If reconciliation needs provider-owned persisted evidence, implement
 `afterUnknownSendTerminal(...)`. Core calls it after the ambiguous queue row
 has authoritatively moved to failed, including retry-budget exhaustion. Use it
 to remove provider-owned plans or payloads that are no longer needed. Cleanup
-is best effort and must be idempotent; a failure is logged without making the
+is best effort and must be safe to repeat; a failure is logged without making the
 terminal queue row replayable again.
 
 ## Deferred delivery admission

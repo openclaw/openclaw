@@ -396,13 +396,11 @@ export async function listSessionWorkspaceFiles(
     ),
   );
   const browser = await buildBrowserResult({
+    ...params,
     root,
-    workspaceRoot,
     fileRoot: params.fileRoot,
-    path: params.path,
-    search: params.search,
+    workspaceRoot,
     files: workspaceFiles,
-    assertCurrent: params.assertCurrent,
   });
   return {
     ...(root ? { root } : {}),
@@ -413,11 +411,15 @@ export async function listSessionWorkspaceFiles(
 }
 
 export async function getSessionWorkspaceFile(
-  params: LoadedSessionFiles & { path: string; assertCurrent?: () => void },
+  params: LoadedSessionFiles & {
+    path: string;
+    assertCurrent?: () => void;
+    includeContent?: boolean;
+  },
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
-    includeContent: true,
+    includeContent: params.includeContent !== false,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
     onOutsideBoundary: () => {

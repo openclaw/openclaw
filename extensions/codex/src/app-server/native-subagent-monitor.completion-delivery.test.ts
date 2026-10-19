@@ -36,6 +36,7 @@ import {
   observeCompletionAttempts,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -126,14 +127,16 @@ describe("CodexNativeSubagentMonitor", () => {
         let lastAnswer = "";
         const answer = async (text: string, id: string) => {
           lastAnswer = text;
-          await projector.handleNotification({
-            method: "item/completed",
-            params: {
-              threadId: "parent-thread",
-              turnId: "parent-turn",
-              item: { type: "agentMessage", id, phase: "final_answer", text },
-            },
-          });
+          await projector.handleNotification(
+            prepareCodexServerNotification({
+              method: "item/completed",
+              params: {
+                threadId: "parent-thread",
+                turnId: "parent-turn",
+                item: { type: "agentMessage", id, phase: "final_answer", text },
+              },
+            }),
+          );
         };
         runtime.deliverAgentHarnessCompletion.mockImplementation(async () => {
           await answer("NO_REPLY", "duplicate-answer");
@@ -152,18 +155,20 @@ describe("CodexNativeSubagentMonitor", () => {
           if (order === "native-first") {
             await client.notify(completedChild());
           }
-          await projector.handleNotification({
-            method: "turn/completed",
-            params: {
-              threadId: "parent-thread",
-              turn: {
-                id: "parent-turn",
-                status: "completed",
-                items: [{ type: "agentMessage", id: "last-answer", text: lastAnswer }],
-                error: null,
+          await projector.handleNotification(
+            prepareCodexServerNotification({
+              method: "turn/completed",
+              params: {
+                threadId: "parent-thread",
+                turn: {
+                  id: "parent-turn",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "last-answer", text: lastAnswer }],
+                  error: null,
+                },
               },
-            },
-          });
+            }),
+          );
           await owner.unregister();
           expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([final]);
           expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
@@ -237,7 +242,8 @@ describe("CodexNativeSubagentMonitor", () => {
       const releaseWrite = createDeferred<void>();
       const assignmentStore: CodexNativeSubagentAssignmentStore = {
         assertCurrent() {},
-        read: () => [],
+        async assertCurrentAsync() {},
+        read: async () => [],
         record: async () => true,
         consume: async () => {
           writeStarted.resolve();
@@ -434,7 +440,8 @@ describe("native follow-up receipt custody", () => {
     const consumed = createDeferred<void>();
     const store = {
       assertCurrent() {},
-      read: () => [],
+      async assertCurrentAsync() {},
+      read: async () => [],
       record: vi.fn(async () => {
         recorded.resolve();
         return true;

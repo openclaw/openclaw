@@ -1,6 +1,7 @@
 import { format } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -10,6 +11,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 
 const fixture = vi.hoisted(() => ({
   close: vi.fn<() => Promise<void>>(),
+  closeNative: vi.fn<() => Promise<void>>(),
   budget: vi.fn(),
   activation: vi.fn(),
   finish: vi.fn(),
@@ -18,6 +20,8 @@ const fixture = vi.hoisted(() => ({
   stopService: vi.fn(),
   ownerLease: vi.fn(),
   recordStep: vi.fn(),
+  recordLedgerStep: vi.fn(),
+  adopt: vi.fn(),
   fence: { assertCurrent: vi.fn() },
 }));
 
@@ -70,6 +74,10 @@ vi.mock("../cli/update-cli/update-command-windows-task.js", () => ({
 vi.mock("../state/openclaw-state-db.js", () => ({
   closeOpenClawStateDatabaseAsync: fixture.close,
 }));
+// mock-isolation: Finalizer fixtures observe cleanup without closing the test process's native workers.
+vi.mock("./worker-native-lifecycle.js", () => ({
+  closeDefaultRetainedNativeWorkerSource: fixture.closeNative,
+}));
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
 }));
@@ -82,9 +90,11 @@ vi.mock("./update-requester-authority.js", () => ({
   createManagedUpdateRequesterAuthority: vi.fn(),
   UpdateRequesterRevokedError: class extends Error {},
 }));
+// mock-isolation: Worker lifecycle tests replace ledger access without opening a real state database.
 vi.mock("./update-run-ledger.js", () => ({
-  adoptUpdateRun: vi.fn(),
+  adoptUpdateRun: fixture.adopt,
   getUpdateRun: fixture.terminal,
+  recordUpdateRunStep: fixture.recordLedgerStep,
 }));
 vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
@@ -95,6 +105,47 @@ const originalConsole = loggingState.rawConsole;
 const stdout: string[] = [];
 const stderr: string[] = [];
 const result = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+const finalizationOptions = {
+  candidateRuntime: true,
+  adoptedFinalization: true,
+  onGatewayStartAttempted: expect.any(Function),
+};
+function finalizationParams(
+  run: Partial<NonNullable<UpdateCommandOptions["run"]>> = {},
+  root = "/synthetic",
+  opts: Pick<UpdateCommandOptions, "json" | "timeout"> = {},
+) {
+  const runId = run.runId ?? "synthetic-run";
+  return {
+    root,
+    opts: { json: true, ...opts, run: { runId, env: {}, activationTimeoutMs: 1_000, ...run } },
+    rollbackBlockedReason: "state-migrated-no-rollback",
+    preUpdatePluginInstallRecords: {},
+    updateStepTimeoutMs: 1_000,
+    result: { ...result, steps: [], runId },
+  };
+}
+function workerInput<T>(params: T) {
+  return { executor: {}, bufferedSteps: [], resultPath: "/synthetic/result.json", params };
+}
+function expectResultFile(
+  input: { resultPath: string; params: { result: unknown } },
+  restartPending: boolean,
+  runId: string,
+) {
+  const args = [
+    input.resultPath,
+    JSON.stringify({
+      result: input.params.result,
+      exitCode: 0,
+      candidateStartAttempted: restartPending,
+      ...(restartPending ? { restartRunId: runId } : { terminalRunId: runId }),
+      executorDelegation: "pid-start-v1",
+    }),
+    { mode: 0o600 },
+  ];
+  expect(fixture.writeFile).toHaveBeenCalledExactlyOnceWith(...args);
+}
 
 beforeEach(() => {
   vi.resetModules();
@@ -134,10 +185,8 @@ async function runWorker(
   cleanup?: () => Promise<void>,
 ) {
   const settled = createDeferredCore();
-  fixture.close.mockImplementation(async () => {
-    await cleanup?.();
-    settled.resolve();
-  });
+  fixture.close.mockImplementation(async () => cleanup?.());
+  fixture.closeNative.mockImplementation(async () => settled.resolve());
   process.argv = [process.execPath, "update-migrated-finalize.worker.js", ...(mode ? [mode] : [])];
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
     yield JSON.stringify(input);
@@ -168,18 +217,13 @@ it.each(["json", "human", "check"] as const)(
       return { runId: "synthetic-run", status: "ok" };
     });
     await runWorker(
-      {
-        executor: {},
-        bufferedSteps: [],
-        resultPath: "/synthetic/result.json",
-        params: {
-          root: "/synthetic",
-          opts: { json: mode === "json", run: { runId: "synthetic-run", env: {} } },
-          rollbackBlockedReason: "state-migrated-no-rollback",
-          preUpdatePluginInstallRecords: {},
-          result,
-        },
-      },
+      workerInput({
+        ...finalizationParams({ activationTimeoutMs: undefined }, "/synthetic", {
+          json: mode === "json",
+        }),
+        updateStepTimeoutMs: undefined,
+        result,
+      }),
       mode === "check" ? "--check" : undefined,
       async () => {
         await Promise.resolve();
@@ -216,32 +260,20 @@ it.each([false, true])(
       ),
     );
     const input = {
-      params: {
-        root: "/fixture/candidate",
-        result: {
-          status: "ok",
-          mode: "npm",
-          root: "/fixture/candidate",
-          runId: "candidate-run",
-          steps: [],
-          durationMs: 0,
-        },
-        opts: {
-          json: true,
-          run: {
+      ...workerInput({
+        ...finalizationParams(
+          {
             runId: "candidate-run",
             env,
-            activationTimeoutMs: 1_000,
             ...(restartPending
-              ? { completionOwner: "gateway-restart" as const, gatewayRestartRequired: true }
+              ? { completionOwner: "gateway-restart", gatewayRestartRequired: true }
               : {}),
           },
-        },
-        preUpdatePluginInstallRecords: {},
-        updateStepTimeoutMs: 1_000,
-        rollbackBlockedReason: "state-migrated-no-rollback",
-      },
-      bufferedSteps: [],
+          "/fixture/candidate",
+        ),
+        result: { ...result, root: "/fixture/candidate", runId: "candidate-run" },
+      }),
+      executor: undefined,
       resultPath: "/fixture/result.json",
     };
     fixture.finish.mockImplementation(async (_params, options) => {
@@ -257,173 +289,147 @@ it.each([false, true])(
     });
     await runWorker(input);
 
-    expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(
-      {
-        ...input.params,
-        opts: {
-          ...input.params.opts,
-          run: { ...input.params.opts.run, executorFence: fixture.fence },
-        },
-      },
-      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
-    );
+    const expected = structuredClone(input.params);
+    Object.assign(expected.opts.run, { executorFence: fixture.fence });
+    expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(expected, finalizationOptions);
     expect(fixture.fence.assertCurrent).toHaveBeenCalled();
-    expect(fixture.writeFile).toHaveBeenCalledExactlyOnceWith(
-      input.resultPath,
-      JSON.stringify({
-        result: input.params.result,
-        exitCode: 0,
-        candidateStartAttempted: restartPending,
-        ...(restartPending
-          ? { restartRunId: "candidate-run" }
-          : { terminalRunId: "candidate-run" }),
-        executorDelegation: "pid-start-v1",
-      }),
-      { mode: 0o600 },
-    );
+    expectResultFile(input, restartPending, "candidate-run");
   },
 );
 
-it.each([
-  {
-    name: "supported omission",
-    version: 1,
-    operator: null,
-    owner: "parent",
-    serialized: "1800",
-    expected: undefined,
-  },
-  {
-    name: "supported omission with foreground restart pending",
-    version: 1,
-    operator: null,
-    owner: "parent",
-    serialized: "1800",
-    restartPending: true,
-    expected: undefined,
-  },
-  {
-    name: "explicit deadline",
-    version: 1,
-    operator: "1800",
-    owner: "parent",
-    serialized: "1800",
-    expected: 10_800_000,
-  },
-  {
-    name: "unknown version",
-    version: 2,
-    operator: null,
-    owner: "parent",
-    serialized: "1800",
-    expected: 10_800_000,
-  },
-  {
-    name: "mismatched serialization",
-    version: 1,
-    operator: null,
-    owner: "parent",
-    serialized: "900",
-    expected: 10_800_000,
-  },
-  {
-    name: "malformed operator",
-    version: 1,
-    operator: false,
-    owner: "parent",
-    serialized: "1800",
-    expected: 10_800_000,
-  },
-  {
-    name: "wrong completion owner",
-    version: 1,
-    operator: null,
-    owner: "child",
-    serialized: "1800",
-    expected: 10_800_000,
-  },
-  { name: "legacy producer", expected: 10_800_000 },
-  {
-    name: "inherited explicit allowance",
-    version: 1,
-    operator: null,
-    owner: "parent",
-    serialized: "1800",
-    inherited: 12_345,
-    expected: 12_345,
-  },
-])("preserves aggregate deadline intent for $name", async (row) => {
-  const input = {
-    executor: {},
-    completionOwner: row.owner,
-    timeout:
-      row.version === undefined
-        ? undefined
-        : {
-            version: row.version,
-            serialized: row.serialized,
-            operator: row.operator,
-          },
-    bufferedSteps: [],
-    resultPath: "/synthetic/result.json",
-    params: {
-      root: "/synthetic",
-      opts: {
-        json: true,
-        timeout: row.version === undefined ? undefined : "1800",
-        run: {
-          runId: "synthetic-run",
-          env: {},
-          activationTimeoutMs: row.inherited,
-          ...(row.restartPending
-            ? { completionOwner: "gateway-restart", gatewayRestartRequired: true }
-            : {}),
-        },
-      },
-      updateStepTimeoutMs: 1_800_000,
-      rollbackBlockedReason: "state-migrated-no-rollback",
-      preUpdatePluginInstallRecords: {},
-      result: { ...result, runId: "synthetic-run" },
-    },
-  };
-  fixture.budget.mockResolvedValue(10_800_000);
-  fixture.finish.mockResolvedValue(input.params.result);
-  fixture.terminal.mockReturnValue({
-    runId: "synthetic-run",
-    status: row.restartPending ? "running" : "succeeded",
-    ...(row.restartPending ? { phase: "restarting" } : {}),
+it("times the fresh-driver handoff from the previous driver's last receipt", async () => {
+  const handoffStartedAtMs = 1_791_594_640_455;
+  const readyAtMs = handoffStartedAtMs + 23_400;
+  vi.spyOn(Date, "now").mockReturnValue(readyAtMs);
+  fixture.adopt.mockReturnValueOnce({
+    runId: "handoff-run",
+    steps: [
+      { step: "validating", status: "completed", endedAtMs: handoffStartedAtMs - 10_000 },
+      { step: "driver:adopted", status: "completed", endedAtMs: handoffStartedAtMs + 15_494 },
+    ],
   });
+  const steps: unknown[] = [];
+  const input = {
+    ...workerInput({
+      ...finalizationParams({ runId: "handoff-run" }, "/fixture/candidate"),
+      result: { status: "ok", mode: "git", root: "/fixture/candidate", steps, durationMs: 0 },
+    }),
+    executor: undefined,
+    bufferedSteps: [
+      {
+        step: "git-verify-head",
+        status: "completed",
+        startedAtMs: handoffStartedAtMs - 36,
+        endedAtMs: handoffStartedAtMs,
+        exitCode: 0,
+      },
+    ],
+    resultPath: "/fixture/result.json",
+  };
+  let stepsAtFinish: unknown[] = [];
+  fixture.finish.mockImplementation(async (params) => {
+    stepsAtFinish = [...params.result.steps];
+    return input.params.result;
+  });
+  fixture.terminal.mockReturnValue({ runId: "handoff-run", status: "succeeded" });
+
   await runWorker(input);
 
-  expect(process.exitCode).toBe(originalExitCode);
-  expect(fixture.activation).toHaveBeenCalledExactlyOnceWith(
-    row.expected === undefined ? undefined : { activationTimeoutMs: row.expected },
+  const handoff = {
+    name: "update-driver-handoff",
+    command: "openclaw update",
+    cwd: "/fixture/candidate",
+    durationMs: 23_400,
+    exitCode: 0,
+    diagnostics: [
+      'Handoff began after "git-verify-head"; the fresh driver adopted the run after 15494ms.',
+    ],
+  };
+  expect(stepsAtFinish).toEqual([handoff]);
+  expect(fixture.recordStep).toHaveBeenCalledWith(
+    "handoff-run",
+    input.bufferedSteps[0],
+    expect.anything(),
   );
-  expect(fixture.budget).toHaveBeenCalledTimes(
-    row.expected === undefined || row.inherited !== undefined ? 0 : 1,
+  expect(fixture.recordLedgerStep.mock.calls).toEqual(
+    [
+      { step: "update-driver-handoff", status: "completed" },
+      { step: "diagnostic:update-driver-handoff", detail: handoff.diagnostics[0] },
+    ].map((step) => [
+      "handoff-run",
+      expect.objectContaining({ ...step, startedAtMs: handoffStartedAtMs, endedAtMs: readyAtMs }),
+      { env: {} },
+    ]),
   );
-  expect(fixture.finish).toHaveBeenCalledOnce();
-  expect(fixture.writeFile).toHaveBeenCalledOnce();
-  if (row.restartPending) {
-    expect(fixture.finish).toHaveBeenCalledWith(
-      expect.objectContaining({
-        opts: expect.objectContaining({ timeout: undefined }),
-      }),
-      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
-    );
-    expect(fixture.writeFile).toHaveBeenCalledWith(
-      input.resultPath,
-      JSON.stringify({
-        result: input.params.result,
-        exitCode: 0,
-        candidateStartAttempted: true,
-        restartRunId: "synthetic-run",
-        executorDelegation: "pid-start-v1",
-      }),
-      { mode: 0o600 },
-    );
-  }
 });
+
+type DeadlineCase = [
+  name: string,
+  version: number | undefined,
+  operator: string | boolean | null | undefined,
+  owner: string | undefined,
+  serialized: string | undefined,
+  expected: number | undefined,
+  restartPending?: boolean,
+  inherited?: number,
+];
+it.each<DeadlineCase>([
+  ["supported omission", 1, null, "parent", "1800", undefined],
+  ["omission during restart", 1, null, "parent", "1800", undefined, true],
+  ["explicit deadline", 1, "1800", "parent", "1800", 10_800_000],
+  ["unknown version", 2, null, "parent", "1800", 10_800_000],
+  ["mismatched serialization", 1, null, "parent", "900", 10_800_000],
+  ["malformed operator", 1, false, "parent", "1800", 10_800_000],
+  ["wrong completion owner", 1, null, "child", "1800", 10_800_000],
+  ["legacy producer", undefined, undefined, undefined, undefined, 10_800_000],
+  ["inherited explicit allowance", 1, null, "parent", "1800", 12_345, false, 12_345],
+])(
+  "preserves aggregate deadline intent for %s",
+  async (_name, version, operator, owner, serialized, expected, restartPending, inherited) => {
+    const input = {
+      ...workerInput({
+        ...finalizationParams(
+          {
+            activationTimeoutMs: inherited,
+            ...(restartPending
+              ? { completionOwner: "gateway-restart", gatewayRestartRequired: true }
+              : {}),
+          },
+          "/synthetic",
+          { timeout: version === undefined ? undefined : "1800" },
+        ),
+        updateStepTimeoutMs: 1_800_000,
+      }),
+      completionOwner: owner,
+      timeout: version === undefined ? undefined : { version, serialized, operator },
+    };
+    fixture.budget.mockResolvedValue(10_800_000);
+    fixture.finish.mockResolvedValue(input.params.result);
+    fixture.terminal.mockReturnValue({
+      runId: "synthetic-run",
+      status: restartPending ? "running" : "succeeded",
+      ...(restartPending ? { phase: "restarting" } : {}),
+    });
+    await runWorker(input);
+
+    expect(process.exitCode).toBe(originalExitCode);
+    expect(fixture.activation).toHaveBeenCalledExactlyOnceWith(
+      expected === undefined ? undefined : { activationTimeoutMs: expected },
+    );
+    expect(fixture.budget).toHaveBeenCalledTimes(
+      expected === undefined || inherited !== undefined ? 0 : 1,
+    );
+    expect(fixture.finish).toHaveBeenCalledOnce();
+    expect(fixture.writeFile).toHaveBeenCalledOnce();
+    if (restartPending) {
+      expect(fixture.finish).toHaveBeenCalledWith(
+        expect.objectContaining({ opts: expect.objectContaining({ timeout: undefined }) }),
+        finalizationOptions,
+      );
+      expectResultFile(input, true, "synthetic-run");
+    }
+  },
+);
 
 it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
   "forwards the %s service owner to shared migrated finalization",
@@ -447,20 +453,12 @@ it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
             serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
           };
     const input = {
-      executor: {},
-      bufferedSteps: [],
-      resultPath: "/synthetic/result.json",
-      ...(mode === "windows-suspended" ? { windowsTaskAutoStartSuspended: true } : {}),
-      params: {
-        root: "/synthetic",
+      ...workerInput({
+        ...finalizationParams(),
         shouldRestart: false,
-        updateStepTimeoutMs: 1_000,
-        opts: { json: true, run: { runId: "synthetic-run", env: {}, activationTimeoutMs: 1_000 } },
-        rollbackBlockedReason: "state-migrated-no-rollback",
-        preUpdatePluginInstallRecords: {},
         preManagedServiceStop: transferred,
-        result: { ...result, steps: [], runId: "synthetic-run" },
-      },
+      }),
+      ...(mode === "windows-suspended" ? { windowsTaskAutoStartSuspended: true } : {}),
     };
     fixture.finish.mockImplementation(async (params: { result: typeof result }) => params.result);
     fixture.terminal.mockReturnValue({ runId: "synthetic-run", status: "succeeded", steps: [] });
@@ -471,7 +469,7 @@ it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
         shouldRestart: false,
         preManagedServiceStop: { ...transferred, windowsTaskAutoStartRecovery: undefined },
       }),
-      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
+      finalizationOptions,
     );
     expect(fixture.stopService).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(originalExitCode);
@@ -479,97 +477,85 @@ it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
 );
 
 it.each([
-  {
-    name: "stops a live supervised predecessor",
-    owner: { state: "live", mode: "supervised" },
-    stops: true,
-    uncertain: false,
-  },
-  {
-    name: "does not enter Doctor after an uncertain native stop",
-    owner: { state: "live", mode: "supervised" },
-    stops: true,
-    uncertain: true,
-  },
-  {
-    name: "leaves a foreground owner to Doctor's own wait",
-    owner: { state: "live", mode: "foreground" },
-    stops: false,
-  },
-  { name: "does nothing without an owner", owner: undefined, stops: false },
-])("delegated Doctor $name before entering maintenance", async ({ owner, stops, uncertain }) => {
-  const doctor = vi.fn();
-  vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
-  fixture.ownerLease.mockReturnValue(owner);
-  fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
-    runId,
-    status: "running",
-    steps: [step],
-  }));
-  const stoppedState = {
-    stopped: true,
-    stoppedAtMs: 7,
-    inspected: true,
-    runtimeInspected: true,
-    running: true,
-    servicePid: 631,
-    serviceManagerUid: 1000,
-    serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
-  };
-  fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
-    params.onStopped?.(stoppedState);
-    throw uncertain
-      ? new CommandProcessCleanupError()
-      : new Error("port still bound after bootout");
-  });
-  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
-  try {
-    await runWorker(
-      {
-        executor: {},
-        runId: "synthetic-run",
-        root: "/synthetic",
-        configInputHash: "hash",
-        repair: true,
-        databaseGenerations: { "/synthetic/agent.sqlite": null },
-      },
-      "--doctor",
-    );
-  } finally {
-    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
-    vi.doUnmock("../flows/doctor-health.js");
-  }
+  ["supervised", false],
+  ["supervised", true],
+  ["foreground", false],
+  [undefined, false],
+] as const)(
+  "delegated Doctor respects %s owner and uncertain-stop=%s before maintenance",
+  async (mode, uncertain) => {
+    const owner = mode ? { state: "live", mode } : undefined;
+    const stops = mode === "supervised";
+    const doctor = vi.fn();
+    vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
+    fixture.ownerLease.mockReturnValue(owner);
+    fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
+      runId,
+      status: "running",
+      steps: [step],
+    }));
+    const stoppedState = {
+      stopped: true,
+      stoppedAtMs: 7,
+      inspected: true,
+      runtimeInspected: true,
+      running: true,
+      servicePid: 631,
+      serviceManagerUid: 1000,
+      serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
+    };
+    fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
+      params.onStopped?.(stoppedState);
+      throw uncertain
+        ? new CommandProcessCleanupError()
+        : new Error("port still bound after bootout");
+    });
+    process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+    try {
+      await runWorker(
+        {
+          executor: {},
+          runId: "synthetic-run",
+          root: "/synthetic",
+          configInputHash: "hash",
+          repair: true,
+          fullIntegrityCheck: true,
+          databaseGenerations: { "/synthetic/agent.sqlite": null },
+        },
+        "--doctor",
+      );
+    } finally {
+      delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+      vi.doUnmock("../flows/doctor-health.js");
+    }
 
-  if (uncertain) {
-    expect(doctor).not.toHaveBeenCalled();
-  } else {
-    expect(doctor, stderr.join("\n")).toHaveBeenCalledExactlyOnceWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
-    );
-  }
-  if (stops) {
-    expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
-    );
-    // The receipt is a retained `finalize:` step whose key carries the identity,
-    // so published parents' detail compaction cannot erase it.
-    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
-      "synthetic-run",
-      {
-        step: "finalize:predecessor-stop:7:1000:631:f",
-        status: "completed",
-        endedAtMs: 7,
-      },
-      expect.objectContaining({ assertCurrent: expect.any(Function) }),
-    );
-    if (!uncertain) {
-      expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
-        doctor.mock.invocationCallOrder[0] ?? 0,
+    if (uncertain) {
+      expect(doctor).not.toHaveBeenCalled();
+    } else {
+      expect(doctor, stderr.join("\n")).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.objectContaining({ fullIntegrityCheck: true }),
+        expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
       );
     }
-  } else {
-    expect(fixture.stopService).not.toHaveBeenCalled();
-  }
-});
+    if (stops) {
+      expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
+      );
+      // The receipt is a retained `finalize:` step whose key carries the identity,
+      // so published parents' detail compaction cannot erase it.
+      expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
+        "synthetic-run",
+        { step: "finalize:predecessor-stop:7:1000:631:f", status: "completed", endedAtMs: 7 },
+        expect.objectContaining({ assertCurrent: expect.any(Function) }),
+      );
+      if (!uncertain) {
+        expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
+          doctor.mock.invocationCallOrder[0] ?? 0,
+        );
+      }
+    } else {
+      expect(fixture.stopService).not.toHaveBeenCalled();
+    }
+  },
+);

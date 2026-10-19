@@ -602,11 +602,16 @@ export class FirstRunSetup {
       return;
     }
     const outcome = await this.verify();
-    if (!this.owns(owner) || !outcome || "error" in outcome) {
+    if (!this.owns(owner) || !outcome || "error" in outcome || !outcome.value.ok) {
       return;
     }
-    if (outcome.value.ok) {
-      this.finishVerified(outcome.value.modelRef, outcome.value.modelTarget);
+    const { modelRef, modelTarget } = outcome.value;
+    if (!this.pending) {
+      this.host.context().navigate("chat");
+    } else if (this.pending.modelRef === modelRef && this.pending.modelTarget === modelTarget) {
+      this.completeNavigation();
+    } else {
+      this.showUnresolved();
     }
   }
 
@@ -615,15 +620,5 @@ export class FirstRunSetup {
       return detection.setupComplete ? detection.configuredModel : undefined;
     }
     return detection.utilityModel ?? detection.setupModel;
-  }
-
-  private finishVerified(modelRef: string, modelTarget?: "utility"): void {
-    if (!this.pending) {
-      this.host.context().navigate("chat");
-    } else if (this.pending.modelRef === modelRef && this.pending.modelTarget === modelTarget) {
-      this.completeNavigation();
-    } else {
-      this.showUnresolved();
-    }
   }
 }

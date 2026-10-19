@@ -195,7 +195,12 @@ export async function runMantisDesktopBrowserSmoke(
   );
   const summaryPath = path.join(outputDir, "mantis-desktop-browser-smoke-summary.json");
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
-  const session = await createMantisCrabboxSession(opts, { repoRoot, env });
+  // Browser capture does not build OpenClaw; heavier Mantis tasks keep the shared default.
+  const session = await createMantisCrabboxSession(
+    opts,
+    { repoRoot, env },
+    { machineClass: "tiny" },
+  );
   const htmlFileOption = trimToValue(opts.htmlFile);
   const htmlFile = htmlFileOption
     ? resolveRepoBoundFile(repoRoot, htmlFileOption, "Mantis desktop HTML file")

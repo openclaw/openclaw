@@ -3,6 +3,14 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+extension LocationServicing {
+    func authorizationSnapshot() -> LocationAuthorizationSnapshot {
+        LocationAuthorizationSnapshot(
+            authorizationStatus: self.authorizationStatus(),
+            accuracyAuthorization: self.accuracyAuthorization())
+    }
+}
+
 @Suite(.serialized) struct LocationPermissionSummaryTests {
     @Test func `initial authorization wait ignores undetermined callbacks`() {
         #expect(!LocationService.shouldCompleteAuthorizationWait(

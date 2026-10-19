@@ -13,14 +13,22 @@ import {
 import { readSessionChangedEvent } from "../sessions/reconcile.ts";
 import type { UiSessionDefaultsHost } from "../sessions/session-key.ts";
 
-export type ChatMetadataResult = CommandsListResult & { revision?: string };
+export type ChatMetadataResult = CommandsListResult & {
+  revision?: string;
+  requiredWorkerInferenceProfileId?: string;
+};
 export type ChatMetadataResponse =
   | (Partial<ChatMetadataResult> &
       Partial<Pick<ModelCatalogResult, "models" | "accountSelection" | "modelSelectionPolicy">>)
   | { revision: string; unchanged: true };
 
 export type ChatMetadataUpdate =
-  | { type: "invalidated"; scope: "session" | "full"; refreshSessionFacts: boolean }
+  | {
+      type: "invalidated";
+      scope: "session" | "full";
+      refreshSessionFacts: boolean;
+      retireCatalog?: boolean;
+    }
   | { type: "loading" }
   | { type: "result"; result: ChatMetadataResult }
   | { type: "error"; error: unknown };
@@ -68,6 +76,7 @@ export type ChatMetadataEntry = {
 
 export type ChatMetadataInvalidation = {
   sessionOnly?: boolean;
+  retireCatalog?: boolean;
   matchesCatalog?: (scope: ChatMetadataParams) => boolean;
   commandsChanged?: boolean;
   delayMs?: number;
@@ -98,7 +107,10 @@ export function invalidateChatMetadataStore(
   } else if (catalogInvalidation === "refresh") {
     invalidateModelCatalogCache(client, scope, sessionDefaults);
   }
-  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, { commandsChanged });
+  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, {
+    commandsChanged,
+    retireCatalog: catalogInvalidation === "clear",
+  });
 }
 
 export function invalidateChatMetadataForSessionEvent(
@@ -113,7 +125,6 @@ export function invalidateChatMetadataForSessionEvent(
   const agentId = typeof agent === "string" ? agent : undefined;
   const scope = changed ? { agentId, sessionKey: changed.key } : undefined;
   const sessionModelRevision =
-    source?.catalogChanged !== true &&
     source?.phase !== "reset" &&
     source?.reason !== "reset" &&
     source?.reason !== "delete" &&

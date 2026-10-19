@@ -99,6 +99,11 @@ response and session owner. `main` is an ordinary agent ID, not a fallback for
 a multi-agent fleet. Per-number routes may choose different agents for inbound
 calls, but do not replace the plugin's startup owner.
 
+Classic voice responses use the routed agent's configured tool policy for the
+conversation. A finite allowlist can keep a compatible restricted Codex thread
+across turns; it does not become a temporary per-turn restriction. Real temporary
+tool restrictions and grants still use isolated threads.
+
 If startup reports that Voice Call has no explicit owner, list your agents with
 `openclaw agents list`, set the existing `agentId` field, and rerun
 `openclaw voicecall setup`. With the default hybrid reload mode, the configuration
@@ -213,7 +218,7 @@ that shared context is intentional.
 
 For `per-phone` and `per-call`, Voice Call stores generated session keys under
 the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
-integration keys resolve into the same namespace: a canonical
+integration keys resolve into the same namespace: a normalized
 `agent:<configuredAgentId>:*` key keeps that owner and honors core
 main-session/global-scope aliasing; foreign or malformed `agent:*` input
 is scoped as an opaque key under the configured agent; `global` and `unknown`

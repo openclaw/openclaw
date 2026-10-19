@@ -27,7 +27,6 @@ import {
   applyAnthropicMessageStartUsage,
   type AnthropicPromptUsageSnapshot,
 } from "../providers/anthropic-usage.js";
-import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import {
   createToolArgumentPreviewSchedule,
@@ -48,10 +47,7 @@ import {
   type WritableTransportStream,
 } from "./transport-stream-shared.js";
 
-export type AnthropicStreamBlock = AssistantMessage["content"][number] & {
-  index?: number;
-  partialJson?: string;
-};
+type AnthropicStreamBlock = AssistantMessage["content"][number];
 
 /** One Messages protocol reducer; entry points retain their established preview/replay contracts. */
 export async function consumeAnthropicStream(params: {
@@ -69,6 +65,17 @@ export async function consumeAnthropicStream(params: {
   const managed = params.profile === "transport";
   const eventSink = refusalBuffer ?? stream;
   let costModel = model;
+  const applyServingModelCost = (servingModelId: string | null) => {
+    costModel = {
+      ...model,
+      cost: resolveAnthropicFallbackServingModelCost({
+        requestedModelId: model.id,
+        servingModelId,
+        requestedCost: model.cost,
+      }),
+    };
+    calculateCost(costModel, output.usage);
+  };
   let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
   let inputTransformations: unknown[] | undefined;
   try {
@@ -97,20 +104,18 @@ export async function consumeAnthropicStream(params: {
     let sawMessageStart = false;
     let sawMessageStop = false;
     let sawStopReason = false;
-    const pendingTextEnds: Array<Extract<AssistantMessageEvent, { type: "text_end" }>> = [];
-    // Hold text_end until tool-boundary classification is known.
-    const flushPendingTextEnds = () => {
-      for (const event of pendingTextEnds) {
-        eventSink.push(event);
-      }
-      pendingTextEnds.length = 0;
-    };
-    const emitTextEnd = (event: Extract<AssistantMessageEvent, { type: "text_end" }>) => {
-      if (managed) {
-        pendingTextEnds.push(event);
-      } else {
-        eventSink.push(event);
-      }
+    let sawFallbackBoundary = false;
+    let terminalFallbackModel: string | undefined;
+    const emitContentEnd = (
+      block: Extract<AnthropicStreamBlock, { type: "thinking" | "text" }>,
+      contentIndex: number,
+    ) => {
+      eventSink.push({
+        type: `${block.type}_end`,
+        contentIndex,
+        content: block.type === "thinking" ? block.thinking : block.text,
+        partial: output,
+      });
     };
     const emitContentStart = (kind: "thinking" | "text", contentIndex: number, delta = "") => {
       eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
@@ -175,12 +180,7 @@ export async function consumeAnthropicStream(params: {
         indexes.delete(key);
         const block = output.content[contentIndex];
         if (block?.type === kind) {
-          eventSink.push({
-            type: `${kind}_end`,
-            contentIndex,
-            content: block.type === "thinking" ? block.thinking : block.text,
-            partial: output,
-          });
+          emitContentEnd(block, contentIndex);
         }
       }
     };
@@ -228,13 +228,13 @@ export async function consumeAnthropicStream(params: {
         }
         const fallbackBoundary = refusalBuffer ? readAnthropicFallbackBoundary(contentBlock) : null;
         if (fallbackBoundary) {
+          sawFallbackBoundary = true;
           // Server-side fallback boundary: pre-boundary thinking/tool
           // blocks must not replay or execute, and the buffered preview
           // events reference them, so rebuild the deferred timeline from
           // the surviving text prefix the fallback model continued from.
           refusalBuffer?.discard();
           sealedToolCalls.length = 0;
-          pendingTextEnds.length = 0;
           blockIndexes.clear();
           pendingThinkingSignatures.clear();
           applyAnthropicFallbackBoundary({
@@ -245,28 +245,14 @@ export async function consumeAnthropicStream(params: {
           // Fallback-only iteration partials stay outside the serving-model
           // estimate. Compaction responses are the exception: usage policy
           // aggregates their complete billed iteration list.
-          costModel = {
-            ...model,
-            cost: resolveAnthropicFallbackServingModelCost({
-              requestedModelId: model.id,
-              servingModelId: fallbackBoundary.toModel,
-              requestedCost: model.cost,
-            }),
-          };
-          calculateCost(costModel, output.usage);
+          applyServingModelCost(fallbackBoundary.toModel);
           eventSink.push({ type: "start", partial: output });
           for (const [i, block] of blocks.entries()) {
             if (block.type !== "text") {
               continue;
             }
-            delete block.index;
             emitContentStart("text", i, block.text);
-            emitTextEnd({
-              type: "text_end",
-              contentIndex: i,
-              content: block.text,
-              partial: output,
-            });
+            emitContentEnd(block, i);
           }
           continue;
         }
@@ -284,7 +270,6 @@ export async function consumeAnthropicStream(params: {
                     typeof contentBlock.text === "string"
                       ? sanitizeTransportPayloadText(contentBlock.text)
                       : "",
-                  index,
                 }
               : contentBlock.type === "thinking"
                 ? {
@@ -293,7 +278,6 @@ export async function consumeAnthropicStream(params: {
                       typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
                     thinkingSignature:
                       typeof contentBlock.signature === "string" ? contentBlock.signature : "",
-                    index,
                   }
                 : {
                     type: "thinking",
@@ -301,7 +285,6 @@ export async function consumeAnthropicStream(params: {
                     thinkingSignature:
                       typeof contentBlock.data === "string" ? contentBlock.data : "",
                     redacted: true,
-                    index,
                   };
           const delta = block.type === "text" ? block.text : block.redacted ? "" : block.thinking;
           output.content.push(block);
@@ -311,10 +294,6 @@ export async function consumeAnthropicStream(params: {
           continue;
         }
         if (contentBlock?.type === "tool_use") {
-          if (managed) {
-            tagPendingCommentaryText(output.content);
-          }
-          flushPendingTextEnds();
           const block: AnthropicStreamBlock = {
             type: "toolCall",
             id: typeof contentBlock.id === "string" ? contentBlock.id : "",
@@ -326,7 +305,6 @@ export async function consumeAnthropicStream(params: {
                 : "",
             arguments: asRecord(contentBlock.input),
             partialJson: "",
-            index,
           };
           output.content.push(block);
           blockIndexes.set(index, output.content.length - 1);
@@ -381,8 +359,7 @@ export async function consumeAnthropicStream(params: {
           }
         }
         if (managed && !block && delta?.type === "text_delta" && typeof delta.text === "string") {
-          const recoveredIndex = typeof event.index === "number" ? event.index : blocks.length;
-          block = { type: "text", text: "", index: recoveredIndex };
+          block = { type: "text", text: "" };
           output.content.push(block);
           index = output.content.length - 1;
           if (typeof event.index === "number") {
@@ -468,26 +445,13 @@ export async function consumeAnthropicStream(params: {
           continue;
         }
         blockIndexes.delete(eventIndex);
-        delete block.index;
-        if (block.type === "text") {
-          emitTextEnd({
-            type: "text_end",
-            contentIndex: index,
-            content: block.text,
-            partial: output,
-          });
-        } else if (block.type === "thinking") {
-          if (pendingSignature !== undefined) {
-            block.thinkingSignature = pendingSignature;
-          }
-          eventSink.push({
-            type: "thinking_end",
-            contentIndex: index,
-            content: block.thinking,
-            partial: output,
-          });
-        } else if (block.type === "toolCall") {
+        if (block.type === "thinking" && pendingSignature !== undefined) {
+          block.thinkingSignature = pendingSignature;
+        }
+        if (block.type === "toolCall") {
           sealedToolCalls.push({ block, contentIndex: index });
+        } else {
+          emitContentEnd(block, index);
         }
         finishReasoningContentSidecars(event.index);
         continue;
@@ -498,6 +462,15 @@ export async function consumeAnthropicStream(params: {
         const usage = asOptionalObjectRecord(event.usage);
         if (typeof delta?.stop_reason === "string" && delta.stop_reason) {
           sawStopReason = true;
+          const iteration = Array.isArray(usage?.iterations)
+            ? asOptionalObjectRecord(usage.iterations.at(-1))
+            : undefined;
+          terminalFallbackModel =
+            iteration?.type === "fallback_message" &&
+            typeof iteration.model === "string" &&
+            iteration.model.trim()
+              ? iteration.model
+              : undefined;
           if (delta.stop_reason === "refusal") {
             applyAnthropicRefusal(output, delta.stop_details, model.provider);
           } else {
@@ -505,18 +478,10 @@ export async function consumeAnthropicStream(params: {
           }
         }
         applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
-        calculateCost(costModel, output.usage);
-        // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
-        // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
-        // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
-        if (
-          managed &&
-          (output.stopReason === "toolUse" ||
-            output.content.some((block) => block.type === "toolCall"))
-        ) {
-          tagPendingCommentaryText(output.content);
+        if (sawStopReason && messageStartPromptUsage && typeof usage?.output_tokens === "number") {
+          output.usage.usageReport = { state: "available" };
         }
-        flushPendingTextEnds();
+        calculateCost(costModel, output.usage);
       }
     }
     // Anthropic completes every SSE response with message_stop. Compatible
@@ -549,6 +514,24 @@ export async function consumeAnthropicStream(params: {
       undefined,
       { repairStringLiterals: true },
     );
+    // Sticky fallback has no content boundary. Commit its explicit terminal identity
+    // only after validation; failed streams must not acquire a fallback diagnostic.
+    if (refusalBuffer && terminalFallbackModel && !sawFallbackBoundary) {
+      output.responseModel = terminalFallbackModel;
+      applyServingModelCost(terminalFallbackModel);
+      output.diagnostics = [
+        ...(output.diagnostics ?? []),
+        {
+          type: "provider_fallback",
+          timestamp: Date.now(),
+          details: {
+            provider: model.provider,
+            fromModel: model.id,
+            toModel: terminalFallbackModel,
+          },
+        },
+      ];
+    }
     for (const sealed of sealedToolCalls) {
       delete sealed.block.partialJson;
       eventSink.push({
@@ -559,18 +542,6 @@ export async function consumeAnthropicStream(params: {
       });
     }
     refusalBuffer?.flush();
-    // Backstop: streaming tags commentary at the tool-boundary above, but
-    // replay/non-streaming assembly may reach here with tool calls untagged.
-    // Idempotent, so it never double-tags the streaming path. Gate on the turn
-    // containing a tool call (not stop_reason) so proxied Bedrock/Vertex routes
-    // that mislabel tool turns as "end_turn" still tag their narration.
-    if (
-      managed &&
-      (output.stopReason === "toolUse" || output.content.some((block) => block.type === "toolCall"))
-    ) {
-      tagPendingCommentaryText(output.content);
-    }
-    flushPendingTextEnds();
   } finally {
     logAnthropicThinkingDrops(inputTransformations);
   }

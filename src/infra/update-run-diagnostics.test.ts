@@ -105,6 +105,40 @@ it("records serving health without replacing a persisted restart refusal", () =>
   );
 });
 
+it.each([undefined, "active-mutation"] as const)(
+  "preserves named data risk over an older refusal (%s) and healthy observation",
+  (existingRisk) => {
+    const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-data-risk-") } };
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(
+      run.runId,
+      {
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          ...(existingRisk ? { dataAtRisk: existingRisk } : {}),
+        },
+      },
+      options,
+    );
+    const recovery = {
+      serviceRestartSafe: false,
+      reason: "runtime-verification-failed",
+      dataAtRisk: "unreadable-state",
+    } as const;
+    recordUpdateRunDiagnostics(
+      run.runId,
+      { recovery, verification: { serviceRunning: true, readyz: true } },
+      () => {},
+      options,
+    );
+    expect(getUpdateRun(run.runId, options)?.verification.recovery).toEqual({
+      ...recovery,
+      dataAtRisk: existingRisk ?? recovery.dataAtRisk,
+    });
+  },
+);
+
 it("keeps the first terminal receipt when a stale publisher carries success verification", () => {
   const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-terminal-diagnostics-") } };
   const run = createUpdateRun({ trigger: "cli" }, options);

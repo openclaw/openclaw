@@ -1,16 +1,17 @@
-import type { Runtime } from "node:inspector";
+import type { Profiler, Runtime } from "node:inspector";
 import type { Session } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { getHeapSpaceStatistics, type HeapSpaceInfo } from "node:v8";
+import type { HeapSpaceInfo } from "node:v8";
+import * as v8 from "node:v8";
+import { isMainThread } from "node:worker_threads";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;
 const ENGINE_NAMES = new Set(["(root)", "(program)", "(idle)", "(garbage collector)"]);
 let capturing = false;
-let cleanupUncertain = false;
 
 type FailureReason =
   | "cooldown"
@@ -49,7 +50,79 @@ export function assertProfile(valid: boolean): asserts valid {
   }
 }
 
-function hasProfilerConflict() {
+export function parseNativeCpuProfile(json: string): Profiler.Profile {
+  // V8 writes names and URLs verbatim. Escape them before decoding its native format.
+  const escaped = json.replace(
+    /"functionName":"(.*?)"(,"lineNumber":-?\d+,"columnNumber":-?\d+,"scriptId":-?\d+,"url":)"(.*?)"}(?=,"(?:children|deoptReason|positionTicks)":|})/gs,
+    (_match, name: string, location: string, url: string) =>
+      `"functionName":${JSON.stringify(name)}${location}${JSON.stringify(url)}}`,
+  );
+  // SAFETY: Only V8's native serializer supplies this graph and numeric script IDs.
+  const profile = JSON.parse(escaped) as Omit<Profiler.Profile, "nodes"> & {
+    nodes: (Omit<Profiler.ProfileNode, "callFrame"> & {
+      callFrame: Omit<Runtime.CallFrame, "scriptId"> & { scriptId: number };
+    })[];
+  };
+  // The native serializer owns this shape; inspector consumers require string IDs.
+  const nodes: Profiler.ProfileNode[] = [];
+  for (const { callFrame, ...node } of profile.nodes) {
+    const { scriptId, ...frame } = callFrame;
+    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(scriptId) } });
+  }
+  return { ...profile, nodes };
+}
+
+type ProfileCapture<Profile> = {
+  setup?: () => Promise<unknown>;
+  start: () => unknown;
+  stop: () => Promise<{ profile: Profile }> | { profile: Profile } | undefined;
+  close: () => unknown;
+};
+
+export function createInspectorProfileCapture<Profile>(
+  inspector: typeof import("node:inspector/promises"),
+  options: {
+    setup: (session: Session) => Promise<unknown>;
+    start: (session: Session) => Promise<unknown>;
+    stop: (session: Session) => Promise<{ profile: Profile }>;
+    disable: (session: Session) => Promise<unknown>;
+  },
+): ProfileCapture<Profile> {
+  const session = new inspector.Session();
+  session.connect();
+  return {
+    setup: () => options.setup(session),
+    start: () => options.start(session),
+    stop: () => options.stop(session),
+    close: async () => {
+      let disabled = false;
+      try {
+        await options.disable(session);
+        disabled = true;
+      } catch {
+        // Disconnect must still release the inspector after a failed disable.
+      }
+      session.disconnect();
+      if (!disabled) {
+        throw new ProfileFailure("cleanup-failed");
+      }
+    },
+  };
+}
+
+export function createNativeCpuProfileCapture(
+  intervalMicros: number,
+): ProfileCapture<Profiler.Profile> {
+  let handle: v8.SyncCPUProfileHandle | undefined;
+  return {
+    // Node shares its native profiler with the stall recorder's overlapping windows.
+    start: () => (handle = v8.startCpuProfile({ sampleInterval: intervalMicros / 1_000 })),
+    stop: () => handle && { profile: parseNativeCpuProfile(handle.stop()) },
+    close: () => handle?.[Symbol.dispose](),
+  };
+}
+
+export function hasProfilerConflict() {
   const options = parseNodeOptionsEnvVar(process.env.NODE_OPTIONS);
   return (
     options === null ||
@@ -142,15 +215,14 @@ export function sanitizeDiagnosticProfileFrame(
   };
 }
 
-/** Owns one ephemeral main-isolate capture; it never opens an inspector listener. */
+/** Owns one ephemeral isolate-local capture; it never opens an inspector listener. */
 export async function captureDiagnosticProfile<Profile, Result>(options: {
   signal: AbortSignal;
   hasAuthority: () => boolean;
   durationMs: number;
-  setup: (session: Session) => Promise<unknown>;
-  start: (session: Session) => Promise<unknown>;
-  stop: (session: Session) => Promise<{ profile: Profile }>;
-  disable: (session: Session) => Promise<unknown>;
+  /** Worker captures require tracing admission from the Gateway; trace_events is main-only. */
+  workerTracingInactive?: true;
+  create: (inspector: typeof import("node:inspector/promises")) => ProfileCapture<Profile>;
   sanitize: (
     profile: Profile,
     packageRoot: string | null,
@@ -165,15 +237,11 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     reason,
     cleanupFailed,
   });
-  if (cleanupUncertain) {
-    return unavailable("cleanup-failed", true);
-  }
   if (capturing) {
     return unavailable("busy");
   }
   capturing = true;
-  let session: Session | undefined;
-  let connected = false;
+  let capture: ProfileCapture<Profile> | undefined;
   let startAttempted = false;
   let stopAttempted = false;
   let failure: FailureReason | undefined;
@@ -194,9 +262,14 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     const inspector = await import("node:inspector/promises").catch(() => {
       throw new ProfileFailure("unsupported");
     });
-    const { getEnabledCategories } = await import("node:trace_events").catch(() => {
-      throw new ProfileFailure("unsupported");
-    });
+    const getEnabledCategories =
+      !isMainThread && options.workerTracingInactive
+        ? () => undefined
+        : (
+            await import("node:trace_events").catch(() => {
+              throw new ProfileFailure("unsupported");
+            })
+          ).getEnabledCategories;
     const assertTracingInactive = () => {
       // V8 can stream raw ProfileChunk data to an existing trace writer before
       // sanitization. Refuse all tracing; legacy and Perfetto match categories differently.
@@ -212,17 +285,15 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
       throw new ProfileFailure("conflict");
     }
     assertTracingInactive();
-    session = new inspector.Session();
-    session.connect();
-    connected = true;
-    await options.setup(session);
+    capture = options.create(inspector);
+    await capture.setup?.();
     assertActive();
     assertTracingInactive();
-    before = { ...process.memoryUsage(), heapSpaces: getHeapSpaceStatistics() };
+    before = { ...process.memoryUsage(), heapSpaces: v8.getHeapSpaceStatistics() };
     const startedAt = performance.now();
     startAttempted = true;
     // Inspector dispatch can synchronously scan V8's heap before returning a promise.
-    const starting = options.start(session);
+    const starting = capture.start();
     startBlockedMs = performance.now() - startedAt;
     await starting;
     // The event loop owns this timer. Requested duration is not a hard wall-time
@@ -232,9 +303,13 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     }
     assertActive();
     stopAttempted = true;
-    ({ profile } = await options.stop(session));
+    const stopped = await capture.stop();
+    if (!stopped) {
+      throw new ProfileFailure("capture-failed");
+    }
+    ({ profile } = stopped);
     durationMs = performance.now() - startedAt;
-    after = { ...process.memoryUsage(), heapSpaces: getHeapSpaceStatistics() };
+    after = { ...process.memoryUsage(), heapSpaces: v8.getHeapSpaceStatistics() };
   } catch (error) {
     failure =
       error instanceof ProfileFailure
@@ -243,23 +318,18 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
           ? "cancelled"
           : "capture-failed";
   } finally {
-    if (session && connected) {
+    if (capture) {
       if (startAttempted && !stopAttempted) {
         try {
-          await options.stop(session);
+          await capture.stop();
         } catch {
           cleanupFailed = true;
         }
       }
       try {
-        await options.disable(session);
+        await capture.close();
       } catch {
         cleanupFailed = true;
-      }
-      try {
-        session.disconnect();
-      } catch {
-        cleanupFailed = cleanupUncertain = true;
       }
     }
     capturing = false;

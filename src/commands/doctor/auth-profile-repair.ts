@@ -1,3 +1,4 @@
+import { copyConfigResolutionFactsThroughRewrite } from "../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
@@ -45,8 +46,12 @@ export async function repairAuthProfileMigration(params: {
       ? await maybeRepairLegacyAuthProfileStores({ cfg: config, env, profileIdMap: authorized })
       : { profileIdMap: authorized, changes: [], warnings: [] };
   const repaired = maybeRepairOpenAICodexAuthConfig(config, { profileIdMap: aliases.profileIdMap });
+  const configChanged = imported.configChanged || repaired.changes.length > 0;
+  if (configChanged) {
+    copyConfigResolutionFactsThroughRewrite(params.cfg, repaired.config);
+  }
   return {
-    config: repaired.config,
+    config: configChanged ? repaired.config : params.cfg,
     changes: [
       ...repaired.changes,
       ...(imported.configChanged ? ["Auth profile SQLite migration updated auth.profiles."] : []),
@@ -55,4 +60,18 @@ export async function repairAuthProfileMigration(params: {
     warnings: [...imported.warnings, ...aliases.warnings, ...repaired.warnings],
     profileIdMap: aliases.profileIdMap,
   };
+}
+
+export async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
+  const { callGateway } = await import("../../gateway/call.js");
+  for (const request of [
+    { method: "secrets.reload", params: {} },
+    { method: "models.authStatus", params: { refresh: true } },
+  ]) {
+    try {
+      await callGateway({ ...request, timeoutMs: 3000 });
+    } catch {
+      // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
+    }
+  }
 }

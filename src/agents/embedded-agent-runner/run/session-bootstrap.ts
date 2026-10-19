@@ -8,15 +8,24 @@ import {
 } from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntriesReadOnly,
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
+  resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
-import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { resolveSqliteSessionKey } from "../../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import type { SessionTranscriptRuntimeScope } from "../../../config/sessions/session-accessor.types.js";
+import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
+import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-entry-presence-read.js";
+import {
+  readSessionEntryInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  runWithSessionSourceScope,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
-import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-transcript-worker-runtime.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
@@ -31,8 +40,12 @@ import {
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { isCurrentSessionControllerOperation } from "../../../sessions/session-controller.identity.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
+import { lifecycleAdmissionByOperation } from "../../../sessions/session-controller.state.js";
+import { supersedeReplyRunByRunId } from "../../../sessions/session-controller.stop-runtime.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
@@ -48,14 +61,15 @@ import {
   AGENT_RUN_SUPERSEDED_ERROR,
   AGENT_RUN_SUPERSEDED_STOP_REASON,
 } from "../../run-termination.js";
+import { captureSessionManagerIncognitoBinding } from "../../sessions/session-manager-incognito-scope.js";
 import { redactRunIdentifier } from "../../workspace-run.js";
 import { log } from "../logger.js";
-import { supersedeEmbeddedAgentRunByRunId } from "../runs.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./internal-params.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { revokeAgentSessionWriterClaim } from "./session-writer-revocation.js";
 import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
 
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
@@ -90,14 +104,14 @@ function resolveSessionTargetAgentId(
   );
 }
 
-export function buildContextEngineCompactionSessionTarget(params: {
+export async function buildContextEngineCompactionSessionTarget(params: {
   agentId?: string;
   config?: RunEmbeddedAgentParams["config"];
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
-}): ContextEngineSessionTarget {
+}): Promise<ContextEngineSessionTarget> {
   const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
   const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
   const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
@@ -109,20 +123,19 @@ export function buildContextEngineCompactionSessionTarget(params: {
   const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const candidateSessionKey = targetSessionKey ?? suppliedSessionKey;
   const candidateKeyAgentId = parseAgentSessionKey(candidateSessionKey)?.agentId;
-  const suppliedEntry =
-    marker && candidateSessionKey
-      ? loadSessionEntryReadOnly({
-          agentId: marker.agentId,
-          sessionKey: candidateSessionKey,
-          storePath: marker.storePath,
-        })
-      : undefined;
-  const markerMatches = marker
-    ? listSessionEntriesReadOnly({
+  const markerEntries = marker
+    ? await readSessionEntrySummariesInWorker({
         agentId: marker.agentId,
         storePath: marker.storePath,
-      }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+      })
     : [];
+  const suppliedEntry = markerEntries.find(
+    ({ sessionKey }) =>
+      marker &&
+      candidateSessionKey &&
+      sessionKey === resolveSqliteSessionKey(candidateSessionKey, marker.agentId),
+  )?.entry;
+  const markerMatches = markerEntries.filter(({ entry }) => entry.sessionId === marker?.sessionId);
   const preferredMarkerSessionKey = marker
     ? resolvePreferredSessionKeyForSessionIdMatches(
         markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
@@ -130,11 +143,9 @@ export function buildContextEngineCompactionSessionTarget(params: {
       )
     : undefined;
   const markerSessionKey = marker
-    ? suppliedEntry?.sessionId === marker.sessionId
+    ? suppliedEntry?.sessionId === marker.sessionId || (candidateSessionKey && !suppliedEntry)
       ? candidateSessionKey
-      : candidateSessionKey && !suppliedEntry
-        ? candidateSessionKey
-        : preferredMarkerSessionKey
+      : preferredMarkerSessionKey
     : undefined;
   if (marker && markerMatches.length > 0 && !markerSessionKey) {
     throw new Error("Legacy compaction transcript identity is ambiguous");
@@ -185,30 +196,34 @@ export function isNoRealConversationCompactionNoop(params: {
 export async function resetNoRealConversationTokenSnapshot(params: {
   sessionTarget: SessionTranscriptRuntimeTarget | undefined;
   sessionPersistence?: RunEmbeddedAgentParams["sessionPersistence"];
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
 }): Promise<void> {
   if (!params.sessionTarget || params.sessionPersistence === "detached") {
     return;
   }
   params.assertActive();
   try {
-    await patchSessionEntryCore(
+    await applySessionEntryOperation(
       params.sessionTarget,
-      () => ({
-        totalTokens: 0,
-        totalTokensFresh: true,
-        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-        inputTokens: undefined,
-        outputTokens: undefined,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        contextBudgetStatus: undefined,
-        updatedAt: Date.now(),
-      }),
       {
+        kind: "fields",
+        patch: {
+          totalTokens: 0,
+          totalTokensFresh: true,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          inputTokens: undefined,
+          outputTokens: undefined,
+          cacheRead: undefined,
+          cacheWrite: undefined,
+          contextBudgetStatus: undefined,
+          updatedAt: Date.now(),
+        },
+      },
+      {
+        result: "none",
         skipMaintenance: true,
         takeCacheOwnership: true,
-        assertCommitAllowed: params.assertActive,
+        ...sessionEntryCommitGuardOptions(params.assertActive),
       },
     );
     params.assertActive();
@@ -222,9 +237,9 @@ export async function resetNoRealConversationTokenSnapshot(params: {
 }
 
 /** Best-effort identity lookup retains the agent that owns an unqualified stored key. */
-function backfillSessionIdentity(
+async function backfillSessionIdentity(
   params: Pick<RunEmbeddedAgentParams, "config" | "sessionId" | "sessionKey" | "agentId">,
-): Pick<RunEmbeddedAgentInternalParams, "agentId" | "sessionKey"> {
+): Promise<Pick<RunEmbeddedAgentInternalParams, "agentId" | "sessionKey">> {
   const trimmed = normalizeOptionalString(params.sessionKey);
   if (trimmed) {
     return { sessionKey: trimmed };
@@ -234,12 +249,12 @@ function backfillSessionIdentity(
   }
   try {
     const resolved = normalizeOptionalString(params.agentId)
-      ? resolveStoredSessionKeyForSessionId({
+      ? await resolveStoredSessionKeyForSessionId({
           cfg: params.config,
           sessionId: params.sessionId,
           agentId: params.agentId,
         })
-      : resolveSessionKeyForRequestCore({
+      : await resolveSessionKeyForRequestCore({
           cfg: params.config,
           sessionId: params.sessionId,
         });
@@ -265,16 +280,44 @@ export async function prepareEmbeddedRunSession(paramsInput: RunEmbeddedAgentInt
   // Carry the lookup's owner into every admission; a bare stored key cannot encode it.
   const paramsBase = {
     ...supplied,
-    ...backfillSessionIdentity(supplied),
+    ...(await backfillSessionIdentity(supplied)),
   };
-  const sessionAdmission = await assertAgentHarnessRunAdmission(paramsBase);
-  assertRequiredWorkerSelection(paramsBase.config ?? {}, {
-    agentRuntime: paramsBase.agentHarnessId ?? paramsBase.agentHarnessRuntimeOverride,
-  });
-  const runSessionTarget = await resolveAgentRunSessionTarget({
-    ...paramsBase,
-    missingSessionKey: "create",
-  });
+  let sessionAdmission: AgentSessionWriterAdmissionSnapshot | undefined;
+  const assertWorkerSelection = () =>
+    assertRequiredWorkerSelection(paramsBase.config ?? {}, {
+      agentRuntime: paramsBase.agentHarnessId ?? paramsBase.agentHarnessRuntimeOverride,
+    });
+  const reader =
+    paramsBase.sessionPersistence !== "detached"
+      ? getReplyOperationSessionReader(paramsBase.replyOperation)
+      : undefined;
+  const assertActive = paramsBase.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(paramsBase.admittedRunContext, paramsBase.abortSignal)
+    : undefined;
+  const prepareTarget = reader
+    ? async (scope: SessionTranscriptRuntimeScope) => {
+        sessionAdmission = await assertAgentHarnessRunAdmission(paramsBase, scope);
+        assertWorkerSelection();
+        const target =
+          sessionAdmission?.runtimeTarget ?? (await resolveSessionTranscriptRuntimeTarget(scope));
+        return {
+          target,
+          assertCurrent: () => {
+            paramsBase.abortSignal?.throwIfAborted();
+            assertActive?.();
+            reader.assertCurrent();
+          },
+        };
+      }
+    : undefined;
+  if (!prepareTarget) {
+    sessionAdmission = await assertAgentHarnessRunAdmission(paramsBase);
+    assertWorkerSelection();
+  }
+  const runSessionTarget = await resolveAgentRunSessionTarget(
+    { ...paramsBase, missingSessionKey: "create" },
+    prepareTarget,
+  );
   const params: RunEmbeddedAgentParamsWithSessionFile = {
     ...paramsBase,
     agentId: runSessionTarget.agentId,
@@ -350,7 +393,8 @@ export async function prepareInitialSessionWriter(params: {
   // Existing-row callers can be inside their creation lifecycle; reject before
   // attempting to acquire an admission that their enclosing mutation excludes.
   await assertAbsent();
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
+    agentId: ownerTarget.agentId,
     scope: presence.storePath,
     identities: [ownerTarget.sessionKey, presence.sessionKey, ownerTarget.sessionId],
     signal,
@@ -402,14 +446,24 @@ export async function prepareInitialSessionWriter(params: {
 }
 
 type AgentSessionWriterAdmissionSnapshot = {
+  runtimeTarget?: SessionTranscriptRuntimeTarget;
+  assertActive?: SessionSourceAssertion;
   agentId?: string;
   entry: InternalSessionEntry;
   sessionKey: string;
   storePath: string;
 };
 
+type AgentSessionWriterFence = {
+  expectedLifecycleRevision: string | undefined;
+  expectedWriterRunId: string;
+  entry: InternalSessionEntry;
+  revoke(isCurrent?: () => boolean, options?: { persistTerminal?: true }): Promise<boolean>;
+};
+
 export async function assertAgentHarnessRunAdmission(
   params: RunEmbeddedAgentParams,
+  runtimeScope?: SessionTranscriptRuntimeScope,
 ): Promise<AgentSessionWriterAdmissionSnapshot | undefined> {
   if (params.sessionPersistence === "detached") {
     return undefined;
@@ -427,81 +481,127 @@ export async function assertAgentHarnessRunAdmission(
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
   assertActive?.();
-  const durableEntry = await readSessionEntryInWorker(
-    {
-      ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
-      readConsistency: "latest",
-      sessionKey,
-      storePath,
-    },
-    () => params.abortSignal?.throwIfAborted(),
-  );
-  assertActive?.();
-  const admissionError = resolveAgentHarnessRunAdmissionError({
-    agentHarnessId: params.agentHarnessId,
-    entry: durableEntry,
-    modelSelectionLocked: params.modelSelectionLocked,
-    sessionId: params.sessionId,
+  const scope = {
+    agentId: admissionAgentId,
     sessionKey,
-  });
-  if (admissionError) {
-    throw new Error(admissionError);
+    storePath,
+    readConsistency: "latest" as const,
+  };
+  const assertCurrent = () => {
+    assertActive?.();
+    params.abortSignal?.throwIfAborted();
+  };
+  const consume = (
+    entry: InternalSessionEntry | undefined,
+    runtimeTarget?: SessionTranscriptRuntimeTarget,
+  ) => {
+    assertCurrent();
+    const admissionError = resolveAgentHarnessRunAdmissionError({
+      agentHarnessId: params.agentHarnessId,
+      entry,
+      modelSelectionLocked: params.modelSelectionLocked,
+      sessionId: params.sessionId,
+      sessionKey,
+    });
+    if (admissionError) {
+      throw new Error(admissionError);
+    }
+    return entry
+      ? {
+          ...scope,
+          entry,
+          assertActive,
+          ...(runtimeTarget && runtimeScope
+            ? {
+                runtimeTarget: { ...runtimeTarget, storePath: runtimeScope.storePath ?? storePath },
+              }
+            : {}),
+        }
+      : undefined;
+  };
+  const reader = getReplyOperationSessionReader(params.replyOperation);
+  if (reader) {
+    const key = assertSessionEntryCohortScope(reader, scope);
+    const runtimeTarget =
+      runtimeScope?.agentId === admissionAgentId &&
+      runtimeScope.sessionKey.trim() === sessionKey &&
+      runtimeScope.storePath &&
+      path.resolve(runtimeScope.storePath) === path.resolve(storePath)
+        ? { agentId: admissionAgentId, sessionId: runtimeScope.sessionId, sessionKey: key }
+        : undefined;
+    return reader.withRead(
+      { sessionKeys: [key], ...(runtimeTarget ? { runtimeTarget } : {}) },
+      assertCurrent,
+      (read) =>
+        consume(read.entries.find((row) => row.sessionKey === key)?.entry, read.runtimeTarget),
+    );
   }
-  return durableEntry
-    ? {
-        ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
-        entry: durableEntry as InternalSessionEntry,
-        sessionKey,
-        storePath,
-      }
-    : undefined;
+  return consume(await readSessionEntryInWorker(scope, assertCurrent));
 }
 
-export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): Promise<
-  | {
-      expectedLifecycleRevision: string | undefined;
-      expectedWriterRunId: string;
-    }
-  | undefined
-> {
-  const snapshot = await assertAgentHarnessRunAdmission(params);
-  if (!snapshot) {
-    return undefined;
-  }
+async function claimPersistedAgentSessionWriter(
+  params: RunEmbeddedAgentParams,
+  snapshot: AgentSessionWriterAdmissionSnapshot,
+): Promise<AgentSessionWriterFence | undefined> {
   const expectedSessionId = params.sessionId;
   const expectedLifecycleRevision = snapshot.entry.lifecycleRevision;
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const operation = params.replyOperation;
+  const memory = captureSessionManagerIncognitoBinding(
+    {
+      agentId: snapshot.agentId ?? resolveSessionTargetAgentId(params, snapshot.sessionKey),
+      sessionId: expectedSessionId,
+      sessionKey: snapshot.sessionKey,
+      storePath: snapshot.storePath,
+    },
+    params.sessionManager,
+  );
   if (snapshot.entry.sessionId !== expectedSessionId) {
     throw new Error(`Session changed before writer admission: ${snapshot.sessionKey}`);
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  const claimed = await applySessionEntryOperation(
-    {
-      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
-      sessionKey: snapshot.sessionKey,
-      storePath: snapshot.storePath,
-    },
-    {
-      kind: "fields",
-      expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
-      patch: { activeWriterRunId: params.runId },
-    },
-    { skipMaintenance: true },
-  );
-  if (
-    claimed &&
-    (claimed.sessionId !== expectedSessionId ||
-      claimed.lifecycleRevision !== expectedLifecycleRevision)
-  ) {
-    throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
-  }
-  if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
-    throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
+  const adoptInput = operation && lifecycleAdmissionByOperation.get(operation)?.adoptInput;
+  let claimed: InternalSessionEntry | null;
+  if (adoptInput) {
+    claimed = await runWithSessionSourceScope(
+      snapshot.assertActive,
+      () => adoptInput({ runId: params.runId, assertCurrent: snapshot.assertActive }),
+      { checkAfter: false },
+    );
+  } else {
+    claimed = await applySessionEntryOperation(
+      {
+        ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+        sessionKey: snapshot.sessionKey,
+        storePath: snapshot.storePath,
+      },
+      {
+        kind: "fields",
+        expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
+        patch: { activeWriterRunId: params.runId },
+      },
+      {
+        skipMaintenance: true,
+        preserveActivity: true,
+        ...sessionEntryCommitGuardOptions(snapshot.assertActive),
+      },
+    );
+    if (
+      claimed &&
+      (claimed.sessionId !== expectedSessionId ||
+        claimed.lifecycleRevision !== expectedLifecycleRevision)
+    ) {
+      throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
+    }
+    if (!claimed || claimed.activeWriterRunId !== params.runId) {
+      throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
+    }
   }
   if (previousWriterRunId && previousWriterRunId !== params.runId) {
     // The replacement must own the durable row before the incumbent is made
     // terminal. A failed claim leaves the still-authoritative run untouched.
-    const superseded = supersedeEmbeddedAgentRunByRunId(previousWriterRunId, () => {
+    const superseded = supersedeReplyRunByRunId(previousWriterRunId, () => {
       const previousLifecycleGeneration =
         getAgentRunContext(previousWriterRunId)?.lifecycleGeneration;
       const recorded = emitAgentEventIfCurrent({
@@ -537,5 +637,25 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   return {
     expectedLifecycleRevision,
     expectedWriterRunId: params.runId,
+    entry: claimed,
+    revoke: (isCurrent, options) =>
+      revokeAgentSessionWriterClaim({
+        snapshot,
+        sessionId: expectedSessionId,
+        runId: params.runId,
+        memory,
+        persistTerminal: options?.persistTerminal,
+        isCurrent: () =>
+          (isCurrent?.() ?? true) &&
+          getAgentEventLifecycleGeneration() === lifecycleGeneration &&
+          (!operation || isCurrentSessionControllerOperation(operation)),
+      }),
   };
+}
+
+export async function claimAgentSessionWriter(
+  params: RunEmbeddedAgentParams,
+): Promise<AgentSessionWriterFence | undefined> {
+  const snapshot = await assertAgentHarnessRunAdmission(params);
+  return snapshot ? claimPersistedAgentSessionWriter(params, snapshot) : undefined;
 }

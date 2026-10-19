@@ -51,6 +51,11 @@ Stopping a meeting requests cancellation of any active agent consult. In `agent`
 
 Leaving also waits for audio startup already admitted by that session and stops the resulting runtime before reporting completion. If a join fails after attaching a runtime and cleanup cannot finish, status keeps the ended session visible so `leave` can retry. A replacement for the same meeting waits for pending audio startup or stop work and can reject if audio cleanup still fails; other meetings remain independent. Browser leave results remain separate: a settled browser-only leave failure remains retryable without permanently blocking another join.
 
+If a warning says cleanup after realtime startup failure or a node audio bridge
+stop did not complete, check Chrome and the audio bridge on the host that runs
+Chrome before retrying. The original startup error remains the join failure; the
+warning does not confirm that the audio bridge has stopped.
+
 The bounded live transcript remains available only in `transcribe` mode. In all
 three modes, browser joins also persist completed caption rows and meeting notes
 to the shared state database. Notes update about every five minutes when new

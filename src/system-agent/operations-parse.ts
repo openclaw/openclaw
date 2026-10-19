@@ -1,11 +1,8 @@
 import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
-import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import type { TuiResult } from "../tui/tui-types.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
 import {
@@ -14,8 +11,8 @@ import {
   redactSystemAgentConfigPath,
 } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
-import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
-import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
+import { INVALID_CONFIG_SET_MESSAGE, isInvalidConfigSetOperation } from "./operations-internal.js";
+import type { loadSystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
 export type { SystemAgentOperation };
@@ -35,45 +32,11 @@ export type SystemAgentOperationResult = {
 
 export type SystemAgentCommandDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  formatOverview?: (overview: SystemAgentOverview) => string;
   loadOverview?: typeof loadSystemAgentOverview;
-  createAgent?: typeof import("../agents/agent-create.js").createAgent;
-  runConfigSet?: (opts: {
-    path?: string;
-    value?: string;
-    cliOptions: ConfigSetOptions;
-    beforePersistentApply?: () => void;
-  }) => Promise<void>;
-  runConfigUnset?: typeof import("../cli/config-cli.js").runConfigUnset;
-  runGatewayRestart?: () => Promise<void | boolean>;
-  runGatewayStart?: () => Promise<void>;
-  runGatewayStop?: () => Promise<void>;
   applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
-  runPluginUninstall?: (
-    pluginId: string,
-    runtime: RuntimeEnv,
-    options?: { beforePersistentApply?: () => void },
-  ) => Promise<void>;
-  runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
-  runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
-  runTui?: (opts: {
-    local: boolean;
-    session?: string;
-    deliver?: boolean;
-    historyLimit?: number;
-    message?: string;
-  }) => Promise<TuiResult | void>;
   /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
   setupSurface?: "cli" | "gateway";
-  applySetup?: typeof import("./setup-apply.js").applySystemAgentSetup;
-  verifyInferenceConfig?: typeof import("./setup-inference.js").verifySetupInferenceConfig;
-  listChannelSetupPlugins?: typeof import("../channels/plugins/setup-registry.js").listChannelSetupPlugins;
-  resolveChannelSetupEntries?: typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
-  isChannelConfigured?: typeof import("../config/channel-configured-shared.js").isStaticallyChannelConfigured;
 };
 
 // Grammar tokens. Workspace/path tokens accept quoted strings so paths with
@@ -548,4 +511,28 @@ export function formatSystemAgentPersistentPlan(
   return operatorApprovalOnly
     ? `Proposed: ${description}.\n\n${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
     : `Plan: ${description}. Say yes to apply.`;
+}
+
+export function redactSensitiveCommandText(text: string): string {
+  const operation = parseSystemAgentOperation(text);
+  if (isInvalidConfigSetOperation(operation)) {
+    return "config set <invalid path> <redacted secret>";
+  }
+  if (operation.kind === "config-set") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    if (
+      displayPath !== operation.path ||
+      isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+    ) {
+      return `config set ${displayPath} <redacted secret>`;
+    }
+  }
+  if (operation.kind === "config-unset") {
+    return `config unset ${redactSystemAgentConfigPath(operation.path)}`;
+  }
+  if (operation.kind === "config-set-ref") {
+    const displayPath = redactSystemAgentConfigPath(operation.path);
+    return `config set-ref ${displayPath} <redacted reference>`;
+  }
+  return text;
 }

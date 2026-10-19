@@ -9,6 +9,8 @@
  * This is in-process source-composition evidence, not live deployment proof.
  */
 import "../test-utils/prepare-compiled-subprocesses.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -24,12 +26,12 @@ import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { readChildSessionPublication } from "../channels/message-access/child-session-publication.js";
 import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
+import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import {
   clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
   setRuntimeConfigSnapshot,
-} from "../config/config.js";
-import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -38,9 +40,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { getPluginInstance, runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import {
+  getPluginRecordRegistry,
+  isPluginRecordActive,
   markPluginRegistryActive,
   markPluginRegistryRetired,
 } from "../plugins/registry-lifecycle.js";
@@ -50,9 +55,10 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { prepareAgentWaitForTurn } from "./agent-turn/agent-wait.js";
 import { isPublicSessionShareActive } from "./control-ui-public-session-read.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -68,7 +74,14 @@ import {
   setTestPluginRegistry,
 } from "./test-helpers.js";
 
-type Case = "allowed" | "guest" | "revoked";
+type Case =
+  | "allowed"
+  | "guest"
+  | "delegation-revoked"
+  | "revoked"
+  | "author-revoked"
+  | "owner-retired";
+type AllowlistSnapshot = { allowFrom: string[]; assertCurrent: () => void };
 type Post = {
   id: string;
   author_id: string;
@@ -84,8 +97,11 @@ type TransportCase = {
   replies: string[];
 };
 let networkCase: TransportCase | undefined;
+let rejectIngress: ((error: unknown) => void) | undefined;
 const appToken = "synthetic-x-composition-app-token";
 const userToken = "synthetic-x-composition-user-token";
+const deniedWorkSessionReply =
+  "[[x_failure]] Work session creation was denied; no public work session was created.";
 
 // Fail closed: never delegate to fetch, credentials, or the network.
 async function xResponse(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -150,6 +166,25 @@ vi.mock("../plugin-sdk/ssrf-runtime.js", async (importOriginal) => ({
     release: async () => {},
   }),
 }));
+// Observe the real delivery promise: retryable failures settle in the durable queue,
+// not the monitor logger. Do not replace admission, delivery, or its result.
+vi.mock("../plugin-sdk/channel-outbound.js", async (importOriginal) => {
+  const original = await importOriginal<typeof channelOutbound>();
+  const create: typeof original.createChannelIngressMonitor = (options) =>
+    original.createChannelIngressMonitor({
+      ...options,
+      deliver: async (...args) => {
+        try {
+          return await options.deliver(...args);
+        } catch (error) {
+          console.error("[x-proof] ingress delivery failed", error);
+          rejectIngress?.(error);
+          throw error;
+        }
+      },
+    });
+  return { ...original, createChannelIngressMonitor: create };
+});
 vi.mock("../plugin-sdk/runtime-fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugin-sdk/runtime-fetch.js")>()),
   fetchWithRuntimeDispatcher: xResponse,
@@ -160,6 +195,16 @@ const { xPlugin } = await importBundledChannelContractSourceArtifact<{
 const { setXRuntime } = await importBundledChannelContractSourceArtifact<{
   setXRuntime: (runtime: PluginRuntime) => void;
 }>("x", "runtime-api.js", {});
+const { openXAllowlist } = await importBundledChannelContractSourceArtifact<{
+  openXAllowlist: (runtime: PluginRuntime) => {
+    put: (
+      accountId: string,
+      entry: { userId: string; username: string; name: string; addedBy: string; addedAt: number },
+    ) => Promise<void>;
+    remove: (accountId: string, userId: string) => Promise<unknown>;
+    readSnapshot: (accountId: string) => Promise<AllowlistSnapshot>;
+  };
+}>("x", "test-api.js", {});
 
 function post(id: string, root: string, author: string, text: string): Post {
   return {
@@ -171,11 +216,19 @@ function post(id: string, root: string, author: string, text: string): Post {
   };
 }
 
+function observedDeferred<T>() {
+  const deferred = Promise.withResolvers<T>();
+  // Observe immediately; awaiting the original promise still surfaces its rejection.
+  void deferred.promise.catch(() => {});
+  return deferred;
+}
+
 describe("X publication production-owner composition", () => {
   installGatewayTestHooks();
 
-  it("commits and anonymously reads maintainer work; denies guest and revoked creation", async ({
+  it("renews stale X authority for public creation and rejects revocation before commit", async ({
     signal,
+    onTestFailed,
   }) => {
     const channels: OpenClawConfig["channels"] = {
       x: {
@@ -185,7 +238,7 @@ describe("X publication production-owner composition", () => {
         clientSecret: "synthetic-client-secret",
         refreshToken: "synthetic-refresh-token",
         bearerToken: appToken,
-        allowFrom: ["x:10"],
+        allowFrom: [],
         groupPolicy: "allowlist",
         autoPublishWorkSessions: true,
         guests: { enabled: true },
@@ -194,20 +247,32 @@ describe("X publication production-owner composition", () => {
       },
     };
     clearRuntimeConfigSnapshot();
+    const baseConfig = await captureRuntimeConfigAsyncReader()();
     const config: OpenClawConfig = {
-      ...getRuntimeConfig(),
+      ...baseConfig,
       agents: {
         defaults: {
-          ...getRuntimeConfig().agents?.defaults,
+          ...baseConfig.agents?.defaults,
           model: { primary: "x-proof/proof-model" },
         },
-        entries: { main: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+        entries: {
+          main: {
+            skills: [],
+            tools: { fs: { workspaceOnly: true }, deny: ["exec", "write", "edit", "apply_patch"] },
+            subagents: { allowAgents: ["coder"], delegateToolsTo: ["coder"] },
+          },
+          coder: { skills: [], tools: { fs: { workspaceOnly: true } } },
+        },
       },
       channels,
+      bindings: [{ agentId: "main", match: { channel: "x", accountId: "default" } }],
       messages: { queue: { mode: "collect" }, inbound: { debounceMs: 0 } },
       skills: { load: { watch: false } },
       gateway: { publicOrigin: "https://public-proof.example.test" },
-      tools: { codeMode: false },
+      tools: {
+        codeMode: false,
+        exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: false },
+      },
       models: {
         providers: {
           "x-proof": {
@@ -236,6 +301,7 @@ describe("X publication production-owner composition", () => {
       enabled: true,
     });
     const sessionStore = resolveSessionStorePathCore(cfg().session?.store, { agentId: "main" });
+    const childStore = resolveSessionStorePathCore(cfg().session?.store, { agentId: "coder" });
     const gateway = createDirectChatContext({
       getRuntimeConfig: cfg,
       loadGatewayModelCatalog: async () => [
@@ -249,13 +315,29 @@ describe("X publication production-owner composition", () => {
       ],
     });
     gateway.resolveGatewayContext = () => gateway;
+    // Registry completion must observe the real child, not the direct fixture's empty wait result.
+    vi.mocked(
+      expectDefined(gateway.recoveryRuntime, "Gateway recovery fixture").waitForAgent,
+    ).mockImplementation(
+      async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
+    );
     gateway.readPreparedGatewayModelCatalog = async () => {
       const catalog = await gateway.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     };
     const runtime = createPluginRuntime();
     bindGatewayContextResolver(runtime.subagent, () => gateway);
-    const logger = { info() {}, warn() {}, error() {}, debug() {} };
+    let rejectMonitor: ((error: Error) => void) | undefined;
+    const reportMonitorFailure = (message: string) => {
+      console.error("[x-proof] monitor failure", message);
+      rejectMonitor?.(new Error(message));
+    };
+    const logger = {
+      info() {},
+      warn: reportMonitorFailure,
+      error: reportMonitorFailure,
+      debug() {},
+    };
     const builder = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
     const record = createPluginRecord({ id: "x", origin: "bundled" });
     const api = builder.createApi(record, { config: cfg(), registrationMode: "full" });
@@ -265,6 +347,24 @@ describe("X publication production-owner composition", () => {
     setTestPluginRegistry(builder.registry);
     const instance = expectDefined(getPluginInstance(record), "registered X instance");
     instance.run(() => setXRuntime(api.runtime));
+    // Agent-core starts tools while consuming the provider's stream, inside that
+    // provider plugin's invocation. Host tools must not borrow its runtime slots.
+    const providerRecord = createPluginRecord({ id: "proof-provider", origin: "bundled" });
+    builder.createApi(providerRecord, { config: cfg(), registrationMode: "full" });
+    builder.registry.plugins.push(providerRecord);
+    const providerInstance = expectDefined(
+      getPluginInstance(providerRecord),
+      "registered provider instance",
+    );
+    const allowlist = openXAllowlist(api.runtime);
+    const allowlistEntry = (userId: string) => ({
+      userId,
+      username: userId === "10" ? "maintainer" : "unrelated",
+      name: "Synthetic X author",
+      addedBy: "composition-proof",
+      addedAt: 0,
+    });
+    await allowlist.put("default", allowlistEntry("10"));
     const registeredX = expectDefined(
       builder.registry.channels.find((entry) => entry.pluginId === "x"),
       "registered X channel",
@@ -276,8 +376,34 @@ describe("X publication production-owner composition", () => {
     console.info("[x-proof] model runtime prepared");
 
     let activeCase: Case = "allowed";
+    let interruptedWait: Error | undefined;
+    onTestFailed(() => {
+      // Vitest records its timeout before the aborted test body finishes unwinding.
+      if (interruptedWait) {
+        throw interruptedWait;
+      }
+    });
+    const waitFor = async <T>(description: string, work: PromiseLike<T>) => {
+      try {
+        return await withinTest(work, signal);
+      } catch (error) {
+        if (!signal.aborted) {
+          throw error;
+        }
+        // Cleanup uses the same signal; preserve the first interrupted await.
+        interruptedWait ??= new Error(`X publication ${activeCase}: waiting for ${description}`, {
+          cause: error,
+        });
+        throw interruptedWait;
+      }
+    };
     let creating = false;
+    let creationSettled = Promise.withResolvers<void>();
     let revokedInCatalogWait = false;
+    let delegationRevokedInCatalogWait = false;
+    let authorRevokedInCatalogWait = false;
+    let ownerRetiredInCatalogWait = false;
+    const staleSnapshots = new Map<Case, AllowlistSnapshot>();
     const creationRequests: Array<{ kind: Case; parent: unknown }> = [];
     const catalog = gateway.loadGatewayModelCatalogSnapshot;
     gateway.loadGatewayModelCatalogSnapshot = async (request) => {
@@ -289,6 +415,26 @@ describe("X publication production-owner composition", () => {
         const next = structuredClone(cfg());
         next.channels!.x!.autoPublishWorkSessions = false;
         setRuntimeConfigSnapshot(next);
+      }
+      if (creating && activeCase === "delegation-revoked" && !delegationRevokedInCatalogWait) {
+        delegationRevokedInCatalogWait = true;
+        const next = structuredClone(cfg());
+        next.agents!.entries!.main!.subagents!.delegateToolsTo = [];
+        setRuntimeConfigSnapshot(next);
+      }
+      if (creating && activeCase === "author-revoked" && !authorRevokedInCatalogWait) {
+        authorRevokedInCatalogWait = true;
+        await allowlist.remove("default", "10");
+        expect((await allowlist.readSnapshot("default")).allowFrom).not.toContain("10");
+      }
+      if (creating && activeCase === "owner-retired" && !ownerRetiredInCatalogWait) {
+        ownerRetiredInCatalogWait = true;
+        // The Gateway fixture adopts this record into its retained registry.
+        // Retire that current owner, not the builder registry it no longer owns.
+        const ownerRegistry = getPluginRecordRegistry(builder.registry, record);
+        expect(isPluginRecordActive(ownerRegistry, record), activeCase).toBe(true);
+        markPluginRegistryRetired(ownerRegistry);
+        expect(isPluginRecordActive(builder.registry, record), activeCase).toBe(false);
       }
       return snapshot;
     };
@@ -310,6 +456,7 @@ describe("X publication production-owner composition", () => {
                 )(options);
               } finally {
                 creating = false;
+                creationSettled.resolve();
               }
             },
           },
@@ -318,10 +465,11 @@ describe("X publication production-owner composition", () => {
       );
 
     const outcomes = new Map<Case, unknown>();
+    const spawnErrors = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();
-    const childWritten = Promise.withResolvers<string>();
+    const childWritten = observedDeferred<string>();
     const childRuns = new Set<Promise<unknown>>();
-    const model = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+    const runModel = async (params: Parameters<typeof embeddedAgent.runEmbeddedAgent>[0]) => {
       const admitted =
         params.admittedRunContext ??
         (await expectDefined(params.preparedRunAdmission, "production reply-owned admission").admit(
@@ -330,7 +478,17 @@ describe("X publication production-owner composition", () => {
       const key = expectDefined(params.sessionKey, "admitted session key");
       console.info("[x-proof] model admitted", key);
       const child = key.includes(":dashboard:");
-      const work = (async () => {
+      const modelCaller = expectDefined(
+        createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          agentId: child ? "coder" : "main",
+          sessionKey: key,
+        }),
+        "admitted model execution scope",
+      );
+      // The deterministic model replaces the runner, including its admitted caller
+      // boundary. Child tools must not borrow the intake turn’s completed receipt.
+      return withGatewayToolCallerIdentity(modelCaller, async () => {
         if (
           params.userTurnTranscriptRecorder &&
           !params.userTurnTranscriptRecorder.hasPersisted()
@@ -338,11 +496,16 @@ describe("X publication production-owner composition", () => {
           expect(await params.userTurnTranscriptRecorder.persistApproved()).toBeTruthy();
         }
         params.onExecutionPhase?.({ phase: "model_call_started" });
-        let text = "Synthetic X invocation settled.";
+        let text = "[[x_success]] Synthetic X invocation settled.";
         if (!child) {
           const publication = readChildSessionPublication(admitted.operationalRunInstance);
           publications.set(activeCase, publication !== undefined);
           publication?.assertCurrent();
+          const staleSnapshot = staleSnapshots.get(activeCase);
+          if (staleSnapshot) {
+            expect(() => staleSnapshot.assertCurrent()).toThrow("X allowlist changed");
+            expect(publication).toBeDefined();
+          }
           const caller = expectDefined(
             createAdmittedGatewayToolCallerIdentity({
               admittedRunContext: admitted,
@@ -369,43 +532,111 @@ describe("X publication production-owner composition", () => {
                 senderIsOwner: params.senderIsOwner,
                 groupId: params.groupId,
                 conversationToolPolicy: params.conversationToolPolicy,
-                runtimeToolAllowlist: ["sessions_spawn"],
                 toolConstructionPlan: {
-                  includeBaseCodingTools: false,
-                  includeShellTools: false,
+                  includeBaseCodingTools: true,
+                  includeShellTools: true,
                   includeChannelTools: false,
                   includeOpenClawTools: true,
                   includePluginTools: false,
                 },
               });
+              for (const name of ["exec", "write", "edit"]) {
+                expect(
+                  tools.some((tool) => tool.name === name),
+                  name,
+                ).toBe(false);
+              }
               const spawn = expectDefined(
                 tools.find((tool) => tool.name === "sessions_spawn"),
                 "real sessions_spawn tool",
               );
-              return spawn.execute("x-proof-" + activeCase, {
-                task: "Persist the synthetic publication composition answer.",
-                label: "X publication " + activeCase,
-                runtime: "subagent",
-                visible: true,
-                context: "isolated",
-                expectsCompletionMessage: false,
-              });
+              const providerStream = providerInstance.run(() => Promise.resolve({}));
+              return runPluginStreamConsumer(providerStream, () =>
+                spawn.execute("x-proof-" + activeCase, {
+                  task: "Persist the synthetic publication composition answer.",
+                  label: "X publication " + activeCase,
+                  runtime: "subagent",
+                  agentId: "coder",
+                  visible: true,
+                  context: "isolated",
+                  expectsCompletionMessage: false,
+                }),
+              );
             });
             outcomes.set(activeCase, result.details);
+            if (isRecord(result.details) && typeof result.details.error === "string") {
+              text = deniedWorkSessionReply;
+            }
             console.info("[x-proof] spawn result", activeCase, result.details);
           } catch (error) {
+            spawnErrors.set(activeCase, error);
             outcomes.set(activeCase, { error: String(error) });
+            text = deniedWorkSessionReply;
             console.info("[x-proof] spawn error", activeCase, String(error));
           }
         } else {
+          const tools = await createOpenClawCodingToolsAsync({
+            config: params.config,
+            agentId: "coder",
+            sessionKey: key,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            operationalRunInstance: admitted.operationalRunInstance,
+            workspaceDir: params.workspaceDir,
+            inputProvenance: params.inputProvenance,
+            toolConstructionPlan: {
+              includeBaseCodingTools: true,
+              includeShellTools: true,
+              includeChannelTools: false,
+              includeOpenClawTools: false,
+              includePluginTools: false,
+            },
+          });
+          for (const name of ["exec", "write", "edit"]) {
+            expect(
+              tools.some((tool) => tool.name === name),
+              name,
+            ).toBe(true);
+          }
+          const writer = expectDefined(
+            tools.find((tool) => tool.name === "write"),
+            "child writer",
+          );
+          const proofPath = path.join(params.workspaceDir, "delegation-proof.txt");
+          await writer.execute("delegated-write", {
+            path: proofPath,
+            content: "coding handoff works",
+          });
+          expect(await fs.readFile(proofPath, "utf8")).toBe("coding handoff works");
+          const executor = expectDefined(
+            tools.find((tool) => tool.name === "exec"),
+            "child executor",
+          );
+          const executed = await executor.execute(
+            "delegated-exec",
+            {
+              command: "echo coding-handoff-works",
+              workdir: params.workspaceDir,
+            },
+            signal,
+          );
+          expect(executed.details).toMatchObject({ status: "completed", exitCode: 0 });
+          expect(executed.content).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "text",
+                text: expect.stringContaining("coding-handoff-works"),
+              }),
+            ]),
+          );
           text = "X publication composition: durable child answer.";
         }
         const appended = await appendTranscriptMessage(
           {
-            agentId: "main",
+            agentId: child ? "coder" : "main",
             sessionKey: key,
             sessionId: params.sessionId,
-            storePath: sessionStore,
+            storePath: child ? childStore : sessionStore,
           },
           { message: { role: "assistant", content: text } },
         );
@@ -418,9 +649,13 @@ describe("X publication production-owner composition", () => {
           meta: { durationMs: 0, stopReason: "stop" as const },
           acceptedSessionSpawns: mergeAcceptedSessionSpawnsForRun(admitted.operationalRunInstance),
         };
-      })();
-      if (child) {
+      });
+    };
+    const model = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation((params) => {
+      const work = runModel(params);
+      if (params.sessionKey?.includes(":dashboard:")) {
         childRuns.add(work);
+        void work.catch(childWritten.reject);
       }
       return work;
     });
@@ -435,15 +670,29 @@ describe("X publication production-owner composition", () => {
         controlUiBasePath: "",
         getRuntimeConfig: cfg,
         getGatewayRequestContext: () => gateway,
+        httpRequestLifetime: gateway,
       },
     });
     const channel = api.runtime.channel;
     const originalDispatch = channel.inbound.dispatch;
-    let dispatched = Promise.withResolvers<void>();
+    let dispatched = observedDeferred<void>();
     // Pass-through observation only: no replacement result or ingress capability.
     channel.inbound.dispatch = async (...args) => {
       console.info("[x-proof] real dispatch entered", activeCase);
       try {
+        if (
+          activeCase === "allowed" ||
+          activeCase === "author-revoked" ||
+          activeCase === "owner-retired"
+        ) {
+          // The monitor has already captured publication intent and built its
+          // host-bound context. Mutate real SQLite policy before run admission.
+          const snapshot = await allowlist.readSnapshot("default");
+          expect(snapshot.allowFrom).toContain("10");
+          await allowlist.put("default", allowlistEntry("40"));
+          expect(() => snapshot.assertCurrent()).toThrow("X allowlist changed");
+          staleSnapshots.set(activeCase, snapshot);
+        }
         const result = await originalDispatch(...args);
         dispatched.resolve();
         return result;
@@ -452,11 +701,32 @@ describe("X publication production-owner composition", () => {
         throw error;
       }
     };
-    const rows = () => listSessionEntriesCore({ agentId: "main", storePath: sessionStore });
+    const rows = () => listSessionEntriesCore({ agentId: "coder", storePath: childStore });
     try {
-      for (const [index, kind] of (["allowed", "guest", "revoked"] as const).entries()) {
+      for (const [index, kind] of (
+        [
+          "allowed",
+          "guest",
+          "delegation-revoked",
+          "revoked",
+          "author-revoked",
+          "owner-retired",
+        ] as const
+      ).entries()) {
+        if (kind !== "allowed" && kind !== "guest") {
+          await allowlist.put("default", allowlistEntry("10"));
+          const restored = structuredClone(cfg());
+          restored.agents!.entries!.main!.subagents!.delegateToolsTo = ["coder"];
+          // The public grant deliberately retires on any config change. Use a
+          // private handoff to prove delegation itself rejects the deferred commit.
+          restored.channels!.x!.autoPublishWorkSessions = kind !== "delegation-revoked";
+          setRuntimeConfigSnapshot(restored);
+        }
         activeCase = kind;
-        dispatched = Promise.withResolvers<void>();
+        creationSettled = Promise.withResolvers<void>();
+        dispatched = observedDeferred<void>();
+        rejectMonitor = dispatched.reject;
+        rejectIngress = dispatched.reject;
         const rootId = String(500 + index * 100);
         const mention = post(
           String(Number(rootId) + 1),
@@ -492,23 +762,90 @@ describe("X publication production-owner composition", () => {
           }),
         );
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              dispatched.promise,
-              monitor,
-              "X monitor ended before production reply dispatch",
-            ),
-            signal,
+          const dispatch =
+            kind === "owner-retired"
+              ? dispatched.promise
+              : awaitGateBeforeSettlement(
+                  dispatched.promise,
+                  monitor,
+                  "X monitor ended before production reply dispatch",
+                );
+          await waitFor(
+            "reply dispatch",
+            dispatch.catch((error: unknown) => {
+              if (!creationRequests.some((request) => request.kind === kind)) {
+                throw error;
+              }
+              // Author removal forbids final delivery. Registry retirement may
+              // instead reject the monitor's last plugin-runtime callback.
+              if (kind === "author-revoked") {
+                expect(authorRevokedInCatalogWait).toBe(true);
+              } else if (kind === "owner-retired") {
+                expect(ownerRetiredInCatalogWait).toBe(true);
+              } else {
+                throw error;
+              }
+            }),
           );
+          if (kind !== "guest") {
+            if (!creationRequests.some((request) => request.kind === kind)) {
+              if (spawnErrors.has(kind)) {
+                throw spawnErrors.get(kind);
+              }
+              throw new Error(
+                `X ${kind} dispatch completed without sessions.create; outcome: ${JSON.stringify(outcomes.get(kind))}`,
+              );
+            }
+            await waitFor("sessions.create settlement", creationSettled.promise);
+          }
         } finally {
+          rejectMonitor = undefined;
+          rejectIngress = undefined;
           abort.abort();
           try {
-            await monitor;
+            await waitFor(
+              "monitor shutdown",
+              monitor.catch((error: unknown) => {
+                if (kind !== "owner-retired" || !ownerRetiredInCatalogWait) {
+                  throw error;
+                }
+                // Retirement can reject the monitor's last plugin-runtime callback.
+                expect(String(error)).toContain("reloaded or disabled");
+              }),
+            );
           } finally {
-            await scheduling.close();
+            await waitFor("scheduler shutdown", Promise.resolve(scheduling.close()));
           }
         }
-        expect(networkCase.replies).toHaveLength(1);
+        if (kind === "owner-retired") {
+          expect(ownerRetiredInCatalogWait, kind).toBe(true);
+          expect(
+            creationRequests.filter((request) => request.kind === kind),
+            kind,
+          ).toHaveLength(1);
+        }
+        // Check the durable effect before delivery, so a reply failure cannot hide a grant.
+        expect(rows(), kind).toHaveLength(1);
+        expect(
+          rows().filter(({ entry }) => resolveSessionPublicShare(entry)),
+          kind,
+        ).toHaveLength(1);
+        expect(
+          rows().filter(({ entry }) => entry.parentSessionKey === "agent:main:x:group:" + rootId),
+          kind,
+        ).toHaveLength(kind === "allowed" ? 1 : 0);
+        // Only a declared success reaches X; denied work-session replies are withheld.
+        const outcome = outcomes.get(kind);
+        const succeeded =
+          publications.has(kind) &&
+          !spawnErrors.has(kind) &&
+          !(isRecord(outcome) && typeof outcome.error === "string");
+        if (!succeeded) {
+          expect(networkCase.replies, kind).toEqual([]);
+        } else if (kind !== "owner-retired") {
+          // Retirement may still reject delivery of an admitted success.
+          expect(networkCase.replies, kind).toHaveLength(1);
+        }
         const publicReads = networkCase.reads.filter((request) => request.appOnly);
         if (kind === "guest") {
           expect(publicReads).toEqual([]);
@@ -518,6 +855,14 @@ describe("X publication production-owner composition", () => {
             error: expect.stringContaining("hidden helpers"),
           });
           expect(creationRequests.filter((request) => request.kind === kind)).toEqual([]);
+        } else if (kind === "delegation-revoked") {
+          expect(publicReads).toEqual([]);
+          expect(publications.get(kind)).toBe(false);
+          expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(1);
+          expect(delegationRevokedInCatalogWait).toBe(true);
+          expect(outcomes.get(kind)).toMatchObject({
+            error: expect.stringContaining("authorization changed"),
+          });
         } else {
           expect(publicReads).toEqual([
             { path: "/2/tweets", appOnly: true, ids: expect.arrayContaining([rootId, mention.id]) },
@@ -526,9 +871,9 @@ describe("X publication production-owner composition", () => {
           expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(1);
           if (kind === "allowed") {
             expect(outcomes.get(kind)).toMatchObject({ status: "accepted", publicRead: true });
-            const key = await withinTest(childWritten.promise, signal);
+            const key = await waitFor("child transcript write", childWritten.promise);
             const entry = expectDefined(
-              loadSessionEntry({ agentId: "main", sessionKey: key, storePath: sessionStore }),
+              loadSessionEntry({ agentId: "coder", sessionKey: key, storePath: childStore }),
               "committed child row",
             );
             const publication = expectDefined(
@@ -537,19 +882,20 @@ describe("X publication production-owner composition", () => {
             );
             expect(publication.sessionId).toBe(entry.sessionId);
             // The append checkpoint precedes the run's final session metadata writes.
-            const childReleased = getSessionWorkAdmissionRelease({
-              scope: sessionStore,
+            const childReleased = captureSessionControllerSettlement({
+              scope: childStore,
               identities: [key, entry.sessionId],
+              agentId: "coder",
             });
             if (childReleased) {
-              await withinTest(childReleased, signal);
+              await waitFor("child admission release", childReleased);
             }
-            await withinTest(projection.prepareMembership(), signal);
+            await waitFor("projection membership", projection.prepareMembership());
             expect(
               isPublicSessionShareActive(
                 cfg(),
                 {
-                  agentId: "main",
+                  agentId: "coder",
                   sessionKey: key,
                   sessionId: publication.sessionId,
                   shareId: publication.id,
@@ -557,51 +903,73 @@ describe("X publication production-owner composition", () => {
                 projection,
               ),
             ).toBe(true);
-            const response = await sendRequest(http, {
-              path: new URL(
-                expectDefined(
-                  resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
-                  "canonical child URL",
-                ),
-              ).pathname,
-              host: "localhost",
-              remoteAddress: "127.0.0.1",
-            });
+            const response = await waitFor(
+              "anonymous public read",
+              sendRequest(http, {
+                path: new URL(
+                  expectDefined(
+                    resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
+                    "canonical child URL",
+                  ),
+                ).pathname,
+                host: "localhost",
+                remoteAddress: "127.0.0.1",
+              }),
+            );
             expect(response.res.statusCode, response.getBody()).toBe(200);
             expect(response.getBody()).toContain(
               "X publication composition: durable child answer.",
             );
             expect(response.getBody()).not.toContain("openclaw-app");
-          } else {
+          } else if (kind === "revoked") {
             expect(revokedInCatalogWait).toBe(true);
             expect(outcomes.get(kind)).toMatchObject({
               error: expect.stringContaining("publication policy changed"),
             });
+          } else if (kind === "author-revoked") {
+            expect(staleSnapshots.has(kind)).toBe(true);
+            expect(authorRevokedInCatalogWait).toBe(true);
+            expect(outcomes.get(kind), kind).toMatchObject({
+              error: expect.stringContaining("X allowlist changed"),
+            });
+          } else {
+            expect(staleSnapshots.has(kind)).toBe(true);
+            expect(ownerRetiredInCatalogWait).toBe(true);
+            // The outer Gateway binding surfaces retirement before the inner publication error.
+            expect(outcomes.get(kind), kind).toMatchObject({
+              error: "Error: Gateway instance unavailable for sessions.create",
+            });
           }
         }
-        expect(rows().filter(({ entry }) => resolveSessionPublicShare(entry))).toHaveLength(1);
-        expect(
-          rows().filter(({ entry }) => entry.parentSessionKey === "agent:main:x:group:" + rootId),
-        ).toHaveLength(kind === "allowed" ? 1 : 0);
       }
     } finally {
       channel.inbound.dispatch = originalDispatch;
-      await Promise.allSettled(childRuns);
-      model.mockRestore();
-      http.emit("close");
-      projection.dispose();
-      const children = rows().filter(({ sessionKey }) => sessionKey.includes(":dashboard:"));
-      await Promise.all(
-        children.flatMap(({ sessionKey, entry }) => {
-          const drain = getSessionWorkAdmissionRelease({
-            scope: sessionStore,
-            identities: [sessionKey, entry.sessionId],
-          });
-          return drain ? [drain] : [];
-        }),
-      );
-      markPluginRegistryRetired(builder.registry);
-      networkCase = undefined;
+      try {
+        await waitFor("child model settlement", Promise.allSettled(childRuns));
+      } finally {
+        model.mockRestore();
+        http.emit("close");
+        projection.dispose();
+        try {
+          const children = rows().filter(({ sessionKey }) => sessionKey.includes(":dashboard:"));
+          await waitFor(
+            "child admission cleanup",
+            Promise.all(
+              children.flatMap(({ sessionKey, entry }) => {
+                const drain = captureSessionControllerSettlement({
+                  scope: childStore,
+                  identities: [sessionKey, entry.sessionId],
+                  agentId: "coder",
+                });
+                return drain ? [drain] : [];
+              }),
+            ),
+          );
+        } finally {
+          markPluginRegistryRetired(builder.registry);
+          networkCase = undefined;
+        }
+      }
     }
   });
 });

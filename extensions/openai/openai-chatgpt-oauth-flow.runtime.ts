@@ -10,7 +10,6 @@ import {
   type OAuthCredentials,
   type OAuthPrompt,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
-import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import {
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
@@ -23,22 +22,12 @@ import {
 
 const CALLBACK_HOST = resolveOpenAICallbackHost();
 const REDIRECT_URI = resolveOpenAIRedirectUri(CALLBACK_HOST);
-const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 
 const loadOAuthCallbackServer = createLazyRuntimeModule(() =>
   import("openclaw/plugin-sdk/provider-auth-runtime").then(
     ({ startProviderOAuthLoopbackCallbackServer }) => startProviderOAuthLoopbackCallbackServer,
   ),
 );
-
-function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
-  return sleepWithAbort(MANUAL_PROMPT_FALLBACK_MS, signal, { ref: false }).then(
-    () => null,
-    () => {
-      throw createOAuthLoginCancelledError();
-    },
-  );
-}
 
 function parseAuthorizationCode(input: string, state: string): string | undefined {
   const parsed = parseOAuthAuthorizationInput(input);
@@ -98,9 +87,8 @@ function resolveOpenAICredentials(
 export async function loginOpenAICodex(options: {
   onAuth: (info: { url: string; instructions?: string }) => Promise<void> | void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-  onProgress?: (message: string) => void;
   // Manual entry races the browser callback; either can complete the login.
-  onManualCodeInput?: () => Promise<string>;
+  onManualCodeInput: () => Promise<string>;
   originator?: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -135,94 +123,40 @@ export async function loginOpenAICodex(options: {
     options.assertCurrent?.();
     throwIfOAuthLoginAborted(options.signal);
   }
-  let cancelWait!: () => void;
-  const cancelledWait = new Promise<null>((resolve) => {
-    cancelWait = () => resolve(null);
-  });
+  const waitForLogin = <T>(promise: Promise<T>) => withOAuthLoginAbort(promise, options.signal);
   let code: string | undefined;
   try {
     options.assertCurrent?.();
     throwIfOAuthLoginAborted(options.signal);
-    await withOAuthLoginAbort(
+    await waitForLogin(
       Promise.resolve(
         options.onAuth({
           url,
           instructions: "A browser window should open. Complete login to finish.",
         }),
       ),
-      options.signal,
-      cancelWait,
     );
     throwIfOAuthLoginAborted(options.signal);
-    const callbackPromise = Promise.race([
-      server
-        ? server.waitForCallback().then((result) => {
-            if (result.type === "oauth_error") {
-              throw new Error("OpenAI authorization was not completed.");
-            }
-            return { code: result.code };
-          })
-        : Promise.resolve(null),
-      cancelledWait,
-    ]);
-    void callbackPromise.catch(() => undefined);
-
-    if (options.onManualCodeInput) {
-      let manualCode: string | undefined;
-      let manualError: Error | undefined;
-      const manualPromise = options
-        .onManualCodeInput()
-        .then((input) => {
-          manualCode = input;
-          cancelWait();
-        })
-        .catch((err: unknown) => {
-          manualError = err instanceof Error ? err : new Error(String(err));
-          cancelWait();
-        });
-
-      const result = await withOAuthLoginAbort(callbackPromise, options.signal, cancelWait);
-
-      if (!result?.code && !manualCode && !manualError) {
-        await withOAuthLoginAbort(manualPromise, options.signal, cancelWait);
+    const callbackPromise = server?.waitForCallback().then((result) => {
+      if (result.type === "oauth_error") {
+        throw new Error("OpenAI authorization was not completed.");
       }
-      if (manualError) {
-        throw manualError;
-      }
-      if (result?.code) {
-        code = result.code;
-      } else if (manualCode) {
-        code = parseAuthorizationCode(manualCode, state);
-      }
-    } else {
-      const result = await withOAuthLoginAbort(
-        Promise.race([callbackPromise, waitForManualPromptFallback(options.signal)]),
-        options.signal,
-        cancelWait,
-      );
-      if (result?.code) {
-        code = result.code;
-      } else {
-        const promptCodePromise = promptForAuthorizationCode(options.onPrompt, state).then(
-          (promptCode) => {
-            cancelWait();
-            return promptCode;
-          },
-        );
-        code = await withOAuthLoginAbort(
-          Promise.race([callbackPromise.then((callback) => callback?.code), promptCodePromise]),
-          options.signal,
-          cancelWait,
-        );
-      }
-    }
+      return result.code;
+    });
+    // Closing the server after manual entry can reject the losing callback wait.
+    void callbackPromise?.catch(() => undefined);
+    const manualPromise = options.onManualCodeInput().then(
+      (input) => parseAuthorizationCode(input, state),
+      (err: unknown) => {
+        throw err instanceof Error ? err : new Error(String(err));
+      },
+    );
+    code = await waitForLogin(
+      callbackPromise ? Promise.race([callbackPromise, manualPromise]) : manualPromise,
+    );
 
     if (!code) {
-      code = await withOAuthLoginAbort(
-        promptForAuthorizationCode(options.onPrompt, state),
-        options.signal,
-        cancelWait,
-      );
+      code = await waitForLogin(promptForAuthorizationCode(options.onPrompt, state));
     }
 
     if (!code) {

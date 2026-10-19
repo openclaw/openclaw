@@ -1,4 +1,4 @@
-import type { RuntimeConfig } from "./config.js";
+import { hasCredentials, usesHostedEndpoint, type RuntimeConfig } from "./config.js";
 import { EvaluationError, evaluationError } from "./errors.js";
 import { localInput, parseLocalResult } from "./local.js";
 import { parseInput, parseResult } from "./schema.js";
@@ -20,33 +20,32 @@ export async function evaluate(
   if (!model) {
     throw new EvaluationError("TypeSafe requires a host-selected model.", "unsupported-input");
   }
-  if (model === "kev-latest" && !config.baseUrl) {
+  const hosted = usesHostedEndpoint(config);
+  if (model === "kev-latest" && hosted) {
     throw new EvaluationError(
       "Kev requires a local System One server. Configure baseUrl in TypeSafe plugin Settings.",
       "unsupported-input",
     );
   }
-  if (!config.baseUrl && !config.apiKey) {
+  if (!hasCredentials(config)) {
     throw new Error("TypeSafe API key is missing. Configure a SecretRef in plugin Settings.");
   }
   try {
-    const wireInput = config.baseUrl ? localInput(parsed) : parsed;
+    const wireInput = hosted ? parsed : localInput(parsed);
     const response = await requestEvaluation({
       body: { ...wireInput, model },
-      apiKey: config.baseUrl ? undefined : config.apiKey,
+      apiKey: config.apiKey,
       baseUrl: config.baseUrl,
+      providerConfig: config.providerConfig,
       timeoutMs: config.timeoutMs,
       signal,
       deadlineMonotonicMs,
       isAdmissible,
     });
     signal?.throwIfAborted();
-    const evaluation = config.baseUrl
-      ? parseLocalResult(response, wireInput, parsed)
-      : parseResult(response, parsed);
-    if (!config.baseUrl && config.apiKey && JSON.stringify(evaluation).includes(config.apiKey)) {
-      throw new Error("Invalid TypeSafe response.");
-    }
+    const evaluation = hosted
+      ? parseResult(response, parsed)
+      : parseLocalResult(response, wireInput, parsed);
     return { evaluation };
   } catch (error) {
     throw evaluationError(error, signal?.aborted ?? false);

@@ -20,20 +20,14 @@ import {
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
-  return {
+  const runtime = {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
-    isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
-      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
-    resolveEmbeddedAgentSessionProgressState: (sessionId: string) =>
-      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
     },
-    waitForEmbeddedAgentRunEnd: async (sessionId: string, timeoutMs?: number | null) => {
+    waitForNativeRunEnd: async (sessionId: string, timeoutMs?: number | null) => {
       if (timeoutMs === null) {
         embeddedRunMock.endWaitCalls.push(sessionId);
         return await new Promise<boolean>((resolve) => {
@@ -50,6 +44,28 @@ function createEmbeddedRunMockExports() {
       }
       return ended;
     },
+  };
+  return {
+    compactEmbeddedAgentSession: runtime.compactEmbeddedAgentSession,
+    abortEmbeddedAgentRun: runtime.abortEmbeddedAgentRun,
+    captureEmbeddedRunDrainTarget: (
+      sessionId: string,
+      owner: Parameters<
+        typeof import("../agents/embedded-agent-runner/runs.js").captureEmbeddedRunDrainTarget
+      >[1],
+    ) =>
+      embeddedRunMock.activeIds.has(sessionId)
+        ? {
+            sessionId,
+            agentId: owner.agentId,
+            sessionKey: undefined,
+            isActive: () => embeddedRunMock.activeIds.has(sessionId),
+            abort: () => runtime.abortEmbeddedAgentRun(sessionId),
+            waitForEnd: (timeoutMs: number | null) =>
+              runtime.waitForNativeRunEnd(sessionId, timeoutMs),
+            release: () => {},
+          }
+        : undefined,
   };
 }
 
@@ -107,7 +123,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     "../agents/sessions/index.js",
   );
 
-  const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
+  const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
     const modelsFile = path.join(args[1], "models.json");
     const Registry = modelSessions.ModelRegistry as unknown as {
       create?: (
@@ -169,8 +185,10 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
 
   return {
     ...actual,
-    discoverModels: (authStorage: Parameters<typeof actual.discoverModels>[0], agentDir: string) =>
-      new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
+    discoverModelsAsync: async (
+      authStorage: Parameters<typeof actual.discoverModelsAsync>[0],
+      agentDir: string,
+    ) => new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
     ModelRegistry: MockModelRegistry,
   };
 });
@@ -258,25 +276,26 @@ vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
   >("../agents/embedded-agent-runner/runs.js");
 });
 
-vi.mock("../agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/embedded-agent-runner/active-run-projections.js")
-  >()),
-  getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
-}));
-
-vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/embedded-agent-runner/active-run-projections.js")
-  >()),
-  getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
-}));
-
+// mock-isolation: Gateway fixtures must not collect real channel or session state.
 vi.mock("./health/collector.js", () => ({
-  collectGatewayHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
+  collectGatewayHealthSnapshot: vi
+    .fn<typeof import("./health/collector.js").collectGatewayHealthSnapshot>()
+    .mockImplementation(async () => ({
+      ok: true,
+      ts: 0,
+      durationMs: 0,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      agents: [],
+      sessions: { path: "/test/gateway/sessions", count: 0, recent: [] },
+    })),
 }));
+// mock-isolation: Gateway fixtures own their status response and must not collect local state.
 vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+  prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand: agentCommandMock,

@@ -10,7 +10,7 @@ import type {
 import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
-} from "./placement-move-intent.js";
+} from "./placement-move-intent.types.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import type { WorkerReclaimPlacement } from "./placement-reclaim-contract.js";
 import {
@@ -20,10 +20,7 @@ import {
   reportPlacementTransition,
   type WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
-import {
-  isFailedWorkerPlacementEnvironmentGone,
-  matchesWorkerPlacementTarget,
-} from "./placement-target.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
@@ -295,18 +292,7 @@ export function createWorkerPlacementMoveService(options: {
         if (environment && !isTerminalWorkerEnvironmentState(environment.state)) {
           return;
         }
-        const source = placement;
-        const assertCurrent = () => {
-          assertDestination();
-          const current = options.placements.get(intent.sessionId);
-          if (
-            !matchesWorkerPlacementTarget(current, source) ||
-            options.placements.getPlacementMove(intent.sessionId)?.operationId !==
-              intent.operationId
-          ) {
-            throw new Error(`Session ${identity.sessionKey} move recovery lost its source owner`);
-          }
-        };
+        const assertCurrent = assertDestination;
         assertCurrent();
         if (intent.target.kind === "gateway") {
           // Teardown can survive a restart before the source checkout is materialized.

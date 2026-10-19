@@ -8,11 +8,13 @@ import {
   packNpmSpecToArchive,
   resolveNpmSpecMetadata,
   withInstallWorkspace,
+  type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "../infra/package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 import {
   downloadRegistryPackageArchive,
   fetchRegistryPackageManifest,
@@ -62,12 +64,14 @@ export async function prepareNodeRuntimeUpdate(params: {
     manager === "bun"
       ? await fetchRegistryPackageManifest({ ...registryTarget, version, signal: params.signal })
       : undefined;
-  const resolved =
-    registryManifest ?? (await resolveNpmSpecMetadata({ spec, signal: params.signal }));
-  if (!resolved.ok) {
-    throw new Error(resolved.error);
+  let metadata: NpmSpecResolution | undefined = registryManifest;
+  if (!metadata) {
+    const resolved = await resolveNpmSpecMetadata({ spec, signal: params.signal });
+    if (!resolved.ok) {
+      throw new Error(resolved.error);
+    }
+    metadata = resolved.metadata;
   }
-  const { metadata } = resolved;
   if (metadata.name !== "openclaw" || metadata.version !== version || !metadata.integrity) {
     throw new Error(
       "Node auto-update registry metadata does not identify the requested release and integrity.",
@@ -102,15 +106,7 @@ export async function prepareNodeRuntimeUpdate(params: {
         params.signal?.throwIfAborted();
       };
       assertCurrent();
-      let retained = false;
-      try {
-        await fs.lstat(packageRoot);
-        retained = true;
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
+      const retained = (await lstatIfExists(packageRoot, "ENOENT")) !== undefined;
       if (retained) {
         // Never reinstall over a retained generation: the launcher may still be running it.
         try {
@@ -139,19 +135,15 @@ export async function prepareNodeRuntimeUpdate(params: {
       return await withInstallWorkspace("openclaw-node-update-", async (workspace) => {
         assertCurrent();
         let archivePath: string;
-        if (registryManifest?.ok) {
-          const downloaded = await downloadRegistryPackageArchive({
-            tarballUrl: registryManifest.metadata.tarball,
+        if (registryManifest) {
+          archivePath = await downloadRegistryPackageArchive({
+            tarballUrl: registryManifest.tarball,
             registryUrl: registryTarget.registryUrl,
             integrity,
             cwd: workspace,
             signal: params.signal,
           });
           assertCurrent();
-          if (!downloaded.ok) {
-            throw new Error(downloaded.error);
-          }
-          archivePath = downloaded.archivePath;
         } else {
           const packed = await packNpmSpecToArchive({
             spec,

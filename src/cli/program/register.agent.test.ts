@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentTurnCommand } from "./register.agent-turn.js";
@@ -9,11 +10,10 @@ const mocks = vi.hoisted(() => ({
   agentsAddCommandMock: vi.fn(),
   agentsTeamCreateCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
-  agentsBindCommandMock: vi.fn(),
+  agentsUpdateBindingsCommandMock: vi.fn(),
   agentsDeleteCommandMock: vi.fn(),
   agentsListCommandMock: vi.fn(),
   agentsSetIdentityCommandMock: vi.fn(),
-  agentsUnbindCommandMock: vi.fn(),
   requestExitAfterOneShotOutputMock: vi.fn(),
   setVerboseMock: vi.fn(),
   runtime: {
@@ -39,10 +39,10 @@ vi.mock("../../commands/agents.commands.team.js", () => ({
   agentsTeamCreateCommand: mocks.agentsTeamCreateCommandMock,
 }));
 
-vi.mock("../../commands/agents.commands.bind.js", () => ({
+vi.mock("../../commands/agents.commands.bind.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/agents.commands.bind.js")>()),
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
-  agentsBindCommand: mocks.agentsBindCommandMock,
-  agentsUnbindCommand: mocks.agentsUnbindCommandMock,
+  agentsUpdateBindingsCommand: mocks.agentsUpdateBindingsCommandMock,
 }));
 
 vi.mock("../../commands/agents.commands.delete.js", () => ({
@@ -70,8 +70,7 @@ vi.mock("../one-shot-exit.js", () => ({
   requestExitAfterOneShotOutput: mocks.requestExitAfterOneShotOutputMock,
 }));
 
-const { agentCliCommandMock, agentExecCommandMock, requestExitAfterOneShotOutputMock, runtime } =
-  mocks;
+const { agentCliCommandMock, agentExecCommandMock, runtime } = mocks;
 
 async function runCli(args: string[]) {
   const program = new Command().enablePositionalOptions();
@@ -95,73 +94,31 @@ describe("agent command registration", () => {
     );
   });
 
-  it("keeps exec-valued parent messages and failure status on the parent action", async () => {
-    const previousExitCode = process.exitCode;
-    agentCliCommandMock.mockImplementationOnce(async () => {
-      process.exitCode = 1;
-    });
-    try {
-      await runCli("agent --message exec --agent ops".split(" "));
-      expect(agentCliCommandMock).toHaveBeenCalledOnce();
-      expect(agentExecCommandMock).not.toHaveBeenCalled();
-      expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime);
-      expect(process.exitCode).toBe(1);
-    } finally {
-      process.exitCode = previousExitCode;
-    }
-  });
-
-  it("runs nested exec with ordered fallbacks and stored credentials by default", async () => {
-    await runCli(
-      "agent exec fix --cwd /tmp/project --model openai/gpt-5.6-luna --fallback anthropic/claude-sonnet-4-6 --fallback google/gemini-3.1-pro-preview --json".split(
-        " ",
-      ),
-    );
-    expect(agentCliCommandMock).not.toHaveBeenCalled();
-    expect(agentExecCommandMock).toHaveBeenCalledWith(
-      "fix",
-      expect.objectContaining({
-        cwd: "/tmp/project",
-        model: "openai/gpt-5.6-luna",
-        fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
-        authEnvOnly: false,
-        isolated: false,
-        timeout: "600",
-        json: true,
-      }),
-      runtime,
-    );
-  });
-
   it.each([
     {
-      args: "agent --model openai/gpt-5.6-luna --timeout 30 exec fix".split(" "),
-      timeout: "30",
+      args: [
+        ..."agent --timeout 30 exec fix --timeout 120".split(" "),
+        "--config-override",
+        '{"tools":{"deny":["exec"]}}',
+        "--config-override",
+        '{"tools":{"deny":[]}}',
+      ],
+      timeout: "120",
     },
-    { args: "agent --timeout 30 exec fix --timeout 120".split(" "), timeout: "120" },
   ])("resolves parent and leaf exec options for $args", async ({ args, timeout }) => {
     await runCli(args);
     expect(agentExecCommandMock).toHaveBeenCalledWith(
       "fix",
-      expect.objectContaining({ timeout }),
+      expect.objectContaining({
+        timeout,
+        configOverride: ['{"tools":{"deny":["exec"]}}', '{"tools":{"deny":[]}}'],
+      }),
       runtime,
     );
     expect(agentCliCommandMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      args: ["alpha"],
-      options: { name: "alpha", bind: [] },
-      workspace: undefined,
-      hasAutomationFlags: false,
-    },
-    {
-      args: "editor --role writer --json".split(" "),
-      options: { name: "editor", role: "writer", json: true, nonInteractive: false },
-      workspace: undefined,
-      hasAutomationFlags: false,
-    },
     {
       args: "beta --workspace /tmp/ws --bind telegram --bind discord:acct --non-interactive --json".split(
         " ",
@@ -198,13 +155,15 @@ describe("agent command registration", () => {
     ["bindings --agent ops --json", mocks.agentsBindingsCommandMock, { agent: "ops", json: true }],
     [
       "bind --agent ops --bind matrix:ops --bind telegram --json",
-      mocks.agentsBindCommandMock,
+      mocks.agentsUpdateBindingsCommandMock,
       { agent: "ops", bind: ["matrix:ops", "telegram"], json: true },
+      "bind",
     ],
     [
       "unbind --agent ops --all --json",
-      mocks.agentsUnbindCommandMock,
+      mocks.agentsUpdateBindingsCommandMock,
       { agent: "ops", bind: [], all: true, json: true },
+      "unbind",
     ],
     [
       "delete worker-a --force --json",
@@ -234,10 +193,17 @@ describe("agent command registration", () => {
         json: true,
       },
     ],
-  ] as const)("dispatches agents %s", async (args, command, options) => {
-    await runCli(["agents", ...(args ? args.split(" ") : [])]);
-    expect(command).toHaveBeenCalledExactlyOnceWith(options, runtime);
-  });
+  ] as const)(
+    "dispatches agents %s",
+    async (args, command, options, operation?: "bind" | "unbind") => {
+      await runCli(["agents", ...(args ? args.split(" ") : [])]);
+      expect(command).toHaveBeenCalledExactlyOnceWith(
+        ...(operation ? [operation] : []),
+        options,
+        runtime,
+      );
+    },
+  );
 
   it("renders Gateway request failures without internal class names", async () => {
     const message =

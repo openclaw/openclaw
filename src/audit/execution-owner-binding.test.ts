@@ -1,17 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  prepareAgentRunAdmission,
-  type AdmittedRunContext,
-} from "../agents/admitted-run-context.js";
-import {
-  createExecutionStartedOwnerBinding,
-  withPostAdmissionExecutionOwnerBinding,
-} from "./execution-owner-binding.js";
-
-const admitted: AdmittedRunContext = {
-  operationalRunInstance: { instanceId: "binding-instance", runId: "binding-run" },
-};
+import { prepareAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { withPostAdmissionExecutionOwnerBinding } from "./execution-owner-binding.js";
 
 function prepareSource(runId: string) {
   return prepareAgentRunAdmission({
@@ -26,41 +16,6 @@ function prepareSource(runId: string) {
 }
 
 describe("execution owner binding settlement", () => {
-  it.each(["admission", "execution"] as const)(
-    "awaits the same durable binding when %s arrives first",
-    async (first) => {
-      const durable = createDeferred();
-      const entered = createDeferred();
-      const bind = vi.fn(async () => {
-        entered.resolve();
-        await durable.promise;
-      });
-      const owner = createExecutionStartedOwnerBinding(bind);
-      await (first === "admission" ? owner.onPostAdmission(admitted) : owner.onExecutionStarted());
-      expect(bind).not.toHaveBeenCalled();
-
-      const second =
-        first === "admission" ? owner.onExecutionStarted() : owner.onPostAdmission(admitted);
-      await entered.promise;
-      const repeated = owner.onExecutionStarted();
-      let resumed = false;
-      const resumedAfterBinding = Promise.all([second, repeated]).then(() => {
-        resumed = true;
-      });
-      try {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(resumed).toBe(false);
-      } finally {
-        durable.resolve();
-        await resumedAfterBinding;
-      }
-      expect(resumed).toBe(true);
-      expect(bind).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each(["persistence failure", "owner closed"] as const)(
     "rejects admissions after %s during binding",
     async (outcome) => {

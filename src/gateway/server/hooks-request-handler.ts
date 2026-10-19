@@ -43,6 +43,7 @@ import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
   HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
+  HookWakeUnavailableError,
   sendAgentResult,
   sendFanOutResult,
   settleFanOutDispatches,
@@ -70,7 +71,8 @@ type HookDispatchers = {
   dispatchWakeHook: (
     value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
     agentId: string,
-  ) => WakeResult;
+    isHooksConfigCurrent?: () => boolean,
+  ) => WakeResult | null | Promise<WakeResult | null>;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
@@ -185,32 +187,23 @@ export function createHooksRequestHandler(
     const pending = Promise.resolve()
       .then(dispatch)
       .then((result) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          if (result.ok) {
-            const active = { state: "active", dispatch: result } as const;
-            hookReplayCache.set(key, active);
-            const settle = () => {
-              if (hookReplayCache.get(key) !== active) {
-                return;
-              }
-              const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
-              hookReplayCache.delete(key);
-              hookReplayCache.set(key, terminal);
-              pruneHookReplayCache(terminal.ts);
-            };
-            void result.completion.then(settle, settle);
-          } else {
+        // Pending/active entries cannot be pruned or replaced by another request.
+        if (result.ok) {
+          hookReplayCache.set(key, { state: "active", dispatch: result });
+          const settle = () => {
+            const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
             hookReplayCache.delete(key);
-          }
+            hookReplayCache.set(key, terminal);
+            pruneHookReplayCache(terminal.ts);
+          };
+          void result.completion.then(settle, settle);
+        } else {
+          hookReplayCache.delete(key);
         }
         return result;
       })
       .catch((err: unknown) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          hookReplayCache.delete(key);
-        }
+        hookReplayCache.delete(key);
         throw err;
       });
     hookReplayCache.set(key, { state: "pending", dispatch: pending });
@@ -353,11 +346,11 @@ export function createHooksRequestHandler(
       return resolution;
     };
     // Callers own the success response so mappings can dispatch several wakes first.
-    const dispatchWake = (
+    const dispatchWake = async (
       value: Parameters<HookDispatchers["dispatchWakeHook"]>[0],
       targetAgentId: string,
       source: HookSessionKeySource,
-    ): WakeResult | null => {
+    ): Promise<WakeResult | null> => {
       let dispatchSessionKey: string | undefined;
       if (value.sessionKey) {
         const sessionKey = resolveHookSessionKey({
@@ -383,9 +376,15 @@ export function createHooksRequestHandler(
         return null;
       }
       try {
-        return dispatchWakeHook(dispatchValue, targetAgentId);
+        return await dispatchWakeHook(
+          dispatchValue,
+          targetAgentId,
+          () => !rejectChangedHooksConfig(),
+        );
       } catch (error) {
-        if (!(error instanceof SystemEventQueueFullError)) {
+        if (
+          !(error instanceof SystemEventQueueFullError || error instanceof HookWakeUnavailableError)
+        ) {
           throw error;
         }
         sendJson(res, 503, { ok: false, error: error.message, ...wakeResult });
@@ -403,7 +402,11 @@ export function createHooksRequestHandler(
       if (!target) {
         return true;
       }
-      const directWakeResult = dispatchWake(normalized.value, target.effectiveAgentId, "request");
+      const directWakeResult = await dispatchWake(
+        normalized.value,
+        target.effectiveAgentId,
+        "request",
+      );
       if (!directWakeResult) {
         return true;
       }
@@ -664,7 +667,7 @@ export function createHooksRequestHandler(
               if (!target) {
                 return true;
               }
-              const dispatched = dispatchWake(
+              const dispatched = await dispatchWake(
                 { text: action.text, mode: action.mode, sessionKey: action.sessionKey },
                 target.effectiveAgentId,
                 action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",

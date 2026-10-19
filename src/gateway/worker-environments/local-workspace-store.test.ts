@@ -11,19 +11,19 @@ import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
 } from "../../agents/worktrees/capacity-contract.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
-  mutateLocalWorkspaceProjection,
-  readLocalWorkspaceProjectionInDatabase,
+  mutateLocalWorkspaceProjection as mutateProjection,
+  readLocalWorkspaceProjectionInDatabase as readProjectionInDatabase,
 } from "./local-workspace-store.kernel.js";
 import {
   localWorkspaceProjectionFixture,
@@ -45,7 +45,9 @@ beforeAll(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it("keeps mutation preconditions small without trimming committed payloads", () => {
+  using cleanup = new DisposableStack();
   const database = new DatabaseSync(":memory:");
+  cleanup.defer(() => database.close());
   const worktreeId = randomUUID();
   const baseline = JSON.stringify({ synthetic: "x".repeat(3 * 1024 * 1024) });
   const journalPack = new Uint8Array(3 * 1024 * 1024).fill(7);
@@ -56,42 +58,34 @@ it("keeps mutation preconditions small without trimming committed payloads", () 
     journal_json: "{}",
     journal_pack: journalPack,
   };
-  try {
-    mutateLocalWorkspaceProjection(database, worktreeId, { kind: "create", row: initial });
-    const reads = trackSqliteStatementExecutions(database, ["precondition"], (sql) =>
-      /^select\b/i.test(sql) && sql.includes("local_workspace_projections") ? "precondition" : null,
-    );
-    try {
-      expect(() =>
-        mutateLocalWorkspaceProjection(database, worktreeId, { kind: "create", row: initial }),
-      ).toThrow("Local workspace binding already exists");
-      const updated = mutateLocalWorkspaceProjection(database, worktreeId, {
-        kind: "update",
-        revision: 0,
-        patch: { paused_runtimes_json: "[]" },
-      });
-      assert(updated);
-      expect(updated).toMatchObject({ revision: 1, paused_runtimes_json: "[]" });
-      expect(updated.baseline_json).toBe(baseline);
-      assert(updated.journal_pack);
-      expect(Buffer.from(updated.journal_pack).equals(journalPack)).toBe(true);
-      expect(() =>
-        mutateLocalWorkspaceProjection(database, worktreeId, { kind: "delete", revision: 1 }),
-      ).toThrow("Local workspace has unsettled edits");
-      mutateLocalWorkspaceProjection(database, worktreeId, {
-        kind: "update",
-        revision: 1,
-        patch: { journal_json: "", journal_pack: new Uint8Array(), pending_ref: "" },
-      });
-      mutateLocalWorkspaceProjection(database, worktreeId, { kind: "delete", revision: 2 });
-      expect(readLocalWorkspaceProjectionInDatabase(database, worktreeId)).toBeUndefined();
-      expect(reads.textBytes.precondition + reads.blobBytes.precondition).toBeLessThan(1024);
-    } finally {
-      reads.restore();
-    }
-  } finally {
-    database.close();
-  }
+  mutateProjection(database, worktreeId, { kind: "create", row: initial });
+  const reads = trackSqliteStatementExecutions(database, ["precondition"], (sql) =>
+    /^select\b/i.test(sql) && sql.includes("local_workspace_projections") ? "precondition" : null,
+  );
+  cleanup.defer(reads.restore);
+  expect(() => mutateProjection(database, worktreeId, { kind: "create", row: initial })).toThrow(
+    "Local workspace binding already exists",
+  );
+  const updated = mutateProjection(database, worktreeId, {
+    kind: "update",
+    revision: 0,
+    patch: { paused_runtimes_json: "[]" },
+  });
+  assert(updated?.journal_pack);
+  expect(updated).toMatchObject({ revision: 1, paused_runtimes_json: "[]" });
+  expect(updated.baseline_json).toBe(baseline);
+  expect(Buffer.from(updated.journal_pack).equals(journalPack)).toBe(true);
+  expect(() => mutateProjection(database, worktreeId, { kind: "delete", revision: 1 })).toThrow(
+    "Local workspace has unsettled edits",
+  );
+  mutateProjection(database, worktreeId, {
+    kind: "update",
+    revision: 1,
+    patch: { journal_json: "", journal_pack: new Uint8Array(), pending_ref: "" },
+  });
+  mutateProjection(database, worktreeId, { kind: "delete", revision: 2 });
+  expect(readProjectionInDatabase(database, worktreeId)).toBeUndefined();
+  expect(reads.textBytes.precondition + reads.blobBytes.precondition).toBeLessThan(1024);
 });
 
 it("preserves the acknowledged row when a stale revision conflicts", async () => {
@@ -132,56 +126,41 @@ it.each([
   const worktreeId = randomUUID();
   const database = openOpenClawStateDatabase({ env });
   const context = captureOpenClawStateWorkerContext({ env });
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let revoked = false;
   let aboutToUpdate = false;
   let retainedIdentity: OpenClawStateLeaseIdentity | undefined;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-    (source, operation, options) =>
-      run(
-        source,
-        (worker) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              if (command.type === "localWorkspace.mutate" && aboutToUpdate) {
-                aboutToUpdate = false;
-                assert(retainedIdentity);
-                const changed = database.db
-                  .prepare(
-                    fault === "expired"
-                      ? "UPDATE state_leases SET expires_at = 0 WHERE scope = ? AND lease_key = ? AND owner = ?"
-                      : "UPDATE state_leases SET owner = 'synthetic-successor' WHERE scope = ? AND lease_key = ? AND owner = ?",
-                  )
-                  .run(retainedIdentity.scope, retainedIdentity.key, retainedIdentity.owner);
-                expect(changed.changes).toBe(1);
-                revoked = true;
-              }
-              return worker.execute(command, executeOptions);
-            },
-          }),
-        options,
-      ),
-  );
+  probe.command(stateWorker, async (command, executeOptions, worker) => {
+    if (command.type === "localWorkspace.mutate" && aboutToUpdate) {
+      aboutToUpdate = false;
+      assert(retainedIdentity);
+      const changed = database.db
+        .prepare(
+          fault === "expired"
+            ? "UPDATE state_leases SET expires_at = 0 WHERE scope = ? AND lease_key = ? AND owner = ?"
+            : "UPDATE state_leases SET owner = 'synthetic-successor' WHERE scope = ? AND lease_key = ? AND owner = ?",
+        )
+        .run(retainedIdentity.scope, retainedIdentity.key, retainedIdentity.owner);
+      expect(changed.changes).toBe(1);
+      revoked = true;
+    }
+    return worker.execute(command, executeOptions);
+  });
   try {
     await expect(
       withOpenClawStateLeaseAsync(
         { scope, key: worktreeId, leaseMs: 60_000, waitMs: 0 },
         context,
-        (lease) =>
-          withOpenClawStateLeasesWorkerAdmission([lease], context, async (authority) => {
-            retainedIdentity = authority.identities[0];
-            assert(retainedIdentity);
-            return withLocalWorkspaceStore(
-              { worktreeId, env, workerAuthority: { leaseSet: { context, leases: [lease] } } },
-              async (store) => {
-                const initial = await store.create(
-                  localWorkspaceProjectionFixture(worktreeId, root),
-                );
-                aboutToUpdate = true;
-                await store.update(initial, { pending_ref: "refs/openclaw/results/refused" });
-              },
-            );
-          }),
+        (lease, identity) => {
+          retainedIdentity = identity;
+          return withLocalWorkspaceStore(
+            { worktreeId, env, workerAuthority: { leaseSet: { context, leases: [lease] } } },
+            async (store) => {
+              const initial = await store.create(localWorkspaceProjectionFixture(worktreeId, root));
+              aboutToUpdate = true;
+              await store.update(initial, { pending_ref: "refs/openclaw/results/refused" });
+            },
+          );
+        },
       ),
     ).rejects.toThrow(/lease/iu);
     expect(revoked).toBe(true);
@@ -201,36 +180,31 @@ it("adopts native committed facts after reply loss without replaying the mutatio
   await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
     store.create(localWorkspaceProjectionFixture(worktreeId, root)),
   );
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
-  const lostReply = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "localWorkspace.mutate") {
-                writes += 1;
-                throw new Error("Synthetic local workspace reply lost after native commit");
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
+  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "localWorkspace.mutate") {
+      writes += 1;
+      throw new Error("Synthetic local workspace reply lost after native commit");
+    }
+    return result;
+  });
   const pendingRef = "refs/openclaw/results/accepted";
   const acknowledged = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    const row = await store.update(store.get()!, { pending_ref: pendingRef });
+    const row = await store.update(
+      { ...store.get()!, base_commit: "f".repeat(40) },
+      { pending_ref: pendingRef },
+    );
     expect(store.get()).toEqual(row);
     return row;
   });
   lostReply.mockRestore();
   expect(writes).toBe(1);
-  expect(acknowledged).toMatchObject({ revision: 1, pending_ref: pendingRef });
+  expect(acknowledged).toMatchObject({
+    revision: 1,
+    pending_ref: pendingRef,
+    base_commit: "a".repeat(40),
+  });
   await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
     expect(store.get()).toEqual(acknowledged);
     await expect(store.delete(store.get()!)).rejects.toThrow("unsettled edits");

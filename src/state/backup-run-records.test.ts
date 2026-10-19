@@ -19,6 +19,8 @@ import {
   readBackupRuns,
   summarizeBackupTargets,
   recordBackupRunOutcome,
+  type BackupRunRecord,
+  type BackupRunFreshness,
 } from "./backup-run-records.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -45,20 +47,86 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
-async function testEnv(options?: { bootstrap?: boolean }): Promise<NodeJS.ProcessEnv> {
+type Outcome = Parameters<typeof recordBackupRunOutcome>[0];
+async function fixture(stubEnv = false, bootstrap = true) {
   const root = roots.make("openclaw-backup-runs-test-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  if (options?.bootstrap) {
-    // Recording is non-creating by contract, so the fixture bootstraps the
-    // state database the way a real gateway host already has.
+  // Recording never creates the ledger; ordinary fixtures model an existing host.
+  if (bootstrap) {
     runOpenClawStateWriteTransaction(() => undefined, { env });
   }
-  return env;
+  if (stubEnv) {
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  }
+  return {
+    env,
+    record: (overrides: Partial<Omit<Outcome, "env">> = {}) =>
+      recordBackupRunOutcome({ env, kind: "archive", status: "ok", archivePath: "", ...overrides }),
+  };
+}
+
+function schedule(namespace: string): CronJob {
+  return {
+    ...buildBackupScheduleJob({
+      mode: "offsite",
+      location: "archive",
+      namespace,
+      everyMs: 100,
+      includeWorkspace: true,
+    }),
+    id: "scheduled",
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    state: {},
+  };
+}
+
+function legacyRun(manifest: object, archivePath = "") {
+  return parseBackupRun({
+    id: "legacy",
+    created_at: 1,
+    archive_path: archivePath,
+    status: "ok",
+    manifest_json: JSON.stringify(manifest),
+  });
+}
+
+const offsiteLocation = (namespace = "host") => ({
+  name: "offsite",
+  provider: "filesystem",
+  locationId: "location-1",
+  namespace,
+  key: "20260930T120000Z-abcd1234.tar.gz",
+  plaintextBytes: 100,
+  storedBytes: 150,
+});
+
+async function checkHint(
+  env: NodeJS.ProcessEnv,
+  message?: string | RegExp,
+  now?: number,
+  cfg?: Parameters<typeof noteBackupDoctorHint>[1],
+) {
+  mocks.note.mockClear();
+  if (now !== undefined) {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+  }
+  await noteBackupDoctorHint(env, cfg);
+  if (message === undefined) {
+    expect(mocks.note).not.toHaveBeenCalled();
+  } else {
+    expect(mocks.note).toHaveBeenCalledWith(
+      typeof message === "string"
+        ? expect.stringContaining(message)
+        : expect.stringMatching(message),
+      "Backups",
+    );
+  }
 }
 
 describe("backup run records", () => {
   it("discovers native absolute archive parents without requiring them to exist", async () => {
-    const env = await testEnv({ bootstrap: true });
+    const { env, record } = await fixture();
     const parent = path.join(path.dirname(resolveOpenClawStateSqlitePath(env)), "archives");
     for (const [kind, archivePath] of [
       ["archive", path.join(parent, "first.tar.gz")],
@@ -67,68 +135,40 @@ describe("backup run records", () => {
       ["archive", "relative.tar.gz"],
       ["git", path.join(parent, "git")],
     ] as const) {
-      await recordBackupRunOutcome({ env, kind, archivePath, status: "ok" });
+      await record({ kind, archivePath });
     }
     expect(await readBackupArchiveDirectories(env)).toEqual([parent]);
     await expect(fs.access(parent)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reads legacy manifests and round trips offsite details and external command outcomes", async () => {
-    expect(
-      parseBackupRun({
-        id: "legacy",
-        created_at: 1,
-        archive_path: "/old.tar.gz",
-        status: "ok",
-        manifest_json: '{"kind":"archive"}',
-      }),
-    ).toEqual({
+    expect(legacyRun({ kind: "archive" }, "/old.tar.gz")).toEqual({
       id: "legacy",
       createdAt: 1,
       archivePath: "/old.tar.gz",
       status: "ok",
       kind: "archive",
     });
-    const env = await testEnv({ bootstrap: true });
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const location = {
-      name: "offsite",
-      provider: "filesystem",
-      locationId: "location-1",
-      key: "20260930T120000Z-abcd1234.tar.gz",
+    const { env, record } = await fixture(true);
+    const location = offsiteLocation();
+    expect(legacyRun({ kind: "archive", target: "offsite", location })).toMatchObject({
       namespace: "host",
-      plaintextBytes: 100,
-      storedBytes: 150,
-    };
-    expect(
-      parseBackupRun({
-        id: "legacy-offsite",
-        created_at: 1,
-        archive_path: "",
-        status: "ok",
-        manifest_json: JSON.stringify({ kind: "archive", target: "offsite", location }),
-      }),
-    ).toMatchObject({ namespace: "host", location });
-    await recordBackupRunOutcome({
-      env,
-      kind: "archive",
-      status: "ok",
-      archivePath: "",
+      location,
+    });
+    await record({
       target: "offsite",
       location,
       retention: { kept: 7, deleted: 2 },
       createdAt: 20,
     });
-    await recordBackupRunOutcome({
-      env,
-      kind: "archive",
+    const failed = {
       status: "failed",
-      archivePath: "",
       target: "offsite",
       namespace: "host",
       error: "reconnect the disk",
       createdAt: 30,
-    });
+    } as const;
+    await record(failed);
     vi.spyOn(Date, "now").mockReturnValue(40);
     await backupRecordCommand(createTestRuntime(), {
       status: "ok",
@@ -143,7 +183,7 @@ describe("backup run records", () => {
         status: "ok",
         bytes: 321,
       }),
-      expect.objectContaining({ target: "offsite", status: "failed", error: "reconnect the disk" }),
+      expect.objectContaining(failed),
       expect.objectContaining({ location, retention: { kept: 7, deleted: 2 } }),
     ]);
     expect(summarizeBackupTargets(runs)).toEqual([
@@ -176,62 +216,23 @@ describe("backup run records", () => {
   it.each(["host-a", undefined])(
     "does not count namespace %s successes toward another namespace's schedule",
     async (namespace) => {
-      const env = await testEnv({ bootstrap: true });
-      vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      const { env, record } = await fixture(true);
       vi.spyOn(Date, "now").mockReturnValue(1_100);
       const ok = {
-        env,
         createdAt: 1_000,
         archivePath: "storage://archive/backups/host-a/backup.tar.gz",
-        status: "ok" as const,
-        kind: "archive" as const,
         target: "archive",
-        ...(namespace
-          ? {
-              location: {
-                name: "archive",
-                provider: "filesystem",
-                locationId: "location-1",
-                namespace,
-                key: "backup.tar.gz",
-                plaintextBytes: 100,
-                storedBytes: 100,
-              },
-            }
-          : {}),
+        location: namespace ? { ...offsiteLocation(namespace), name: "archive" } : undefined,
       };
-      await recordBackupRunOutcome(ok);
+      await record(ok);
       await saveCronJobsStore(resolveCronJobsStorePathFromConfig({}, env), {
         version: 1,
-        jobs: [
-          {
-            ...buildBackupScheduleJob({
-              mode: "offsite",
-              location: "archive",
-              namespace: "host-b",
-              everyMs: 100,
-              includeWorkspace: true,
-            }),
-            id: "scheduled",
-            enabled: true,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            state: {},
-          },
-        ],
+        jobs: [schedule("host-b")],
       });
-      await noteBackupDoctorHint(env, {});
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("No successful offsite backup to archive is recorded."),
-        "Backups",
-      );
-      expect(summarizeBackupTargets(await readBackupRuns(env))).toEqual([
-        expect.objectContaining({
-          target: "archive",
-          latestOk: expect.objectContaining({ createdAt: 1_000 }),
-        }),
-      ]);
-      await recordBackupRunOutcome({
+      await checkHint(env, "No successful offsite backup to archive is recorded.", undefined, {});
+      const successfulTarget = { target: "archive", latestOk: { createdAt: 1_000 } };
+      expect(summarizeBackupTargets(await readBackupRuns(env))).toMatchObject([successfulTarget]);
+      await record({
         ...ok,
         location: undefined,
         namespace: "host-b",
@@ -239,110 +240,62 @@ describe("backup run records", () => {
         error: "disk unavailable",
         createdAt: 1_050,
       });
-      expect(summarizeBackupTargets(await readBackupRuns(env))).toEqual([
-        {
-          kind: "archive",
-          target: "archive",
-          namespace: "host-b",
-          latest: expect.objectContaining({ status: "failed", namespace: "host-b" }),
-        },
-        expect.objectContaining({
-          target: "archive",
-          latestOk: expect.objectContaining({ createdAt: 1_000 }),
-        }),
-      ]);
-      await recordBackupRunOutcome({
+      const targets = summarizeBackupTargets(await readBackupRuns(env));
+      expect(targets).toHaveLength(2);
+      expect(targets[0]).toEqual({
+        kind: "archive",
+        target: "archive",
+        namespace: "host-b",
+        latest: expect.objectContaining({ status: "failed", namespace: "host-b" }),
+      });
+      expect(targets[1]).toMatchObject(successfulTarget);
+      await record({
         ...ok,
         location: undefined,
         namespace: "host-b",
         createdAt: 1_100,
       });
-      mocks.note.mockClear();
-      await noteBackupDoctorHint(env, {});
-      expect(mocks.note).not.toHaveBeenCalled();
+      await checkHint(env, undefined, undefined, {});
     },
   );
 
   it("hints on failed or stale offsite schedules independently of newer successes elsewhere", async () => {
-    const env = await testEnv({ bootstrap: true });
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const { env, record } = await fixture(true);
     const cfg = {};
     const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-    const ok = {
+    const ok = { createdAt: 1_000, target: "archive", namespace: "host" };
+    const job = schedule("host");
+    await record(ok);
+    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
+    await checkHint(env, undefined, 1_300, cfg);
+    await checkHint(env, "openclaw storage test archive", 1_301, cfg);
+    await record({ ...ok, target: "elsewhere", createdAt: 1_250 });
+    await record({ ...ok, status: "failed", error: "disk unavailable", createdAt: 1_200 });
+    await checkHint(
       env,
-      createdAt: 1_000,
-      archivePath: "",
-      status: "ok" as const,
-      kind: "archive" as const,
-      target: "archive",
-      namespace: "host",
-    };
-    const schedule: CronJob = {
-      id: "scheduled",
-      name: "Offsite backup",
-      declarationKey: "openclaw-backup-offsite-scheduled",
-      enabled: true,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      schedule: { kind: "every", everyMs: 100 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: {
-        kind: "command",
-        argv: ["openclaw", "backup", "create", "--to", "archive", "--namespace", "host"],
-      },
-      state: {},
-    };
-    await recordBackupRunOutcome(ok);
-    await saveCronJobsStore(storePath, { version: 1, jobs: [schedule] });
-    vi.spyOn(Date, "now").mockReturnValue(1_300);
-    await noteBackupDoctorHint(env, cfg);
-    expect(mocks.note).not.toHaveBeenCalled();
-    vi.mocked(Date.now).mockReturnValue(1_301);
-    await noteBackupDoctorHint(env, cfg);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw storage test archive"),
-      "Backups",
+      /archive failed: disk unavailable.*openclaw storage test archive/su,
+      1_250,
+      cfg,
     );
-    await recordBackupRunOutcome({ ...ok, target: "elsewhere", createdAt: 1_250 });
-    await recordBackupRunOutcome({
-      ...ok,
-      status: "failed",
-      error: "disk unavailable",
-      createdAt: 1_200,
-    });
-    mocks.note.mockClear();
-    vi.mocked(Date.now).mockReturnValue(1_250);
-    await noteBackupDoctorHint(env, cfg);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringMatching(/archive failed: disk unavailable.*openclaw storage test archive/su),
-      "Backups",
-    );
-    await saveCronJobsStore(storePath, {
-      version: 1,
-      jobs: [{ ...schedule, enabled: false }],
-    });
-    mocks.note.mockClear();
-    vi.mocked(Date.now).mockReturnValue(1_301);
-    await noteBackupDoctorHint(env, cfg);
-    expect(mocks.note).not.toHaveBeenCalled();
+    await saveCronJobsStore(storePath, { version: 1, jobs: [{ ...job, enabled: false }] });
+    await checkHint(env, undefined, 1_301, cfg);
   });
 
   it("records in the captured state without main-thread SQL and retains the outcome after reopen", async () => {
-    const env = await testEnv({ bootstrap: true });
-    const otherEnv = await testEnv({ bootstrap: true });
+    const { env } = await fixture();
+    const { env: otherEnv } = await fixture();
     const mutableEnv = { ...env };
+    const snapshot = {
+      archivePath: "/backups/snapshot",
+      kind: "sqlite-snapshot",
+      status: "ok",
+      createdAt: 7,
+    } as const;
     await closeOpenClawStateDatabaseAsync();
     requireNodeSqlite();
     const sql = observeMainThreadSql();
     try {
-      const pending = recordBackupRunOutcome({
-        env: mutableEnv,
-        archivePath: "/backups/snapshot",
-        kind: "sqlite-snapshot",
-        status: "ok",
-        createdAt: 7,
-      });
+      const pending = recordBackupRunOutcome({ env: mutableEnv, ...snapshot });
       mutableEnv.OPENCLAW_STATE_DIR = otherEnv.OPENCLAW_STATE_DIR;
       await pending;
       const [first, second] = await Promise.all([
@@ -350,100 +303,71 @@ describe("backup run records", () => {
         readBackupRunFreshness(otherEnv),
       ]);
       expect(second).toEqual({});
-      expect(first).toMatchObject({
-        latest: { archivePath: "/backups/snapshot", kind: "sqlite-snapshot", createdAt: 7 },
-      });
+      expect(first).toMatchObject({ latest: snapshot });
       sql.expectIdle();
     } finally {
       sql.restore();
     }
     await closeOpenClawStateDatabaseAsync();
     expect(await readBackupRunFreshness(env)).toMatchObject({
-      latest: {
-        archivePath: "/backups/snapshot",
-        kind: "sqlite-snapshot",
-        status: "ok",
-        createdAt: 7,
-      },
+      latest: snapshot,
       latestOk: { archivePath: "/backups/snapshot" },
     });
   });
 
-  it.each(["archive", "git", "local archive"] as const)(
-    "retains each target and namespace's newest attempt and success beyond the 200-row window (%s)",
-    async (mode) => {
-      const env = await testEnv({ bootstrap: true });
+  it.each([
+    ["archive", "occasional", "frequent", "occasional"],
+    ["git", "commit", undefined, "/backups/git"],
+    ["archive", undefined, undefined, "/backups/archive-252.tar.gz"],
+  ] as const)(
+    "retains %s target %s attempts and successes beyond the 200-row window",
+    async (kind, target, namespace, expectedTarget) => {
+      const { env, record } = await fixture();
       const frequentRun = (index: number) => ({
-        archivePath: mode === "git" ? "/backups/git" : `/backups/archive-${index}.tar.gz`,
-        kind: mode === "git" ? ("git" as const) : ("archive" as const),
-        ...(mode === "local archive"
-          ? {}
-          : { target: mode === "git" ? `commit-${index}` : "occasional" }),
-        ...(mode === "archive" ? { namespace: "frequent" } : {}),
+        archivePath: kind === "git" ? "/backups/git" : `/backups/archive-${index}.tar.gz`,
+        kind,
+        target: target === "commit" ? `commit-${index}` : target,
+        namespace,
       });
-      await recordBackupRunOutcome({
-        env,
+      const occasional = {
         archivePath: "/backups/archive.tar.gz",
-        status: "ok",
-        kind: "archive",
         target: "occasional",
         namespace: "occasional",
-        createdAt: 1,
-      });
-      await recordBackupRunOutcome({
-        env,
-        archivePath: "/backups/archive.tar.gz",
+      };
+      await record({ ...occasional, createdAt: 1 });
+      await record({
+        ...occasional,
         status: "failed",
-        kind: "archive",
-        target: "occasional",
-        namespace: "occasional",
         error: "archive failed",
         createdAt: 2,
       });
       for (let index = 3; index <= 252; index += 1) {
-        await recordBackupRunOutcome({
-          env,
-          ...frequentRun(index),
-          status: "ok",
-          createdAt: index,
-        });
+        await record({ ...frequentRun(index), createdAt: index });
       }
       const targets = summarizeBackupTargets(await readBackupRuns(env));
       expect(targets.find((entry) => entry.latest.createdAt === 252)).toMatchObject({
-        kind: mode === "git" ? "git" : "archive",
-        target:
-          mode === "git"
-            ? "/backups/git"
-            : mode === "local archive"
-              ? "/backups/archive-252.tar.gz"
-              : "occasional",
-        latest: expect.objectContaining({ createdAt: 252, status: "ok" }),
-        latestOk: expect.objectContaining({ createdAt: 252, status: "ok" }),
+        kind,
+        target: expectedTarget,
+        latest: { createdAt: 252, status: "ok" },
+        latestOk: { createdAt: 252, status: "ok" },
       });
       expect(targets.find((entry) => entry.namespace === "occasional")).toMatchObject({
         kind: "archive",
         target: "occasional",
-        latest: expect.objectContaining({ createdAt: 2, status: "failed" }),
-        latestOk: expect.objectContaining({ createdAt: 1, status: "ok" }),
+        latest: { createdAt: 2, status: "failed" },
+        latestOk: { createdAt: 1, status: "ok" },
       });
       const rows = withExistingOpenClawStateDatabaseReadOnly(
         ({ db }) =>
           db
-            .prepare(
-              "SELECT created_at, status, manifest_json FROM backup_runs ORDER BY created_at ASC",
-            )
-            .all() as Array<{ created_at: number; status: string; manifest_json: string }>,
+            .prepare("SELECT created_at, status FROM backup_runs ORDER BY created_at ASC")
+            .all() as Array<{ created_at: number; status: string }>,
         { env },
       );
       expect(rows).toHaveLength(202);
       expect(rows?.slice(0, 3).map((row) => row.created_at)).toEqual([1, 2, 53]);
       expect(rows?.at(-1)).toMatchObject({ created_at: 252, status: "ok" });
-      await recordBackupRunOutcome({
-        env,
-        ...frequentRun(253),
-        status: "failed",
-        createdAt: 253,
-      });
+      await record({ ...frequentRun(253), status: "failed", createdAt: 253 });
       expect(await readBackupRunFreshness(env)).toMatchObject({
         latest: { createdAt: 253, status: "failed" },
         latestOk: { createdAt: 252, status: "ok" },
@@ -452,83 +376,58 @@ describe("backup run records", () => {
   );
 
   it("treats an older same-version database without backup_runs as no recorded backups", async () => {
-    const env = await testEnv({ bootstrap: true });
+    const { env } = await fixture();
     withExistingOpenClawStateDatabaseReadOnly(() => undefined, { env });
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    fsSync.renameSync(pathname, `${pathname}.seed`);
+    fsSync.copyFileSync(`${pathname}.seed`, pathname);
     const { DatabaseSync } = await import("node:sqlite");
-    const raw = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+    const raw = new DatabaseSync(pathname);
     raw.exec("DROP TABLE backup_runs");
     raw.close();
     expect(await readBackupRunFreshness(env)).toEqual({});
   });
 
   it("keeps absent status reads read-only and formats none, failed, fresh, and stale states", async () => {
-    const env = await testEnv();
+    const { env, record } = await fixture(false, false);
     const realpath = vi.spyOn(fsSync.realpathSync, "native").mockImplementation(() => {
       throw new Error("Scratch discovery must not canonicalize an absent ledger");
     });
     await expect(readBackupArchiveDirectories(env)).resolves.toEqual([]);
     expect(realpath).not.toHaveBeenCalled();
     realpath.mockRestore();
-    await recordBackupRunOutcome({
-      env,
-      archivePath: "/backups/failed.tar.gz",
-      kind: "archive",
-      status: "failed",
-    });
+    await record({ archivePath: "/backups/failed.tar.gz", status: "failed" });
     expect(await readBackupRunFreshness(env)).toEqual({});
     await expect(fs.access(resolveOpenClawStateSqlitePath(env))).rejects.toMatchObject({
       code: "ENOENT",
     });
     const formatTimeAgo = (ageMs: number) => `${ageMs / 3_600_000}h ago`;
-    expect(buildBackupStatusValue({ freshness: {}, now: 10, formatTimeAgo })).toBe("none recorded");
-    const failed = {
+    const statusValue = (freshness: BackupRunFreshness, now: number) =>
+      buildBackupStatusValue({ freshness, now, formatTimeAgo });
+    expect(statusValue({}, 10)).toBe("none recorded");
+    const failed: BackupRunRecord = {
       id: "failed",
       createdAt: 1,
       archivePath: "/backup",
-      status: "failed" as const,
-      kind: "archive" as const,
+      status: "failed",
+      kind: "archive",
     };
-    expect(
-      buildBackupStatusValue({
-        freshness: { latest: failed },
-        now: 3 * 24 * 3_600_000 + 1,
-        formatTimeAgo,
-      }),
-    ).toBe("last attempt failed 72h ago (archive)");
-    await noteBackupDoctorHint(env);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("No successful backup is recorded."),
-      "Backups",
+    expect(statusValue({ latest: failed }, 3 * 24 * 3_600_000 + 1)).toBe(
+      "last attempt failed 72h ago (archive)",
     );
+    await checkHint(env, "No successful backup is recorded.");
 
-    // Recording is non-creating; bootstrap the state database before the
-    // recording phase the way a real gateway host already has.
     runOpenClawStateWriteTransaction(() => undefined, { env });
     vi.spyOn(Date, "now").mockReturnValue(1_000);
-    await recordBackupRunOutcome({
-      env,
-      archivePath: "/backup",
-      status: "ok",
-      kind: "git",
-      createdAt: 1,
-    });
-    mocks.note.mockClear();
-    await noteBackupDoctorHint(env);
-    expect(mocks.note).not.toHaveBeenCalled();
+    await record({ archivePath: "/backup", kind: "git", createdAt: 1 });
+    await checkHint(env);
 
-    vi.mocked(Date.now).mockReturnValue(1 + 15 * 24 * 3_600_000);
-    await noteBackupDoctorHint(env);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("more than 14 days old"),
-      "Backups",
-    );
+    await checkHint(env, "more than 14 days old", 1 + 15 * 24 * 3_600_000);
 
-    await recordBackupRunOutcome({
-      env,
+    await record({
       archivePath: "/backups/git",
-      status: "ok",
       kind: "git",
       pushFailed: true,
       error: `${"x".repeat(1_199)}😀tail`,
@@ -536,19 +435,7 @@ describe("backup run records", () => {
     });
     const pushFailed = await readBackupRunFreshness(env);
     expect(pushFailed.latest?.error).toBe("x".repeat(1_199));
-    expect(
-      buildBackupStatusValue({
-        freshness: pushFailed,
-        now: 3_600_002,
-        formatTimeAgo,
-      }),
-    ).toBe("last ok 1h ago (git, push failing)");
-    mocks.note.mockClear();
-    vi.mocked(Date.now).mockReturnValue(3_600_002);
-    await noteBackupDoctorHint(env);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringMatching(/configured Git remote.*\/backups\/git/su),
-      "Backups",
-    );
+    expect(statusValue(pushFailed, 3_600_002)).toBe("last ok 1h ago (git, push failing)");
+    await checkHint(env, /configured Git remote.*\/backups\/git/su, 3_600_002);
   });
 });

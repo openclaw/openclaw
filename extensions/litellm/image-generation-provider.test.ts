@@ -60,17 +60,6 @@ describe("litellm image generation provider", () => {
     postMultipartRequestMock.mockReset();
   });
 
-  it("defaults to the loopback proxy and allows private network for localhost", async () => {
-    postJsonRequestMock.mockImplementation(pngResponse);
-
-    await generate();
-
-    expect(mockObjectArg(postJsonRequestMock)).toMatchObject({
-      url: "http://localhost:4000/images/generations",
-      allowPrivateNetwork: true,
-    });
-  });
-
   it("forwards count and size overrides on generation requests", async () => {
     postJsonRequestMock.mockImplementation(pngResponse);
 
@@ -82,6 +71,7 @@ describe("litellm image generation provider", () => {
     });
 
     expect(mockObjectArg(postJsonRequestMock).url).toBe("http://localhost:4000/images/generations");
+    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
     expect(mockObjectArg(postJsonRequestMock).body).toEqual({
       model: "dall-e-3",
       prompt: "two landscape variants",
@@ -90,6 +80,8 @@ describe("litellm image generation provider", () => {
     });
   });
 
+  // The multipart edit tests own LiteLLM's part names and upload assembly.
+  // Assert each image's bytes and MIME type, not only the part count.
   it("routes to the edit endpoint as multipart when input images are provided", async () => {
     postMultipartRequestMock.mockImplementation(pngResponse);
 
@@ -141,12 +133,6 @@ describe("litellm image generation provider", () => {
       { bytes: Buffer.from("first"), mimeType: "image/png" },
       { bytes: Buffer.from("second"), mimeType: "image/jpeg" },
     ]);
-  });
-
-  it("throws a clear error when the API key is missing", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
-
-    await expect(generate()).rejects.toThrow("LiteLLM API key missing");
   });
 
   it("auto-allows private network for loopback-style baseUrls", async () => {

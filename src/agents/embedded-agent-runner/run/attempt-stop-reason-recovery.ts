@@ -12,10 +12,9 @@ function normalizeUnhandledStopReasonMessage(message: unknown): string | undefin
     return undefined;
   }
   const stopReason = message.trim().match(UNHANDLED_STOP_REASON_RE)?.[1]?.trim();
-  if (!stopReason) {
-    return undefined;
-  }
-  return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
+  return stopReason
+    ? `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`
+    : undefined;
 }
 
 function normalizeUnhandledStopReasonError(error: unknown): string {
@@ -91,9 +90,8 @@ function wrapStreamHandleUnhandledStopReason(
 
         try {
           const result = await streamIterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { error?: unknown };
-            patchUnhandledStopReasonInAssistantMessage(event.error);
+          if (!result.done && result.value.type === "error") {
+            patchUnhandledStopReasonInAssistantMessage(result.value.error);
           }
           return result;
         } catch (err) {

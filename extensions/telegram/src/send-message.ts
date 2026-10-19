@@ -26,7 +26,6 @@ import { buildTelegramThreadReplyParams } from "./reply-parameters.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
-  logTelegramOutboundSendOk,
   resolveAcceptedReplyToMessageId,
   resolveTelegramMessageIdOrThrow,
   sendLogger,
@@ -84,8 +83,8 @@ export async function sendMessageTelegram(
     });
     const deliveryResults: TelegramSendResult[] = [];
     let finalMediaBatch = true;
-    const reportDelivery: TelegramDeliveryReporter = async (params) => {
-      return await reportTelegramProviderDelivery({
+    const reportDelivery: TelegramDeliveryReporter = (params) =>
+      reportTelegramProviderDelivery({
         ...params,
         successfulSendThread: threadSpec,
         onPrepared: (delivery) => {
@@ -99,7 +98,6 @@ export async function sendMessageTelegram(
         },
         onDeliveryResult: opts.onDeliveryResult,
       });
-    };
     const recordDeliveredPromptContext = async (
       params: Omit<
         Parameters<typeof recordOutboundMessageForPromptContext>[0],
@@ -301,13 +299,12 @@ export async function sendMessageTelegram(
       const { htmlCaption, plainCaption, followUpText } = mediaPlan;
       // If text exceeds Telegram's caption limit, send media without caption
       // then send text as a separate follow-up message.
-      const needsSeparateText = Boolean(followUpText);
       // When splitting, put reply_markup only on the follow-up text (the "main" content),
       // not on the media message.
       const mediaThreadParams = buildThreadParams(!singleUseReplyTo || sender.parts.length === 0);
       const baseMediaParams = {
         ...mediaThreadParams,
-        ...(!needsSeparateText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
+        ...(!followUpText && batchReplyMarkup ? { reply_markup: batchReplyMarkup } : {}),
       };
       const videoDimensions =
         mediaPlan.deliveryKind === "video" && !mediaPlan.isVideoNote
@@ -322,8 +319,6 @@ export async function sendMessageTelegram(
           : {}),
       };
       let mediaParts: [TelegramPreparedSendPart, ...TelegramPreparedSendPart[]];
-      let operation = mediaSender.operation;
-      let deliveryKind = mediaSender.label;
       try {
         if (batch.length > 1) {
           try {
@@ -333,7 +328,6 @@ export async function sendMessageTelegram(
               plainCaption: htmlCaption ? plainCaption : undefined,
             });
             mediaParts = album.parts;
-            operation = "sendMediaGroup";
           } catch (error) {
             if (!isTelegramPhotoLimitError(error)) {
               throw error;
@@ -357,8 +351,6 @@ export async function sendMessageTelegram(
             plainCaption: htmlCaption ? plainCaption : undefined,
           });
           mediaParts = [delivery];
-          operation = delivery.sender.operation;
-          deliveryKind = delivery.sender.label;
         }
       } catch (error) {
         if (
@@ -409,7 +401,6 @@ export async function sendMessageTelegram(
         mediaParts,
         async (part) => {
           const deliveredCaption = part.plainText || undefined;
-          const acceptedParams = toAcceptedThreadScopedParams(part.acceptedParams);
           const resolvedChatId = String(part.result.chat?.id ?? chatId);
           const meta = {
             ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
@@ -431,19 +422,9 @@ export async function sendMessageTelegram(
             },
           });
           const lastPart = part.result === lastMedia.result;
-          if (!needsSeparateText || !lastPart) {
+          if (!followUpText || !lastPart) {
             await recordMediaPromptPart(part, lastPart);
           }
-          logTelegramOutboundSendOk({
-            accountId: account.accountId,
-            chatId: resolvedChatId,
-            messageId: String(part.messageId),
-            operation,
-            deliveryKind,
-            messageThreadId: acceptedParams?.message_thread_id,
-            replyToMessageId: opts.replyToMessageId,
-            silent: opts.silent,
-          });
         },
         {
           partialDeliveryResult: () => ({

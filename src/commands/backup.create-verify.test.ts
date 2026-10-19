@@ -1,6 +1,7 @@
 // Backup create/verify tests cover archive creation, runtime output, and verification failure handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { makeBackupResult } from "../infra/backup-create.test-support.js";
 import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -25,8 +26,9 @@ vi.mock("../runtime.js", async () => {
   };
 });
 
-vi.mock("../state/backup-run-records.js", () => ({
-  recordBackupRunOutcome: recordBackupRunOutcomeMock,
+// mock-isolation: Archive settlement uses a controlled outcome; routing has real-ledger coverage.
+vi.mock("./backup-outcome.js", () => ({
+  recordBackupRunOutcomeWithOwner: recordBackupRunOutcomeMock,
 }));
 
 describe("backupCreateCommand verification", () => {
@@ -35,6 +37,46 @@ describe("backupCreateCommand verification", () => {
     verifyBackupArchiveMock.mockReset();
     writeRuntimeJsonMock.mockReset();
     recordBackupRunOutcomeMock.mockReset();
+  });
+
+  it("formats created archives with included and skipped paths", async () => {
+    createBackupArchiveMock.mockResolvedValue(
+      makeBackupResult({
+        verified: true,
+        skippedVolatileCount: 3,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/state",
+            archivePath: "archive/state",
+            displayPath: "~/.openclaw",
+          },
+        ],
+        skipped: [
+          {
+            kind: "workspace",
+            sourcePath: "/workspace",
+            displayPath: "~/Projects/openclaw",
+            reason: "covered",
+            coveredBy: "~/.openclaw",
+          },
+        ],
+      }),
+    );
+    const runtime = createTestRuntime();
+    await backupCreateCommand(runtime);
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      [
+        "Backup archive: /tmp/openclaw-backup.tar.gz",
+        "Included 1 path:",
+        "- state: ~/.openclaw",
+        "Skipped 1 path:",
+        "- workspace: ~/Projects/openclaw (covered by ~/.openclaw)",
+        "Created /tmp/openclaw-backup.tar.gz",
+        "Skipped 3 volatile files (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).",
+        "Archive verification: passed",
+      ].join("\n"),
+    );
   });
 
   it("verifies the archive and settles outcome recording before reporting completion", async () => {

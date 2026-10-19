@@ -4,10 +4,12 @@ import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
+import { wrapStreamFnWithSessionFork, type EmbeddedSessionForkIdentity } from "./session-fork.js";
 
 const embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 
@@ -47,7 +49,7 @@ function isDefaultOpenClawStreamFnForModel(
   if (!streamFn || streamFn === llmRuntime.streamSimple) {
     return true;
   }
-  const api = typeof model.api === "string" ? model.api.trim() : "";
+  const api = model.api.trim();
   if (!api) {
     return false;
   }
@@ -78,6 +80,7 @@ type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
   assertCurrent?: () => void;
+  sessionFork?: EmbeddedSessionForkIdentity;
 };
 
 export function resolveEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
@@ -108,6 +111,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     authProfileId: params.authProfileId,
     promptCacheKey: params.promptCacheKey,
     assertCurrent: params.assertCurrent,
+    sessionFork: params.sessionFork,
   };
   const wrapRunApiKey = (streamFn: StreamFn) =>
     wrapEmbeddedAgentStreamApiKey(streamFn, {
@@ -116,6 +120,15 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       authStorage: params.authStorage,
       assertCurrent: params.assertCurrent,
     });
+  const wrapCredentialedStream = (
+    streamFn: StreamFn,
+    options: Parameters<typeof wrapEmbeddedAgentStreamFn>[1],
+    strategy: string,
+  ) => ({
+    streamFn: wrapEmbeddedAgentStreamFn(streamFn, options),
+    strategy,
+    wrapApiKey: wrapRunApiKey,
+  });
   // Vertex and session-owned streams resolve their own auth.
   const keepStreamAuth = (streamFn: StreamFn) => streamFn;
   const stripCacheBoundary = (context: Parameters<StreamFn>[1]) =>
@@ -123,12 +136,12 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
       ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
       : context;
   if (params.providerStreamFn) {
-    return {
-      // Provider stream creation owns the plugin's cache-boundary capability.
-      streamFn: wrapEmbeddedAgentStreamFn(params.providerStreamFn, wrapOptions),
-      strategy: "provider",
-      wrapApiKey: wrapRunApiKey,
-    };
+    // Provider stream creation owns the plugin's cache-boundary capability.
+    return wrapCredentialedStream(
+      params.providerStreamFn,
+      { ...wrapOptions, sessionFork: undefined },
+      "provider",
+    );
   }
 
   const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
@@ -155,15 +168,11 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     (isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, llmRuntime) ||
       getStreamLlmRuntime(params.currentStreamFn) === llmRuntime)
   ) {
-    return {
-      streamFn: wrapEmbeddedAgentStreamFn(currentStreamFn, {
-        ...wrapOptions,
-        sessionId: params.sessionId,
-        transformContext: stripCacheBoundary,
-      }),
-      strategy: "openclaw-native-codex-responses",
-      wrapApiKey: wrapRunApiKey,
-    };
+    return wrapCredentialedStream(
+      currentStreamFn,
+      { ...wrapOptions, sessionId: params.sessionId, transformContext: stripCacheBoundary },
+      "openclaw-native-codex-responses",
+    );
   }
 
   const isDefault = isDefaultOpenClawStreamFnForModel(
@@ -181,26 +190,24 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   ) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
-      return {
-        streamFn: wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
-          ...wrapOptions,
-          sessionId: params.sessionId,
-        }),
-        strategy: `boundary-aware:${params.model.api}`,
-        wrapApiKey: wrapRunApiKey,
-      };
+      return wrapCredentialedStream(
+        boundaryAwareStreamFn,
+        { ...wrapOptions, sessionId: params.sessionId },
+        `boundary-aware:${params.model.api}`,
+      );
     }
   }
 
   const promptCacheKey = params.promptCacheKey?.trim();
   return {
     streamFn:
-      !promptCacheKey && !params.signal && !params.assertCurrent
+      !promptCacheKey && !params.signal && !params.assertCurrent && !params.sessionFork
         ? currentStreamFn
         : wrapEmbeddedAgentStreamFn(currentStreamFn, {
             runSignal: params.signal,
             promptCacheKey,
             assertCurrent: params.assertCurrent,
+            sessionFork: params.sessionFork,
           }),
     strategy: isDefault ? "stream-simple" : "session-custom",
     wrapApiKey: keepStreamAuth,
@@ -229,10 +236,14 @@ function wrapEmbeddedAgentStreamFn(
     promptCacheKey?: string;
     transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
     assertCurrent?: () => void;
+    sessionFork?: EmbeddedSessionForkIdentity;
   },
 ): StreamFn {
   const transformContext =
     params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
+  const transport = params.sessionFork
+    ? wrapStreamFnWithSessionFork(inner, params.sessionFork)
+    : inner;
   const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
     const embeddedOptions = options as EmbeddedStreamOptions | undefined;
     const callerSignal = embeddedOptions?.signal;
@@ -255,7 +266,13 @@ function wrapEmbeddedAgentStreamFn(
   };
   return (m, context, options) => {
     params.assertCurrent?.();
-    return inner(m, transformContext(context), mergeRunSignal(options));
+    const mergedOptions = mergeRunSignal(options);
+    return admitProviderRateLimitStream(
+      m,
+      mergedOptions,
+      (admittedOptions) => transport(m, transformContext(context), admittedOptions),
+      params.assertCurrent,
+    );
   };
 }
 

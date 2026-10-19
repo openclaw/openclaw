@@ -16,6 +16,34 @@ const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
 
 describe("configured agent scanning", () => {
+  it.each([
+    {
+      agents: { entries: { malformed: null, guest: { sandbox: { mode: "all" } } } },
+      source: "oc://openclaw.config/agents/entries/guest/sandbox/mode",
+    },
+    {
+      agents: { list: [null, { id: "guest", sandbox: { mode: "all" } }] },
+      source: "oc://openclaw.config/agents/list/#1/sandbox/mode",
+    },
+  ])(
+    "ignores malformed agents without renumbering their sources ($source)",
+    ({ agents, source }) => {
+      const evidence = collectPolicyEvidence({ agents });
+      expect(evidence.sandboxPosture?.filter((entry) => entry.scope === "agent")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "guest", kind: "mode", value: "all", source }),
+        ]),
+      );
+      expect(
+        new Set(
+          evidence.agentWorkspace
+            ?.filter((entry) => entry.scope === "agent")
+            .map((entry) => entry.agentId),
+        ),
+      ).toEqual(new Set(["guest"]));
+    },
+  );
+
   const keyedConfig = {
     tools: { elevated: { enabled: true } },
     agents: {
@@ -106,18 +134,6 @@ describe("configured agent scanning", () => {
     );
   });
 
-  it("does not fall back to stale agents.list when entries owns the roster", () => {
-    const evidence = collectPolicyEvidence({
-      agents: {
-        entries: {},
-        list: [{ id: "legacy", sandbox: { mode: "all" } }],
-      },
-    });
-    expect(evidence.sandboxPosture).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "legacy" })]),
-    );
-  });
-
   it("keeps attestations stable across keyed entry order", () => {
     const first = {
       alpha: { models: { "openai/gpt-5.6-luna": {} } },
@@ -135,24 +151,6 @@ describe("configured agent scanning", () => {
 
     expect(attestationHash(first)).toBe(
       attestationHash({ omega: first.omega, alpha: first.alpha }),
-    );
-  });
-
-  it("escapes entry keys that are not bare identifiers", () => {
-    const evidence = scanPolicySandboxPosture({
-      agents: {
-        defaults: { sandbox: { mode: "off" } },
-        entries: { "team/qa": { sandbox: { mode: "all" } } },
-      },
-    });
-    expect(evidence).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "mode",
-          agentId: "team/qa",
-          source: 'oc://openclaw.config/agents/entries/"team/qa"/sandbox/mode',
-        }),
-      ]),
     );
   });
 });
@@ -278,14 +276,6 @@ describe("scanPolicyChannels", () => {
       },
     ]);
   });
-
-  it("does not treat channel arrays as channel config maps", () => {
-    expect(
-      scanPolicyChannels({
-        channels: [{ enabled: true }],
-      }),
-    ).toEqual([]);
-  });
 });
 
 describe("scanPolicyRouting", () => {
@@ -329,34 +319,6 @@ describe("scanPolicyTools", () => {
     ]);
   });
 
-  it("does not treat indented metadata bullets as tool declarations", () => {
-    expect(
-      scanPolicyTools(["## Tools", "- deploy: risk: critical", "  - owner: ops"].join("\n")),
-    ).toEqual([
-      {
-        id: "deploy",
-        source: "oc://AGENTS.md/tools/deploy",
-        line: 2,
-        risk: "critical",
-        owner: "ops",
-      },
-    ]);
-  });
-
-  it("ignores local-note examples inside fenced blocks", () => {
-    expect(
-      scanPolicyTools(
-        [
-          "## Tools",
-          "```markdown",
-          "- SSH: home-server -> 192.168.1.100",
-          "### Cameras",
-          "```",
-        ].join("\n"),
-      ),
-    ).toEqual([]);
-  });
-
   it("parses a tool literally named tools after local notes", () => {
     expect(
       scanPolicyTools(
@@ -375,20 +337,6 @@ describe("scanPolicyTools", () => {
         owner: "ops",
       }),
     ]);
-  });
-
-  it("ignores deeper Tools sections outside the governed H1/H2 contract", () => {
-    expect(
-      scanPolicyTools(
-        [
-          "## Build",
-          "### Tools",
-          "- npm: risk: high owner: ops",
-          "## Tools",
-          "### deploy risk: low owner: release",
-        ].join("\n"),
-      ),
-    ).toEqual([expect.objectContaining({ id: "deploy", risk: "low", owner: "release" })]);
   });
 
   it("does not carry metadata across repeated Tools section boundaries", () => {

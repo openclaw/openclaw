@@ -116,12 +116,7 @@ export function resolveCommandTurnContext(input: CommandTurnContextInput): Comma
   if (explicit) {
     return explicit;
   }
-  const source =
-    input.CommandSource === "native"
-      ? "native"
-      : input.CommandSource === "text"
-        ? "text"
-        : "message";
+  const source = normalizeCommandTurnSource(input.CommandSource) ?? "message";
   const body = resolveCommandBody(input);
   return createCommandTurnContext(source, {
     authorized: input.CommandAuthorized === true,
@@ -153,7 +148,15 @@ export function isExplicitCommandTurn(commandTurn: CommandTurnContext | undefine
   );
 }
 
-/** Resolves the target session override for trusted native or explicit steer command turns. */
+/** Retains one-message followup intent after its authorized handler strips command text. */
+export function isExplicitFollowupCommandTurn(input: CommandTurnContextInput): boolean {
+  const turn = resolveCommandTurnContext(input);
+  return (
+    turn.kind !== "normal" && turn.authorized && turn.commandName?.toLowerCase() === "followup"
+  );
+}
+
+/** Resolves the target session override for trusted native or continuing command turns. */
 export function resolveCommandTurnTargetSessionKey(
   input: Omit<CommandTurnContextInput, "CommandTurn" | "rawText" | "BotUsername"> & {
     CommandTurn?: CommandTurnContext;
@@ -161,16 +164,13 @@ export function resolveCommandTurnTargetSessionKey(
   },
 ): string | undefined {
   const commandTurn = resolveCommandTurnContext(input);
-  const isExplicitTextSteer =
+  const isExplicitTextContinuation =
     isAuthorizedTextSlashCommandTurn(commandTurn) &&
     (commandTurn.commandName?.toLowerCase() === "steer" ||
-      commandTurn.commandName?.toLowerCase() === "tell");
-  if (
-    (!isNativeCommandTurn(commandTurn) && !isExplicitTextSteer) ||
-    typeof input.CommandTargetSessionKey !== "string"
-  ) {
+      commandTurn.commandName?.toLowerCase() === "tell" ||
+      commandTurn.commandName?.toLowerCase() === "followup");
+  if (!isNativeCommandTurn(commandTurn) && !isExplicitTextContinuation) {
     return undefined;
   }
-  const trimmed = input.CommandTargetSessionKey.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(input.CommandTargetSessionKey);
 }

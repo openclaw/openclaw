@@ -1,4 +1,3 @@
-/** Resolves preferred provider auth choices from config and plugin metadata. */
 import { resolveLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";

@@ -68,12 +68,14 @@ export async function listProjectRegistry(
 ): Promise<ProjectRegistryRecord[]> {
   const context = captureOpenClawStateWorkerContext(options);
   const workspaces = listWorkspaceProjects(cfg);
-  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  const stored = await executeOpenClawStateWorker(context, {
-    type: "projects.list",
-    input: undefined,
-  });
-  return [...workspaces, ...stored].toSorted(compareProjects);
+  const { executeExistingOpenClawStateRead } =
+    await import("../state/openclaw-state-db-readonly.js");
+  const stored = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "projects.list", input: undefined },
+    { context, current: true },
+  );
+  return [...workspaces, ...(stored?.projects ?? [])].toSorted(compareProjects);
 }
 
 export function resolveWorkspaceProject(

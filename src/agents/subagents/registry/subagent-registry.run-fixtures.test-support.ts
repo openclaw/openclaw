@@ -77,6 +77,7 @@ export const makeQueuedRun = ({
     completion: { required: false },
     ...overrides,
     queuedLaunch: {
+      requesterRecovery: {},
       request: {
         sessionKey: childSessionKey,
         idempotencyKey: overrides.runId,

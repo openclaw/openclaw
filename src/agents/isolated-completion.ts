@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 /**
@@ -12,10 +14,15 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
  */
 import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import { estimateAggregateUsageCost } from "../utils/usage-format.js";
 import {
   assertOperatorModelAllowed,
   prepareSystemAgentRunAdmission,
@@ -33,6 +40,10 @@ import type {
   AgentHarnessIsolatedCompletionParamsV2,
   AgentHarnessIsolatedCompletionResult,
 } from "./harness/types.js";
+import {
+  createIsolatedCompletionDiagnostics,
+  type IsolatedCompletionDiagnostics,
+} from "./isolated-completion-diagnostics.js";
 import { createIsolatedCompletionModelAuthority } from "./isolated-completion-model-authority.js";
 import {
   hasCliSideEffectEvidence,
@@ -40,20 +51,28 @@ import {
   isRetryableIsolatedQuotaFailure,
   requireIsolatedAssistantText,
 } from "./isolated-completion-output.js";
+import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import {
   resolveIsolatedCompletionAuthorizationOwner,
   selectIsolatedHarnessAuthAttempt,
   resolveIsolatedCompletionProvider,
   resolveIsolatedCompletionRoute,
 } from "./isolated-completion-route.js";
-import { ensureAuthProfileStore } from "./model-auth.js";
+import { ensureAuthProfileStoreAsync } from "./model-auth.js";
+import {
+  createModelCatalogSnapshotView,
+  listModelCatalogObservedRoutes,
+} from "./model-catalog-view.js";
 import type { ModelRef } from "./model-ref-shared.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
+} from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
-import type { IsolatedCompletionPurpose } from "./run-trigger.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
@@ -63,7 +82,12 @@ import {
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
-import type { UsageLike } from "./usage.js";
+import {
+  hasObservedModelUsage,
+  normalizeUsage,
+  toDiagnosticUsage,
+  type UsageLike,
+} from "./usage.js";
 
 type RunIsolatedCompletionParams = {
   purpose?: IsolatedCompletionPurpose;
@@ -81,6 +105,10 @@ type RunIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Private credential directories must remain outside the configured Gateway owner. */
+  preparedModelRuntimeMode?: "isolated-read-only";
+  /** Duration of dispatch through the selected runtime, excluding model/auth preparation. */
+  onRequestComplete?: (durationMs: number) => void;
   /** Revalidate the caller's authority before credential handoff and dispatch. */
   assertCurrent?: () => void;
   /** Explicit requester restriction; automatic metadata callers remain system-owned. */
@@ -89,6 +117,8 @@ type RunIsolatedCompletionParams = {
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   thinkLevel?: ThinkLevel;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
+  /** Internal answer budget; reasoning reserves still obey model and explicit stream limits. */
+  answerTokenBudget?: number;
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
 
@@ -99,20 +129,30 @@ export type IsolatedCompletionResult = {
   owner: { kind: "cli" | "harness"; id: string };
   /** CLI runtimes may not report token usage; absence must not be projected as zero. */
   usage?: UsageLike;
+  /** Terminal cumulative CLI turn usage; diagnostics prefer it over `usage`. */
+  diagnosticUsage?: UsageLike;
 };
 
 type AgentHarnessIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarness["runIsolatedCompletion"]>
 >[0];
 
-function clampIsolatedStreamParams(
-  streamParams: RunIsolatedCompletionParams["streamParams"],
-  modelMaxTokens: number | undefined,
+function resolveIsolatedStreamParams(
+  { answerTokenBudget, streamParams, thinkLevel }: RunIsolatedCompletionParams,
+  model?: Model,
 ): RunIsolatedCompletionParams["streamParams"] {
-  if (streamParams?.maxTokens === undefined || modelMaxTokens === undefined) {
+  let maxTokens = answerTokenBudget ?? streamParams?.maxTokens;
+  if (maxTokens === undefined) {
     return streamParams;
   }
-  return { ...streamParams, maxTokens: Math.min(streamParams.maxTokens, modelMaxTokens) };
+  const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
+  if (answerTokenBudget !== undefined && model?.reasoning && thinkLevel !== "off") {
+    maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
+  }
+  return {
+    ...streamParams,
+    maxTokens: Math.min(maxTokens, modelMaxTokens, streamParams?.maxTokens ?? maxTokens),
+  };
 }
 
 async function runCliIsolatedCompletion(
@@ -124,6 +164,8 @@ async function runCliIsolatedCompletion(
   },
   provider: string,
   modelProvider: string,
+  diagnostics: IsolatedCompletionDiagnostics,
+  remainingTimeoutMs: () => number,
 ): Promise<IsolatedCompletionResult> {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
@@ -139,7 +181,7 @@ async function runCliIsolatedCompletion(
         config: request.config,
         agentId: request.agentId,
       })
-        ? resolveCliExecutionAuthProfileId({
+        ? await resolveCliExecutionAuthProfileId({
             cliExecutionProvider: provider,
             authProfileProvider: modelProvider,
             config: request.config,
@@ -160,40 +202,42 @@ async function runCliIsolatedCompletion(
       );
       try {
         request.assertCurrent?.();
-        const result = await runCliAgent({
-          preparedRunAdmission,
-          sessionId,
-          sessionFile: path.join(dir, "session.json"),
-          workspaceDir: request.workspaceDir,
-          cwd: dir,
-          agentDir: request.agentDir,
-          agentId: request.agentId,
-          config,
-          prompt: request.prompt,
-          extraSystemPrompt: request.systemPrompt,
-          timeoutMs: request.timeoutMs,
-          runId: sessionId,
-          provider,
-          modelProvider,
-          requesterModel: { provider: modelProvider, model: request.model },
-          model: request.model,
-          authProfileId,
-          thinkLevel: request.thinkLevel,
-          streamParams: request.streamParams,
-          abortSignal: request.abortSignal,
-          assertCurrent: request.assertCurrent,
-          mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
-          executionMode: "side-question",
-          cliToolAvailability: { native: [], openClaw: [] },
-          disableTools: true,
-          disableCliLiveSession: true,
-          cleanupCliLiveSessionOnRunEnd: true,
-          cleanupBundleMcpOnRunEnd: true,
-          requireExplicitMessageTarget: true,
-          isolatedCompletion: true,
-          isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
-          outputTextPolicy: request.outputTextPolicy,
-        });
+        const dispatch = () =>
+          runCliAgent({
+            preparedRunAdmission,
+            sessionId,
+            sessionFile: path.join(dir, "session.json"),
+            workspaceDir: request.workspaceDir,
+            cwd: dir,
+            agentDir: request.agentDir,
+            agentId: request.agentId,
+            config,
+            prompt: request.prompt,
+            extraSystemPrompt: request.systemPrompt,
+            timeoutMs: remainingTimeoutMs(),
+            runId: sessionId,
+            provider,
+            modelProvider,
+            requesterModel: { provider: modelProvider, model: request.model },
+            model: request.model,
+            authProfileId,
+            thinkLevel: request.thinkLevel,
+            streamParams: resolveIsolatedStreamParams(request),
+            abortSignal: request.abortSignal,
+            assertCurrent: request.assertCurrent,
+            mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
+            executionMode: "side-question",
+            cliToolAvailability: { native: [], openClaw: [] },
+            disableTools: true,
+            disableCliLiveSession: true,
+            cleanupCliLiveSessionOnRunEnd: true,
+            cleanupBundleMcpOnRunEnd: true,
+            requireExplicitMessageTarget: true,
+            isolatedCompletion: true,
+            isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
+            outputTextPolicy: request.outputTextPolicy,
+          });
+        const result = await (diagnostics ? diagnostics.dispatch("cli", dispatch) : dispatch());
         if (hasCliSideEffectEvidence(result)) {
           throw new IsolatedCompletionError(
             "output-rejected",
@@ -217,7 +261,7 @@ async function runCliIsolatedCompletion(
           );
         }
         const text = payloads
-          .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
+          .filter((payload) => !payload.isReasoning && payload.text !== undefined)
           .map((payload) => payload.text ?? "")
           .join("\n")
           .trim();
@@ -230,13 +274,14 @@ async function runCliIsolatedCompletion(
             `CLI backend ${provider} became unavailable after execution.`,
           );
         }
-        const usage = result.meta?.agentMeta?.usage;
+        const { usage, diagnosticUsage } = result.meta?.agentMeta ?? {};
         return {
           text,
           provider: modelProvider,
           model: normalizeCliModel(request.model, backend.config),
           owner: { kind: "cli", id: provider },
           ...(usage ? { usage } : {}),
+          ...(diagnosticUsage ? { diagnosticUsage } : {}),
         };
       } finally {
         preparedRunAdmission.close();
@@ -268,19 +313,112 @@ function prepareIsolatedHostAuthorization<
   };
 }
 
+/** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
+function emitIsolatedCompletionUsage(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  purpose?: IsolatedCompletionPurpose;
+  result: IsolatedCompletionResult;
+}): void {
+  const { config, result } = params;
+  if (params.purpose === "plugin-completion" || !isDiagnosticsEnabled(config)) {
+    return;
+  }
+  const usage = normalizeUsage(result.diagnosticUsage ?? result.usage);
+  if (!hasObservedModelUsage(usage)) {
+    return;
+  }
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    agentId: params.agentId,
+    provider: result.provider,
+    model: result.model,
+    purpose: params.purpose ?? "isolated-completion",
+    runtimeKind: result.owner.kind,
+    usage: toDiagnosticUsage(usage),
+    costUsd: estimateAggregateUsageCost({
+      usage,
+      provider: result.provider,
+      model: result.model,
+      config,
+      agentDir: params.agentDir,
+    }),
+  });
+}
+
 /** Run one fresh completion with the selected runtime's documented isolation boundary. */
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
-  return await runWithAsyncWorkResources((onAcquired, captureWorkContext) =>
-    runIsolatedCompletionOwned(params, onAcquired, captureWorkContext),
-  );
+  const deadline = performance.now() + params.timeoutMs;
+  const diagnostics = createIsolatedCompletionDiagnostics(params);
+  const abortSignal = params.abortSignal;
+  const timeout = new AbortController();
+  const signal = abortSignal ? AbortSignal.any([abortSignal, timeout.signal]) : timeout.signal;
+  const expire = () =>
+    timeout.abort(
+      new IsolatedCompletionError("runtime-unavailable", "Isolated completion timed out."),
+    );
+  const remainingTimeoutMs = () => {
+    const remaining = deadline - performance.now();
+    // Check the clock at ownership boundaries even when the timer is starved.
+    if (remaining <= 0 && !signal.aborted) {
+      expire();
+    }
+    signal.throwIfAborted();
+    // Runtime timeout APIs require integers; the shared signal keeps the exact cutoff.
+    return Math.ceil(remaining);
+  };
+  const cancelDeadline = scheduleAbsoluteDeadline(deadline, expire, () => performance.now());
+  return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
+    let release: (() => Promise<void>) | undefined;
+    // Register before acquisition: failed preparation can still own an async cleanup tail.
+    onAcquired({
+      release: async () => {
+        let settlementOutcome: "completed" | "error" = "error";
+        try {
+          await release?.();
+          settlementOutcome = "completed";
+        } finally {
+          diagnostics?.settle(settlementOutcome);
+        }
+      },
+    });
+    try {
+      const result = await racePromiseWithAbortSignal(
+        // Timeout ends observation, not ownership of preparation or runtime cleanup.
+        () =>
+          trackAsyncWork(() =>
+            runIsolatedCompletionOwned(
+              { ...params, abortSignal: signal },
+              (resources) => {
+                release = resources.release;
+              },
+              captureWorkContext,
+              diagnostics,
+              remainingTimeoutMs,
+            ),
+          ),
+        signal,
+        (aborted) => aborted.reason,
+      );
+      remainingTimeoutMs();
+      diagnostics?.complete("completed");
+      return result;
+    } catch (error) {
+      diagnostics?.complete(abortSignal?.aborted ? "aborted" : "error");
+      throw error;
+    }
+  }).finally(cancelDeadline);
 }
 
 async function runIsolatedCompletionOwned(
   params: RunIsolatedCompletionParams,
   onAcquired: (resources: { release: () => Promise<void> }) => void,
   captureWorkContext: () => void,
+  diagnostics: IsolatedCompletionDiagnostics,
+  remainingTimeoutMs: () => number,
 ): Promise<IsolatedCompletionResult> {
   // Snapshot caller choices and validators before admission yields; callbacks expire on close.
   const input = {
@@ -309,7 +447,7 @@ async function runIsolatedCompletionOwned(
     } catch (error) {
       throw input.mapOperatorAuthorizationError?.(error) ?? error;
     }
-    input.abortSignal?.throwIfAborted();
+    remainingTimeoutMs();
   };
   const resolveAuthorizedModel: typeof resolveModelAsync = async (...args) => {
     const resolved = await resolveModelAsync(...args);
@@ -320,7 +458,11 @@ async function runIsolatedCompletionOwned(
     return resolved;
   };
   assertCurrent();
-  const lease = await acquireAgentRunPreparedModelRuntime(
+  const isolatedReadOnly = input.preparedModelRuntimeMode === "isolated-read-only";
+  const acquireRuntime = isolatedReadOnly
+    ? acquireReadOnlyPreparedModelRuntime
+    : acquireAgentRunPreparedModelRuntime;
+  const lease = await acquireRuntime(
     {
       config: requestConfig,
       agentId,
@@ -328,6 +470,7 @@ async function runIsolatedCompletionOwned(
       workspaceDir: requestedWorkspaceDir,
       preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
       runtimePluginPurpose: "isolated-completion",
+      ...(isolatedReadOnly ? { loadRuntimePlugins: true } : {}),
     },
     {
       catalogMode: "static",
@@ -350,6 +493,7 @@ async function runIsolatedCompletionOwned(
     runtime: lease,
   });
   onAcquired({ release: () => modelAuthority.release() });
+  diagnostics?.setConfig(lease.snapshot.config);
   try {
     assertCurrent();
     const run = async (): Promise<IsolatedCompletionResult> => {
@@ -375,7 +519,7 @@ async function runIsolatedCompletionOwned(
         pluginRegistry: lease.snapshot.pluginRegistry,
       });
       assertCurrent();
-      const { selection, cliOwner } = resolveIsolatedCompletionRoute({
+      const { selection, cliOwner } = await resolveIsolatedCompletionRoute({
         provider,
         model: request.model,
         authProfileId: request.authProfileId,
@@ -384,7 +528,13 @@ async function runIsolatedCompletionOwned(
         ...context,
       });
       if (cliOwner) {
-        return await runCliIsolatedCompletion(request, cliOwner, provider);
+        return await runCliIsolatedCompletion(
+          request,
+          cliOwner,
+          provider,
+          diagnostics,
+          remainingTimeoutMs,
+        );
       }
 
       // Retain the validated plugin instance; load the built-in runner only when selected.
@@ -404,11 +554,11 @@ async function runIsolatedCompletionOwned(
         ...context,
         systemPrompt: request.systemPrompt,
         prompt: request.prompt,
-        timeoutMs: request.timeoutMs,
         abortSignal: request.abortSignal,
         assertCurrent,
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
+        onRequestComplete: request.onRequestComplete,
       };
       const prepareHostAuthorization = async (
         authProfileId: string | undefined,
@@ -440,11 +590,10 @@ async function runIsolatedCompletionOwned(
       };
       let result: AgentHarnessIsolatedCompletionResult | undefined;
       if (harness.runIsolatedCompletionV2) {
-        let modelMaxTokens: number | undefined;
         let harnessAuth:
           | {
               model: Model;
-              store: ReturnType<typeof ensureAuthProfileStore>;
+              store: Awaited<ReturnType<typeof ensureAuthProfileStoreAsync>>;
               attempts: readonly PreparedAgentRuntimeAuthAttempt[];
             }
           | undefined;
@@ -474,17 +623,26 @@ async function runIsolatedCompletionOwned(
           }
           const runtimeModel = resolution.model;
           assertCurrent();
-          const authProfileStore = ensureAuthProfileStore(agentDir, {
+          const authProfileStore = await ensureAuthProfileStoreAsync(agentDir, {
             profileId: request.authProfileId,
             readOnly: true,
             allowKeychainPrompt: false,
             config,
           });
+          const catalog =
+            readAdmittedPublishedModelCatalog(lease.snapshot) ?? lease.snapshot.modelCatalog;
+          const variants =
+            catalog &&
+            createModelCatalogSnapshotView(config, catalog).variantsOf({
+              provider: runtimeModel.provider,
+              id: runtimeModel.id,
+            });
           const authParams = {
             provider: runtimeModel.provider,
             modelId: runtimeModel.id,
-            modelApi: runtimeModel.api,
-            modelBaseUrl: runtimeModel.baseUrl,
+            ...(variants
+              ? { observedRoutes: listModelCatalogObservedRoutes(variants) }
+              : { modelApi: runtimeModel.api, modelBaseUrl: runtimeModel.baseUrl }),
             ...context,
             env: process.env,
             authProfileStore,
@@ -500,23 +658,18 @@ async function runIsolatedCompletionOwned(
           const authAttempts = prepareAgentRuntimeAuth(authParams).attempts;
           harnessAuth = { model: runtimeModel, store: authProfileStore, attempts: authAttempts };
         }
-        // Profile rotation shares one inference budget instead of restarting it per account.
-        let deadline: number | undefined;
-        const remainingTimeoutMs = () => {
-          const remaining = deadline === undefined ? request.timeoutMs : deadline - Date.now();
-          if (remaining <= 0) {
-            throw new IsolatedCompletionError(
-              "runtime-unavailable",
-              "Isolated completion timed out.",
-            );
-          }
-          return remaining;
-        };
+        const hasAuthCandidate = (attempt: PreparedAgentRuntimeAuthAttempt | undefined) =>
+          attempt?.kind !== "profile" ||
+          !harnessAuth ||
+          preparedAgentRuntimeProfileAttemptHasCandidate({
+            attempt,
+            store: harnessAuth.store,
+            modelId: harnessAuth.model.id,
+          });
         let firstError: unknown;
         let priorProfileAttempted = false;
         for (const preparedAttempt of harnessAuth?.attempts ?? [undefined]) {
           assertCurrent();
-          remainingTimeoutMs();
           const attempt = preparedAttempt && selectIsolatedHarnessAuthAttempt(preparedAttempt);
           if (
             attempt &&
@@ -525,15 +678,7 @@ async function runIsolatedCompletionOwned(
             firstError ??= new Error("Prepared direct auth requires a prior profile attempt.");
             continue;
           }
-          if (
-            attempt?.kind === "profile" &&
-            harnessAuth &&
-            !preparedAgentRuntimeProfileAttemptHasCandidate({
-              attempt,
-              store: harnessAuth.store,
-              modelId: harnessAuth.model.id,
-            })
-          ) {
+          if (!hasAuthCandidate(attempt)) {
             firstError ??= new Error(
               "Prepared runtime auth candidates are temporarily unavailable.",
             );
@@ -541,6 +686,7 @@ async function runIsolatedCompletionOwned(
           }
           try {
             let authorization: AgentHarnessIsolatedCompletionAuthorization;
+            let completionModel: Model | undefined;
             if (
               attempt &&
               harnessAuth &&
@@ -550,7 +696,7 @@ async function runIsolatedCompletionOwned(
               // Auth owns the resolved model tuple; a manifest alias remains only
               // on the caller's dispatch envelope, not on the materialization target.
               const { model: runtimeModel, store: authProfileStore } = harnessAuth;
-              const model = await materializePreparedRuntimeModel({
+              completionModel = await materializePreparedRuntimeModel({
                 plan,
                 provider: runtimeModel.provider,
                 modelId: runtimeModel.id,
@@ -578,7 +724,6 @@ async function runIsolatedCompletionOwned(
                   ),
               });
               assertCurrent();
-              modelMaxTokens = model?.maxTokens;
               authorization = {
                 owner: "harness",
                 plan,
@@ -588,32 +733,25 @@ async function runIsolatedCompletionOwned(
               authorization = await prepareHostAuthorization(
                 attempt?.kind === "profile" ? attempt.profileId : request.authProfileId,
               );
-              modelMaxTokens = authorization.model.maxTokens;
+              completionModel = authorization.model;
             }
-            if (
-              attempt?.kind === "profile" &&
-              harnessAuth &&
-              !preparedAgentRuntimeProfileAttemptHasCandidate({
-                attempt,
-                store: harnessAuth.store,
-                modelId: harnessAuth.model.id,
-              })
-            ) {
+            if (!hasAuthCandidate(attempt)) {
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
             assertCurrent();
-            deadline ??= Date.now() + request.timeoutMs;
             const execution = modelAuthority.bind(modelForAuthorization);
-            const pending = harness.runIsolatedCompletionV2({
-              ...commonParams,
-              ...execution,
-              timeoutMs: remainingTimeoutMs(),
-              authorization:
-                authorization.owner === "host"
-                  ? prepareIsolatedHostAuthorization(harness, authorization)
-                  : authorization,
-              streamParams: clampIsolatedStreamParams(request.streamParams, modelMaxTokens),
-            });
+            const dispatch = () =>
+              harness.runIsolatedCompletionV2!({
+                ...commonParams,
+                ...execution,
+                timeoutMs: remainingTimeoutMs(),
+                authorization:
+                  authorization.owner === "host"
+                    ? prepareIsolatedHostAuthorization(harness, authorization)
+                    : authorization,
+                streamParams: resolveIsolatedStreamParams(request, completionModel),
+              });
+            const pending = diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch();
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
             execution.assertCurrent?.();
@@ -632,34 +770,31 @@ async function runIsolatedCompletionOwned(
           }
         }
         if (!result) {
-          if (firstError instanceof Error) {
-            throw firstError;
-          }
-          throw new Error("No prepared auth attempt succeeded.", { cause: firstError });
+          throw firstError instanceof Error
+            ? firstError
+            : new Error("No prepared auth attempt succeeded.", { cause: firstError });
         }
       } else {
         const authorization = await prepareHostAuthorization(request.authProfileId);
-        const harnessParams: AgentHarnessIsolatedCompletionParams = {
+        const harnessParams: Omit<AgentHarnessIsolatedCompletionParams, "timeoutMs"> = {
           ...commonParams,
-          streamParams: clampIsolatedStreamParams(
-            request.streamParams,
-            authorization.model.maxTokens,
-          ),
+          streamParams: resolveIsolatedStreamParams(request, authorization.model),
           model: authorization.model,
           auth: authorization.auth,
-          ...(authorization.sourceAuthFingerprint
-            ? { sourceAuthFingerprint: authorization.sourceAuthFingerprint }
-            : {}),
+          sourceAuthFingerprint: authorization.sourceAuthFingerprint,
         };
         assertCurrent();
         const execution = modelAuthority.bind(modelForAuthorization);
-        result = await harness.runIsolatedCompletion!(
-          prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
-        );
+        const dispatch = () =>
+          harness.runIsolatedCompletion!(
+            prepareIsolatedHostAuthorization(harness, {
+              ...harnessParams,
+              ...execution,
+              timeoutMs: remainingTimeoutMs(),
+            }),
+          );
+        result = await (diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch());
         execution.assertCurrent?.();
-      }
-      if (!result) {
-        throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion failed.");
       }
       return {
         text: requireIsolatedAssistantText(result.assistant),
@@ -669,15 +804,25 @@ async function runIsolatedCompletionOwned(
         usage: result.assistant.usage,
       };
     };
-    const result = await withPluginRuntimeGenerationScope(lease.snapshot, run);
-    assertCurrent();
-    if (!result.text && input.outputTextPolicy !== "strict-visible") {
-      throw new IsolatedCompletionError(
-        "output-rejected",
-        "Isolated completion returned empty output.",
-      );
-    }
-    return result;
+    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+      const result = await run();
+      assertCurrent();
+      if (!result.text && input.outputTextPolicy !== "strict-visible") {
+        throw new IsolatedCompletionError(
+          "output-rejected",
+          "Isolated completion returned empty output.",
+        );
+      }
+      // Usage pricing must share the completion's prepared metadata instead of rediscovering it.
+      emitIsolatedCompletionUsage({
+        config: lease.snapshot.config,
+        agentId,
+        agentDir: lease.snapshot.agentDir,
+        purpose: input.purpose,
+        result,
+      });
+      return result;
+    });
   } finally {
     closed = true;
   }

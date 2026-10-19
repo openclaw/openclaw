@@ -3,30 +3,55 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as configSerialization from "../config/runtime-config-snapshot-match.js";
+import {
+  clearRuntimeConfigSnapshot as clearConfig,
+  setRuntimeConfigSnapshot as setConfig,
+} from "../config/runtime-snapshot.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
+import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
-  acquireAgentRunPreparedModelRuntime,
-  acquireReadOnlyPreparedModelRuntime,
-  activateStandalonePreparedModelRuntime,
-  getPreparedModelRuntimeSnapshot,
-  loadPreparedModelRuntimeSnapshot,
-  markPreparedModelRuntimeSnapshotsStale,
-  prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
-  rejectPendingPreparedModelRuntimeReplacement,
-  refreshPreparedModelRuntimeSnapshots,
+  acquireAgentRunPreparedModelRuntime as acquireRun,
+  acquireReadOnlyPreparedModelRuntime as acquireReadOnly,
+  activateStandalonePreparedModelRuntime as activate,
+  getPreparedModelRuntimeSnapshot as readSnapshot,
+  markPreparedModelRuntimeSnapshotsStale as markStale,
+  prepareModelRuntimeSnapshot as prepare,
+  publishPreparedModelRuntimeSnapshot as publish,
+  refreshPreparedModelRuntimeSnapshots as refresh,
+  type PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const fixture = usePreparedModelRuntimeHarness(undefined, () => {
+const pendingBuilds: Array<() => Promise<void>> = [];
+const fixture = usePreparedModelRuntimeHarness(undefined, async () => {
+  for (const close of pendingBuilds.splice(0)) {
+    await close();
+  }
   vi.restoreAllMocks();
 });
 const { mocks } = fixture;
-const configFor = (model = "openai/gpt-5.5") => ({ agents: { defaults: { model } } });
-const inputFor = (name: string, config: OpenClawConfig = {}) => ({
+const configFor = (model = "openai/gpt-5.5", defaults: Partial<AgentDefaultsConfig> = {}) => ({
+  agents: { defaults: { model, ...defaults } },
+});
+const inputFor = (
+  name: string,
+  config: OpenClawConfig = {},
+  options: Partial<PreparedModelRuntimeInput> = {},
+) => ({
   agentDir: fixture.state.agentDir(name),
   config,
+  ...options,
+});
+const scopedModel = (model: string, runtime: string, allow: string) => ({
+  model: { primary: model },
+  models: { [model]: { agentRuntime: { id: runtime } } },
+  modelPolicy: { allow: [allow] },
 });
 function holdNextBuild() {
   const started = createDeferred();
@@ -36,7 +61,19 @@ function holdNextBuild() {
     await finish.promise;
     return { agentDir: String(targetDir), wrote: false };
   });
-  return { started: started.promise, finish: () => finish.resolve() };
+  const work: Promise<unknown>[] = [];
+  pendingBuilds.push(async () => {
+    finish.resolve();
+    await Promise.allSettled(work);
+  });
+  return {
+    started: started.promise,
+    finish: () => finish.resolve(),
+    track<T>(pending: Promise<T>) {
+      work.push(pending);
+      return pending;
+    },
+  };
 }
 
 describe("prepared model runtime snapshots", () => {
@@ -44,18 +81,13 @@ describe("prepared model runtime snapshots", () => {
     const modelId = "claude-opus-5";
     mocks.resolveStaticCatalogModel.mockImplementation(({ modelId: requestedId, provider }) =>
       provider === "claude-cli"
-        ? {
+        ? makeProviderModelFixture({
             provider,
             id: requestedId,
-            name: `${requestedId} (Claude CLI)`,
             api: "anthropic-messages",
             baseUrl: "https://api.anthropic.com",
             reasoning: true,
-            input: ["text" as const],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 1_000_000,
-            maxTokens: 128_000,
-          }
+          })
         : undefined,
     );
     const row = { provider: "anthropic", id: modelId, name: modelId, reasoning: false };
@@ -63,20 +95,16 @@ describe("prepared model runtime snapshots", () => {
       entries: [row],
       routeVariants: [row],
     });
-    // Raw user config permits sparse provider model overrides. This omission is
-    // the contract under test: it must not become an explicit reasoning opt-out.
+    // A sparse user override must not become an explicit reasoning opt-out.
     const config = {
-      agents: {
-        defaults: {
-          model: `anthropic/${modelId}`,
-          models: {
-            [`anthropic/${modelId}`]: {
-              agentRuntime: { id: "claude-cli" },
-              params: { thinking: "medium" },
-            },
+      ...configFor(`anthropic/${modelId}`, {
+        models: {
+          [`anthropic/${modelId}`]: {
+            agentRuntime: { id: "claude-cli" },
+            params: { thinking: "medium" },
           },
         },
-      },
+      }),
       models: {
         providers: {
           anthropic: {
@@ -86,11 +114,9 @@ describe("prepared model runtime snapshots", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const snapshot = await publishPreparedModelRuntimeSnapshot({
-      agentId: "main",
-      config,
-      agentDir: fixture.state.agentDir("claude-cli-capabilities"),
-    });
+    const snapshot = await publish(
+      inputFor("claude-cli-capabilities", config, { agentId: "main" }),
+    );
     expect(snapshot.modelCatalog.entries).toEqual([
       expect.objectContaining({ provider: "anthropic", id: modelId, reasoning: true }),
     ]);
@@ -118,57 +144,43 @@ describe("prepared model runtime snapshots", () => {
       }
       return registry;
     });
-    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-    markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
-      waitForReplacement: true,
-    });
-    const leasePending = acquireReadOnlyPreparedModelRuntime({
+    await refresh({}, { gatewayLifecycle: true });
+    markStale("test isolated probe replacement", { waitForReplacement: true });
+    const input = inputFor("setup-probe-agent", stagedConfig, {
       agentId: "openclaw",
-      config: stagedConfig,
-      agentDir: fixture.state.agentDir("setup-probe-agent"),
       inheritedAuthDir: fixture.state.agentDir("setup-probe-agent"),
       workspaceDir: "/tmp/setup-probe-workspace",
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
     });
+    const leasePending = acquireReadOnly(input);
     await Promise.resolve();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
 
-    await refreshPreparedModelRuntimeSnapshots({
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    });
-    const lease = await leasePending;
+    await refresh(configFor());
+    await using lease = await leasePending;
     expect(lease.snapshot).toMatchObject({
-      agentId: "openclaw",
+      agentId: input.agentId,
       config: stagedConfig,
-      agentDir: fixture.state.agentDir("setup-probe-agent"),
-      workspaceDir: "/tmp/setup-probe-workspace",
+      agentDir: input.agentDir,
+      workspaceDir: input.workspaceDir,
       pluginRegistry: expect.any(Object),
     });
     expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
       "codex",
     ]);
-    await lease[Symbol.asyncDispose]();
   });
 
   it("never returns a standalone generation invalidated while it is building", async () => {
     const input = inputFor("standalone-build-race");
     const build = holdNextBuild();
 
-    let activation: ReturnType<typeof activateStandalonePreparedModelRuntime> | undefined;
-    try {
-      activation = activateStandalonePreparedModelRuntime(input);
-      await build.started;
-      markPreparedModelRuntimeSnapshotsStale("test in-flight standalone publication");
-      build.finish();
+    const activation = build.track(activate(input));
+    await build.started;
+    markStale("test in-flight standalone publication");
+    build.finish();
 
-      const published = await activation;
-      expect(published).toBeDefined();
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-      await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(published);
-    } finally {
-      build.finish();
-      await Promise.allSettled([activation]);
-    }
+    await expect(activation).rejects.toThrow(PreparedModelRuntimePublicationSupersededError);
+    expect(readSnapshot(input)).toBeUndefined();
   });
 
   it("keeps provider catalog outcomes on the published live snapshot", async () => {
@@ -183,7 +195,7 @@ describe("prepared model runtime snapshots", () => {
       return { agentDir: fixture.state.agentDir("provider-outcome-agent"), wrote: false };
     });
 
-    const snapshot = await publishPreparedModelRuntimeSnapshot(inputFor("provider-outcome-agent"));
+    const snapshot = await publish(inputFor("provider-outcome-agent"));
 
     expect(snapshot.modelCatalog.providerOutcomes).toEqual([
       { provider: "openai", status: "auth-rejected" },
@@ -195,18 +207,8 @@ describe("prepared model runtime snapshots", () => {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6" } },
         entries: {
-          selected: {
-            model: { primary: "anthropic/claude-sonnet-5" },
-            models: {
-              "anthropic/claude-sonnet-5": { agentRuntime: { id: "selected-runtime" } },
-            },
-            modelPolicy: { allow: ["vllm/*"] },
-          },
-          sibling: {
-            model: { primary: "ollama/sibling" },
-            models: { "ollama/sibling": { agentRuntime: { id: "sibling-runtime" } } },
-            modelPolicy: { allow: ["sibling-only/*"] },
-          },
+          selected: scopedModel("anthropic/claude-sonnet-5", "selected-runtime", "vllm/*"),
+          sibling: scopedModel("ollama/sibling", "sibling-runtime", "sibling-only/*"),
         },
       },
       models: {
@@ -218,15 +220,12 @@ describe("prepared model runtime snapshots", () => {
     } as OpenClawConfig;
     mocks.runtimeSyntheticAuthProviderRefs = ["selected-runtime", "sibling-runtime"];
 
-    await publishPreparedModelRuntimeSnapshot({
-      agentId: "selected",
-      config,
-      agentDir: fixture.state.agentDir("selected-provider-scope"),
-    });
+    const input = inputFor("selected-provider-scope", config, { agentId: "selected" });
+    await publish(input);
 
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
       config,
-      fixture.state.agentDir("selected-provider-scope"),
+      input.agentDir,
       expect.objectContaining({
         providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "selected-runtime", "vllm"],
       }),
@@ -236,88 +235,16 @@ describe("prepared model runtime snapshots", () => {
     );
   });
 
-  it("publishes configured manifest model capabilities without a provider discovery entry", async () => {
-    const runtimeModel = {
-      provider: "openai",
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-responses" as const,
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text" as const, "image" as const],
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-      contextWindow: 1_050_000,
-      contextWindows: [
-        { id: "250k", label: "250K", contextWindow: 250_000 },
-        { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
-      ],
-      contextWindowDefault: "1050k",
-      maxTokens: 128_000,
-    };
-    mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          models: { "openai/gpt-5.4": {} },
-        },
-        entries: {
-          qa: { model: { primary: "openai/gpt-5.4" } },
-        },
-      },
-    };
-
-    const snapshot = await publishPreparedModelRuntimeSnapshot({
-      agentId: "qa",
-      config,
-      agentDir: fixture.state.agentDir("manifest-qa"),
-      workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
-    });
-
-    expect(snapshot.agentId).toBe("qa");
-    expect(snapshot.configuredRuntimeModels).toEqual([
-      { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
-    ]);
-    expect(snapshot.modelCatalog.entries).toEqual([]);
-    expect(snapshot.modelCatalog.staticEntries).toEqual([
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4",
-        contextWindow: 1_050_000,
-        contextWindows: [
-          { id: "250k", label: "250K", contextWindow: 250_000 },
-          { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
-        ],
-        contextWindowDefault: "1050k",
-        reasoning: true,
-        input: ["text", "image"],
-      }),
-    ]);
-  });
-
   it("prepares inline provider models when no default model is configured", async () => {
-    const snapshot = await publishPreparedModelRuntimeSnapshot(
-      inputFor("inline", {
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://custom.example.test/v1",
-              api: "openai-responses",
-              models: [
-                {
-                  id: "custom-model",
-                  name: "Custom Model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128_000,
-                  maxTokens: 8_192,
-                },
-              ],
-            },
-          },
-        },
-      }),
+    const snapshot = await publish(
+      inputFor(
+        "inline",
+        providerConfig("custom", {
+          baseUrl: "https://custom.example.test/v1",
+          api: "openai-responses",
+          models: [modelDefinition("custom-model", { reasoning: false })],
+        }),
+      ),
     );
 
     expect(snapshot.inlineProviderModels).toMatchObject([
@@ -330,47 +257,21 @@ describe("prepared model runtime snapshots", () => {
     ]);
   });
 
-  it("does not let a superseded reload reject the current replacement gate", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const latestConfig = configFor();
-    await refreshPreparedModelRuntimeSnapshots(initialConfig);
-
-    const supersededGate = markPreparedModelRuntimeSnapshotsStale("test superseded reload", {
-      waitForReplacement: true,
-    });
-    markPreparedModelRuntimeSnapshotsStale("test current reload", { waitForReplacement: true });
-    rejectPendingPreparedModelRuntimeReplacement(
-      supersededGate,
-      new Error("superseded reload cancelled"),
-    );
-    const read = prepareModelRuntimeSnapshot({
-      ...fixture.agentInput("default", latestConfig),
-      workspaceDir: "/tmp/unused-workspace",
-    });
-    const refresh = refreshPreparedModelRuntimeSnapshots(latestConfig);
-
-    await expect(read).resolves.toMatchObject({ config: latestConfig });
-    await refresh;
-  });
-
   it("builds credential-free command owners separately from runtime owners", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("credential-free");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
+    const input = inputFor("credential-free");
+    await publish(input);
 
-    const credentialFree = await publishPreparedModelRuntimeSnapshot({
-      config,
-      agentDir,
+    const credentialFree = await publish({
+      ...input,
       readOnly: true,
       skipCredentials: true,
     });
 
-    expect(credentialFree).not.toBe(await prepareModelRuntimeSnapshot({ config, agentDir }));
+    const runtime = await prepare(input);
+    expect(credentialFree).not.toBe(runtime);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
     expect(getPreparedModelRuntimeAuthStore(credentialFree)).toEqual({ version: 1, profiles: {} });
     expect(credentialFree.createStores().authStorage.getAll()).toEqual({});
-    const runtime = await prepareModelRuntimeSnapshot({ config, agentDir });
     expect(runtime.createStores().authStorage.getAll()).toEqual({
       custom: { type: "api_key", key: "test-key" },
     });
@@ -385,7 +286,7 @@ describe("prepared model runtime snapshots", () => {
       const config = configFor("openai/gpt-5.4");
       mocks.authStorage.getAll.mockReturnValue({ openai: credential });
 
-      const snapshot = await publishPreparedModelRuntimeSnapshot(inputFor("cli-startup", config));
+      const snapshot = await publish(inputFor("cli-startup", config));
 
       const discoveryOptions = mocks.discoverAuthStorage.mock.calls[0]?.[1] as {
         externalCli?: unknown;
@@ -397,17 +298,56 @@ describe("prepared model runtime snapshots", () => {
 
   it("reuses read-only owners for equivalent config clones but rejects projections", async () => {
     const input = { ...inputFor("read-only-config", configFor()), readOnly: true };
-    const first = await publishPreparedModelRuntimeSnapshot(input);
+    const first = await publish(input);
     const equivalent = { ...input, config: configFor() };
     const different = { ...input, config: configFor("anthropic/claude-opus-4-6") };
-    expect(getPreparedModelRuntimeSnapshot(equivalent)).toBe(first);
-    expect(getPreparedModelRuntimeSnapshot(different)).toBeUndefined();
-    await expect(prepareModelRuntimeSnapshot(equivalent)).resolves.toBe(first);
-    await expect(prepareModelRuntimeSnapshot(different)).rejects.toThrow("not published");
-    const secondLease = await acquireReadOnlyPreparedModelRuntime(different);
+    expect(readSnapshot(equivalent)).toBe(first);
+    expect(readSnapshot(different)).toBeUndefined();
+    await expect(prepare(equivalent)).resolves.toBe(first);
+    await expect(prepare(different)).rejects.toThrow("not published");
+    await using secondLease = await acquireReadOnly(different);
     expect(secondLease.snapshot).not.toBe(first);
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
-    await secondLease[Symbol.asyncDispose]();
+  });
+
+  it("reuses publication fingerprints across fleet catalog reads without caching mutable projections", async () => {
+    using stringify = vi.spyOn(configSerialization, "stableConfigStringify");
+    try {
+      for (const size of [8, 16]) {
+        const config: OpenClawConfig = {
+          agents: {
+            entries: Object.fromEntries(
+              Array.from({ length: size }, (_, index) => [`agent-${index}`, { name: "original" }]),
+            ),
+          },
+        };
+        setConfig(config);
+        const input = inputFor(`read-only-fleet-${size}`, config, {
+          agentId: "agent-0",
+          readOnly: true,
+        });
+        const snapshot = await publish(input, { catalogMode: "static" });
+        stringify.mockClear();
+        for (let request = 0; request < 16; request++) {
+          expect(catalogOwner(input)).toBe(snapshot);
+        }
+        expect(stringify.mock.calls.filter(([value]) => value === config)).toHaveLength(0);
+
+        const projected = structuredClone(config);
+        expect(catalogOwner({ ...input, config: projected })).toBe(snapshot);
+        projected.agents!.entries!["agent-0"]!.name = "projected";
+        expect(catalogOwner({ ...input, config: projected })).toBeUndefined();
+
+        config.agents!.entries!["agent-0"]!.name = "republished";
+        setConfig(config);
+        expect(catalogOwner(input)).toBeUndefined();
+        const replacement = await publish(input, { catalogMode: "static" });
+        expect(replacement).not.toBe(snapshot);
+        expect(catalogOwner(input)).toBe(replacement);
+      }
+    } finally {
+      clearConfig();
+    }
   });
 
   it("keeps replacement readers blocked when an earlier refresh is superseded", async () => {
@@ -415,115 +355,45 @@ describe("prepared model runtime snapshots", () => {
     const initialConfig = {};
     const skippedConfig = configFor("openai/gpt-5.4");
     const latestConfig = configFor();
-    await refreshPreparedModelRuntimeSnapshots(initialConfig);
+    await refresh(initialConfig);
     const build = holdNextBuild();
 
-    let skipped: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    let latest: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    let read: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
-    try {
-      markPreparedModelRuntimeSnapshotsStale("test overlapping config commit", {
-        waitForReplacement: true,
-      });
-      skipped = refreshPreparedModelRuntimeSnapshots(skippedConfig);
-      latest = refreshPreparedModelRuntimeSnapshots(latestConfig);
-      read = prepareModelRuntimeSnapshot({
+    markStale("test overlapping config commit", { waitForReplacement: true });
+    const skipped = build.track(refresh(skippedConfig));
+    const latest = build.track(refresh(latestConfig));
+    const read = build.track(
+      prepare({
         ...fixture.agentInput("default", latestConfig),
         workspaceDir: "/tmp/unused-workspace",
-      });
-
-      await skipped;
-      await expect(
-        Promise.race([
-          read.then(
-            () => "settled",
-            () => "settled",
-          ),
-          Promise.resolve("pending"),
-        ]),
-      ).resolves.toBe("pending");
-      await build.started;
-      build.finish();
-      await latest;
-      await expect(read).resolves.toMatchObject({ config: latestConfig });
-    } finally {
-      build.finish();
-      await Promise.allSettled([skipped, latest, read]);
-    }
-  });
-  it("reactivates a standalone read-only owner after a publication boundary", async () => {
-    const input = {
-      agentDir: fixture.state.agentDir("read-only-reactivation"),
-      config: {},
-      readOnly: true,
-    };
-    await activateStandalonePreparedModelRuntime(input);
-
-    markPreparedModelRuntimeSnapshotsStale("test config publication");
-
-    expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
-    await expect(loadPreparedModelRuntimeSnapshot(input)).resolves.toMatchObject({
-      config: input.config,
-    });
-    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-  });
-
-  it("rebinds unpublished read-only activation to the committed replacement config", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const initialConfig = {};
-    const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-
-    markPreparedModelRuntimeSnapshotsStale("test read-only replacement", {
-      waitForReplacement: true,
-    });
-    const read = loadPreparedModelRuntimeSnapshot({
-      ...fixture.agentInput("default", initialConfig),
-      workspaceDir: "/tmp/dynamic-read-only-workspace",
-      readOnly: true,
-    });
-    markPreparedModelRuntimeSnapshotsStale("test superseding read-only replacement", {
-      waitForReplacement: true,
-    });
-    expect(
-      getPreparedModelRuntimeSnapshot(fixture.agentInput("default", latestConfig)),
-    ).toBeUndefined();
-    const refresh = refreshPreparedModelRuntimeSnapshots(latestConfig);
-
-    await expect(read).resolves.toMatchObject({
-      config: latestConfig,
-      workspaceDir: "/tmp/dynamic-read-only-workspace",
-    });
-    await refresh;
-  });
-
-  it("canonicalizes explicit false owner flags", async () => {
-    const input = { ...fixture.agentInput("worker", {}), workspaceDir: "/tmp/workspace-worker" };
-    await publishPreparedModelRuntimeSnapshot(input, { provenance: "configured" });
-
-    await expect(
-      prepareModelRuntimeSnapshot({
-        ...input,
-        readOnly: false,
-        skipCredentials: false,
-        workspaceDir: undefined,
       }),
-    ).resolves.toMatchObject({ agentId: "worker", workspaceDir: "/tmp/workspace-worker" });
-  });
+    );
 
+    await skipped;
+    await expect(
+      Promise.race([
+        read.then(
+          () => "settled",
+          () => "settled",
+        ),
+        Promise.resolve("pending"),
+      ]),
+    ).resolves.toBe("pending");
+    await build.started;
+    build.finish();
+    await latest;
+    await expect(read).resolves.toMatchObject({ config: latestConfig });
+  });
   it.each(["workspace", "config"] as const)(
     "deduplicates standalone activation while publishing a changed %s",
     async (changed) => {
       const input = {
-        config: {},
-        agentDir: fixture.state.agentDir("standalone"),
+        ...inputFor("standalone"),
         workspaceDir: "/tmp/prepared-model-runtime-standalone-workspace",
       };
 
-      const first = await activateStandalonePreparedModelRuntime(input);
-      await activateStandalonePreparedModelRuntime(input);
-      await activateStandalonePreparedModelRuntime({
+      const first = await activate(input);
+      await activate(input);
+      await activate({
         ...input,
         agentDir: fixture.state.agentDir("standalone-second"),
       });
@@ -533,7 +403,7 @@ describe("prepared model runtime snapshots", () => {
           ? { workspaceDir: "/tmp/standalone-replacement-workspace" }
           : { config: configFor() }),
       };
-      const replacement = await activateStandalonePreparedModelRuntime(replacementInput);
+      const replacement = await activate(replacementInput);
       expect(replacement).not.toBe(first);
       expect(first?.config).toBe(input.config);
       expect(replacement?.config).toBe(replacementInput.config);
@@ -541,8 +411,8 @@ describe("prepared model runtime snapshots", () => {
         agentDir: input.agentDir,
         workspaceDir: replacementInput.workspaceDir,
       });
-      await expect(prepareModelRuntimeSnapshot(replacementInput)).resolves.toBe(replacement);
-      await expect(prepareModelRuntimeSnapshot(input)).resolves.toMatchObject({
+      await expect(prepare(replacementInput)).resolves.toBe(replacement);
+      await expect(prepare(input)).resolves.toMatchObject({
         workspaceDir: input.workspaceDir,
       });
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3);
@@ -551,11 +421,10 @@ describe("prepared model runtime snapshots", () => {
 
   it("publishes a run owner from the caller-selected metadata generation", async () => {
     const selectedMetadata = { ...mocks.pluginMetadataSnapshot };
-    const lease = await acquireAgentRunPreparedModelRuntime(
+    await using lease = await acquireRun(
       {
-        config: {},
+        ...inputFor("selected-metadata-agent"),
         agentId: "main",
-        agentDir: fixture.state.agentDir("selected-metadata-agent"),
         workspaceDir: "/tmp/selected-metadata-workspace",
         loadRuntimePlugins: true,
         runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
@@ -567,6 +436,5 @@ describe("prepared model runtime snapshots", () => {
     );
 
     expect(lease.snapshot.metadataSnapshot).toBe(selectedMetadata);
-    await lease[Symbol.asyncDispose]();
   });
 });
