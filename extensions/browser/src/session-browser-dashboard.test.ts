@@ -100,6 +100,13 @@ function page(id: string) {
     }),
   };
 }
+function access(
+  owner = authority().value,
+  options: Parameters<typeof accessSessionBrowserDashboard>[2] = { operation: "open" },
+  input: Parameters<typeof accessSessionBrowserDashboard>[0] = request,
+) {
+  return accessSessionBrowserDashboard(input, owner, options);
+}
 beforeEach(() => {
   vi.clearAllMocks();
   mocked.profile = makeBrowserProfile();
@@ -135,15 +142,13 @@ describe("isolated session browser owner", () => {
       oldReadStarted.resolve();
       return oldRead.promise;
     });
-    const stale = accessSessionBrowserDashboard(request, authority().value, {
-      operation: "open",
-    });
+    const stale = access();
     await oldReadStarted.promise;
     mocked.definition.mockResolvedValue(replacement);
-    const current = await accessSessionBrowserDashboard(
-      { ...request, instanceId: replacement.instanceId },
+    const current = await access(
       authority().value,
       { operation: "open" },
+      { ...request, instanceId: replacement.instanceId },
     );
     oldRead.resolve(definition);
     await expect(stale).rejects.toThrow("dashboard changed before this operation");
@@ -157,10 +162,7 @@ describe("isolated session browser owner", () => {
   it("allocates one isolated context for concurrent viewers and keeps it across actor retirement", async () => {
     const first = authority();
     const second = authority();
-    const [one, two] = await Promise.all([
-      accessSessionBrowserDashboard(request, first.value, { operation: "open" }),
-      accessSessionBrowserDashboard(request, second.value, { operation: "open" }),
-    ]);
+    const [one, two] = await Promise.all([access(first.value), access(second.value)]);
     expect(mocked.create).toHaveBeenCalledOnce();
     expect(mocked.create).toHaveBeenCalledWith(
       expect.objectContaining({ isolatedContext: true, url: definition.url }),
@@ -169,35 +171,27 @@ describe("isolated session browser owner", () => {
     first.revokeActor();
     expect(() => one.resource.assertCurrent()).not.toThrow();
     expect(
-      (await accessSessionBrowserDashboard(request, second.value, { operation: "inspect" }))
-        .response.browserTab?.targetId,
+      (await access(second.value, { operation: "inspect" })).response.browserTab?.targetId,
     ).toBe("owned-tab");
   });
 
   it("inspects without starting Chromium and preserves explicit Stop until Resume", async () => {
     const owner = authority();
-    const inspect = await accessSessionBrowserDashboard(request, owner.value, {
-      operation: "inspect",
-    });
+    const inspect = await access(owner.value, { operation: "inspect" });
     expect(inspect.response.paused).toBe(false);
     expect(mocked.create).not.toHaveBeenCalled();
-    const opened = await accessSessionBrowserDashboard(request, owner.value, { operation: "open" });
+    const opened = await access(owner.value);
     expect(opened.response.browserTab).toBeDefined();
-    await accessSessionBrowserDashboard(request, owner.value, { operation: "stop" });
+    await access(owner.value, { operation: "stop" });
     expect(opened.resource.page?.close).toHaveBeenCalledOnce();
-    expect(
-      (await accessSessionBrowserDashboard(request, owner.value, { operation: "open" })).response
-        .paused,
-    ).toBe(true);
-    await accessSessionBrowserDashboard(request, owner.value, { operation: "open", resume: true });
+    expect((await access(owner.value)).response.paused).toBe(true);
+    await access(owner.value, { operation: "open", resume: true });
     expect(mocked.create).toHaveBeenCalledTimes(2);
   });
 
   it("closes the complete context when its board definition changes", async () => {
     const owner = authority();
-    const { resource } = await accessSessionBrowserDashboard(request, owner.value, {
-      operation: "open",
-    });
+    const { resource } = await access(owner.value);
     mocked.definition.mockResolvedValue({ ...definition, url: "https://replacement.test/" });
     await expect(resource.assertDefinitionCurrent()).rejects.toThrow("removed or replaced");
     expect(resource.page?.close).toHaveBeenCalledOnce();
@@ -207,9 +201,7 @@ describe("isolated session browser owner", () => {
 
   it("closes an adopted context when its session lifetime ends", async () => {
     const owner = authority();
-    const { resource } = await accessSessionBrowserDashboard(request, owner.value, {
-      operation: "open",
-    });
+    const { resource } = await access(owner.value);
     owner.session.abort(new Error("session reset"));
     await resource.close();
     expect(resource.page?.close).toHaveBeenCalledOnce();
@@ -218,9 +210,7 @@ describe("isolated session browser owner", () => {
 
   it("rejects a board-selected custom profile before allocating a context", async () => {
     mocked.definition.mockResolvedValue({ ...definition, profile: "custom" });
-    await expect(
-      accessSessionBrowserDashboard(request, authority().value, { operation: "open" }),
-    ).rejects.toThrow("configured default managed profile");
+    await expect(access()).rejects.toThrow("configured default managed profile");
     expect(mocked.create).not.toHaveBeenCalled();
   });
 
@@ -233,9 +223,7 @@ describe("isolated session browser owner", () => {
       assertCurrent();
       throw new Error("revoked authority reached page allocation");
     });
-    await expect(
-      accessSessionBrowserDashboard(request, owner.value, { operation: "open" }),
-    ).rejects.toThrow("actor revoked");
+    await expect(access(owner.value)).rejects.toThrow("actor revoked");
     expect(getBrowserStateRuntime().sessionDashboards?.size).toBe(0);
     expect(owner.release).toHaveBeenCalledOnce();
   });
@@ -247,9 +235,7 @@ describe("isolated session browser owner", () => {
       owner.revokeActor();
       return allocated;
     });
-    await expect(
-      accessSessionBrowserDashboard(request, owner.value, { operation: "open" }),
-    ).rejects.toThrow("actor revoked");
+    await expect(access(owner.value)).rejects.toThrow("actor revoked");
     expect(allocated.close).toHaveBeenCalledOnce();
     expect(getBrowserStateRuntime().sessionDashboards?.size).toBe(0);
   });
@@ -261,26 +247,18 @@ describe("isolated session browser owner", () => {
       owner.session.abort();
       return allocated;
     });
-    await expect(
-      accessSessionBrowserDashboard(request, owner.value, { operation: "open" }),
-    ).rejects.toThrow();
+    await expect(access(owner.value)).rejects.toThrow();
     expect(allocated.close).toHaveBeenCalledOnce();
     expect(getBrowserStateRuntime().sessionDashboards?.size).toBe(0);
   });
 
   it("rejects required sandbox and unsupported profiles before allocating a context", async () => {
     const owner = authority();
-    await expect(
-      accessSessionBrowserDashboard(
-        request,
-        { ...owner.value, sandboxRequired: true },
-        { operation: "open" },
-      ),
-    ).rejects.toThrow("does not provide a sandbox");
+    await expect(access({ ...owner.value, sandboxRequired: true })).rejects.toThrow(
+      "does not provide a sandbox",
+    );
     mocked.profile = makeBrowserProfile({ attachOnly: true });
-    await expect(
-      accessSessionBrowserDashboard(request, owner.value, { operation: "open" }),
-    ).rejects.toThrow("local managed browser");
+    await expect(access(owner.value)).rejects.toThrow("local managed browser");
     expect(mocked.create).not.toHaveBeenCalled();
   });
 });

@@ -41,6 +41,15 @@ afterEach(() => {
 });
 
 type BrowserConfig = NonNullable<Parameters<typeof noteChromeMcpBrowserReadiness>[0]["browser"]>;
+function withProfile(
+  profile: NonNullable<BrowserConfig["profiles"]>[string],
+  name = "work",
+  browser: BrowserConfig = {},
+): BrowserConfig {
+  return { ...browser, profiles: { [name]: profile } };
+}
+const mcpProfile = { driver: "existing-session" } as const;
+const remoteMcp = { ...mcpProfile, cdpUrl: "https://browser.example" };
 type DoctorHost = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -109,81 +118,52 @@ describe("browser doctor readiness", () => {
   it.each<[string, BrowserConfig, boolean, boolean]>([
     [
       "custom default Chrome MCP",
-      { defaultProfile: "work", profiles: { work: { driver: "existing-session" } } },
+      withProfile(mcpProfile, "work", { defaultProfile: "work" }),
       false,
       true,
     ],
-    [
-      "explicit Chrome MCP endpoint",
-      { profiles: { endpoint: { driver: "existing-session", cdpUrl: "https://browser.example" } } },
-      false,
-      false,
-    ],
+    ["explicit Chrome MCP endpoint", withProfile(remoteMcp), false, false],
     [
       "Chrome MCP endpoint arguments",
-      {
-        profiles: {
-          endpoint: {
-            driver: "existing-session",
-            mcpArgs: ["--browserUrl", "https://browser.example"],
-          },
-        },
-      },
+      withProfile({ ...mcpProfile, mcpArgs: ["--browserUrl", remoteMcp.cdpUrl] }),
       false,
       false,
     ],
     [
       "explicit Chrome MCP auto-connect override",
-      {
-        profiles: {
-          local: {
-            driver: "existing-session",
-            cdpUrl: "https://browser.example",
-            mcpArgs: ["--autoConnect"],
-          },
-        },
-      },
+      withProfile({ ...remoteMcp, mcpArgs: ["--autoConnect"] }),
       false,
       true,
     ],
     [
       "explicit managed override of user",
-      { defaultProfile: "user", profiles: { user: { driver: "openclaw", cdpPort: 18801 } } },
+      withProfile({ driver: "openclaw", cdpPort: 18801 }, "user", { defaultProfile: "user" }),
       true,
       false,
     ],
     [
       "extension",
-      { defaultProfile: "chrome", profiles: { chrome: { driver: "extension" } } },
+      withProfile({ driver: "extension" }, "chrome", { defaultProfile: "chrome" }),
       false,
       false,
     ],
-    ["remote CDP", { profiles: { remote: { cdpUrl: "https://browser.example" } } }, false, false],
-    [
-      "profile attach-only",
-      { profiles: { attached: { cdpPort: 18801, attachOnly: true } } },
-      false,
-      false,
-    ],
+    ["remote CDP", withProfile({ cdpUrl: "https://browser.example" }), false, false],
+    ["profile attach-only", withProfile({ cdpPort: 18801, attachOnly: true }), false, false],
     [
       "inherited attach-only",
-      { attachOnly: true, profiles: { attached: { cdpPort: 18801 } } },
+      withProfile({ cdpPort: 18801 }, "work", { attachOnly: true }),
       false,
       false,
     ],
     [
       "explicit managed override of inherited attach-only",
-      { attachOnly: true, profiles: { local: { cdpPort: 18801, attachOnly: false } } },
+      withProfile({ cdpPort: 18801, attachOnly: false }, "work", { attachOnly: true }),
       true,
       false,
     ],
     [
       "Lightpanda",
-      {
-        profiles: {
-          lightweight: { engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true },
-        },
-      },
+      withProfile({ engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true }),
       false,
       false,
     ],
@@ -203,49 +183,29 @@ describe("browser doctor readiness", () => {
     expect(text.includes("Google Chrome was not found")).toBe(chromeMcp);
   });
 
-  it.each([
-    { name: "profile headless override", global: false, profile: true, env: {}, warning: false },
-    { name: "profile headed override", global: true, profile: false, env: {}, warning: true },
-    {
-      name: "Linux headless default",
-      global: undefined,
-      profile: undefined,
-      env: {},
-      warning: false,
-    },
-    {
-      name: "environment headless override",
-      global: false,
-      profile: false,
-      env: { OPENCLAW_BROWSER_HEADLESS: "1" },
-      warning: false,
-    },
-    {
-      name: "environment headed override",
-      global: true,
-      profile: true,
-      env: { OPENCLAW_BROWSER_HEADLESS: "0" },
-      warning: true,
-    },
-  ])("matches managed launch display requirements for $name", async (testCase) => {
-    const { text } = await diagnose(
-      {
-        headless: testCase.global,
-        profiles: { work: { cdpPort: 18801, headless: testCase.profile } },
-      },
-      { env: testCase.env },
-    );
-    expect(text.includes("DISPLAY") || text.includes("Linux display server")).toBe(
-      testCase.warning,
-    );
-    if (testCase.warning) {
-      expect(text).toContain(
-        testCase.name === "profile headed override"
-          ? "browser.profiles.work.headless=false"
-          : "OPENCLAW_BROWSER_HEADLESS=0",
+  it.each<[string, boolean | undefined, boolean | undefined, NodeJS.ProcessEnv, boolean]>([
+    ["profile headless override", false, true, {}, false],
+    ["profile headed override", true, false, {}, true],
+    ["Linux headless default", undefined, undefined, {}, false],
+    ["environment headless override", false, false, { OPENCLAW_BROWSER_HEADLESS: "1" }, false],
+    ["environment headed override", true, true, { OPENCLAW_BROWSER_HEADLESS: "0" }, true],
+  ])(
+    "matches managed launch display requirements for %s",
+    async (name, global, profile, env, warning) => {
+      const { text } = await diagnose(
+        withProfile({ cdpPort: 18801, headless: profile }, "work", { headless: global }),
+        { env },
       );
-    }
-  });
+      expect(text.includes("DISPLAY") || text.includes("Linux display server")).toBe(warning);
+      if (warning) {
+        expect(text).toContain(
+          name === "profile headed override"
+            ? "browser.profiles.work.headless=false"
+            : "OPENCLAW_BROWSER_HEADLESS=0",
+        );
+      }
+    },
+  );
 
   it("checks effective executables once per path and names only profiles missing a browser", async () => {
     const resolveManagedExecutable = vi.fn((resolved: { executablePath?: string }) =>
@@ -284,7 +244,7 @@ describe("browser doctor readiness", () => {
     "reports Chrome MCP compatibility for $version",
     async ({ version, platform, expected }) => {
       const { noteFn, text } = await diagnose(
-        { profiles: { chromeLive: { driver: "existing-session", color: "#00AA00" } } },
+        withProfile({ driver: "existing-session", color: "#00AA00" }, "chromeLive"),
         {
           platform,
           resolveChromeExecutable: () => ({ kind: "chrome", path: "/chrome" }),
@@ -301,15 +261,14 @@ describe("browser doctor readiness", () => {
 
   it("skips Chrome auto-detection when profiles use explicit userDataDir", async () => {
     const { noteFn, text } = await diagnose(
-      {
-        profiles: {
-          braveLive: {
-            driver: "existing-session",
-            userDataDir: "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
-            color: "#FB542B",
-          },
+      withProfile(
+        {
+          driver: "existing-session",
+          userDataDir: "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
+          color: "#FB542B",
         },
-      },
+        "braveLive",
+      ),
       {
         resolveChromeExecutable: () => {
           throw new Error("should not look up Chrome");
