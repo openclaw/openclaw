@@ -42,6 +42,7 @@ const string = { type: "string" };
 const boolean = { type: "boolean" };
 const nil = { type: "null" };
 const positiveInteger = { ...integer, minimum: 1 };
+const optionalLimit = Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]));
 const requiredCount = objectSchema({ count: integer }, { required: ["count"] });
 const validateDecimal = validator(closedObject({ amount: number, count: integer }), "decimal-tool");
 
@@ -55,17 +56,14 @@ describe("validateToolArguments", () => {
   });
 
   it.each(["anyOf", "oneOf"])("preserves accepted %s values during sibling coercion", (form) => {
-    const cases: { branches: TSchema[]; value: unknown }[] = [
-      { branches: [Type.Number(), Type.String()], value: "00123" },
-      { branches: [Type.String(), Type.Number()], value: 42 },
-      { branches: [Type.String(), Type.Boolean()], value: false },
-      { branches: [Type.Array(Type.Integer()), Type.String()], value: '["2"]' },
-      {
-        branches: [Type.Object({ id: Type.Integer() }), Type.Object({ id: Type.String() })],
-        value: { id: "00123" },
-      },
+    const cases: [TSchema[], unknown][] = [
+      [[Type.Number(), Type.String()], "00123"],
+      [[Type.String(), Type.Number()], 42],
+      [[Type.String(), Type.Boolean()], false],
+      [[Type.Array(Type.Integer()), Type.String()], '["2"]'],
+      [[Type.Object({ id: Type.Integer() }), Type.Object({ id: Type.String() })], { id: "00123" }],
     ];
-    for (const { branches, value } of cases) {
+    for (const [branches, value] of cases) {
       for (const alternatives of [branches, branches.toReversed()]) {
         const validate = objectValidator(
           { value: { [form]: alternatives }, count: integer },
@@ -79,21 +77,11 @@ describe("validateToolArguments", () => {
   });
 
   it.each(["anyOf", "oneOf"])("recovers %s branches and preserves nested values", (keyword) => {
-    const validate = valueValidator({
-      [keyword]: [
-        {
-          type: "array",
-          items: objectSchema(
-            {
-              id: { [keyword]: [number, string] },
-              count: integer,
-            },
-            { required: ["id", "count"] },
-          ),
-        },
-        boolean,
-      ],
-    });
+    const item = objectSchema(
+      { id: { [keyword]: [number, string] }, count: integer },
+      { required: ["id", "count"] },
+    );
+    const validate = valueValidator({ [keyword]: [{ type: "array", items: item }, boolean] });
     expectValue(validate, [{ id: "00123", count: "2" }], [{ id: "00123", count: 2 }]);
     expectValue(validate, "true", true);
     expect(() => validate({ value: [{ id: "00123", count: "invalid" }] })).toThrow(
@@ -102,17 +90,14 @@ describe("validateToolArguments", () => {
   });
 
   it("keeps invalid non-null values out of nullable integer schemas", () => {
-    const typebox = Type.Object({
-      limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
-    });
-    const schemas = [
+    const typebox = Type.Object({ limit: optionalLimit });
+    for (const schema of [
       objectSchema({ limit: { anyOf: [positiveInteger, nil] } }),
       objectSchema({ limit: { oneOf: [positiveInteger, nil] } }),
       typebox,
       objectSchema({ limit: { type: ["integer", "null"], minimum: 1 } }),
       objectSchema({ limit: { type: ["null", "integer"], minimum: 1 } }),
-    ];
-    for (const schema of schemas) {
+    ]) {
       const validateArgs = validator(schema, "nullable-limit");
       const validate = (limit: unknown) => validateArgs({ limit });
       expect(validate(null)).toEqual({ limit: null });
@@ -162,11 +147,7 @@ describe("validateToolArguments", () => {
       ["", ""],
       ["existing", "existing"],
     ] as const;
-    const nulls = [
-      [false, null],
-      [0, null],
-      ["", null],
-    ] as const;
+    const nulls = [false, 0, ""].map((input) => [input, null] as const);
     const cases: [Tool["parameters"], readonly (readonly [unknown, unknown])[]][] = [
       [{ type: ["number", "null"] }, numbers],
       [{ type: ["null", "number"] }, numbers],
@@ -215,7 +196,7 @@ describe("validateToolArguments", () => {
         counts: Type.Record(Type.String(), Type.Integer()),
         choice: Type.Enum([1, 2]),
         value: Type.Union([Type.Number(), Type.String()]),
-        limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
+        limit: optionalLimit,
       }),
       "typed-record",
     );
@@ -226,9 +207,8 @@ describe("validateToolArguments", () => {
       value: "00123",
       limit: null,
     });
-    expect(() => validate({ ...input, limit: 0 })).toThrow(
-      /Validation failed for tool "typed-record"/,
-    );
+    const invalid = { ...input, limit: 0 };
+    expect(() => validate(invalid)).toThrow(/Validation failed for tool "typed-record"/);
   });
 
   it("still rejects values accepted by multiple oneOf branches", () => {
@@ -246,9 +226,6 @@ describe("validateToolArguments", () => {
       cluster_name: "testenv",
     });
   });
-});
-
-describe("validateToolArguments — root references", () => {
   it.each(["anyOf", "oneOf"])("preserves values accepted by a referenced %s branch", (keyword) => {
     const validate = rootValidator(
       { [keyword]: [{ $ref: "#/$defs/number" }, { $ref: "#/$defs/text" }] },
@@ -294,14 +271,8 @@ describe("validateToolArguments — root references", () => {
       ["Filter/value~", "#%2Fdefinitions%2FFilter%7E1value%7E0"],
       ["Filter%2Fvalue", "#/definitions/Filter%252Fvalue"],
     ] as const) {
-      const validate = valueValidator(
-        { $ref: ref },
-        {
-          definitions: {
-            [name]: objectSchema({ limit: number }),
-          },
-        },
-      );
+      const definitions = { [name]: objectSchema({ limit: number }) };
+      const validate = valueValidator({ $ref: ref }, { definitions });
       expect(validate({ value: { limit: "5" } }), ref).toEqual({ value: { limit: 5 } });
       expect(() => validate({ value: { limit: "invalid" } })).toThrow(/Validation failed/);
     }
@@ -323,21 +294,16 @@ describe("validateToolArguments — root references", () => {
 
   it("coerces recursive definitions at distinct data locations and preserves siblings", () => {
     const node = { $ref: "#/$defs/node" };
-    const validate = rootValidator(
-      { ...node, maxProperties: 2 },
+    const definition = objectSchema(
       {
-        node: {
-          ...objectSchema({
-            count: integer,
-            next: node,
-            children: { type: "array", items: node },
-            named: { type: "object", additionalProperties: node },
-          }),
-          required: ["count"],
-          additionalProperties: false,
-        },
+        count: integer,
+        next: node,
+        children: { type: "array", items: node },
+        named: { type: "object", additionalProperties: node },
       },
+      { required: ["count"], additionalProperties: false },
     );
+    const validate = rootValidator({ ...node, maxProperties: 2 }, { node: definition });
     const input = {
       count: "1",
       children: [
@@ -352,9 +318,8 @@ describe("validateToolArguments — root references", () => {
         { count: 4, named: { last: { count: 5 } } },
       ],
     });
-    expect(() => validate({ value: { count: "1", next: { count: "2" }, children: [] } })).toThrow(
-      /must NOT have more than|must not have more than/i,
-    );
+    const invalid = { value: { count: "1", next: { count: "2" }, children: [] } };
+    expect(() => validate(invalid)).toThrow(/must not have more than/i);
   });
 
   it("applies reference siblings without dropping their coercion or validation", () => {
