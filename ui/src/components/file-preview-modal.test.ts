@@ -245,7 +245,7 @@ describe("openclaw-file-preview-modal", () => {
     updatedBody!.scrollLeft = 40;
     modal.files = previewFiles.map((file) =>
       file.path === "second.ts"
-        ? { ...file, contents: `${file.contents}\nUpdated contents` }
+        ? Object.assign({}, file, { contents: `${file.contents}\nUpdated contents` })
         : file,
     );
     await modal.updateComplete;

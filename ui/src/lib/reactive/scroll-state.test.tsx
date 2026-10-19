@@ -202,19 +202,21 @@ it("defers bounded reveal and cancels replaced, cleared, and disposed requests",
   ancestor.scrollTop = 400;
   region.scrollTop = 100;
   region.scrollLeft = 25;
-  const dispose = createRoot((dispose) => {
+  const stop = createRoot((dispose) => {
     createScrollPosition(
       () => {
-        const id = activeId();
+        const initialId = activeId();
         return {
-          reveal: id ? { identity: [id], target: () => document.getElementById(id) } : undefined,
+          reveal: initialId
+            ? { identity: [initialId], target: () => document.getElementById(initialId) }
+            : undefined,
         };
       },
       { region: () => region, revealTiming: "animation-frame" },
     );
     return dispose;
   });
-  cleanup.push(dispose);
+  cleanup.push(stop);
   flush();
   expect(region.scrollTop).toBe(100);
 
@@ -243,7 +245,7 @@ it("defers bounded reveal and cancels replaced, cleared, and disposed requests",
 
   setActiveId(second.id);
   flush();
-  dispose();
+  stop();
   vi.advanceTimersToNextFrame();
   expect(region.scrollTop).toBe(140);
   expect(region.scrollLeft).toBe(25);
