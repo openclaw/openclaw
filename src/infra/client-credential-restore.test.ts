@@ -31,6 +31,7 @@ import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
+import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
 import { prepareRestoredClientCredentials } from "./client-credential-restore.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import {

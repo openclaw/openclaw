@@ -817,6 +817,11 @@ describe.skipIf(!connection)("client credential PostgreSQL public update custody
   it("captures PostgreSQL before cutover and restores shared credentials through public rollback", async () => {
     const f = await fixture("postgres");
     const captured = await capture(f);
+    expect(await f.readShared()).toEqual({
+      version: f.sourceVersion,
+      token: "synthetic-original-token",
+      policy,
+    });
     await migrate(f, captured);
     await rollback(f, captured);
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);

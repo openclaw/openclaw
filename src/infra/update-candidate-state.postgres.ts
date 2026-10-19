@@ -1,20 +1,16 @@
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { admitStatePostgres, stateEngineSchema } from "../state/openclaw-state-db-engine.js";
+import { openExistingStatePostgresConnection } from "../state/openclaw-state-db-engine.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { isNativeClientCredentialBootstrap } from "./client-credential-native-bootstrap.js";
-import { databaseEngineAdapters } from "./database-engine/adapters.js";
+import { runEngineStoreReadSnapshot } from "./database-engine/adapters.js";
 import { resolveDatabaseEngineSelection } from "./database-engine/config.js";
 import {
-  getDatabaseEngineInput,
   getDatabaseEngineSelection,
   getScopedDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "./database-engine/context.js";
-import {
-  admitPostgresPhysicalFacts,
-  getPostgresPhysicalFacts,
-} from "./database-engine/physical-facts.js";
+import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { readBackupEngine } from "./database-engine/physical-store.js";
 import { withPostgresStoreMetadata } from "./database-engine/postgres-store-metadata.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -38,7 +34,7 @@ type Reply = {
   pluginIndex?: UpdateCandidatePluginIndex;
 };
 
-/** Registry, versions and plugin facts share one admitted read-only PostgreSQL snapshot. */
+/** Registry, versions and plugin facts share one read snapshot on the admitted store. */
 export async function readUpdatePostgresState(
   input: Input,
   files: Map<string, StateDatabaseDiscovery>,
@@ -96,10 +92,6 @@ if (parentPort && workerData?.updatePostgresState === true) {
         version: { userVersion: metadata.version },
       }));
     }
-    const inputEngine = getDatabaseEngineInput("state");
-    if (!inputEngine) {
-      throw new Error("PostgreSQL update preflight requires the configured state connection.");
-    }
     const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
     const identity = readBackupEngine(shared);
     if (identity.engine !== "postgres") {
@@ -131,28 +123,14 @@ if (parentPort && workerData?.updatePostgresState === true) {
         snapshot.cleanup();
       }
     }
-    using anchor = openNodeSqliteDatabase(shared, { readOnly: true });
-    const db = databaseEngineAdapters.postgres.openConnection({
-      anchor,
-      schema: stateEngineSchema,
-      input: inputEngine,
-      storeId: identity.storeId,
-      namespace: identity.namespace,
-      openSqlite() {},
-    });
+    const connection = openExistingStatePostgresConnection(shared);
+    if (!connection) {
+      throw new Error("PostgreSQL update preflight requires the configured state connection.");
+    }
+    const { db } = connection.database;
     try {
-      // Bind the worker's host admission record before staging facts in a read transaction.
-      getPostgresPhysicalFacts(db);
-      return databaseEngineAdapters.postgres.transactions.read(db, () => {
-        // Preflight never bootstraps, migrates or seals a source schema.
-        admitPostgresPhysicalFacts({
-          anchor,
-          db,
-          ...identity,
-          store: "state",
-          version: stateEngineSchema.version,
-        });
-        admitStatePostgres(db, false);
+      // The existing owner admits the installed version without migrating or resealing it.
+      return runEngineStoreReadSnapshot(db, () => {
         const files = new Map(entries);
         const registered = collectRegisteredPaths(db, shared, files);
         const held = input.includeRetainedAgentPaths
@@ -169,7 +147,7 @@ if (parentPort && workerData?.updatePostgresState === true) {
         };
       });
     } finally {
-      db.close();
+      connection.close();
     }
   });
 }
