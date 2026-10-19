@@ -12,6 +12,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { generateUniqueCode } from "./pairing-store-model.js";
 
+// mock-isolation: Store tests pass explicit adapters and must not discover installed channels.
 vi.mock("../channels/plugins/pairing.js", () => ({
   getPairingAdapter: () => null,
 }));

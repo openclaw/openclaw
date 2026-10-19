@@ -16,13 +16,21 @@ import type { InternalApplySessionModelSelectionParams } from "./apply-session-m
 
 const selectionMocks = vi.hoisted(() => createModelSelectionMocks());
 export { selectionMocks };
+// mock-isolation: Runtime eligibility belongs to its owner; these tests exercise selection effects.
 vi.mock("../agents/model-runtime-choice.js", selectionMocks.factories.runtimeChoice);
+// mock-isolation: Supply a deterministic thinking catalog without provider discovery.
 vi.mock("../agents/model-catalog.runtime.js", selectionMocks.factories.catalog);
+// mock-isolation: Capture system-event effects without publishing into the process event store.
 vi.mock("../infra/system-events.js", selectionMocks.factories.systemEvents);
+// mock-isolation: Observe queue refresh effects without dispatching queued follow-up work.
 vi.mock("../auto-reply/reply/queue.js", selectionMocks.factories.queue);
+// mock-isolation: Observe patch hooks without invoking installed plugins.
 vi.mock("../gateway/session-patch-hooks.js", selectionMocks.factories.patchHooks);
+// mock-isolation: The delegated factory spreads the real config exports and replaces config writes.
 vi.mock("../config/config.js", selectionMocks.factories.config);
+// mock-isolation: The delegated factory preserves real exports and replaces only selection logging.
 vi.mock("../logging/subsystem.js", selectionMocks.factories.logging);
+// mock-isolation: Placement state is a controlled fixture rather than the live worker registry.
 vi.mock(
   "../gateway/session-worker-placement-context.js",
   selectionMocks.factories.placementContext,
@@ -32,6 +40,7 @@ vi.mock(
   "../gateway/worker-environments/placement-session-runtime.js",
   selectionMocks.factories.placementRuntime,
 );
+// mock-isolation: Worker preparation is owned elsewhere; selection receives a synthetic lease.
 vi.mock(
   "../gateway/worker-environments/placement-session-runtime-preparation.js",
   selectionMocks.factories.placementRuntimePreparation,

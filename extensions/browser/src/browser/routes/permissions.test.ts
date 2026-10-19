@@ -29,7 +29,9 @@ vi.mock("../chrome.js", () => ({
   getChromeWebSocketEndpoint: cdpMocks.getChromeWebSocketEndpoint,
 }));
 
+// mock-isolation: Permission routes use a synthetic CDP transport, never a live browser socket.
 vi.mock("../cdp.helpers.js", () => ({ withCdpSocket: cdpMocks.withCdpSocket }));
+// mock-isolation: Exercise Playwright-present and CDP-fallback routes without loading Playwright.
 vi.mock("../pw-ai-module.js", () => ({ getPwAiModule: pwMocks.getPwAiModule }));
 const { registerBrowserPermissionRoutes } = await import("./permissions.js");
 
