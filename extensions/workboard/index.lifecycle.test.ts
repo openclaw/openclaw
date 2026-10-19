@@ -68,29 +68,28 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
       await scheduler.stop();
     }
   };
-  const cleanup = async (
-    context: Parameters<NonNullable<(typeof captured.runtimeLifecycles)[number]["cleanup"]>>[0],
+  const retire = async (
+    context?: Parameters<NonNullable<(typeof captured.runtimeLifecycles)[number]["cleanup"]>>[0],
   ) => {
     for (const lifecycle of captured.runtimeLifecycles) {
-      await lifecycle.cleanup?.(context);
+      await (context ? lifecycle.cleanup?.(context) : lifecycle.dispose?.());
     }
   };
-  const dispose = async () => {
-    for (const lifecycle of captured.runtimeLifecycles) {
-      await lifecycle.dispose?.();
-    }
-  };
-  const call = async (method: string, params = {}) => {
-    const handler = methods.get(method);
+  const expectCall = async (
+    method: string,
+    expected: { ok?: boolean; payload?: object; error?: object; params?: object } = {},
+  ) => {
+    const { params = {}, ...response } = expected;
+    const handler = methods.get(`workboard.${method}`);
     if (!handler) {
       throw new Error(`Missing Gateway method: ${method}`);
     }
     const respond = vi.fn<Parameters<typeof handler>[0]["respond"]>();
     await handler({ params, respond } as unknown as Parameters<typeof handler>[0]);
     const [ok, payload, error] = respond.mock.calls[0] ?? [];
-    return { ok, payload, error };
+    expect({ ok, payload, error }).toMatchObject({ ok: true, ...response });
   };
-  return { cleanup, dispose, start, stop, warn, emit, call };
+  return { cleanup: retire, dispose: () => retire(), start, stop, warn, emit, expectCall };
 }
 
 describe("Workboard registration cleanup", () => {
@@ -135,11 +134,7 @@ describe("Workboard registration cleanup", () => {
         const retire = () => (action === "dispose" ? first.dispose() : first.cleanup({ reason }));
         try {
           await first.start();
-          expect(
-            await first.call("workboard.cards.create", { title: "Retained card" }),
-          ).toMatchObject({
-            ok: true,
-          });
+          await first.expectCall("cards.create", { params: { title: "Retained card" } });
           for (const context of [
             { reason: "reset" as const },
             { reason: "delete" as const },
@@ -147,15 +142,14 @@ describe("Workboard registration cleanup", () => {
             { reason, runId: "other-run" },
           ]) {
             await first.cleanup(context);
-            expect(await first.call("workboard.cards.list")).toMatchObject({
-              ok: true,
+            await first.expectCall("cards.list", {
               payload: { cards: [expect.objectContaining({ title: "Retained card" })] },
             });
           }
 
           expect(vi.getTimerCount()).toBeGreaterThan(0);
           await retire();
-          expect(await first.call("workboard.cards.list")).toMatchObject({
+          await first.expectCall("cards.list", {
             ok: false,
             error: { message: "workboard store is closed." },
           });
@@ -163,27 +157,21 @@ describe("Workboard registration cleanup", () => {
           expect(first.warn).not.toHaveBeenCalled();
           expect(vi.getTimerCount()).toBe(0);
           await second.start();
-          expect(
-            await second.call("workboard.cards.create", { title: "Fresh card" }),
-          ).toMatchObject({
-            ok: true,
+          await second.expectCall("cards.create", {
+            params: { title: "Fresh card" },
             payload: { card: { title: "Fresh card" } },
           });
-          expect(await second.call("workboard.cards.list")).toMatchObject({
-            ok: true,
+          await second.expectCall("cards.list", {
             payload: {
-              cards: expect.arrayContaining([
-                expect.objectContaining({ title: "Retained card" }),
-                expect.objectContaining({ title: "Fresh card" }),
-              ]),
+              cards: expect.arrayContaining(
+                ["Retained card", "Fresh card"].map((title) => expect.objectContaining({ title })),
+              ),
             },
           });
           await retire();
           second.emit.mockClear();
-          expect(
-            await second.call("workboard.cards.create", { title: "After repeated retirement" }),
-          ).toMatchObject({
-            ok: true,
+          await second.expectCall("cards.create", {
+            params: { title: "After repeated retirement" },
           });
           expect(second.emit).toHaveBeenCalled();
         } finally {
@@ -207,22 +195,14 @@ describe("Workboard registration cleanup", () => {
           registerWorkboardGatewayMethods({ api, store }),
         );
         try {
-          expect(await generation.call("workboard.cards.list")).toMatchObject({
-            ok: true,
-            payload: { cards: [] },
+          await generation.expectCall("cards.list", { payload: { cards: [] } });
+          await generation.expectCall("boards.upsert", {
+            params: { id: "retained", name: "Retained board" },
           });
-          expect(
-            await generation.call("workboard.boards.upsert", {
-              id: "retained",
-              name: "Retained board",
-            }),
-          ).toMatchObject({ ok: true });
           await generation.cleanup({ reason: "disable", sessionKey: "agent:other:session" });
-          expect(await generation.call("workboard.cards.list")).toMatchObject({ ok: true });
+          await generation.expectCall("cards.list");
           await generation.cleanup({ reason: "disable" });
-          expect(await generation.call("workboard.cards.list")).toMatchObject({
-            ok: ownership === "injected",
-          });
+          await generation.expectCall("cards.list", { ok: ownership === "injected" });
           const reopened = WorkboardStore.openSqlite(workerModuleUrl);
           try {
             expect(await reopened.listBoards()).toMatchObject({
