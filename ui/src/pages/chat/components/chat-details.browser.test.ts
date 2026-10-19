@@ -64,6 +64,7 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
     () =>
       createComponent(ChatDetails, {
         props: value,
+        elements: { pane, frame, footer, header: fullscreen ? header : undefined },
         presented: true,
         conversationVisible: !fullscreen,
         externalTrigger: fullscreen,
@@ -161,6 +162,20 @@ describe("chat Details presentation", () => {
     await element.updateComplete;
     expect(panel.hidden).toBe(true);
     expect(conversation.getBoundingClientRect().width).toBe(1320);
+  });
+
+  it("positions above its supplied footer when unrelated matching DOM precedes it", async () => {
+    const { element, frame, footer, trigger, panel } = await fixture();
+    const unrelatedFooter = document.createElement("div");
+    unrelatedFooter.className = "chat-footer";
+    unrelatedFooter.style.cssText = "position:absolute;top:0;height:20px";
+    frame.prepend(unrelatedFooter);
+    trigger.click();
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(true);
+    expect(Number.parseFloat(panel.style.maxHeight)).toBeCloseTo(
+      footer.getBoundingClientRect().top - 8 - Number.parseFloat(panel.style.top),
+    );
   });
 
   it("nests section content under aligned headings without shifting navigation highlights", async () => {

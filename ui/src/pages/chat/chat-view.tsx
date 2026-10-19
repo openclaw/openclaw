@@ -12,6 +12,7 @@ import {
 } from "../../lib/keyboard-shortcut-contract.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
@@ -456,7 +457,10 @@ function ChatContent(input: { props: ChatProps }) {
                   />
                 </Show>
                 <TranscriptSearch search={getTranscriptState(input.props.paneId).search} />
-                <div class="chat-main__conversation-frame">
+                <div
+                  class="chat-main__conversation-frame"
+                  ref={[elementRef(input.props.onConversationFrameRef)]}
+                >
                   <div
                     class="chat-main__conversation"
                     ref={skillFileHovercard}
@@ -521,7 +525,7 @@ function ChatContent(input: { props: ChatProps }) {
                         <ChatTaskSuggestionTray view={input.props} />
                       </div>
                     </Show>
-                    <div class="chat-footer">
+                    <div class="chat-footer" ref={[elementRef(input.props.onFooterElementRef)]}>
                       <ChatSurface
                         binding={{
                           "prop:surface": "composer",
