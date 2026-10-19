@@ -696,10 +696,11 @@ export function getAdmittedSqliteSchemaFacts(
     return undefined;
   }
   const snapshot = getSqlitePinnedReadSnapshot(database);
+  // A bound catalog that predates a sibling's DDL is historical once its facts are
+  // invalidated: recapturing it must neither borrow nor publish shared facts.
   const unknownSnapshot =
     (database.isTransaction &&
-      owner.transactionRead &&
-      !owner.transactionCatalogBound &&
+      (owner.transactionRead || owner.transactionCatalogBound) &&
       owner.processRevision !== getSqliteDatabaseSchemaRevision(database)) ||
     owner.unmanagedSnapshots.size > 0;
   const scopeChanged = observeSchemaLifetime(database, owner, snapshot);
@@ -708,16 +709,11 @@ export function getAdmittedSqliteSchemaFacts(
     // Managed operations refresh on their next admission. Unmanaged snapshots and
     // sibling publications observed inside a transaction cannot outlive that snapshot.
     owner.transactionalFacts ||= database.isTransaction && (owner.readDepth === 0 || scopeChanged);
-    // An outer transaction keeps its native catalog after an inner schema pin ends.
-    // It must neither borrow current shared facts nor publish its historical catalog.
-    const localSnapshot =
-      unknownSnapshot ||
-      Boolean(snapshot) ||
-      owner.transactionalSchema ||
-      (database.isTransaction && owner.transactionCatalogBound);
-    const retained = localSnapshot
-      ? undefined
-      : getSqliteDatabaseAdmission(database, schemaAdmission);
+    const localSnapshot = unknownSnapshot || Boolean(snapshot) || owner.transactionalSchema;
+    const retained =
+      owner.transactionalSchema || localSnapshot
+        ? undefined
+        : getSqliteDatabaseAdmission(database, schemaAdmission);
     if (retained) {
       validateUserVersion?.(retained.userVersion);
       owner.facts = { ...retained, revision: owner.revision };
