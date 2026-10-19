@@ -51,8 +51,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     "openclaw/plugin-sdk/provider-http",
   );
   return {
+    ...actual,
     ...http,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
   };
 });
 

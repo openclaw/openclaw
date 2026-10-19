@@ -25,7 +25,8 @@ vi.mock("../plugins/runtime.js", async (importOriginal) => {
   return { ...actual, getActivePluginRegistryVersion: registryVersion };
 });
 
-vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
+vi.mock("../plugins/web-fetch-providers.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/web-fetch-providers.runtime.js")>()),
   resolvePluginWebFetchProviders: pluginProviders,
   resolveRuntimeWebFetchProviders: runtimeProviders,
 }));

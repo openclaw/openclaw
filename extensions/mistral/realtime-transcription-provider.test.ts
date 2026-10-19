@@ -62,8 +62,12 @@ async function createRealtimeServer(
       onConnection?.(ws);
       ws.on("close", () => closed.resolve());
       ws.on("message", (data) => {
-        // This fixture uses ws's default nodebuffer binaryType.
-        const message = JSON.parse(data.toString()) as { type?: unknown };
+        const bytes = Buffer.isBuffer(data)
+          ? data
+          : Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.from(data);
+        const message = JSON.parse(bytes.toString("utf8")) as { type?: unknown };
         if (message.type === "session.update") {
           for (const event of eventsByConnection[connectionIndex] ?? []) {
             ws.send(JSON.stringify(event));
