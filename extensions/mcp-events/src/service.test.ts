@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -43,22 +44,24 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 }));
 
 const epoch = Date.parse("2026-10-01T12:00:00Z");
+const stringObjectSchema = (key: string) => ({
+  type: "object",
+  properties: { [key]: { type: "string" } },
+  required: [key],
+  additionalProperties: false,
+});
 const definition = {
   name: "comment.created",
   delivery: ["webhook"],
-  inputSchema: {
-    type: "object",
-    properties: { document_id: { type: "string" } },
-    required: ["document_id"],
-    additionalProperties: false,
-  },
-  payloadSchema: {
-    type: "object",
-    properties: { text: { type: "string" } },
-    required: ["text"],
-    additionalProperties: false,
-  },
+  inputSchema: stringObjectSchema("document_id"),
+  payloadSchema: stringObjectSchema("text"),
 };
+const bindings = () =>
+  createPluginStateKeyedStoreForTests<SubscriptionBinding>("mcp-events", {
+    namespace: "subscriptions-v1",
+    maxEntries: 4096,
+    overflowPolicy: "reject-new",
+  });
 const event = (id = "evt-1") => ({
   eventId: id,
   name: "comment.created",
@@ -111,9 +114,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       server.listen(0, "127.0.0.1", resolve);
     });
     const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing fixture address");
-    }
+    assert(address && typeof address !== "string", "Missing fixture address");
     origin = "http://127.0.0.1:" + address.port;
   });
   afterAll(async () => {
@@ -161,9 +162,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
           openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
             const store = createPluginStateKeyedStoreForTests<T>("mcp-events", options);
             const withCurrent = store.withCurrent?.bind(store);
-            if (!withCurrent) {
-              throw new Error("Missing guarded state owner");
-            }
+            assert(withCurrent, "Missing guarded state owner");
             return {
               ...store,
               withCurrent: (guard) => {
@@ -191,9 +190,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
           openChannelIngressQueue: (options) =>
             createChannelIngressQueueForTests({ ...options, channelId: "mcp-events" }),
           openChannelIngressDrain: (options) => {
-            if (!options.queue) {
-              throw new Error("A supplied queue is required");
-            }
+            assert(options.queue, "A supplied queue is required");
             return createChannelIngressDrain({ ...options, queue: options.queue });
           },
         },
@@ -267,16 +264,11 @@ describe("MCP Events callback and subscription lifecycle", () => {
               delivery: { mode: "webhook", url: record(params.delivery)?.url },
             };
             const delivery = record(params.delivery);
-            if (typeof delivery?.secret !== "string" || typeof delivery.url !== "string") {
-              throw new Error("Missing delivery");
-            }
+            assert(typeof delivery?.secret === "string" && typeof delivery.url === "string");
             secret = delivery.secret;
             bindingId = new URL(delivery.url).pathname.split("/").at(-1)!;
             // A separate real-store read proves pre-network persistence, not a fixture-supplied receipt.
-            const stored = await createPluginStateKeyedStoreForTests<SubscriptionBinding>(
-              "mcp-events",
-              { namespace: "subscriptions-v1", maxEntries: 4096, overflowPolicy: "reject-new" },
-            ).lookup(bindingId);
+            const stored = await bindings().lookup(bindingId);
             expect([stored?.secret, stored?.pendingSecret]).toContain(secret);
             const verification = JSON.stringify({
               type: "verification",
@@ -294,9 +286,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
             };
           },
           unsubscribe: async () => {
-            if (!subscription) {
-              throw new Error("No captured subscription");
-            }
+            assert(subscription, "No captured subscription");
             unsubscribed.push(subscription);
             return {};
           },
@@ -327,13 +317,27 @@ describe("MCP Events callback and subscription lifecycle", () => {
     });
   }
 
-  async function runSchedule(id: string) {
+  function scheduled(id: string) {
     const job = schedules.get(id);
-    if (!job) {
-      throw new Error("Missing scheduled operation: " + id);
+    assert(job, "Missing scheduled operation: " + id);
+    return job;
+  }
+  async function runSchedule(id: string, atDeadline = false) {
+    const job = scheduled(id);
+    if (atDeadline) {
+      now = job.atMs;
     }
     schedules.delete(id);
     await job.run();
+  }
+  function expectBoundedRetry(id: string) {
+    const delay = scheduled(id).atMs - now;
+    expect(delay).toBeGreaterThan(0);
+    expect(delay).toBeLessThanOrEqual(300_000);
+  }
+  async function expectEvent(status: number, id = "evt-1", signingSecret = secret) {
+    const body = JSON.stringify(event(id));
+    expect((await post(body, id, signed(signingSecret, body, id, now))).status).toBe(status);
   }
 
   it("registers a ready callback and reacts to Cron replacement/removal through its real hooks", async () => {
@@ -344,9 +348,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       id: "mcp-events",
       pluginConfig: deps.config,
       registerService: (service) => {
-        if (service.apiVersion !== 2) {
-          throw new Error("MCP Events requires versioned service scheduling");
-        }
+        assert(service.apiVersion === 2, "MCP Events requires versioned service scheduling");
         registered = service;
       },
       registerHttpRoute: (route) => {
@@ -356,9 +358,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     });
     api.runtime.state = { ...api.runtime.state, ...deps.runtime.state };
     plugin.register(api);
-    if (!registered) {
-      throw new Error("Plugin service was not registered");
-    }
+    assert(registered, "Plugin service was not registered");
     let cron = {
       ...deps.cron,
       list: async () => [],
@@ -374,9 +374,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       logger: deps.logger,
       scheduler: { ...scheduler, now: deps.scheduler.now, schedule: deps.scheduler.schedule },
       getCron: () => cron,
-      mcpEvents: {
-        prepareSource: deps.prepareSource,
-      },
+      mcpEvents: { prepareSource: deps.prepareSource },
     };
     try {
       await registered.start(context);
@@ -387,20 +385,16 @@ describe("MCP Events callback and subscription lifecycle", () => {
       const replacementRead = vi.fn(async () => sources);
       cron = { ...cron, readEventSources: replacementRead };
       const reconciled = hooks.mock.calls.find(([name]) => name === "cron_reconciled")?.[1];
-      if (typeof reconciled !== "function") {
-        throw new Error("Missing reconciliation hook");
-      }
+      assert(typeof reconciled === "function", "Missing reconciliation hook");
       await reconciled({ reason: "reload", enabled: true }, {});
       await runSchedule("reconcile");
       expect(replacementRead).toHaveBeenCalledOnce();
       sources = [];
       const changed = hooks.mock.calls.find(([name]) => name === "cron_changed")?.[1];
-      if (typeof changed !== "function") {
-        throw new Error("Missing source-change hook");
-      }
+      assert(typeof changed === "function", "Missing source-change hook");
       await changed({ action: "removed", jobId: "authored-job" }, {});
       await runSchedule("reconcile");
-      expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(410);
+      await expectEvent(410);
       expect(unsubscribed).toHaveLength(1);
     } finally {
       await registered.stop?.(context);
@@ -416,9 +410,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     const release = createDeferred<void>();
     const preflight = vi.mocked(resolvePinnedHostnameWithPolicy);
     const original = preflight.getMockImplementation();
-    if (!original) {
-      throw new Error("Missing preflight fixture");
-    }
+    assert(original, "Missing preflight fixture");
     preflight.mockImplementationOnce(async (...args) => {
       entered.resolve();
       await release.promise;
@@ -440,7 +432,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect.soft(earlyStatus).toBe(503);
     expect.soft(subscribed).toHaveLength(1);
     expect(getMcpEventsDiagnostics(current)).toHaveLength(1);
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+    await expectEvent(200);
   });
 
   it("coalesces a source retry with reconciliation instead of creating duplicate subscriptions", async () => {
@@ -479,23 +471,11 @@ describe("MCP Events callback and subscription lifecycle", () => {
     };
     await current!.start();
     for (let attempt = 0; attempt < 10; attempt++) {
-      const retry = schedules.get("source:authored-job");
-      expect(retry, "An enabled source must retain its recovery deadline").toBeDefined();
-      if (!retry) {
-        throw new Error("Missing source recovery deadline");
-      }
-      expect(retry.atMs - now).toBeGreaterThan(0);
-      expect(retry.atMs - now).toBeLessThanOrEqual(300_000);
-      now = retry.atMs;
-      await runSchedule("source:authored-job");
+      expectBoundedRetry("source:authored-job");
+      await runSchedule("source:authored-job", true);
     }
     available = true;
-    const retry = schedules.get("source:authored-job");
-    if (!retry) {
-      throw new Error("Missing source recovery deadline");
-    }
-    now = retry.atMs;
-    await runSchedule("source:authored-job");
+    await runSchedule("source:authored-job", true);
     expect(subscribed).toHaveLength(1);
     expect(getMcpEventsDiagnostics(current!)).toEqual([
       expect.objectContaining({ status: "active" }),
@@ -508,7 +488,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await runSchedule("drain");
     expect(schedules.has("drain")).toBe(false);
     expect(schedules.has("reconcile")).toBe(false);
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+    await expectEvent(200);
     await runSchedule("drain");
     expect((await queue().listPending())[0]?.attempts).toBe(0);
     expect(schedules.get("drain")?.atMs).toBeGreaterThan(now);
@@ -520,12 +500,12 @@ describe("MCP Events callback and subscription lifecycle", () => {
 
   it("retains callbacks and pending work through temporary credential-owner unavailability", async () => {
     await current!.start();
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+    await expectEvent(200);
     authorityUnavailable = true;
     await runSchedule("drain");
     expect(deps.cron.runEvent).not.toHaveBeenCalled();
     expect((await queue().listPending())[0]?.attempts).toBe(0);
-    expect((await post(JSON.stringify(event("evt-2")), "evt-2")).status).toBe(503);
+    await expectEvent(503, "evt-2");
     await current!.reconcile();
     expect(
       getMcpEventsDiagnostics(current!).find((entry) => entry.status === "active")?.status,
@@ -533,7 +513,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(unsubscribed).toHaveLength(0);
     authorityUnavailable = false;
     now += 1; // Distinct receipt times exercise FIFO rather than the event-ID tie breaker.
-    expect((await post(JSON.stringify(event("evt-2")), "evt-2")).status).toBe(200);
+    await expectEvent(200, "evt-2");
     await runSchedule("drain");
     // One lane admits its oldest event first; the busy result keeps both accepted events pending.
     expect(deps.cron.runEvent).toHaveBeenCalledOnce();
@@ -552,15 +532,13 @@ describe("MCP Events callback and subscription lifecycle", () => {
       await current!.start();
       const oldBinding = bindingId;
       const oldSecret = secret;
-      expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+      await expectEvent(200);
       // The credential owner records a new lifetime even if no callback observed the disconnected interval.
       authorizationId++;
       if (trigger === "callback") {
-        expect((await post(JSON.stringify(event("evt-2")), "evt-2")).status).toBe(410);
+        await expectEvent(410, "evt-2");
       } else if (trigger === "renewal") {
-        const key = "refresh:" + oldBinding;
-        now = schedules.get(key)!.atMs;
-        await runSchedule(key);
+        await runSchedule("refresh:" + oldBinding, true);
       }
       await runSchedule("drain");
       expect(deps.cron.runEvent).not.toHaveBeenCalled();
@@ -585,21 +563,14 @@ describe("MCP Events callback and subscription lifecycle", () => {
   it("retains a bounded refresh deadline while subscription failure bookkeeping is unavailable", async () => {
     await current!.start();
     const key = "refresh:" + bindingId;
-    now = schedules.get(key)!.atMs;
+    now = scheduled(key).atMs;
     rejectedWrites = 2;
     await expect(runSchedule(key)).rejects.toThrow("Injected state write failure");
     expect(subscribed).toHaveLength(1);
-    const retry = schedules.get(key);
-    expect(retry, "Store recovery must not require a Cron edit or restart").toBeDefined();
-    if (!retry) {
-      throw new Error("Missing subscription retry deadline");
-    }
-    expect(retry.atMs - now).toBeGreaterThan(0);
-    expect(retry.atMs - now).toBeLessThanOrEqual(300_000);
-    now = retry.atMs;
-    await runSchedule(key);
+    expectBoundedRetry(key);
+    await runSchedule(key, true);
     expect(subscribed).toHaveLength(2);
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+    await expectEvent(200);
   });
 
   it.each(["retirement", "cleanup", "deletion"] as const)(
@@ -629,24 +600,13 @@ describe("MCP Events callback and subscription lifecycle", () => {
         await expect(current!.reconcile()).rejects.toThrow("Injected state write failure");
       } else if (phase === "cleanup") {
         await current!.reconcile();
-        const retry = schedules.get(key);
-        if (!retry) {
-          throw new Error("Missing first cleanup retry");
-        }
-        now = retry.atMs;
-        await expect(runSchedule(key)).rejects.toThrow("Injected state write failure");
+        await expect(runSchedule(key, true)).rejects.toThrow("Injected state write failure");
       } else {
         rejectedDeletes = 1;
         await current!.reconcile();
       }
-      expect((await post(JSON.stringify(event("evt-retired")), "evt-retired")).status).toBe(410);
-      const retry = schedules.get(key);
-      expect(retry, "Retired bindings must recover without another edit or restart").toBeDefined();
-      if (!retry) {
-        throw new Error("Missing cleanup recovery deadline");
-      }
-      now = retry.atMs;
-      await runSchedule(key);
+      await expectEvent(410, "evt-retired");
+      await runSchedule(key, true);
       expect(getMcpEventsDiagnostics(current!)).toEqual([]);
       expect(unsubscribed).toHaveLength(1);
       expect(schedules.has(key)).toBe(false);
@@ -657,12 +617,12 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await current!.start();
     await runSchedule("drain");
     rejectedWrites = 1;
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(503);
+    await expectEvent(503);
     expect(await queue().listPending()).toHaveLength(1);
     expect(schedules.has("drain")).toBe(true);
     await runSchedule("drain");
     expect(deps.cron.runEvent).toHaveBeenCalledOnce();
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+    await expectEvent(200);
     expect(await queue().listPending()).toHaveLength(1);
   });
 
@@ -722,10 +682,10 @@ describe("MCP Events callback and subscription lifecycle", () => {
   it("backpressures bursts without evicting accepted work", async () => {
     await current!.start();
     for (const id of ["evt-1", "evt-2"]) {
-      expect((await post(JSON.stringify(event(id)), id)).status).toBe(200);
+      await expectEvent(200, id);
     }
-    expect((await post(JSON.stringify(event("evt-3")), "evt-3")).status).toBe(503);
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+    await expectEvent(503, "evt-3");
+    await expectEvent(200);
     expect((await queue().listPending()).map((row) => row.payload.eventId).toSorted()).toEqual([
       "evt-1",
       "evt-2",
@@ -735,16 +695,14 @@ describe("MCP Events callback and subscription lifecycle", () => {
   it("rotates secrets on refresh, resumes its cursor, and expires the old verification key", async () => {
     await current!.start();
     const oldSecret = secret;
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+    await expectEvent(200);
     now += 49_000;
     await current!.reconcile();
     expect(secret).not.toBe(oldSecret);
     expect(subscribed[1]?.cursor).toBe("cursor-1");
-    let body = JSON.stringify(event("evt-2"));
-    expect((await post(body, "evt-2", signed(oldSecret, body, "evt-2", now))).status).toBe(200);
+    await expectEvent(200, "evt-2", oldSecret);
     now += 301_000;
-    body = JSON.stringify(event("evt-3"));
-    expect((await post(body, "evt-3", signed(oldSecret, body, "evt-3", now))).status).toBe(401);
+    await expectEvent(401, "evt-3", oldSecret);
   });
 
   it("revokes before remote cleanup and cannot be resurrected by a late refresh reply", async () => {
@@ -757,13 +715,8 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await current!.reconcile();
     await current!.reconcile();
     expect(getMcpEventsDiagnostics(current!)).toEqual([]);
-    const bindings = createPluginStateKeyedStoreForTests<SubscriptionBinding>("mcp-events", {
-      namespace: "subscriptions-v1",
-      maxEntries: 4096,
-      overflowPolicy: "reject-new",
-    });
-    expect(await bindings.entries()).toEqual([]);
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(410);
+    expect(await bindings().entries()).toEqual([]);
+    await expectEvent(410);
     expect(unsubscribed).toHaveLength(1);
     expect(unsubscribed[0]).toMatchObject({
       name: "comment.created",
@@ -786,9 +739,7 @@ it("discovers events under the active tool owner without accepting an argument-s
     .mockResolvedValue({ serverName: "reviews", events: [] });
   plugin.register(api);
   const descriptor = register.mock.calls[0]?.[0];
-  if (!descriptor || typeof descriptor !== "object" || !("create" in descriptor)) {
-    throw new Error("Expected an authority-bound MCP Events tool");
-  }
+  assert(descriptor && typeof descriptor === "object" && "create" in descriptor);
   let current = true;
   const tool = descriptor.create({
     agentId: "main",
@@ -798,9 +749,7 @@ it("discovers events under the active tool owner without accepting an argument-s
       }
     },
   });
-  if (!tool || Array.isArray(tool)) {
-    throw new Error("Expected one catalog tool");
-  }
+  assert(tool && !Array.isArray(tool), "Expected one catalog tool");
   const result = await tool.execute("discover", { serverName: "reviews", agentId: "other" });
   expect(result.details).toEqual({ serverName: "reviews", events: [] });
   expect(request).toHaveBeenCalledWith("mcp.events.list", {
