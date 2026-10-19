@@ -204,7 +204,11 @@ export function createTabList(
       select(target, event, false);
     }
     target.focus({ preventScroll: true });
-    target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (typeof options.revealActive === "function") {
+      options.revealActive(target);
+    } else {
+      target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }
   }
 
   return {

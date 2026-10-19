@@ -144,7 +144,14 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       style.id = "panel-tab-strip-browser-test-styles";
       style.textContent = `${panelTabStripCss}\n${sidePanelStyles}`;
       document.head.append(style);
-      const container = host();
+      const scrollPort = host();
+      scrollPort.style.cssText = "height: 80px; width: 240px; overflow: auto";
+      const before = document.createElement("div");
+      before.style.height = "64px";
+      const after = document.createElement("div");
+      after.style.height = "120px";
+      const container = document.createElement("div");
+      scrollPort.append(before, container, after);
       container.className = surface === "sidebar" ? "side-panel__header" : "";
       container.dir = direction;
       container.style.width = "220px";
@@ -156,26 +163,42 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       });
       await renderControlledStrip(container, tabs, { activeId, onSelect });
       const initialActive = await expectControlledSelection(container, activeId);
-      initialActive.focus();
-      initialActive.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: direction === "rtl" ? "ArrowLeft" : "ArrowRight",
-          bubbles: true,
-          composed: true,
-        }),
-      );
-      await vi.waitFor(() => expect(activeId).toBe("5"));
-      const arrowActive = await expectControlledSelection(container, activeId);
-      expect(document.activeElement).toBe(arrowActive);
-      await expectOverflowTabVisible(container, arrowActive);
-
+      initialActive.focus({ preventScroll: true });
+      await settleTabLayout();
+      scrollPort.scrollTop =
+        initialActive.getBoundingClientRect().top - scrollPort.getBoundingClientRect().top + 8;
+      const ancestorScrollTop = scrollPort.scrollTop;
       const scrollY = window.scrollY;
+      expect(initialActive.getBoundingClientRect().top).toBeLessThan(
+        scrollPort.getBoundingClientRect().top,
+      );
+      expect(initialActive.getBoundingClientRect().bottom).toBeGreaterThan(
+        scrollPort.getBoundingClientRect().top,
+      );
+      let keyboardActive = initialActive;
+      for (const [key, selectedId] of [
+        [direction === "rtl" ? "ArrowLeft" : "ArrowRight", "5"],
+        ["End", "8"],
+        ["Home", "1"],
+      ]) {
+        keyboardActive.dispatchEvent(
+          new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
+        );
+        await vi.waitFor(() => expect(activeId).toBe(selectedId));
+        keyboardActive = await expectControlledSelection(container, activeId);
+        expect(document.activeElement).toBe(keyboardActive);
+        await expectOverflowTabVisible(container, keyboardActive);
+        expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
+        expect(window.scrollY).toBe(scrollY);
+      }
+
       const last = renderedTabs(container).find((entry) => entry.dataset.tabValue === "8");
       last?.click();
       await vi.waitFor(() => expect(activeId).toBe("8"));
       const lastActive = await expectControlledSelection(container, activeId);
       await expectOverflowTabVisible(container, lastActive);
-      expect(document.activeElement).toBe(arrowActive);
+      expect(document.activeElement).toBe(keyboardActive);
+      expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
       expect(window.scrollY).toBe(scrollY);
 
       renderedTabs(container)
@@ -183,7 +206,8 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
         ?.click();
       await vi.waitFor(() => expect(activeId).toBe("1"));
       await expectOverflowTabVisible(container, await expectControlledSelection(container, "1"));
-      expect(document.activeElement).toBe(arrowActive);
+      expect(document.activeElement).toBe(keyboardActive);
+      expect(scrollPort.scrollTop).toBe(ancestorScrollTop);
       expect(window.scrollY).toBe(scrollY);
     },
   );
