@@ -60,7 +60,9 @@ function fixture(
     state: null,
     executionIdentity: {
       ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" } as const,
-      onPostAdmission: (context: AdmittedRunContext) => admitted.push(context),
+      onPostAdmission: (context: AdmittedRunContext) => {
+        admitted.push(context);
+      },
     },
   };
   return { runtime, prepare, admitted, retained, input };

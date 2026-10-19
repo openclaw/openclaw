@@ -65,7 +65,9 @@ function persistenceEnvironment(root: string): NodeJS.ProcessEnv {
 }
 
 export type PersistenceCommand =
-  | { action: "seed" | "read" | "update-remove" }
+  | { action: "seed" }
+  | { action: "read" }
+  | { action: "update-remove" }
   | {
       action: "publish-hold" | "stage-hold" | "save";
       pin: SkillLibrarySelection;

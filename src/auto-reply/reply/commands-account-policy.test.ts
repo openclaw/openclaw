@@ -32,7 +32,9 @@ const priorityAccounts = (key: string) => ({
 
 beforeEach(({ onTestFinished }) => {
   const previous = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previous));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previous);
+  });
   const plugin = {
     ...createChannelTestPluginBase({
       id: channel,

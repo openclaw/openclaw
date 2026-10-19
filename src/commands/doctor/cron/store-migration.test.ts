@@ -331,7 +331,17 @@ describe("normalizeStoredCronJobs", () => {
       sessionTarget: "isolated",
       payload: {
         kind: "agentTurn",
-        message: `${commandPrompt(command, "/home/openclaw/.razor/quant")}\n- timeout: 840`,
+        message: [
+          "Run this deterministic shell job once and report only the final JSON/status.",
+          "",
+          commandPrompt(command, "/home/openclaw/.razor/quant"),
+          "- background: false",
+          "- timeout: 840",
+          "",
+          "Final response contract:",
+          "- If the command prints exactly NO_REPLY, respond exactly NO_REPLY.",
+          "- Otherwise return the concise command output.",
+        ].join("\n"),
         toolsAllow: ["group:runtime"],
         lightContext: true,
         timeoutSeconds: 900,

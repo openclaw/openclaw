@@ -82,7 +82,7 @@ it("retains a computer execution across MCP catalog rebuilds and releases it wit
     "start_recording",
     "stop_recording",
     "replay_trajectory",
-  ];
+  ] as const;
   const capabilities: ReturnType<ComputerUseProvider["capabilities"]> = {
     ...computerCapabilities(
       { id: "fixture", label: "Fixture", generation: "computer-generation" },

@@ -41,7 +41,7 @@ const x = await loadBundledPluginFacade<{
   createKeyedState: () => PluginRuntime["state"]["openKeyedStore"];
   setXRuntime: (runtime: PluginRuntime) => void;
   openXAllowlist: (runtime: PluginRuntime) => {
-    put(accountId: string, entry: ReturnType<typeof entry>): Promise<void>;
+    put(accountId: string, value: ReturnType<typeof entry>): Promise<void>;
     remove(accountId: string, userId: string): Promise<unknown>;
     readSnapshot(accountId: string): Promise<Snapshot>;
   };

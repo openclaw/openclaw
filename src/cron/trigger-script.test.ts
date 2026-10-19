@@ -379,7 +379,7 @@ it.each(["preparation", "headless"] as const)("survives a clock jump during %s",
       vi.fn(async () => jsonResult({ observed: true })),
     );
     const { evaluate, runHeadless } = createEvaluator(
-      (params) =>
+      async (params) =>
         phase === "headless" ? runCodeModeScriptHeadless(params) : completed({ fire: false }),
       {
         prepareRuntime: async ({ runtimeConfig }) => {

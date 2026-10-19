@@ -181,7 +181,7 @@ it.each(["evaluated", "aborted"] as const)(
       // The server holds this socket until it is killed, so its close proves retirement.
       const socket = await connected.promise;
       let retired = false;
-      const closed = createDeferred<void>();
+      const closed = createDeferred();
       socket.once("close", () => {
         retired = true;
         closed.resolve();
