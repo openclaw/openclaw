@@ -1,5 +1,5 @@
 import type { SQLInputValue } from "node:sqlite";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SqlConnection } from "../../infra/sql-connection.js";
 import type {
@@ -18,6 +18,55 @@ export function rows(db: SqlConnection, sql: string, ...bindings: SQLInputValue[
 
 export function row(db: SqlConnection, sql: string, ...bindings: SQLInputValue[]) {
   return db.prepare(sql).get(...bindings);
+}
+
+export function expectRows(
+  db: SqlConnection,
+  sql: string,
+  expected: unknown,
+  ...bindings: SQLInputValue[]
+) {
+  expect(rows(db, sql, ...bindings)).toEqual(expected);
+}
+
+export function rebuildState(db: SqlConnection) {
+  return row(db, "SELECT needs_rebuild FROM session_transcript_index_state");
+}
+
+export function projectionMessages(db: SqlConnection) {
+  return rows(db, "SELECT message_id, text FROM session_transcript_fts");
+}
+
+export function projectionSnapshot(db: SqlConnection, sessionId: string) {
+  const query = (sql: string) => rows(db, sql, sessionId);
+  return {
+    index: row(db, "SELECT * FROM session_transcript_index_state WHERE session_id = ?", sessionId),
+    active: query(
+      "SELECT * FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
+    ),
+    // Keep orphan FTS rows visible as well as their mapping IDs.
+    fts: query(`SELECT CAST(m.id AS TEXT) AS id, f.* FROM session_transcript_fts f
+      LEFT JOIN session_transcript_fts_rows m ON m.id = f.rowid
+      WHERE f.session_id = ? ORDER BY f.message_id`),
+  };
+}
+
+export function markRebuild(db: SqlConnection, sessionId?: string) {
+  db.prepare(
+    `UPDATE session_transcript_index_state SET needs_rebuild = 1${sessionId ? " WHERE session_id = ?" : ""}`,
+  ).run(...(sessionId ? [sessionId] : []));
+}
+
+export function seedScanBacklog(db: SqlConnection, sessionKey: string) {
+  db.prepare(`WITH RECURSIVE candidates(n) AS (
+      VALUES (0) UNION ALL SELECT n + 1 FROM candidates WHERE n < 199
+    ) INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+      SELECT printf('a-%03d', n), ?, 1, 1 FROM candidates`).run(sessionKey);
+}
+
+export function reconcileScope(stateDir: string, sessionId: string) {
+  const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+  return { options, scope: { ...options, sessionId, sessionKey: `agent:main:${sessionId}` } };
 }
 
 export async function seedTranscript(

@@ -10,12 +10,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import * as transcriptMaintenance from "./session-transcript-index-maintenance.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import { readSessionTranscriptProjectionStatus } from "./session-transcript-reconcile-readiness.js";
-import {
-  closeReconcileDatabases,
-  holdReconcileAck,
-  rows,
-  seedTranscript,
-} from "./session-transcript-reconcile.fixtures.test-support.js";
+import * as fixtures from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -36,22 +31,16 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("observes foreground traversal completion while foreign writes continue", async () => {
   const stateDir = tempDirs.make("openclaw-projection-backlog-admission-");
-  const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-  const scope = { ...options, sessionId: "zz-late", sessionKey: "agent:main:zz-late" };
+  const { options, scope } = fixtures.reconcileScope(stateDir, "zz-late");
   setRuntimeConfigSnapshot({});
   let restoreDrain: (() => void) | undefined;
   try {
-    await seedTranscript(scope, "late", "Late projection", null);
+    await fixtures.seedTranscript(scope, "late", "Late projection", null);
     await waitForSessionTranscriptIndexReconcile(options);
-    const database = openOpenClawAgentDatabase(options);
-    database.db
-      .prepare(`WITH RECURSIVE candidates(n) AS (
-      VALUES (0) UNION ALL SELECT n + 1 FROM candidates WHERE n < 199
-    ) INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
-      SELECT printf('a-%03d', n), ?, 1, 1 FROM candidates`)
-      .run(scope.sessionKey);
-    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-    const foreignCommit = database.db.prepare(
+    const { db } = openOpenClawAgentDatabase(options);
+    fixtures.seedScanBacklog(db, scope.sessionKey);
+    fixtures.markRebuild(db);
+    const foreignCommit = db.prepare(
       "UPDATE session_windows SET updated_at = updated_at + 1 WHERE session_id = 'a-000'",
     );
     let dispatched = false;
@@ -123,14 +112,14 @@ it("observes foreground traversal completion while foreign writes continue", asy
       reconciledSessions: 1,
     });
     expect(worklists).toEqual([[scope.sessionId]]);
-    expect(rows(database.db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual([
+    expect(fixtures.rows(db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual([
       { needs_rebuild: 0 },
     ]);
   } finally {
     restoreDrain?.();
     observer.onTask = undefined;
     await waitForSessionTranscriptIndexReconcile(options);
-    await closeReconcileDatabases();
+    await fixtures.closeReconcileDatabases();
     clearRuntimeConfigSnapshot();
   }
 });
@@ -139,20 +128,15 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
   "preserves readiness lifetime and cancellation across %s",
   async (boundary) => {
     const stateDir = tempDirs.make("openclaw-projection-read-retirement-");
-    const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-    const scope = {
-      ...options,
-      sessionId: "retired-read",
-      sessionKey: "agent:main:retired-read",
-    };
+    const { options, scope } = fixtures.reconcileScope(stateDir, "retired-read");
     setRuntimeConfigSnapshot({});
     let resume: (() => void) | undefined;
     try {
-      await seedTranscript(scope, "seed", "Read owner", null);
+      await fixtures.seedTranscript(scope, "seed", "Read owner", null);
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
-      database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-      const held = holdReconcileAck(observer, "plan-start");
+      fixtures.markRebuild(database.db);
+      const held = fixtures.holdReconcileAck(observer, "plan-start");
       resume = held.release;
       startSessionTranscriptIndexReconcile(options);
       await held.paused;
@@ -180,23 +164,11 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
             controller.signal,
           ),
         ).rejects.toMatchObject({ name: "AbortError", cause: reason });
-        let scheduled: { ok: true } | { ok: false; error: unknown };
-        try {
-          startSessionTranscriptIndexReconcile(options);
-          scheduled = { ok: true };
-        } catch (error) {
-          scheduled = { ok: false, error };
-        }
-        const waiting = waitForSessionTranscriptProjection(scope).then(
-          () => ({ ok: true }),
-          (error: unknown) => ({ ok: false, error }),
-        );
+        expect(() => startSessionTranscriptIndexReconcile(options)).not.toThrow();
+        const waiting = expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
         resume?.();
         await closing;
-        expect({ scheduled, ready: await waiting }).toEqual({
-          scheduled: { ok: true },
-          ready: { ok: true },
-        });
+        await waiting;
       } else if (boundary === "queued-status") {
         const {
           historyLane: { pool: historyPages },
@@ -253,11 +225,10 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
             activeTasks: capacity,
             pendingTasks: capacity,
           });
-          const outcome = await ready;
-          expect(outcome.kind).toBe("rejected");
-          if (outcome.kind === "rejected") {
-            expect(outcome.error).toMatchObject({ name: "AbortError", cause: reason });
-          }
+          await expect(ready).resolves.toMatchObject({
+            kind: "rejected",
+            error: { name: "AbortError", cause: reason },
+          });
         } finally {
           releasePreparation.resolve();
           try {
@@ -282,7 +253,7 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
     } finally {
       resume?.();
       await waitForSessionTranscriptIndexReconcile(options);
-      await closeReconcileDatabases();
+      await fixtures.closeReconcileDatabases();
       clearRuntimeConfigSnapshot();
     }
   },

@@ -15,14 +15,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import {
-  closeReconcileDatabases,
-  holdReconcileAck,
-  interceptWorkerExecution,
-  row,
-  rows,
-  seedTranscript,
-} from "./session-transcript-reconcile.fixtures.test-support.js";
+import * as fixtures from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -39,22 +32,20 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function fixture() {
   const stateDir = tempDirs.make("transcript-publication-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const options = { agentId: "main", env };
+  const { options, scope } = fixtures.reconcileScope(stateDir, "publication");
   setRuntimeConfigSnapshot({
     session: { store: resolveSessionStorePathCore(undefined, options) },
   });
-  const scope = { ...options, sessionId: "publication", sessionKey: "agent:main:publication" };
-  await seedTranscript(scope, "message-0", "projection message 0");
+  await fixtures.seedTranscript(scope, "message-0", "projection message 0");
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
   const database = openOpenClawAgentDatabase(options);
-  database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+  fixtures.markRebuild(database.db);
   return { options: { ...options, path: database.path }, scope, database };
 }
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await closeReconcileDatabases();
+  await fixtures.closeReconcileDatabases();
   clearRuntimeConfigSnapshot();
 });
 
@@ -89,56 +80,36 @@ it("publishes a cold compressed multi-chunk branch without host data SQL", async
   ];
   await replaceTranscriptEvents(scope, events);
   const sibling = { ...scope, sessionId: "sibling", sessionKey: "agent:main:sibling" };
-  await seedTranscript(sibling, "sibling-message", "untouched");
+  await fixtures.seedTranscript(sibling, "sibling-message", "untouched");
   await waitForSessionTranscriptIndexReconcilesInStateDir(options.env.OPENCLAW_STATE_DIR!);
-  expect(
-    rows(
-      database.db,
-      `SELECT seq, event_json IS NULL AS compressed,
+  fixtures.expectRows(
+    database.db,
+    `SELECT seq, event_json IS NULL AS compressed,
         length(event_zstd) > 0 AND length(event_zstd) < event_utf8_bytes AS smaller,
         navigation_json IS NOT NULL AS navigation
         FROM transcript_events WHERE session_id = ? AND seq IN (1, 521) ORDER BY seq`,
-      scope.sessionId,
-    ),
-  ).toEqual([
-    { seq: 1, compressed: 1, smaller: 1, navigation: 1 },
-    { seq: 521, compressed: 1, smaller: 1, navigation: 1 },
-  ]);
+    [
+      { seq: 1, compressed: 1, smaller: 1, navigation: 1 },
+      { seq: 521, compressed: 1, smaller: 1, navigation: 1 },
+    ],
+    scope.sessionId,
+  );
   const canonical = readTranscriptEventRows(database, scope.sessionId);
   expect(canonical.map((event) => event.eventJson)).toEqual(
     events.map((event) => JSON.stringify(event)),
   );
   const physicalRows = (db: typeof database.db) =>
-    rows(
+    fixtures.rows(
       db,
       `SELECT session_id, seq, created_at, event_json, hex(event_zstd) AS compressed_hex,
         event_utf8_bytes, navigation_json FROM transcript_events ORDER BY session_id, seq`,
     );
-  const siblingProjection = (db: typeof database.db) => ({
-    index: row(
-      db,
-      "SELECT * FROM session_transcript_index_state WHERE session_id = ?",
-      sibling.sessionId,
-    ),
-    active: rows(
-      db,
-      "SELECT * FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
-      sibling.sessionId,
-    ),
-    fts: rows(
-      db,
-      `SELECT CAST(m.id AS TEXT) AS id, m.message_id, f.text, f.role, f.timestamp
-        FROM session_transcript_fts_rows m JOIN session_transcript_fts f ON f.rowid = m.id
-        WHERE m.session_id = ? ORDER BY m.id`,
-      sibling.sessionId,
-    ),
-  });
+  const siblingProjection = (db: typeof database.db) =>
+    fixtures.projectionSnapshot(db, sibling.sessionId);
   const physicalBefore = physicalRows(database.db);
   const siblingBefore = siblingProjection(database.db);
-  database.db
-    .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-    .run(scope.sessionId);
-  await closeReconcileDatabases();
+  fixtures.markRebuild(database.db, scope.sessionId);
+  await fixtures.closeReconcileDatabases();
   const observed = observeHostDataSql();
   try {
     await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
@@ -147,7 +118,7 @@ it("publishes a cold compressed multi-chunk branch without host data SQL", async
     await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
       reconciledSessions: 0,
     });
-    await closeReconcileDatabases();
+    await fixtures.closeReconcileDatabases();
     expect(observed.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
   } finally {
     observed.restore();
@@ -158,45 +129,42 @@ it("publishes a cold compressed multi-chunk branch without host data SQL", async
   expect(physicalRows(db)).toEqual(physicalBefore);
   expect(siblingProjection(db)).toEqual(siblingBefore);
   expect(
-    row(
+    fixtures.row(
       db,
       `SELECT needs_rebuild, active_message_count, leaf_event_id
         FROM session_transcript_index_state WHERE session_id = ?`,
       scope.sessionId,
     ),
   ).toEqual({ needs_rebuild: 0, active_message_count: 520, leaf_event_id: "message-519" });
-  expect(
-    rows(
-      db,
-      `SELECT identity.event_id FROM session_transcript_active_events active
+  fixtures.expectRows(
+    db,
+    `SELECT identity.event_id FROM session_transcript_active_events active
         JOIN transcript_event_identities identity
           ON identity.session_id = active.session_id AND identity.seq = active.event_seq
         WHERE active.session_id = ? ORDER BY active.active_position`,
-      scope.sessionId,
-    ),
-  ).toEqual(activeMessages.map((event) => ({ event_id: event.id })));
-  expect(
-    rows(
-      db,
-      "SELECT message_id, text FROM session_transcript_fts WHERE session_id = ? ORDER BY rowid",
-      scope.sessionId,
-    ),
-  ).toEqual(activeMessages.map((event) => ({ message_id: event.id, text: event.message.content })));
-  expect(row(db, "SELECT count(*) AS count FROM session_transcript_fts_rows")).toEqual({
+    activeMessages.map((event) => ({ event_id: event.id })),
+    scope.sessionId,
+  );
+  fixtures.expectRows(
+    db,
+    "SELECT message_id, text FROM session_transcript_fts WHERE session_id = ? ORDER BY rowid",
+    activeMessages.map((event) => ({ message_id: event.id, text: event.message.content })),
+    scope.sessionId,
+  );
+  expect(fixtures.row(db, "SELECT count(*) AS count FROM session_transcript_fts_rows")).toEqual({
     count: 521,
   });
   // Check both directions: content alone can hide missing identities or stale FTS rows.
-  expect(
-    rows(
-      db,
-      `SELECT m.id FROM session_transcript_fts_rows m
+  fixtures.expectRows(
+    db,
+    `SELECT m.id FROM session_transcript_fts_rows m
         LEFT JOIN session_transcript_fts f ON f.rowid = m.id
         WHERE f.rowid IS NULL OR f.session_id IS NOT m.session_id OR f.message_id IS NOT m.message_id
         UNION ALL
         SELECT f.rowid FROM session_transcript_fts f
         LEFT JOIN session_transcript_fts_rows m ON m.id = f.rowid WHERE m.id IS NULL`,
-    ),
-  ).toEqual([]);
+    [],
+  );
 }, 30_000);
 
 it("publishes the session change only after finalization commits", async () => {
@@ -204,7 +172,7 @@ it("publishes the session change only after finalization commits", async () => {
   const changes: unknown[] = [];
   const stop = sessionChanges.subscribe((change) => {
     if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-      changes.push(row(database.db, "SELECT needs_rebuild FROM session_transcript_index_state"));
+      changes.push(fixtures.rebuildState(database.db));
     }
   });
   try {
@@ -222,9 +190,7 @@ it("publishes the session change only after finalization commits", async () => {
     );
     observer.onTask = undefined;
     expect(changes).toEqual([]);
-    expect(row(database.db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual({
-      needs_rebuild: 1,
-    });
+    expect(fixtures.rebuildState(database.db)).toEqual({ needs_rebuild: 1 });
     database.db.exec("DROP TRIGGER refuse_projection");
     await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
       reconciledSessions: 1,
@@ -252,30 +218,30 @@ it("delivers a committed finalization before close permits a physical successor"
       notifications.push({
         originalFile: statSync(database.path, { bigint: true }).ino === originalFile.ino,
         originalOpen: database.db.isOpen,
-        state: database.db.isOpen
-          ? row(database.db, "SELECT needs_rebuild FROM session_transcript_index_state")
-          : undefined,
+        state: database.db.isOpen ? fixtures.rebuildState(database.db) : undefined,
       });
     }
   });
   let held = false;
-  const operationSpy = interceptWorkerExecution((execute) => async (command, commandOptions) => {
-    const result = await execute(command, commandOptions);
-    if (
-      !held &&
-      command.type === "database.domain.publish" &&
-      isRecord(command.input) &&
-      isRecord(command.input.command) &&
-      command.input.command.type === "finalize"
-    ) {
-      held = true;
-      expect(result).toMatchObject({ finalized: true, sessionKey: scope.sessionKey });
-      events.push("committed");
-      committed.resolve();
-      await deliver.promise;
-    }
-    return result;
-  });
+  const operationSpy = fixtures.interceptWorkerExecution(
+    (execute) => async (command, commandOptions) => {
+      const result = await execute(command, commandOptions);
+      if (
+        !held &&
+        command.type === "database.domain.publish" &&
+        isRecord(command.input) &&
+        isRecord(command.input.command) &&
+        command.input.command.type === "finalize"
+      ) {
+        held = true;
+        expect(result).toMatchObject({ finalized: true, sessionKey: scope.sessionKey });
+        events.push("committed");
+        committed.resolve();
+        await deliver.promise;
+      }
+      return result;
+    },
+  );
   let reconciliation: ReturnType<typeof reconcileSessionTranscriptIndexes> | undefined;
   let closing: Promise<boolean> | undefined;
   let replacing: Promise<typeof database> | undefined;
@@ -287,10 +253,8 @@ it("delivers a committed finalization before close permits a physical successor"
         throw new Error("Reconciliation finished without holding its native finalizer reply");
       }),
     ]);
-    expect(row(database.db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual({
-      needs_rebuild: 0,
-    });
-    expect(rows(database.db, "SELECT message_id, text FROM session_transcript_fts")).toEqual([
+    expect(fixtures.rebuildState(database.db)).toEqual({ needs_rebuild: 0 });
+    expect(fixtures.projectionMessages(database.db)).toEqual([
       { message_id: "message-0", text: "projection message 0" },
     ]);
     expect(notifications).toEqual([]);
@@ -304,7 +268,7 @@ it("delivers a committed finalization before close permits a physical successor"
       const successor = openOpenClawAgentDatabase(options);
       expect(statSync(successor.path, { bigint: true }).ino).not.toBe(originalFile.ino);
       events.push("replaced");
-      await seedTranscript(
+      await fixtures.seedTranscript(
         { ...options, sessionId: "successor", sessionKey: "agent:main:successor" },
         "successor-message",
         "successor",
@@ -324,7 +288,7 @@ it("delivers a committed finalization before close permits a physical successor"
     ]);
     expect(database.db.isOpen).toBe(false);
     expect(readTranscriptEventRows(successor, scope.sessionId)).toEqual([]);
-    expect(rows(successor.db, "SELECT message_id, text FROM session_transcript_fts")).toEqual([
+    expect(fixtures.projectionMessages(successor.db)).toEqual([
       { message_id: "successor-message", text: "successor" },
     ]);
   } finally {
@@ -341,20 +305,16 @@ it("refuses a retired scheduled owner and permits an explicit fresh repair", asy
   await closeOpenClawAgentDatabasesAsync();
   await waitForSessionTranscriptIndexReconcile(options);
   const { db } = openOpenClawAgentDatabase(options);
-  expect(row(db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual({
-    needs_rebuild: 1,
-  });
+  expect(fixtures.rebuildState(db)).toEqual({ needs_rebuild: 1 });
   await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
     reconciledSessions: 1,
   });
-  expect(row(db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual({
-    needs_rebuild: 0,
-  });
+  expect(fixtures.rebuildState(db)).toEqual({ needs_rebuild: 0 });
 }, 30_000);
 
 it("keeps a successor request separate from a retired scheduled owner", async () => {
   const { options, scope } = await fixture();
-  const { paused, release } = holdReconcileAck(observer, "plan-finish");
+  const { paused, release } = fixtures.holdReconcileAck(observer, "plan-finish");
   startSessionTranscriptIndexReconcile(options);
   try {
     await paused;
@@ -363,15 +323,11 @@ it("keeps a successor request separate from a retired scheduled owner", async ()
     release();
     await closing;
     const successor = openOpenClawAgentDatabase(options);
-    successor.db
-      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-      .run(scope.sessionId);
+    fixtures.markRebuild(successor.db, scope.sessionId);
     startSessionTranscriptIndexReconcile(options);
     release();
     await waitForSessionTranscriptIndexReconcilesInStateDir(options.env.OPENCLAW_STATE_DIR!);
-    expect(row(successor.db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual({
-      needs_rebuild: 0,
-    });
+    expect(fixtures.rebuildState(successor.db)).toEqual({ needs_rebuild: 0 });
   } finally {
     release();
     await waitForSessionTranscriptIndexReconcile(options);
@@ -419,10 +375,8 @@ it.each(["transcript", "caller", "cancellation"] as const)(
         await expect(repair).rejects.toThrow("startup maintenance owner retired");
       }
       expect(changes).toEqual([]);
-      expect(row(database.db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual({
-        needs_rebuild: 1,
-      });
-      expect(rows(database.db, "SELECT message_id, text FROM session_transcript_fts")).toEqual([
+      expect(fixtures.rebuildState(database.db)).toEqual({ needs_rebuild: 1 });
+      expect(fixtures.projectionMessages(database.db)).toEqual([
         { message_id: "message-0", text: "projection message 0" },
       ]);
     } finally {

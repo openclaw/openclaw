@@ -25,6 +25,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withSqliteWorkerLifecycleCoordination } from "./session-accessor.sqlite-worker-coordination.js";
+import { row } from "./session-transcript-reconcile.fixtures.test-support.js";
 import { observeReconcileHostSqlite } from "./session-transcript-reconcile.sql-observer.test-support.js";
 import type {
   SessionTranscriptReconcileWorkerTask,
@@ -94,11 +95,9 @@ async function releaseInRealWorker(
           {
             inputBytes: 512,
             signal: controller.signal,
-            transferList: (task) => [
-              task.port,
-              ...(task.coordination?.databaseAdmission
-                ? [task.coordination.databaseAdmission]
-                : []),
+            transferList: ({ port, coordination: taskCoordination }) => [
+              port,
+              ...(taskCoordination?.databaseAdmission ? [taskCoordination.databaseAdmission] : []),
             ],
           },
         );
@@ -120,10 +119,14 @@ async function releaseInRealWorker(
   }
 }
 
-function observe(context: OpenClawStateWorkerContext) {
-  return observeReconcileHostSqlite({
-    data: [context.admission.databasePath],
-  });
+function expectLeaseReleased(leaseId: string) {
+  expect(
+    row(
+      openOpenClawStateDatabase().db,
+      "SELECT lease_id FROM agent_database_leases WHERE lease_id = ?",
+      leaseId,
+    ),
+  ).toBeUndefined();
 }
 
 it("counts all eight boundaries, including pre-attached cached statements and unknown databases", () => {
@@ -219,7 +222,7 @@ it("joins native exit when shared-state close fails after lease deletion", async
       closeOpenClawStateDatabaseForTest();
       const context = captureOpenClawStateWorkerContext();
       const pool = createPool(context.admission.databasePath);
-      const observation = observe(context);
+      const observation = observeReconcileHostSqlite({ data: [context.admission.databasePath] });
       try {
         await expect(
           releaseInRealWorker(pool, context, lease, state.path("main", "agent.sqlite")),
@@ -231,11 +234,7 @@ it("joins native exit when shared-state close fails after lease deletion", async
         await pool.close();
         observation.restore();
       }
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
-          .get(lease),
-      ).toBeUndefined();
+      expectLeaseReleased(lease);
     },
   );
 });
@@ -293,11 +292,7 @@ it.each([false, true])(
           expect(() => context.admission.assertCurrent()).toThrow();
           releasePort.postMessage({ type: "release" }, []);
           await expect(task).resolves.toContainEqual({ type: "lease-released" });
-          expect(
-            openOpenClawStateDatabase()
-              .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
-              .get(leaseId),
-          ).toBeUndefined();
+          expectLeaseReleased(leaseId);
         } finally {
           releasePort?.postMessage({ type: "release" }, []);
           await task.catch(() => {});

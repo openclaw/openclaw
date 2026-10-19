@@ -17,7 +17,12 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { readSessionTranscriptMessageEvents } from "./session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { row, rows, seedTranscript } from "./session-transcript-reconcile.fixtures.test-support.js";
+import {
+  markRebuild,
+  projectionSnapshot,
+  rows,
+  seedTranscript,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
@@ -26,10 +31,7 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
-import type {
-  SessionTranscriptReconcileWorkerInput,
-  SessionTranscriptReconcileWorkerMessage,
-} from "./session-transcript-reconcile.worker.js";
+import type { SessionTranscriptReconcileWorkerInput } from "./session-transcript-reconcile.worker.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -44,6 +46,8 @@ const scope = {
   sessionKey: "agent:main:native-exit-proof",
 };
 type ProjectionStage = "plan-start" | "active-chunk" | "fts-chunk" | "plan-finish" | "done";
+const write = (run: () => Promise<void> = async () => undefined) =>
+  runExclusiveSqliteSessionWrite(databaseOptions, run, "sessions.transcript-index.preflight");
 
 function createQueuedProjectionFence(stage: ProjectionStage) {
   const release = createDeferred();
@@ -67,17 +71,13 @@ function createQueuedProjectionFence(stage: ProjectionStage) {
       }
     };
     // Both foreground writes and canonical publication enter this same per-path FIFO.
-    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+    observeMessage((message) => {
       if (message.type === stage && !fenced) {
         fenced = true;
-        blocker = runExclusiveSqliteSessionWrite(
-          databaseOptions,
-          async () => {
-            blocked.resolve();
-            await release.promise;
-          },
-          "sessions.transcript-index.preflight",
-        );
+        blocker = write(async () => {
+          blocked.resolve();
+          await release.promise;
+        });
       }
     });
   };
@@ -97,30 +97,19 @@ function createQueuedProjectionFence(stage: ProjectionStage) {
       release.resolve();
       await blocker;
       // On baseline failure, settlement can beat this handler; join it before fixture disposal.
-      if (fenced) {
-        if (stage === "done") {
-          await runExclusiveSqliteSessionWrite(
-            databaseOptions,
-            async () => undefined,
-            "sessions.transcript-index.preflight",
-          );
-        } else {
-          await withTestTimeout(acknowledged.promise, 5_000, "queued projection did not finish");
-        }
+      if (fenced && stage === "done") {
+        await write();
+      } else if (fenced) {
+        await withTestTimeout(acknowledged.promise, 5_000, "queued projection did not finish");
       }
       await worker?.terminate();
     },
   };
 }
 
-const cases = [
-  { stage: "plan-start", scheduled: false },
-  { stage: "active-chunk", scheduled: false },
-  { stage: "fts-chunk", scheduled: false },
-  { stage: "plan-finish", scheduled: false },
-  { stage: "done", scheduled: false },
-  { stage: "active-chunk", scheduled: true },
-] satisfies Array<{ stage: ProjectionStage; scheduled: boolean }>;
+const cases = (["plan-start", "active-chunk", "fts-chunk", "plan-finish", "done"] as const)
+  .map((stage) => ({ stage, scheduled: false }))
+  .concat([{ stage: "active-chunk", scheduled: true }]);
 
 it.each(cases)(
   "joins queued $stage on native exit (scheduled=$scheduled)",
@@ -133,54 +122,25 @@ it.each(cases)(
       let drain: Promise<void> | undefined;
       try {
         await seedTranscript(scope, "seed", "synthetic seed");
-        const database = openOpenClawAgentDatabase(databaseOptions);
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(scope.sessionId);
+        const { db } = openOpenClawAgentDatabase(databaseOptions);
+        markRebuild(db, scope.sessionId);
+        const query = (sql: string) => rows(db, sql, scope.sessionId);
         const sourceRows = () =>
-          rows(
-            database.db,
-            "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-            scope.sessionId,
-          );
-        const snapshot = () => ({
-          state: row(
-            database.db,
-            "SELECT * FROM session_transcript_index_state WHERE session_id = ?",
-            scope.sessionId,
-          ),
-          active: rows(
-            database.db,
-            "SELECT * FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
-            scope.sessionId,
-          ),
-          fts: rows(
-            database.db,
-            "SELECT * FROM session_transcript_fts WHERE session_id = ? ORDER BY message_id",
-            scope.sessionId,
-          ),
-        });
+          query("SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq");
+        const snapshot = () => projectionSnapshot(db, scope.sessionId);
         const originalSource = sourceRows();
         let settled = false;
         if (scheduled) {
           startSessionTranscriptIndexReconcile(databaseOptions);
-          outcome = waitForSessionTranscriptIndexReconcile(databaseOptions).then(() => {
-            settled = true;
-          });
-        } else {
-          outcome = reconcileSessionTranscriptIndexes(databaseOptions).then(
-            (value) => {
-              settled = true;
-              return { status: "fulfilled", value };
-            },
-            (error: unknown) => {
-              settled = true;
-              return { status: "rejected", error };
-            },
-          );
         }
+        outcome = Promise.allSettled([
+          scheduled
+            ? waitForSessionTranscriptIndexReconcile(databaseOptions)
+            : reconcileSessionTranscriptIndexes(databaseOptions),
+        ]).then(([result]) => {
+          settled = true;
+          return result;
+        });
         let drained = false;
         drain = waitForSessionTranscriptIndexReconcilesInStateDir(stateDir).then(() => {
           drained = true;
@@ -197,16 +157,10 @@ it.each(cases)(
         const result = await outcome;
         expect(fence.modes).toEqual(["disk", "release"]);
         await drain;
-        if (!scheduled) {
-          expect(result).toMatchObject({ status: "rejected" });
-        }
+        expect(result).toMatchObject({ status: scheduled ? "fulfilled" : "rejected" });
         expect(isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(false);
         const atSettlement = snapshot();
-        await runExclusiveSqliteSessionWrite(
-          databaseOptions,
-          async () => undefined,
-          "sessions.transcript-index.preflight",
-        );
+        await write();
         await checkpoint();
         expect(snapshot()).toEqual(atSettlement);
         expect(sourceRows()).toEqual(originalSource);

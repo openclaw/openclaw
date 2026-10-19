@@ -9,7 +9,11 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
-import { rows, seedTranscript } from "./session-transcript-reconcile.fixtures.test-support.js";
+import {
+  expectRows,
+  markRebuild,
+  seedTranscript,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -38,9 +42,7 @@ async function seedPendingBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<stri
       );
     }
     await waitForSessionTranscriptIndexReconcile(options);
-    openOpenClawAgentDatabase(options)
-      .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
-      .run();
+    markRebuild(openOpenClawAgentDatabase(options).db);
   }
   await reconcilePool.closeSessionTranscriptReconcileWorkerPool();
 }
@@ -48,23 +50,17 @@ async function seedPendingBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<stri
 function expectIndexedBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<string, number>) {
   for (const [agentId, count] of Object.entries(backlogs)) {
     const { db } = openOpenClawAgentDatabase({ agentId, env });
-    expect(
-      rows(
-        db,
-        "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
-      ),
-    ).toEqual(
+    expectRows(
+      db,
+      "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
       Array.from({ length: count }, (_, index) => ({
         session_id: `s${index}`,
         needs_rebuild: 0,
       })),
     );
-    expect(
-      rows(
-        db,
-        "SELECT session_id, message_id, text FROM session_transcript_fts ORDER BY session_id",
-      ),
-    ).toEqual(
+    expectRows(
+      db,
+      "SELECT session_id, message_id, text FROM session_transcript_fts ORDER BY session_id",
       Array.from({ length: count }, (_, index) => ({
         session_id: `s${index}`,
         message_id: `e${index}`,

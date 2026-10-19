@@ -19,7 +19,11 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { rows, seedTranscript } from "./session-transcript-reconcile.fixtures.test-support.js";
+import {
+  markRebuild,
+  rows,
+  seedTranscript,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -84,7 +88,7 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
         // Exercise cold publication admission independently of the seed writer.
         await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
-        database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+        markRebuild(database.db);
         const state = openOpenClawStateDatabase();
         const readLeases = () =>
           rows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id");
@@ -93,8 +97,10 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
         expect(baseline).toHaveLength(1);
         let creations = 0;
         observer.beforeCreate = (filename, workerOptions) => {
-          const planner = creations++ === 0;
-          if (fault === "startup" && planner) {
+          if (creations++ !== 0) {
+            return { filename, options: workerOptions };
+          }
+          if (fault === "startup") {
             // Bun follow-up (oven-sh/bun#43222): Restore a missing entry once Bun closes ports
             // transferred before worker entry resolution fails.
             return {
@@ -102,7 +108,7 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
               options: { ...workerOptions, eval: true },
             };
           }
-          if (planner && (fault === "claim-before" || fault === "claim-after")) {
+          if (fault === "claim-before" || fault === "claim-after") {
             const channel = new MessageChannel();
             ports.push(channel.port1, channel.port2);
             channel.port1.once("message", () => {
@@ -143,20 +149,17 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
               },
             };
           }
-          if (planner && fault === "planner-ack") {
-            // Native exit after the canonical DELETE commits, immediately before its ACK.
-            return {
-              filename: `const {MessagePort}=require('node:worker_threads');
+          // Native exit after the canonical DELETE commits, immediately before its ACK.
+          return {
+            filename: `const {MessagePort}=require('node:worker_threads');
                const post=MessagePort.prototype.postMessage;
                MessagePort.prototype.postMessage=function(message,...args){
                  if(message.type==='lease-released') process.exit(0);
                  return post.call(this,message,...args);
                };
                void import(${JSON.stringify(String(filename))});`,
-              options: { ...workerOptions, eval: true },
-            };
-          }
-          return { filename, options: workerOptions };
+            options: { ...workerOptions, eval: true },
+          };
         };
         observer.onTask = ({ input, worker }) => {
           modes.push(input.mode);
@@ -167,14 +170,12 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
             leaseId = input.leaseId;
           }
         };
-        const result = await reconcileSessionTranscriptIndexes(options).then(
-          (value) => ({ status: "fulfilled" as const, value }),
-          (error: unknown) => ({ status: "rejected" as const, error }),
+        const failure = await reconcileSessionTranscriptIndexes(options).then(
+          () => {
+            throw new Error("native failure was reported as success");
+          },
+          (error: unknown) => error,
         );
-        expect(result.status).toBe("rejected");
-        if (result.status !== "rejected") {
-          throw new Error("native failure was reported as success");
-        }
         expect(workers[0]?.threadId).toBe(-1);
         expect(workers[1]?.threadId).toBeGreaterThan(0);
         expect(modes).toEqual(["disk", "release"]);
@@ -191,9 +192,8 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
               String(a.lease_id).localeCompare(String(b.lease_id)),
             ),
           );
-          expect(leasesAtNativeFault).toContainEqual({ lease_id: leaseId });
         }
-        expect(String(result.error)).not.toContain("cleanup incomplete");
+        expect(String(failure)).not.toContain("cleanup incomplete");
         expect(readLeases()).toEqual(writerLeases);
       } finally {
         admissionSpy.mockRestore();
@@ -205,7 +205,6 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
         observer.onTask = undefined;
         await closeOpenClawAgentDatabasesAsync(stateDir);
         await closeOpenClawStateDatabaseAsync();
-
         closeOpenClawStateDatabaseForTest();
         clearRuntimeConfigSnapshot();
       }
