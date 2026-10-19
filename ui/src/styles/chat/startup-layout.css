@@ -487,6 +487,8 @@
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-menu {
+  min-width: 32px;
+
   > .chat-pane__workspace-chip {
     min-width: 0;
   }

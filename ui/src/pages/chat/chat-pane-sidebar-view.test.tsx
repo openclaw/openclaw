@@ -28,6 +28,7 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
         callbacks={{
           activatePanel() {},
           togglePanelExpanded() {},
+          setDock() {},
           closeSlot() {},
           openSlot() {},
           reorderPanel() {},
@@ -73,6 +74,7 @@ it("retains the primary input and the region-owned outlet while changing the lay
         callbacks={{
           activatePanel() {},
           togglePanelExpanded() {},
+          setDock() {},
           closeSlot() {},
           openSlot() {},
           reorderPanel() {},

@@ -327,7 +327,9 @@ export type SidebarSelection = (
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
   | { kind: "unavailable"; message: string }
-) & { fileTab?: { id: string; label: string; disposition?: "pinned" | "preview" } };
+) & {
+  fileTab?: { id: string; label: string; disposition?: "pinned" | "preview"; intent?: "navigate" };
+};
 
 export type FileReaderInteraction = "selection" | "copy" | "link" | "edit";
 

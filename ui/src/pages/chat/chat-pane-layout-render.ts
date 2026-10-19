@@ -1,5 +1,5 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
-import { merge } from "solid-js";
+import { merge, type Element } from "solid-js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
@@ -65,6 +65,13 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  dashboardControls: Element | undefined = undefined;
+  private readonly setDashboardControls = (action: Element | undefined) => {
+    if (this.dashboardControls !== action) {
+      this.dashboardControls = action;
+    }
+  };
+
   private readonly detailsElements: ChatDetailsElements = {};
 
   private registerDetailsElement(name: keyof ChatDetailsElements, element: HTMLElement) {
@@ -75,6 +82,15 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       }
     };
   }
+
+  protected readonly onSidebarPanelOpened = (slot: SidebarSlotId) => {
+    const destination = this.mobilePresentation.destination;
+    this.navigateMobileHost({
+      area: "panels",
+      slot,
+      ...(destination.area === "details" ? { backTo: destination } : {}),
+    });
+  };
 
   get composerReady(): boolean {
     return getChatComposerState(this.presentationId).composerTextarea?.isConnected === true;
@@ -120,18 +136,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       catalog,
       agentWorkspace,
       workspaceGit,
-      openPanelSlot: nativeOpenPanelSlot,
+      openPanelSlot,
       closePanelSlot,
     } = params;
     const mobileHost = this.mobileHost(savedLayout);
-    const openPanelSlot = (slot: SidebarSlotId) => {
-      nativeOpenPanelSlot(slot);
-      this.navigateMobileHost({
-        area: "panels",
-        slot,
-        ...(mobileHost?.destination.area === "details" ? { backTo: mobileHost.destination } : {}),
-      });
-    };
 
     // What the pane shows. Its controls keep working on the layout as it is saved.
     const sidebarLayout = this.presentSidebarLayout(savedLayout);
@@ -230,6 +238,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ? {
           chat: paneChatProps,
           elements: this.detailsElements,
+          mobileHost,
           mobile: this.mergedChrome && !this.onBackToSubagents,
           presentation: panePresentation,
           conversationVisible,
@@ -301,7 +310,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       };
     }
     const desktopFocus = this.desktopFocus;
+    sessionWorkspace.onScrollPortRef = this.mobileScrollFades.register;
     const panelDefinitions = sidebarPanelDefinitions({
+      onScrollPortRef: this.mobileScrollFades.register,
       paneId: this.paneId,
       panePresentationId: this.presentationId,
       subagentsInputRegion: this.inputRegion,
@@ -510,8 +521,16 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
               preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
             },
           };
+    if (header) {
+      header.header.header.setDashboardControls = this.setDashboardControls;
+    }
+    const dashboard = panelDefinitions.find((definition) => definition.slot === "dashboard");
+    if (dashboard?.view?.dashboard) {
+      dashboard.view.dashboard.controls = this.dashboardControls;
+    }
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
+      mobileScrollFades: this.mobileScrollFades,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;
         const release = this.registerDetailsElement("pane", element);

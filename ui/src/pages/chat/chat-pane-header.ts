@@ -280,13 +280,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       isDesktopPanelAvailable(this.context.gateway.snapshot);
     const discussion = this.resolveSessionDiscussionAction();
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
-    const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
-    const sessionRailVisible =
-      this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "companion");
-    const subagentsVisible =
-      this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "subagents");
-    const processesVisible =
-      this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "processes");
+    const shownLayout =
+      currentLayout && this.usesMobileHost
+        ? this.presentSidebarLayout(currentLayout)
+        : currentLayout;
+    const sidePanelOpen = shownLayout?.open === true && !shownLayout.expanded;
+    const isShown = (slot: SidebarSlotId) => {
+      const layout = this.state?.sidebarLayout;
+      return Boolean(
+        layout &&
+        (this.usesMobileHost ? this.isSlotShown(layout, slot) : isSidebarSlotVisible(layout, slot)),
+      );
+    };
     const panelMenuActions = this.headerPanelsMemo.read(
       [
         Boolean(sessionWorkspace.onToggleTerminal),
@@ -296,13 +301,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         discussion?.active,
         Boolean(sessionWorkspace.onOpenDiff),
         sessionWorkspace.collapsed,
-        sessionRailVisible,
-        subagentsVisible,
-        processesVisible,
+        isShown("companion"),
+        isShown("subagents"),
+        isShown("processes"),
         catalog,
         currentLayout,
         Boolean(panelControls),
         ...panelDefinitions.flatMap(({ slot, label, available }) => [slot, label, available]),
+        ...panelDefinitions.map(({ slot }) => isShown(slot)),
         i18n.getLocale(),
       ],
       () => {
@@ -373,9 +379,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         });
         addPanelAction("companion", {
           id: "session-companion",
-          label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
+          label: t(isShown("companion") ? "chat.rail.collapse" : "chat.rail.show"),
           icon: "spark",
-          active: sessionRailVisible,
+          active: isShown("companion"),
           onActivate: callbacks.companion,
         });
         if (!catalog) {
@@ -385,12 +391,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               id: `session-${slot}`,
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
               icon: subagents ? "bot" : "terminal",
-              active: subagents ? subagentsVisible : processesVisible,
-              onActivate: () =>
-                this.requestBackgroundPanel(
-                  slot,
-                  (subagents ? subagentsVisible : processesVisible) ? "close" : "open",
-                ),
+              active: isShown(slot),
+              onActivate: () => this.requestBackgroundPanel(slot, isShown(slot) ? "close" : "open"),
             });
           }
         }
@@ -408,14 +410,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             id: `panel-${slot}`,
             label: definition.label,
             icon: definition.icon,
-            active: Boolean(currentLayout && isSidebarSlotVisible(currentLayout, slot)),
-            onActivate: () => {
-              if (this.state && isSidebarSlotVisible(this.state.sidebarLayout, slot)) {
-                this.headerPanelControls?.closePanelSlot(slot);
-              } else {
-                this.headerPanelControls?.openPanelSlot(slot);
-              }
-            },
+            active: isShown(slot),
+            onActivate: () =>
+              this.headerPanelControls?.[isShown(slot) ? "closePanelSlot" : "openPanelSlot"](slot),
           });
         }
         return actions;
@@ -575,12 +572,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
       panelMenuActions,
+      dashboardWidgetMenu: boardWidgetMenu,
       layoutMenuActions: defaultAction
         ? [{ id: "dashboard-default", icon: "check", ...defaultAction }]
         : [],
       runningSubagentCount: subagents.running,
       onOpenSubagents: subagents.listed ? detailsControl?.chat?.onOpenSubagents : undefined,
       sidebarLayout: currentLayout,
+      sidePanelOpen,
       panelDefinitions,
       onLayoutChange: (layout, options) => this.state?.updateSidebarLayout(layout, options),
       onToggleSidePanel: () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout),

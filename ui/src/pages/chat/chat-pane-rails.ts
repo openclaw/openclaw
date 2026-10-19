@@ -84,6 +84,7 @@ export function createChatPaneRails(params: {
       ...createSessionWorkspaceProps(state, {
         draftScope: params.presentationId,
         presentation: params.presentation,
+        openIntent: "navigate",
         draftContext: {
           sessionTitle: params.sessionTitle,
           paneLabel: params.paneLabel,

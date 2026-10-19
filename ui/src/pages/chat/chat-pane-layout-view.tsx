@@ -8,7 +8,7 @@ import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "./chat-pane-header-view.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
-import { SidebarRegionView, type SidebarRegionViewProps } from "./chat-pane-sidebar-view.tsx";
+import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import { ChatBoardResetConfirmation } from "./chat-pane-surfaces.tsx";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
@@ -16,6 +16,7 @@ import type { ComposerQuestions } from "./components/chat-composer-questions.ts"
 import { ChatDetails, type ChatDetailsViewProps } from "./components/chat-details.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { PaneHeaderView, type ChatPaneHeaderPresentation } from "./components/chat-pane-header.tsx";
+import type { SidebarRegionViewProps } from "./components/chat-sidebar-region-types.ts";
 
 function PaneSubagentHeader(props: {
   title: string;
