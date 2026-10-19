@@ -1007,3 +1007,47 @@ both legacy and delta readers still receive real changes. CPU and RSS cover the
 workload in the shared Gateway/client process; they are context, not full-browser
 or production capacity measurements. This script models a reproducible lifecycle
 pattern, not a claim that all observed viewer traffic is redundant.
+
+## Measure session roster refreshes during row churn
+
+`session-roster-churn-measure.ts` starts an isolated loopback Gateway, creates 270
+synthetic conversations through the real RPC, and drives the Control UI session
+capability through a WebSocket transport adapter. It observes the general,
+owner, involving-me, and compact child queries plus the primary roster. The
+sidebar uses its 200-row window; the ten warmed hot rows receive one patch per
+second. Each run lasts 135 seconds by default, crossing both minute fallback
+windows:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/session-roster-churn-measure.ts \
+  --state-dir /path/to/new-synthetic-state --port 41471 \
+  --sessions 270 --duration 135 --output /path/to/roster-report.json
+```
+
+The state directory must be new. `--session-owner` selects an alternate module
+exporting `createSessionCapability` and `GatewaySessionRowEvents` for controlled
+owner and decoder comparisons; otherwise the current source is used. `--start-at` gates activity after setup and rejects
+an already missed shared deadline. `--membership-churn` also creates and archives
+sessions every thirty patches, keeping necessary membership reads separate from
+the steady held-row workload. Run the same scenario on both sides, with the host's
+exclusive measurement lock and alternating CPU halves. Fixture preparation and
+builds must use the host's preparation CPU allocation.
+
+The report records list caller/query parameters, response JSON bytes, conditional
+row bases, preceding session event, event counts, CPU, and Node event-loop delay.
+It rejects missing row-event deliveries, decoder gaps, empty observed queries,
+RPC failures, or final membership, label, status, active-run, model, or agent-status
+note differences from authoritative list reads. Counts exclude setup and final
+verification. Bytes are response payload
+JSON, excluding WebSocket framing and compression. The process contains both the
+Gateway and session owner, so CPU and event-loop delay do not isolate either.
+This exercises the real session owner and transport, not browser DOM rendering,
+Long Task blocking, or reconnection.
+
+Add `--model-turns 2 --mock-port 41474` for a separate correctness phase after the
+measured row workload. It enables the bundled OpenAI plugin with synthetic-only
+credentials and a loopback SSE fixture, changes between two configured models,
+starts real agent turns, and waits for success. The report must observe each
+turn's start and settlement events and each loopback inference request. Model
+and catalog traffic is reported separately and is excluded from the healthy-row
+rate comparison. The default run starts no model provider.
