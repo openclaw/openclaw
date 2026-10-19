@@ -509,8 +509,16 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
         <ActivityMenu workspace={props.workspace} filters={filters()} filter={filter()} />
       </div>
       <Show when={props.workspace.error}>
-        <div class="workspace-desktop__notice" role="alert">
-          {props.workspace.error}
+        <div class="workspace-desktop__notice">
+          <div role="alert">{props.workspace.error}</div>
+          <button
+            type="button"
+            class="btn btn--sm"
+            disabled={props.workspace.loading}
+            onClick={() => props.workspace.onRetry()}
+          >
+            {t("common.retry")}
+          </button>
         </div>
       </Show>
       <Show when={props.workspace.loading && !props.workspace.list}>
