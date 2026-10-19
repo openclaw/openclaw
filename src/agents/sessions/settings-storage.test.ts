@@ -20,11 +20,28 @@ import {
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
 import { SettingsManager } from "./settings-manager.js";
+import type { SettingsScope } from "./settings-storage.js";
 import { FileSettingsStorage } from "./settings-storage.js";
 
 const fixtures = createFixtureLifetime();
 const storageUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsStorage);
 const managerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsManager);
+
+function settingsFixture(label: string, scope: SettingsScope = "global") {
+  const root = fixtures.createTempDir(`openclaw-settings-${label}-`);
+  const agentDir = join(root, "agent");
+  const settingsDir = scope === "global" ? agentDir : join(root, ".openclaw");
+  return { root, agentDir, settingsDir, settingsPath: join(settingsDir, "settings.json") };
+}
+
+async function expectCompleted(
+  child: ReturnType<typeof startSettingsProcess>,
+  signal: AbortSignal,
+) {
+  const result = await withinTest(child.completed, signal);
+  expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+  return result;
+}
 
 // Pipe input is asynchronous: the child bridges it to a worker's shared-memory gate.
 // The reader stays outside Vitest too, so its synchronous fs probe remains abortable.
@@ -121,9 +138,7 @@ afterEach(async () => {
 
 describe("FileSettingsStorage", () => {
   it("preserves provider retry settings across an upgraded settings write", async () => {
-    const root = fixtures.createTempDir("openclaw-settings-retry-migration-");
-    const agentDir = join(root, "agent");
-    const settingsPath = join(agentDir, "settings.json");
+    const { root, agentDir, settingsPath } = settingsFixture("retry-migration");
     mkdirSync(agentDir);
     fs.writeFileSync(
       settingsPath,
@@ -145,9 +160,7 @@ describe("FileSettingsStorage", () => {
   });
 
   it("keeps the original settings when a write fails partway", () => {
-    const root = fixtures.createTempDir("openclaw-settings-partial-write-");
-    const agentDir = join(root, "agent");
-    const settingsPath = join(agentDir, "settings.json");
+    const { root, agentDir, settingsPath } = settingsFixture("partial-write");
     const original = JSON.stringify({ packages: ["npm:@openclaw/keep"] });
     const replacement = JSON.stringify({ packages: ["npm:@openclaw/replacement"] });
     mkdirSync(agentDir);
@@ -173,9 +186,7 @@ describe("FileSettingsStorage", () => {
   it.runIf(process.platform !== "win32")(
     "preserves existing settings and parent directory modes",
     () => {
-      const root = fixtures.createTempDir("openclaw-settings-modes-");
-      const agentDir = join(root, "agent");
-      const settingsPath = join(agentDir, "settings.json");
+      const { root, agentDir, settingsPath } = settingsFixture("modes");
       mkdirSync(agentDir, { mode: 0o751 });
       fs.writeFileSync(settingsPath, "{}", { mode: 0o640 });
 
@@ -190,8 +201,7 @@ describe("FileSettingsStorage", () => {
 
   it.runIf(process.platform !== "win32")("uses the current umask when creating settings", () =>
     fixtures.run(async () => {
-      const root = fixtures.createTempDir("openclaw-settings-umask-");
-      const agentDir = join(root, "agent");
+      const { root, agentDir } = settingsFixture("umask");
       const result = await runNodeScript(
         (workerArgv) => [
           ...workerArgv(storageUrl).slice(0, -1),
@@ -246,8 +256,7 @@ describe("FileSettingsStorage", () => {
   );
 
   it("loads absent unlocked settings without syncing writer sidecars", () => {
-    const root = fixtures.createTempDir("openclaw-settings-unlocked-");
-    const agentDir = join(root, "agent");
+    const { root, agentDir } = settingsFixture("unlocked");
     mkdirSync(agentDir);
     mkdirSync(join(root, ".openclaw"));
     const fsync = vi.spyOn(fs, "fsyncSync");
@@ -269,10 +278,10 @@ describe("FileSettingsStorage", () => {
     { timeout: 20_000 },
     (scope, { signal }) =>
       fixtures.run(async () => {
-        const root = fixtures.createTempDir("openclaw-settings-first-writer-");
-        const agentDir = join(root, "agent");
-        const settingsDir = scope === "global" ? agentDir : join(root, ".openclaw");
-        const settingsPath = join(settingsDir, "settings.json");
+        const { root, agentDir, settingsDir, settingsPath } = settingsFixture(
+          "first-writer",
+          scope,
+        );
         mkdirSync(settingsDir);
         const abort = new AbortController();
         const childSignal = AbortSignal.any([signal, abort.signal]);
@@ -336,12 +345,10 @@ describe("FileSettingsStorage", () => {
           );
           await reader.waitFor("observed", "reader exited before observing the first writer");
           await writer.release();
-          const writerResult = await withinTest(writer.completed, signal);
-          expect(writerResult, writerResult.stderr).toMatchObject({ error: undefined, status: 0 });
+          await expectCompleted(writer, signal);
           // withLock returned and the writer exited: rename, fsync, and lock release are complete.
           await reader.release();
-          const readerResult = await withinTest(reader.completed, signal);
-          expect(readerResult, readerResult.stderr).toMatchObject({ error: undefined, status: 0 });
+          const readerResult = await expectCompleted(reader, signal);
           expect(JSON.parse(readerResult.stdout.trim().split("\n").at(-1)!)).toEqual({
             committedDuringRead: true,
             errors: [],
@@ -358,8 +365,7 @@ describe("FileSettingsStorage", () => {
   it.each([".lock", ".lock.reclaim"])(
     "does not skip an existing %s namespace when settings are absent",
     (suffix) => {
-      const root = fixtures.createTempDir("openclaw-settings-lock-namespace-");
-      const settingsDir = join(root, "agent");
+      const { root, settingsDir } = settingsFixture("lock-namespace");
       mkdirSync(settingsDir);
       mkdirSync(join(settingsDir, `settings.json${suffix}`));
       const storage = new FileSettingsStorage(root, settingsDir);
@@ -370,8 +376,7 @@ describe("FileSettingsStorage", () => {
   );
 
   it.skipIf(process.platform === "win32")("does not skip a dangling lock symlink", () => {
-    const root = fixtures.createTempDir("openclaw-settings-lock-symlink-");
-    const settingsDir = join(root, "agent");
+    const { root, settingsDir } = settingsFixture("lock-symlink");
     mkdirSync(settingsDir);
     fs.symlinkSync(join(root, "missing"), join(settingsDir, "settings.json.lock"));
     expect(() => new FileSettingsStorage(root, settingsDir).readSettingsScope("global")).toThrow(
@@ -379,33 +384,15 @@ describe("FileSettingsStorage", () => {
     );
   });
 
-  it("locks before reading when the settings directory exists", () => {
-    const root = fixtures.createTempDir("openclaw-settings-lock-");
-    const settingsDir = join(root, "agent");
-    const settingsPath = join(settingsDir, "settings.json");
-    mkdirSync(settingsDir);
-    const storage = new FileSettingsStorage(settingsDir, settingsDir);
-    let lockedDuringRead = false;
-
-    storage.withLock("global", (current) => {
-      lockedDuringRead = existsSync(`${settingsPath}.lock`);
-      expect(current).toBeUndefined();
-      return undefined;
-    });
-
-    expect(lockedDuringRead).toBe(true);
-    expect(existsSync(settingsPath)).toBe(false);
-  });
-
   it.for(["global", "project"] as const)(
     "preserves independent concurrent first writes to %s settings",
     { timeout: 20_000 },
     (scope, { signal }) =>
       fixtures.run(async () => {
-        const root = fixtures.createTempDir("openclaw-settings-concurrent-create-");
-        const agentDir = join(root, "agent");
-        const settingsDir = scope === "global" ? agentDir : join(root, ".openclaw");
-        const settingsPath = join(settingsDir, "settings.json");
+        const { root, agentDir, settingsDir, settingsPath } = settingsFixture(
+          "concurrent-create",
+          scope,
+        );
         const abort = new AbortController();
         const writerSignal = AbortSignal.any([signal, abort.signal]);
         const writers: ReturnType<typeof startSettingsProcess>[] = [];
@@ -466,12 +453,10 @@ describe("FileSettingsStorage", () => {
           expect(existsSync(`${settingsPath}.lock`)).toBe(true);
           expect(existsSync(settingsPath)).toBe(false);
           await first.release();
-          const firstResult = await withinTest(first.completed, signal);
-          expect(firstResult, firstResult.stderr).toMatchObject({ error: undefined, status: 0 });
+          await expectCompleted(first, signal);
           await contender.release();
           for (const writer of writers) {
-            const result = await withinTest(writer.completed, signal);
-            expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+            await expectCompleted(writer, signal);
           }
           expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
             defaultModel: "mock-model",

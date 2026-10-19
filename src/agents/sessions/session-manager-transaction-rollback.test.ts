@@ -22,10 +22,7 @@ async function createTarget(state: OpenClawTestState, name: string) {
   };
   const created = await createSessionEntryWithTranscript(
     scope,
-    () => ({
-      ok: true as const,
-      entry: { sessionId: name, updatedAt: 1 },
-    }),
+    () => ({ ok: true as const, entry: { sessionId: name, updatedAt: 1 } }),
     { cwd: state.workspaceDir },
   );
   if (!created.ok) {
@@ -40,6 +37,32 @@ async function createTarget(state: OpenClawTestState, name: string) {
 
 function message(content: string) {
   return { role: "user" as const, content, timestamp: 1 };
+}
+
+type Target = Awaited<ReturnType<typeof createTarget>>;
+function transactionOptions(target: Target) {
+  return {
+    agentId: target.agentId,
+    env: target.env,
+    path: resolveSessionTranscriptDatabasePath(target),
+  };
+}
+
+function expectRollback(target: Target, refusal: Error, run: () => void) {
+  let caught: unknown;
+  try {
+    runOpenClawAgentWriteTransaction(() => {
+      run();
+      throw refusal;
+    }, transactionOptions(target));
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(refusal);
+}
+
+function expectReopened(manager: SessionManager, target: Target) {
+  expect(view(manager)).toEqual(view(SessionManager.open(target)));
 }
 
 function view(manager: SessionManager) {
@@ -108,57 +131,39 @@ it.each(["keyed replay", "same-target reload", "bounded branch", "lazy header"] 
       const durableBefore = loadTranscriptEventsSync(target);
       const header = structuredClone(manager.getHeader());
       const refusal = new Error("refuse enclosing transaction");
-      let caught: unknown;
-      try {
-        runOpenClawAgentWriteTransaction(
-          () => {
-            if (scenario === "keyed replay") {
-              const keyed = { ...message("keyed user"), idempotencyKey: "replayed-user" };
-              const keyedId = writer.appendMessage(keyed);
-              expect(manager.appendMessageWithTranscriptAnchor(keyed)).toMatchObject({
-                entryId: keyedId,
-                appended: false,
-              });
-              expect(manager.getBranch()).toMatchObject([
-                { id: seed, message: { content: "seed" } },
-                { id: keyedId, parentId: seed, message: { content: "keyed user" } },
-              ]);
-            } else if (scenario === "same-target reload") {
-              const provisional = manager.appendMessage(message("provisional"));
-              manager.reloadPersistedTranscript();
-              expect(manager.getBranch()).toMatchObject([
-                { id: seed, message: { content: "seed" } },
-                { id: provisional, parentId: seed, message: { content: "provisional" } },
-              ]);
-            } else if (scenario === "bounded branch") {
-              if (seed === null) {
-                throw new Error("Bounded fixture needs its selected entry");
-              }
-              manager.appendLabelChange(seed, "temporary label");
-              const reset = manager.appendResetBoundary("reset", seed);
-              manager.appendLeafControl({
-                targetId: seed,
-                appendParentId: reset,
-                appendMode: "side",
-              });
-              expect(manager.getBoundaryCount()).toBe(before.boundaryCount + 1);
-              expect(manager.getLabel(seed)).toBe("temporary label");
-            } else {
-              const rejected = manager.appendMessage(message("rolled back first message"));
-              expect(manager.getEntry(rejected)?.parentId).toBeNull();
-            }
-            throw refusal;
-          },
-          {
-            agentId: target.agentId,
-            env: target.env,
-            path: resolveSessionTranscriptDatabasePath(target),
-          },
-        );
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBe(refusal);
+      expectRollback(target, refusal, () => {
+        if (scenario === "keyed replay") {
+          const keyed = { ...message("keyed user"), idempotencyKey: "replayed-user" };
+          const keyedId = writer.appendMessage(keyed);
+          expect(manager.appendMessageWithTranscriptAnchor(keyed)).toMatchObject({
+            entryId: keyedId,
+            appended: false,
+          });
+          expect(manager.getBranch()).toMatchObject([
+            { id: seed, message: { content: "seed" } },
+            { id: keyedId, parentId: seed, message: { content: "keyed user" } },
+          ]);
+        } else if (scenario === "same-target reload") {
+          const provisional = manager.appendMessage(message("provisional"));
+          manager.reloadPersistedTranscript();
+          expect(manager.getBranch()).toMatchObject([
+            { id: seed, message: { content: "seed" } },
+            { id: provisional, parentId: seed, message: { content: "provisional" } },
+          ]);
+        } else if (scenario === "bounded branch") {
+          if (seed === null) {
+            throw new Error("Bounded fixture needs its selected entry");
+          }
+          manager.appendLabelChange(seed, "temporary label");
+          const reset = manager.appendResetBoundary("reset", seed);
+          manager.appendLeafControl({ targetId: seed, appendParentId: reset, appendMode: "side" });
+          expect(manager.getBoundaryCount()).toBe(before.boundaryCount + 1);
+          expect(manager.getLabel(seed)).toBe("temporary label");
+        } else {
+          const rejected = manager.appendMessage(message("rolled back first message"));
+          expect(manager.getEntry(rejected)?.parentId).toBeNull();
+        }
+      });
       expect(loadTranscriptEventsSync(target)).toEqual(durableBefore);
       expect(view(manager)).toEqual(before);
       if (scenario === "bounded branch") {
@@ -170,7 +175,7 @@ it.each(["keyed replay", "same-target reload", "bounded branch", "lazy header"] 
         expect(loadTranscriptEventsSync(target)).toEqual([]);
         expect(manager.getHeader()).toEqual(header);
       } else {
-        expect(view(manager)).toEqual(view(SessionManager.open(target)));
+        expectReopened(manager, target);
       }
       const content =
         scenario === "lazy header"
@@ -207,36 +212,24 @@ it("rolls back only the inner savepoint while the enclosing transaction commits"
     const target = await createTarget(state, "savepoint");
     const manager = SessionManager.open(target, state.workspaceDir);
     const seed = manager.appendMessage(message("seed"));
-    const options = {
-      agentId: target.agentId,
-      env: target.env,
-      path: resolveSessionTranscriptDatabasePath(target),
-    };
     const refusal = new Error("refuse inner savepoint");
     runOpenClawAgentWriteTransaction(() => {
       const retained = manager.appendMessage(message("retained outer write"));
       const before = view(manager);
-      let caught: unknown;
-      try {
-        runOpenClawAgentWriteTransaction(() => {
-          manager.appendMessage(message("rolled back inner write"));
-          throw refusal;
-        }, options);
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBe(refusal);
+      expectRollback(target, refusal, () => {
+        manager.appendMessage(message("rolled back inner write"));
+      });
       expect(view(manager)).toEqual(before);
-      expect(view(manager)).toEqual(view(SessionManager.open(target)));
+      expectReopened(manager, target);
       const next = manager.appendMessage(message("outer continuation"));
       expect(manager.getEntry(next)?.parentId).toBe(retained);
-    }, options);
+    }, transactionOptions(target));
     expect(manager.getBranch()).toMatchObject([
       { id: seed, message: { content: "seed" } },
       { parentId: seed, message: { content: "retained outer write" } },
       { message: { content: "outer continuation" } },
     ]);
-    expect(view(manager)).toEqual(view(SessionManager.open(target)));
+    expectReopened(manager, target);
   });
 });
 
@@ -252,32 +245,18 @@ it("does not restore the old view over a rebound target after rollback", async (
     const secondSeed = secondWriter.appendMessage(message("second seed"));
     const secondBefore = view(secondWriter);
     const refusal = new Error("refuse old target transaction");
-    let caught: unknown;
-    try {
-      runOpenClawAgentWriteTransaction(
-        () => {
-          manager.appendMessage(message("rolled back first write"));
-          manager.setSessionTarget(second);
-          expect(view(manager)).toEqual(secondBefore);
-          throw refusal;
-        },
-        {
-          agentId: first.agentId,
-          env: first.env,
-          path: resolveSessionTranscriptDatabasePath(first),
-        },
-      );
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBe(refusal);
+    expectRollback(first, refusal, () => {
+      manager.appendMessage(message("rolled back first write"));
+      manager.setSessionTarget(second);
+      expect(view(manager)).toEqual(secondBefore);
+    });
     expect(manager.getSessionTarget()).toEqual(secondWriter.getSessionTarget());
     expect(manager.getSessionId()).toBe(second.sessionId);
     expect(view(manager)).toEqual(secondBefore);
     expect(view(SessionManager.open(first))).toEqual(firstBefore);
     const next = manager.appendMessage(message("second continuation"));
     expect(manager.getEntry(next)?.parentId).toBe(secondSeed);
-    expect(view(manager)).toEqual(view(SessionManager.open(second)));
+    expectReopened(manager, second);
   });
 });
 
@@ -311,11 +290,7 @@ it.each(["top-level", "enclosing transaction"] as const)(
       };
       if (transaction === "enclosing transaction") {
         // Catch inside the transaction so its COMMIT cannot mask a late append rejection.
-        runOpenClawAgentWriteTransaction(appendAndCatch, {
-          agentId: first.agentId,
-          env: first.env,
-          path: resolveSessionTranscriptDatabasePath(first),
-        });
+        runOpenClawAgentWriteTransaction(appendAndCatch, transactionOptions(first));
       } else {
         appendAndCatch();
       }
@@ -328,7 +303,7 @@ it.each(["top-level", "enclosing transaction"] as const)(
       expect(view(manager)).toEqual(selectedView);
       const next = manager.appendMessage(message("second continuation"));
       expect(manager.getEntry(next)?.parentId).toBe(secondSeed);
-      expect(view(manager)).toEqual(view(SessionManager.open(second)));
+      expectReopened(manager, second);
     });
   },
 );
