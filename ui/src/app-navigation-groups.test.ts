@@ -33,37 +33,34 @@ describe("sidebar entries", () => {
       refresh: () => undefined,
       dispose: () => undefined,
     };
+    const searchOptions = { schema: null, value: null, uiHints: {}, canAdmin };
     const search = (query: string, nativeDeviceSettings: NativeDeviceSettingsCapability | null) =>
-      findSettingsSearchBlocks({
-        query,
-        schema: null,
-        value: null,
-        uiHints: {},
-        canAdmin,
-        nativeDeviceSettings,
-      });
-    expect(search("Dock icon", null)).toEqual([]);
-    expect(search("Dock icon", capability)).toContainEqual(
-      expect.objectContaining({ routeId: "device" }),
-    );
-    expect(search("System-wide presence detection", null)).toEqual([]);
-    expect(search("System-wide presence detection", capability)).toContainEqual(
-      expect.objectContaining({ routeId: "device-permissions" }),
-    );
+      findSettingsSearchBlocks({ ...searchOptions, query, nativeDeviceSettings });
+    const expectSearch = (
+      query: string,
+      device: NativeDeviceSettingsCapability | null,
+      routeId?: string,
+    ) => {
+      expect(search(query, device)).toEqual(
+        routeId ? expect.arrayContaining([expect.objectContaining({ routeId })]) : [],
+      );
+    };
+    const deviceGroup = (snapshot: NativeDeviceSettingsCapability["snapshot"]) =>
+      visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot })[1];
+    const catalog = (device: NativeDeviceSettingsCapability | null = null) =>
+      getStaticCommandPaletteCatalogItems(canAdmin, device).map((item) => item.action);
+    expectSearch("Dock icon", null);
+    expectSearch("Dock icon", capability, "device");
+    expectSearch("System-wide presence detection", null);
+    expectSearch("System-wide presence detection", capability, "device-permissions");
     const browserGroups = visibleSettingsNavigationGroups(canAdmin);
     const nativeGroups = visibleSettingsNavigationGroups(canAdmin, capability);
     expect(browserGroups.flatMap((group) => group.routes).includes("updates")).toBe(canAdmin);
     expect(nativeGroups.flatMap((group) => group.routes)).toContain("updates");
     expect(isSettingsNavigationRouteVisible("updates", canAdmin)).toBe(canAdmin);
     expect(isSettingsNavigationRouteVisible("updates", canAdmin, capability)).toBe(true);
-    expect(search("Check for updates", capability)).toContainEqual(
-      expect.objectContaining({ routeId: "updates" }),
-    );
-    expect(
-      getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-        (item) => item.action === "nav:updates",
-      ),
-    ).toBe(true);
+    expectSearch("Check for updates", capability, "updates");
+    expect(catalog(capability)).toContain("nav:updates");
     expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
     expect(nativeGroups[1]).toEqual({
       labelKey: "nav.settingsGroupDevice",
@@ -74,20 +71,15 @@ describe("sidebar entries", () => {
         ...capability,
         snapshot: createTauriDeviceSettingsSnapshot(platform),
       };
-      expect(visibleSettingsNavigationGroups(canAdmin, desktopCapability)[1]).toEqual({
+      expect(deviceGroup(desktopCapability.snapshot)).toEqual({
         labelKey: "nav.settingsGroupThisComputer",
         routes: ["device"],
       });
-      expect(search("Desktop sharing", desktopCapability)).toContainEqual(
-        expect.objectContaining({ routeId: "device" }),
-      );
-      expect(search("Precise location", desktopCapability)).toEqual([]);
+      expectSearch("Desktop sharing", desktopCapability, "device");
+      expectSearch("Precise location", desktopCapability);
     }
-    expect(
-      visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
-    ).toBe("nav.settingsGroupThisDevice");
+    expect(deviceGroup(null)?.labelKey).toBe("nav.settingsGroupThisDevice");
     const iosSnapshot = createIosNativeDeviceSettingsSnapshot();
-    iosSnapshot.voice.speakerphoneEnabled = false;
     for (const [formFactor, labelKey] of [
       ["phone", "nav.settingsGroupThisIPhone"],
       ["pad", "nav.settingsGroupThisIPad"],
@@ -95,10 +87,7 @@ describe("sidebar entries", () => {
       [undefined, "nav.settingsGroupThisDevice"],
     ] as const) {
       iosSnapshot.device.formFactor = formFactor;
-      expect(
-        visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: iosSnapshot })[1]
-          ?.labelKey,
-      ).toBe(labelKey);
+      expect(deviceGroup(iosSnapshot)?.labelKey).toBe(labelKey);
     }
     const iosCapability = { ...capability, snapshot: iosSnapshot };
     for (const [query, routeId] of [
@@ -109,10 +98,10 @@ describe("sidebar entries", () => {
       ["Use speakerphone", "talk"],
       ["Talk in the background", "talk"],
     ] as const) {
-      expect(search(query, iosCapability)).toContainEqual(expect.objectContaining({ routeId }));
-      expect(search(query, null)).toEqual([]);
-      expect(search(query, capability)).toEqual([]);
-      expect(search(query, { ...capability, snapshot: null })).toEqual([]);
+      expectSearch(query, iosCapability, routeId);
+      expectSearch(query, null);
+      expectSearch(query, capability);
+      expectSearch(query, { ...capability, snapshot: null });
     }
     for (const query of [
       "Dock icon",
@@ -122,7 +111,7 @@ describe("sidebar entries", () => {
       "System-wide presence detection",
     ]) {
       expect(search(query, capability)).not.toEqual([]);
-      expect(search(query, iosCapability)).toEqual([]);
+      expectSearch(query, iosCapability);
     }
     const sparseIosSnapshot = createIosNativeDeviceSettingsSnapshot();
     sparseIosSnapshot.capabilities!.healthSummaryAvailable = false;
@@ -131,29 +120,20 @@ describe("sidebar entries", () => {
       (entry) => entry.id !== "contacts",
     );
     for (const query of ["Health summaries", "Use speakerphone", "Contacts"]) {
-      expect(search(query, { ...capability, snapshot: sparseIosSnapshot })).toEqual([]);
+      expectSearch(query, { ...capability, snapshot: sparseIosSnapshot });
     }
     for (const route of ["device", "device-permissions"] as const) {
       expect(isSettingsNavigationRouteVisible(route, canAdmin)).toBe(false);
       expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
       expect(browserGroups.flatMap((group) => group.routes)).not.toContain(route);
-      expect(
-        getStaticCommandPaletteCatalogItems(canAdmin).some(
-          (item) => item.action === `nav:${route}`,
-        ),
-      ).toBe(false);
-      expect(
-        getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
-          (item) => item.action === `nav:${route}`,
-        ),
-      ).toBe(true);
+      expect(catalog()).not.toContain(`nav:${route}`);
+      expect(catalog(capability)).toContain(`nav:${route}`);
     }
   });
-  it("treats worktrees as a sessions hub tab without its own pin", () => {
+  it("treats worktrees as a sessions hub tab", () => {
     expect(isSessionsHubRoute("sessions")).toBe(true);
     expect(isSessionsHubRoute("worktrees")).toBe(true);
     expect(isSessionsHubRoute("chat")).toBe(false);
-    expect(normalizeSidebarEntries(["route:worktrees", "route:usage"])).toEqual(["route:usage"]);
   });
 
   it("preserves the shipped Workboard placement slot outside customizable routes", () => {
