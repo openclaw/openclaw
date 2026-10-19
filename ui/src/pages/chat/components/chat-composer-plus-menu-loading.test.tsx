@@ -133,6 +133,7 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
 );
 
 it("keeps the menu open and retries a failed content load", async () => {
+  // mock-isolation: reject the chunk import itself to exercise the visible retry path.
   vi.doMock("./chat-composer-plus-menu-content.tsx", () => {
     throw new Error("Menu chunk could not be loaded");
   });

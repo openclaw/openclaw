@@ -395,6 +395,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       );
       const { page } = await import("vitest/browser");
       await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
+      await expect.poll(() => host.querySelector('[data-value="photo"]')).not.toBeNull();
       const photo = host.querySelector<HTMLElement>('[data-value="photo"]')!;
       const skills = host.querySelector<HTMLElement>('[data-value="open-skills"]')!;
       await hoverBackground(photo, highlight);
