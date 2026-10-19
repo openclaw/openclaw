@@ -9,6 +9,7 @@ import {
 } from "../../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../../agents/bash-process-registry.test-helpers.js";
 import { createExecTool } from "../../../agents/bash-tools.exec-run.js";
+import { createRunExit } from "../../../agents/bash-tools.exec-runtime.test-support.js";
 import { createProcessTool } from "../../../agents/bash-tools.process.js";
 import { resolveCurrentAttemptAssistant } from "../../../agents/embedded-agent-runner/run/attempt-terminal-evidence.js";
 import { createEmbeddedRunContextRecoveryState } from "../../../agents/embedded-agent-runner/run/context-recovery-state.js";
@@ -86,16 +87,13 @@ export function createRequiredExecRuntimeContract() {
     }
     settled = true;
     input?.onStdout?.("REQUIRED_NATIVE_RESULT");
-    exit.resolve({
-      reason,
-      exitCode: reason === "exit" ? 0 : null,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "REQUIRED_NATIVE_RESULT",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
+    exit.resolve(
+      createRunExit({
+        reason,
+        exitCode: reason === "exit" ? 0 : null,
+        stdout: "REQUIRED_NATIVE_RESULT",
+      }),
+    );
   };
   const spawn = vi.spyOn(getProcessSupervisor(), "spawn").mockImplementation(async (next) => {
     input = next;
@@ -221,11 +219,7 @@ export function buildContractReplyPayloads(
     assistantTexts: [params.assistantText],
     lastAssistant: undefined,
     lastToolError: params.lastToolError,
-    isCronTrigger: false,
     sessionKey: "session:runtime-contract",
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    toolResultFormat: "plain",
   });
 }
 
