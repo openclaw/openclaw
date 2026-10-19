@@ -111,12 +111,9 @@ type MockDesktopCandidate = ReturnType<typeof resolveMacOSDesktopCodexAppPathCan
 const desktop = vi.hoisted(() => ({
   cache: vi.fn<(_params: { forceRefresh?: boolean }) => Promise<boolean>>(async () => false),
   marketplace: vi.fn<(_params?: unknown) => Promise<string | undefined>>(async () => undefined),
-  service: vi.fn<
-    (_params?: unknown) => Promise<{
-      status: "already_current" | "source_missing";
-      changed: boolean;
-    }>
-  >(async () => ({ status: "already_current", changed: false })),
+  service: vi.fn<typeof import("./computer-use-service.js").ensureCodexComputerUseServiceApp>(
+    async () => undefined,
+  ),
   marketplaceSource: vi.fn<
     (params: {
       candidates?: readonly MockDesktopCandidate[];
