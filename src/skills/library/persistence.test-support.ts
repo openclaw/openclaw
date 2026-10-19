@@ -91,11 +91,12 @@ export async function withPersistenceChild(
   signal: AbortSignal,
   use?: (
     reply: PersistenceReply,
-    child: { pid: number; kill: () => Promise<void>; finish: () => Promise<void> },
+    child: { pid: number; kill: () => Promise<void> },
   ) => Promise<void>,
 ): Promise<PersistenceReply> {
   const output = createBoundedChildOutput();
   const diagnostic = () => `${command.action}: ${output.text()}`;
+  const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
   const workerUrl = resolveRuntimeWorkerUrl(persistenceRuntimeEntrypoint);
   const child = fork(workerUrl, [], {
     execArgv: workerUrl.pathname.endsWith(".ts")
@@ -113,6 +114,7 @@ export async function withPersistenceChild(
   const moduleReady = createDeferred();
   try {
     const replyPromise = new Promise<PersistenceReply>((resolve, reject) => {
+      const fail = (message: string) => reject(new Error(`${diagnostic()}; ${message}`));
       const send = (message: PersistenceCommand | { kind: "run" }) => {
         child.send(message, (error) => {
           if (error) {
@@ -128,44 +130,32 @@ export async function withPersistenceChild(
           moduleReady.resolve();
           send({ kind: "run" });
         } else if (message.kind === "error") {
-          reject(new Error(message.error));
+          fail(message.error ?? "Unknown child error");
         } else {
           resolve(message as PersistenceReply);
         }
       });
-      void closed.then(({ code, signal: exitSignal }) =>
-        reject(
-          new Error(
-            `Persistence child exited before its reply (${exitSignal ?? code}): ${diagnostic()}`,
-          ),
-        ),
-      );
+      void closed.then((exit) => fail(`Child exited before reply (${exit.signal ?? exit.code})`));
     });
-    await withinTest(
+    await wait(
       awaitGateBeforeSettlement(
         moduleReady.promise,
         replyPromise,
         "Persistence child did not become module-ready",
       ),
-      signal,
     );
-    const reply = await withinTest(replyPromise, signal);
+    const reply = await wait(replyPromise);
     assert.ok(child.pid);
-    const control = {
-      pid: child.pid,
-      async kill() {
-        assert.equal(child.kill("SIGKILL"), true);
-        assert.deepEqual(await withinTest(closed, signal), { code: null, signal: "SIGKILL" });
-      },
-      async finish() {
-        const result = await withinTest(closed, signal);
-        assert.deepEqual(result, { code: 0, signal: null }, output.text());
-      },
-    };
     if (use) {
-      await use(reply, control);
+      await use(reply, {
+        pid: child.pid,
+        async kill() {
+          assert.equal(child.kill("SIGKILL"), true);
+          assert.deepEqual(await wait(closed), { code: null, signal: "SIGKILL" });
+        },
+      });
     } else {
-      await control.finish();
+      assert.deepEqual(await wait(closed), { code: 0, signal: null }, output.text());
     }
     return reply;
   } finally {
@@ -266,22 +256,20 @@ export function assertPersistenceSelection(
   pins: SkillLibrarySelection[],
 ) {
   assert.equal(reply.kind, "selected", "Expected reopened selection");
-  assert.deepEqual(reply.pins, pins);
+  const files = persistenceFiles("old")
+    .toSorted(byPath)
+    .map((file) => ({
+      path: file.path,
+      content: bytesOf(file).toString("base64"),
+      encoding: "base64",
+      executable: file.executable === true,
+    }));
   assert.deepEqual(
-    reply.catalog,
-    pins.map((pin) => ({ name: pin.name, baseDir: persistenceRevisionDir(root, pin) })),
-  );
-  assert.deepEqual(
-    reply.files,
-    pins.map(() =>
-      persistenceFiles("old")
-        .toSorted(byPath)
-        .map((file) => ({
-          path: file.path,
-          content: bytesOf(file).toString("base64"),
-          encoding: "base64",
-          executable: file.executable === true,
-        })),
-    ),
+    [reply.pins, reply.catalog, reply.files],
+    [
+      pins,
+      pins.map((pin) => ({ name: pin.name, baseDir: persistenceRevisionDir(root, pin) })),
+      pins.map(() => files),
+    ],
   );
 }

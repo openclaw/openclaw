@@ -128,10 +128,14 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
     revision.run(id, saved.entry.skillId);
   }
   db.exec("COMMIT");
-  const measure = (kind: "list" | "seed" | "session") => {
-    const reader = openNodeSqliteDatabase(options.path, { readOnly: true });
-    enableNodeSqliteKyselyStatementCache(reader);
-    admitSqliteSchema(reader);
+  using reader = openNodeSqliteDatabase(options.path, { readOnly: true });
+  enableNodeSqliteKyselyStatementCache(reader);
+  admitSqliteSchema(reader);
+  const measure = (
+    kind: "list" | "seed" | "session",
+    profileId = alice.profileId,
+    config: ReturnType<SkillLibraryAuthority["getConfig"]> = {},
+  ) => {
     const sql = trackSqliteStatementExecutions(reader, ["entries", "profiles", "other"], (query) =>
       /from "skill_library_entries"/i.test(query)
         ? "entries"
@@ -154,7 +158,7 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
                   },
                 }
               : { kind, params: undefined }),
-          authority: { profileId: alice.profileId, scopes: alice.scopes, config: {} },
+          authority: { profileId, scopes: alice.scopes, config },
         },
         reader,
       );
@@ -166,13 +170,17 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
       };
     } finally {
       sql.restore();
-      reader.close();
     }
   };
   const listed = measure("list");
   assert.equal(listed.result.kind, "list");
-  expect(listed.result.value.entries).toEqual(expect.any(Array));
-  expect(listed.result.value.entries).toHaveLength(100);
+  expect(listed.result.value.profileId).toBe(alice.profileId);
+  expect(listed.result.value.entries.map((item) => item.skillId).toSorted()).toEqual(
+    [
+      saved.entry.skillId,
+      ...Array.from({ length: 99 }, (_, index) => `catalog-${index + 1}`),
+    ].toSorted(),
+  );
   expect(listed.counts).toEqual({ entries: 1, profiles: 3, other: 0 });
   expect.soft(listed.blobs).toBe(0);
   const session = measure("session");
@@ -187,6 +195,24 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
   expect(session.result.value.selections).toHaveLength(64);
   expect(session.counts).toEqual({ entries: 1, profiles: 1, other: 0 });
   expect(session.blobs).toBe(0);
+  expect(listed.result.value.entries.find((item) => item.skillId === saved.entry.skillId)).toEqual(
+    saved.entry,
+  );
+  const alias = ensureProfileForEmail("alias@example.test", options);
+  linkEmail("alias@example.test", alice.profileId!, options);
+  const merged = measure("list", alias.id, writerConfig);
+  expect(merged.result).toMatchObject({
+    kind: "list",
+    value: { profileId: alice.profileId, entries: listed.result.value.entries },
+  });
+  // Together with the canonical read's three profile queries, this retains the seven-query bound.
+  expect(merged.counts).toEqual({ entries: 1, profiles: 4, other: 0 });
+  expect(merged.blobs).toBe(0);
+  setUserProfileRole(alice.profileId!, "blocked", options);
+  const blocked = measure("list", alias.id, writerConfig);
+  expect(blocked.result).toMatchObject({ value: { profileId: alice.profileId, entries: [] } });
+  expect(blocked.blobs).toBe(0);
+  setUserProfileRole(alice.profileId!, null, options);
   const insertOwner =
     db.prepare(`INSERT INTO user_profiles (id, display_name, created_at, updated_at)
       VALUES (?, ?, 0, 0)`);
@@ -337,61 +363,6 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
     profileId: alice.profileId,
     defaultTarget: "personal",
   });
-});
-
-it("projects a library through a separate admitted reader without copying actor avatars", async () => {
-  const { options, alice } = fixture();
-  const saved = [];
-  for (const slug of ["first", "second", "third"]) {
-    saved.push((await save(alice, draft(slug), options)).entry);
-  }
-  const alias = ensureProfileForEmail("alias@example.test", options);
-  linkEmail("alias@example.test", alice.profileId!, options);
-  expect(setAvatar(alice.profileId!, new Uint8Array(80 * 1024), "image/png", options).ok).toBe(
-    true,
-  );
-  const reader = openNodeSqliteDatabase(options.path, { readOnly: true });
-  enableNodeSqliteKyselyStatementCache(reader);
-  admitSqliteSchema(reader);
-  const sql = trackSqliteStatementExecutions(reader, ["profiles", "columnProbes"], (query) =>
-    /\bfrom "user_profiles"/i.test(query)
-      ? "profiles"
-      : /pragma table_info/i.test(query)
-        ? "columnProbes"
-        : null,
-  );
-  const read = (profileId: string) =>
-    readLibrary(
-      {
-        kind: "list",
-        params: {},
-        authority: {
-          profileId,
-          scopes: alice.scopes,
-          config: writerConfig,
-        },
-      },
-      reader,
-    );
-  try {
-    for (const profileId of [alice.profileId!, alias.id]) {
-      expect(read(profileId)).toMatchObject({
-        kind: "list",
-        value: { profileId: alice.profileId, entries: saved },
-      });
-    }
-    // Each catalog reads the actor, the owner cohort, and presentation identities once.
-    // The merged actor adds one hop, independent of the number of entries.
-    expect(sql.counts.profiles).toBe(7);
-    expect(sql.blobBytes.profiles).toBe(0);
-    expect(sql.counts.columnProbes).toBe(0);
-    setUserProfileRole(alice.profileId!, "blocked", options);
-    expect(read(alias.id)).toMatchObject({ value: { profileId: alice.profileId, entries: [] } });
-    expect(sql.blobBytes.profiles).toBe(0);
-  } finally {
-    sql.restore();
-    reader.close();
-  }
 });
 
 it.each(["unshare", "disable", "remove", "role", "alias"] as const)(

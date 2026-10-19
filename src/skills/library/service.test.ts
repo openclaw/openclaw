@@ -60,6 +60,11 @@ function fixture() {
         listSkillLibrary(who, params, options),
       mutate: (params: Parameters<typeof mutateSkillLibrary>[1], who: Authority = alice) =>
         mutateSkillLibrary(who, params, options),
+      change: (
+        { skillId, revision }: { skillId: string; revision: string },
+        action: Parameters<typeof mutateSkillLibrary>[1]["action"],
+        who: Authority = alice,
+      ) => mutateSkillLibrary(who, { skillId, expectedRevision: revision, action }, options),
       seed: (who: Authority = alice) => seedSkillLibrarySelection(who, options),
       select: (
         pins: Parameters<typeof changeSkillLibrarySelection>[1],
@@ -148,9 +153,7 @@ it("discovers pinned commands through the loader without leaking them into works
   expect(
     loadSkillLibrarySelection(mixedRevisions, options).map((entry) => entry.skill.filePath),
   ).toEqual(
-    mixedRevisions.map((pin) =>
-      path.join(skillLibraryRevisionDir(pin.skillId, pin.revision, options.env), "SKILL.md"),
-    ),
+    mixedRevisions.map((pin) => path.join(revisionDirectory(pin, options.env), "SKILL.md")),
   );
   expect(() =>
     loadSkillLibrarySelection([originalPin, { ...originalPin, revision: "0".repeat(64) }], options),
@@ -278,8 +281,7 @@ it("enforces independent read/write/transfer checks and preserves a removed sess
   const anonymousAdmin = actor(undefined, true);
   const expectAnonymousReadOnly = async () => {
     const read = await lib.read(skillId, anonymousAdmin);
-    expect(read.content).toBe(content);
-    expect(read.entry.canEdit).toBe(false);
+    expect(read).toMatchObject({ content, entry: { canEdit: false } });
     expect(await lib.list(anonymousAdmin)).toMatchObject({
       defaultTarget: "workspace",
       canManageWorkspace: true,
@@ -288,27 +290,22 @@ it("enforces independent read/write/transfer checks and preserves a removed sess
     await expect(
       lib.save({ ...draft(), skillId, expectedRevision: revision }, anonymousAdmin),
     ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
-    await expect(
-      lib.mutate({ skillId, expectedRevision: revision, action: "remove" }, anonymousAdmin),
-    ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
+    await expect(lib.change({ skillId, revision }, "remove", anonymousAdmin)).rejects.toMatchObject(
+      { code: "IDENTITY_REQUIRED" },
+    );
   };
   await expectAnonymousReadOnly();
   const privateRead = lib.read(skillId, bob);
   await expect(privateRead).rejects.toBeInstanceOf(SkillLibraryError);
   await expect(privateRead).rejects.toMatchObject({ code: "NOT_FOUND" });
   await expect(lib.save(draft(), actor())).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
-  await lib.mutate({ skillId, expectedRevision: revision, action: "share" });
+  await lib.change({ skillId, revision }, "share");
   expect((await lib.read(skillId, bob)).content).toBe(content);
-  await expect(
-    lib.mutate({ skillId, expectedRevision: revision, action: "remove" }, bob),
-  ).rejects.toThrow("Only the skill's owner");
-  await expect(
-    lib.mutate({ skillId, expectedRevision: revision, action: "transfer" }),
-  ).rejects.toThrow("administrator");
-  const transferred = await lib.mutate(
-    { skillId, expectedRevision: revision, action: "transfer" },
-    admin,
+  await expect(lib.change({ skillId, revision }, "remove", bob)).rejects.toThrow(
+    "Only the skill's owner",
   );
+  await expect(lib.change({ skillId, revision }, "transfer")).rejects.toThrow("administrator");
+  const transferred = await lib.change({ skillId, revision }, "transfer", admin);
   expect(transferred.entry).toMatchObject({
     skillId,
     revision,
@@ -320,10 +317,7 @@ it("enforces independent read/write/transfer checks and preserves a removed sess
   });
   await expectAnonymousReadOnly();
   expect((await lib.list(actor(undefined, true), { scope: "mine" })).entries).toEqual([]);
-  const removed = await lib.mutate(
-    { skillId, expectedRevision: revision, action: "remove" },
-    admin,
-  );
+  const removed = await lib.change({ skillId, revision }, "remove", admin);
   expect(removed).toMatchObject({ state: "removed", entry: { removed: true } });
   expect((await lib.read(skillId, admin)).entry).toEqual(removed.entry);
   expect((await lib.list(bob)).entries).toEqual([]);
@@ -347,7 +341,7 @@ it("returns committed flags and relinquishes personal edit access on transfer", 
     ["enable", true, true],
     ["unshare", false, true],
   ] as const) {
-    const receipt = await lib.mutate({ skillId, expectedRevision: revision, action });
+    const receipt = await lib.change({ skillId, revision }, action);
     expect(receipt.entry).toEqual({
       ...created.entry,
       shared,
@@ -357,10 +351,7 @@ it("returns committed flags and relinquishes personal edit access on transfer", 
     expect((await lib.read(skillId)).entry).toEqual(receipt.entry);
   }
   const personalAdmin = { ...admin, namespace: "personal" as const };
-  const transferred = await lib.mutate(
-    { skillId, expectedRevision: revision, action: "transfer" },
-    personalAdmin,
-  );
+  const transferred = await lib.change({ skillId, revision }, "transfer", personalAdmin);
   expect(transferred.entry).toEqual({
     ...created.entry,
     ownerProfileId: null,
@@ -401,7 +392,7 @@ it("makes identical saves a no-op, rejects racing writers, and leaves existing p
   });
   expect(current.revision).not.toBe(revision);
   expect(current.description).not.toBe(created.entry.description);
-  const staleMutation = lib.mutate({ action: "disable", skillId, expectedRevision: revision });
+  const staleMutation = lib.change({ skillId, revision }, "disable");
   await expect(staleMutation).rejects.toBeInstanceOf(SkillLibraryError);
   await expect(staleMutation).rejects.toMatchObject({
     code: "CONFLICT",
@@ -501,8 +492,7 @@ it.each(["current", "legacy"] as const)(
       ...options,
       database,
     });
-    expect(read.content).toBe(content);
-    expect(read.entry).toEqual(saved.entry);
+    expect(read).toMatchObject({ content, entry: saved.entry });
     expect(tableHasColumn(database.db, "user_profiles", "role")).toBe(schema === "current");
   },
 );
@@ -582,7 +572,7 @@ it("delivers complete immutable supporting files into a worker-owned directory",
     );
     expect(materialized.snapshot.prompt).toContain(skill.filePath);
     expect(materialized.snapshot.prompt).not.toContain(
-      skillLibraryRevisionDir(selections[0]!.skillId, selections[0]!.revision, options.env),
+      revisionDirectory(selections[0]!, options.env),
     );
   } finally {
     await materialized.cleanup();
@@ -595,7 +585,7 @@ it("delivers complete immutable supporting files into a worker-owned directory",
 it("reads published executable metadata from the manifest and detects changed resource bytes", async () => {
   const { options, lib } = fixture();
   const saved = await lib.save();
-  const directory = skillLibraryRevisionDir(saved.entry.skillId, saved.entry.revision, options.env);
+  const directory = revisionDirectory(saved.entry, options.env);
   const script = path.join(directory, "scripts/task.sh");
   await fs.chmod(script, 0o400);
   const read = await lib.read(saved.entry.skillId);
@@ -824,11 +814,7 @@ it("bounds growing team defaults without stopping session creation", async () =>
   const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
   for (let index = 0; index < 65; index += 1) {
     const saved = await lib.save({ slug: `team-${index}`, content, expectedRevision: null });
-    await lib.mutate({
-      action: "share",
-      skillId: saved.entry.skillId,
-      expectedRevision: saved.entry.revision,
-    });
+    await lib.change(saved.entry, "share");
   }
   const library = await lib.list(bob);
   const selected = await lib.seed(bob);

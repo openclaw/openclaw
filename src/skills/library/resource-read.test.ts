@@ -39,32 +39,11 @@ function snapshotFor(...pins: NonNullable<SkillSnapshot["librarySelections"]>): 
   return { prompt: "", skills: pins.map(({ name }) => ({ name })), librarySelections: pins };
 }
 
-function pausedRead() {
-  const entered = createDeferredCore();
-  const gate = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: gate.resolve,
-    async hold<T>(value: T) {
-      entered.resolve();
-      await gate.promise;
-      return value;
-    },
-  };
-}
-
-const outcomeOf = <T>(pending: Promise<T>) =>
-  pending.then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
-
 async function fixture() {
   const root = dirs.make("skill-library-resource-read-");
   const options = { env: { OPENCLAW_STATE_DIR: root } };
-  const profile = ensureProfileForEmail("reader@example.test", options);
   const authority = {
-    profileId: profile.id,
+    profileId: ensureProfileForEmail("reader@example.test", options).id,
     scopes: ["operator.read", "operator.write"],
     getConfig: () => ({}),
     assertCurrent() {},
@@ -182,7 +161,13 @@ it.each(["root", "authority", "admission", "selection", "descriptions", "manifes
     const { root, pin, snapshot } = await fixture();
     const originalPin = { ...pin };
     const other = dirs.make("skill-library-other-root-");
-    const { entered, release, hold } = pausedRead();
+    const entered = createDeferredCore();
+    const gate = createDeferredCore();
+    async function hold<T>(value: T) {
+      entered.resolve();
+      await gate.promise;
+      return value;
+    }
     if (change === "manifests") {
       const read = selectionReads.readSkillLibrarySelectionManifests;
       vi.spyOn(selectionReads, "readSkillLibrarySelectionManifests").mockImplementation(
@@ -207,9 +192,12 @@ it.each(["root", "authority", "admission", "selection", "descriptions", "manifes
                 throw closed;
               }
             }).then((delivery) => delivery?.skills);
-      const outcome = outcomeOf(pending);
+      const outcome = pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
       try {
-        await entered;
+        await entered.promise;
         if (change === "root") {
           process.env.OPENCLAW_STATE_DIR = other;
         } else if (change === "authority") {
@@ -226,7 +214,7 @@ it.each(["root", "authority", "admission", "selection", "descriptions", "manifes
           snapshot.librarySelections!.push({ ...pin });
           snapshot.skills[0]!.name = "changed";
         }
-        release();
+        gate.resolve();
         const result = await outcome;
         if (change === "authority") {
           expect(result).toEqual({ error: closed });
@@ -243,7 +231,7 @@ it.each(["root", "authority", "admission", "selection", "descriptions", "manifes
           }
         }
       } finally {
-        release();
+        gate.resolve();
         await outcome;
       }
     });

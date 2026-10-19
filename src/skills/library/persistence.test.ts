@@ -26,9 +26,7 @@ async function fixture(signal: AbortSignal) {
     pin: before.pins[0]!,
     hold: (command: Parameters<typeof withChild>[1], use: Parameters<typeof withChild>[3]) =>
       withChild(root, command, signal, use),
-    async assertReopened() {
-      assertSelection(root, await run({ action: "read" }), before.pins);
-    },
+    assertReopened: async () => assertSelection(root, await run({ action: "read" }), before.pins),
   };
 }
 
