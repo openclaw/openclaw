@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
   formatMigrationWarningSummary,
   MIGRATION_WARNING_EXAMPLE_LIMIT,
@@ -67,8 +68,7 @@ function isResolvedActiveTranscriptWarning(
     fs.statSync(transcriptPath);
     return false;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" || code === "ENOTDIR";
+    return hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR");
   }
 }
 
