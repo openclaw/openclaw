@@ -223,7 +223,8 @@ export function buildMinimaxMusicGenerationProvider(
       if ((req.inputImages?.length ?? 0) > 0) {
         throw new Error("MiniMax music generation does not support image reference inputs.");
       }
-      if (req.instrumental === true && normalizeOptionalString(req.lyrics)) {
+      const requestedLyrics = normalizeOptionalString(req.lyrics);
+      if (req.instrumental === true && requestedLyrics) {
         throw new Error("MiniMax music generation cannot use lyrics when instrumental=true.");
       }
       if (req.format && req.format !== "mp3") {
@@ -249,7 +250,6 @@ export function buildMinimaxMusicGenerationProvider(
       jsonHeaders.set("Content-Type", "application/json");
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_MUSIC_MODEL;
-      const requestedLyrics = normalizeOptionalString(req.lyrics);
       const body = {
         model,
         prompt: req.prompt.trim(),
