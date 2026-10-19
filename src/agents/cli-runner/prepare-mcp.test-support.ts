@@ -19,7 +19,12 @@ import type { RunCliAgentParams } from "./types.js";
 
 type McpProjectionParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
 
-/** Reuses the preparation suite's backend and lifecycle fixture for MCP admission proof. */
+const loopbackRuntime = () => ({
+  port: 31783,
+  ownerToken: "loopback-owner-token",
+  nonOwnerToken: "loopback-non-owner-token",
+});
+
 export function registerCliMcpPreparationTests({
   getFixture,
   createConfig,
@@ -28,13 +33,7 @@ export function registerCliMcpPreparationTests({
   createConfig: () => OpenClawConfig;
 }) {
   it("preserves already-admitted authority through MCP grant transfer", async () => {
-    const explicitAgentId = "worker";
     const messageActionTurnCapability = "test-current-message-authority";
-    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-      port: 31783,
-      ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
-    }));
     const activateMcpLoopbackClientGrantCapture = vi.fn(() => ({
       captureNativeToolAuthority: vi.fn((_names: readonly string[] | null) => true),
     }));
@@ -55,7 +54,7 @@ export function registerCliMcpPreparationTests({
       ],
     }));
     setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
+      getActiveMcpLoopbackRuntime: loopbackRuntime,
       activateMcpLoopbackClientGrantCapture,
       deactivateMcpLoopbackClientGrantCapture,
       transferMcpLoopbackClientGrant,
@@ -75,18 +74,20 @@ export function registerCliMcpPreparationTests({
         sessionMode: "existing",
       },
     });
-    const context = await getFixture().prepare({
-      sessionKey: "agent:main:telegram:group:chat123",
+    const sessionKey = "agent:main:telegram:group:chat123";
+    const sender = {
+      senderName: "Canonical Name",
+      senderUsername: "canonical-user",
+      senderE164: "+15551234567",
+      groupId: "chat123",
+      groupChannel: "ops",
+      groupSpace: "workspace-a",
+    };
+    const sessionEntry = { execHost: "node", execNode: "mac-a" } as const;
+    const forwarded = {
       runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-      agentId: explicitAgentId,
-      provider: "native-cli",
       modelProvider: "anthropic",
       runId: "run-test-room-event-tools",
-      messageActionTurnCapability,
-      sessionEntry: {
-        execHost: "node",
-        execNode: "mac-a",
-      } as never,
       execOverrides: {
         host: "node",
         security: "allowlist",
@@ -101,9 +102,6 @@ export function registerCliMcpPreparationTests({
         fullAccessBlockedReason: "runtime",
       },
       trigger: "user",
-      currentInboundEventKind: "room_event",
-      messageChannel: "telegram",
-      messageProvider: "discord",
       clientCaps: ["tool-events", "inline-widgets"],
       pinnedWidgetAuthoring: true,
       currentChannelId: "telegram:-100123:topic:42",
@@ -114,14 +112,20 @@ export function registerCliMcpPreparationTests({
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       approvalReviewerDeviceId: "reviewer-device",
-      senderId: "canonical-sender",
-      senderName: "Canonical Name",
-      senderUsername: "canonical-user",
-      senderE164: "+15551234567",
-      groupId: "chat123",
-      groupChannel: "ops",
-      groupSpace: "workspace-a",
       spawnedBy: "agent:main:telegram:group:parent",
+    } satisfies Partial<RunCliAgentParams>;
+    const context = await getFixture().prepare({
+      ...forwarded,
+      ...sender,
+      sessionKey,
+      agentId: "worker",
+      provider: "native-cli",
+      messageActionTurnCapability,
+      sessionEntry: sessionEntry as never,
+      currentInboundEventKind: "room_event",
+      messageChannel: "telegram",
+      messageProvider: "discord",
+      senderId: "canonical-sender",
       channelContext: {
         sender: { id: "sender-1", displayName: "not-forwarded" },
         chat: { id: "chat-1", title: "not-forwarded" },
@@ -135,70 +139,30 @@ export function registerCliMcpPreparationTests({
     expect(JSON.stringify(context.preparedBackend.env)).not.toContain(messageActionTurnCapability);
     expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
       context: {
-        sessionKey: "agent:main:telegram:group:chat123",
+        ...forwarded,
+        ...sender,
+        sessionKey,
         requesterOrigin: {
-          sessionKey: "agent:main:telegram:group:chat123",
+          ...sender,
+          sessionKey,
           messageProvider: "discord",
           senderId: "canonical-sender",
-          senderName: "Canonical Name",
-          senderUsername: "canonical-user",
-          senderE164: "+15551234567",
-          groupId: "chat123",
-          groupChannel: "ops",
-          groupSpace: "workspace-a",
         },
-        runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
         runtimePolicyAgentId: "worker",
         agentId: "main",
         sessionId: "session-test",
-        runId: "run-test-room-event-tools",
         workspaceDir: context.workspaceDir,
-        modelProvider: "anthropic",
         modelId: "test-model",
         messageProvider: "telegram",
-        clientCaps: ["tool-events", "inline-widgets"],
-        pinnedWidgetAuthoring: true,
-        currentChannelId: "telegram:-100123:topic:42",
-        currentThreadTs: "42",
-        currentMessageId: "reply-message-1",
-        currentInboundAudio: true,
         accountId: undefined,
         inboundEventKind: "room_event",
-        sourceReplyDeliveryMode: "message_tool_only",
-        taskSuggestionDeliveryMode: "gateway",
-        requireExplicitMessageTarget: true,
         senderIsOwner: false,
         nodeExecAllowed: true,
-        execSession: {
-          execHost: "node",
-          execNode: "mac-a",
-        },
-        execOverrides: {
-          host: "node",
-          security: "allowlist",
-          ask: "always",
-          node: "mac-b",
-        },
-        bashElevated: {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-          fullAccessAvailable: false,
-          fullAccessBlockedReason: "runtime",
-        },
-        trigger: "user",
-        approvalReviewerDeviceId: "reviewer-device",
+        execSession: sessionEntry,
         channelContext: {
           sender: { id: "canonical-sender" },
           chat: { id: "chat-1" },
         },
-        senderName: "Canonical Name",
-        senderUsername: "canonical-user",
-        senderE164: "+15551234567",
-        groupId: "chat123",
-        groupChannel: "ops",
-        groupSpace: "workspace-a",
-        spawnedBy: "agent:main:telegram:group:parent",
       },
       runtimeOwnerToken: "loopback-owner-token",
       admittedRunContext: context.params.admittedRunContext,
@@ -214,28 +178,28 @@ export function registerCliMcpPreparationTests({
         store: expect.objectContaining({ version: 1, profiles: {} }),
       },
     });
-    expect(context.preparedBackend.mcpClientGrantCapture?.transportToken).toBe("loopback-token");
-    context.preparedBackend.mcpClientGrantCapture?.adoptProcessToken("stable-loopback-token");
+    const capture = context.preparedBackend.mcpClientGrantCapture;
+    expect(capture?.transportToken).toBe("loopback-token");
+    capture?.adoptProcessToken("stable-loopback-token");
     const assertCaptureCurrent = () => {};
-    context.preparedBackend.mcpClientGrantCapture?.activate("capture-test", assertCaptureCurrent);
-    context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
+    capture?.activate("capture-test", assertCaptureCurrent);
+    capture?.deactivate("capture-test");
     expect(transferMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith({
       sourceToken: "loopback-token",
       targetToken: "stable-loopback-token",
       runtimeOwnerToken: "loopback-owner-token",
     });
-    expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
+    const processCapture = {
       token: "stable-loopback-token",
       runtimeOwnerToken: "loopback-owner-token",
       captureKey: "capture-test",
+    };
+    expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
+      ...processCapture,
       assertCurrent: assertCaptureCurrent,
     });
-    expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-      token: "stable-loopback-token",
-      runtimeOwnerToken: "loopback-owner-token",
-      captureKey: "capture-test",
-    });
-    context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken();
+    expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith(processCapture);
+    capture?.revokeProcessToken();
     expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("stable-loopback-token");
     expect(context.mcpDeliveryCapture).toBe(true);
     expect(context.systemPrompt).toContain(
@@ -270,8 +234,7 @@ export function registerCliMcpPreparationTests({
       managed: true,
     },
   ])("stamps managed shell into the final MCP grant for $name", async (entry) => {
-    const { managed } = entry;
-    const { restricted } = entry;
+    const { managed, restricted } = entry;
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     const resolveMcpLoopbackScopedTools = vi.fn((scope: McpProjectionParams) => ({
       agentId: "main",
@@ -280,11 +243,7 @@ export function registerCliMcpPreparationTests({
         .map((name) => ({ name })),
     }));
     setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime: vi.fn(() => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      })),
+      getActiveMcpLoopbackRuntime: loopbackRuntime,
       mintMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
       resolveMcpLoopbackPolicyTools: resolveMcpLoopbackScopedTools,
@@ -298,13 +257,7 @@ export function registerCliMcpPreparationTests({
       hostOwnedTools: ["exec", "process"],
       toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs: ({ baseArgs }) => baseArgs,
-      config: {
-        command: "managed-cli",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
+      config: createJsonlStdinBackendConfig("managed-cli"),
     });
     const context = await getFixture().prepare({
       provider: "managed-cli",
@@ -333,11 +286,7 @@ export function registerCliMcpPreparationTests({
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     const revokeMcpLoopbackClientGrant = vi.fn(() => true);
     setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime: vi.fn(() => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      })),
+      getActiveMcpLoopbackRuntime: loopbackRuntime,
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
@@ -371,18 +320,13 @@ export function registerCliMcpPreparationTests({
   });
 
   it("binds one live prepared admission to tool projection and the CLI MCP grant", async () => {
-    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-      port: 31783,
-      ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
-    }));
     const bindMcpLoopbackClientGrantAdmission = vi.fn(() => true);
     const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [],
     }));
     setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
+      getActiveMcpLoopbackRuntime: loopbackRuntime,
       resolveMcpLoopbackScopedTools,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),

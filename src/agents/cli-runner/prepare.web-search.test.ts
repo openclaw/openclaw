@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveMcpLoopbackPolicyTools,
@@ -112,105 +113,96 @@ afterEach(async () => {
   await fixture.cleanup();
 });
 
-describe("registered Claude CLI search preparation", () => {
-  it.each([
-    { name: "automatic", config: {}, native: true, sessionSearch: true, managed: true },
-    {
-      name: "pinned provider",
-      config: { tools: { web: { search: { provider: "brave" } } } },
-      native: false,
-      sessionSearch: true,
-      managed: true,
-    },
-    {
-      name: "global off with stale session enable",
-      config: { tools: { web: { search: { enabled: false } } } },
-      native: false,
-      sessionSearch: true,
-      managed: false,
-    },
-    {
-      name: "session off overrides an explicit tool allowlist",
-      config: {},
-      native: false,
-      sessionSearch: false,
-      managed: false,
-      openClaw: ["exec", "web_search", "message"],
-    },
-  ] satisfies Array<{
-    name: string;
-    config: OpenClawConfig;
-    native: boolean;
-    sessionSearch: boolean;
-    managed: boolean;
-    openClaw?: string[];
-  }>)(
-    "keeps native authority consistent with $name",
-    async ({ config, native, sessionSearch, managed, openClaw }) => {
-      const cfg: OpenClawConfig = {
-        ...config,
-        plugins: { enabled: false },
-        tools: {
-          ...config.tools,
-          allow: ["exec", "web_search", "message"],
-          // Keep this node-only proof explicit now that ordinary local shell is managed.
-          exec: { host: openClaw ? "auto" : "node", mode: "full" },
-        },
-      };
-      const context = await fixture.prepare({
-        provider: "claude-cli",
-        config: cfg,
-        senderIsOwner: true,
-        toolOverrides: { webSearch: sessionSearch },
-        model: "fixture-model",
-        ...(openClaw ? { cliToolAvailability: { native: ["Read", "WebSearch"], openClaw } } : {}),
+it.each<{
+  name: string;
+  config: OpenClawConfig;
+  native: boolean;
+  sessionSearch: boolean;
+  managed: boolean;
+  openClaw?: string[];
+}>([
+  { name: "automatic", config: {}, native: true, sessionSearch: true, managed: true },
+  {
+    name: "pinned provider",
+    config: { tools: { web: { search: { provider: "brave" } } } },
+    native: false,
+    sessionSearch: true,
+    managed: true,
+  },
+  {
+    name: "global off with stale session enable",
+    config: { tools: { web: { search: { enabled: false } } } },
+    native: false,
+    sessionSearch: true,
+    managed: false,
+  },
+  {
+    name: "session off overrides an explicit tool allowlist",
+    config: {},
+    native: false,
+    sessionSearch: false,
+    managed: false,
+    openClaw: ["exec", "web_search", "message"],
+  },
+])(
+  "keeps registered Claude CLI native authority consistent with $name",
+  async ({ config, native, sessionSearch, managed, openClaw }) => {
+    const cfg: OpenClawConfig = {
+      ...config,
+      plugins: { enabled: false },
+      tools: {
+        ...config.tools,
+        allow: ["exec", "web_search", "message"],
+        // Keep this node-only proof explicit now that ordinary local shell is managed.
+        exec: { host: openClaw ? "auto" : "node", mode: "full" },
+      },
+    };
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      config: cfg,
+      senderIsOwner: true,
+      toolOverrides: { webSearch: sessionSearch },
+      model: "fixture-model",
+      ...(openClaw ? { cliToolAvailability: { native: ["Read", "WebSearch"], openClaw } } : {}),
+    });
+    try {
+      const capture = expectDefined(context.preparedBackend.mcpClientGrantCapture, "capture");
+      capture.activate("fixture-capture", () => {});
+      capture.captureNativeTools?.(["Read", "WebSearch"]);
+      expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(
+        native ? ["read", "web_search"] : ["read"],
+      );
+      const argv = context.preparedBackend.backend.args ?? [];
+      const denied = argv[argv.indexOf("--disallowedTools") + 1] ?? "";
+      expect(denied.split(",").includes("WebSearch")).toBe(!native);
+      const promptTools = context.systemPromptReport.tools.entries.map((tool) => tool.name);
+      expect.soft(promptTools.includes("web_search")).toBe(managed);
+      expect(promptTools).toContain("message");
+      const grant = expectDefined(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context, "grant");
+      expect.soft(grant.toolsAllow).toEqual(openClaw);
+      const tools = await resolveMcpLoopbackScopedTools({
+        cfg,
+        context: grant,
+        isGrantCurrent: () => true,
       });
-      try {
-        const capture = context.preparedBackend.mcpClientGrantCapture;
-        expect(capture).toBeDefined();
-        capture!.activate("fixture-capture", () => {});
-        capture!.captureNativeTools?.(["Read", "WebSearch"]);
-        expect(captureNativeToolAuthority).toHaveBeenLastCalledWith(
-          native ? ["read", "web_search"] : ["read"],
-        );
-        const argv = context.preparedBackend.backend.args ?? [];
-        const denied = argv[argv.indexOf("--disallowedTools") + 1] ?? "";
-        expect(denied.split(",").includes("WebSearch")).toBe(!native);
-        expect
-          .soft(context.systemPromptReport.tools.entries.some((tool) => tool.name === "web_search"))
-          .toBe(managed);
-        expect(
-          context.systemPromptReport.tools.entries.some((tool) => tool.name === "message"),
-        ).toBe(true);
-        const grant = mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context;
-        expect(grant).toBeDefined();
-        expect.soft(grant!.toolsAllow).toEqual(openClaw);
-        const tools = await resolveMcpLoopbackScopedTools({
-          cfg,
-          context: grant!,
-          isGrantCurrent: () => true,
+      expect(tools.tools.some((tool) => tool.name === "web_search")).toBe(managed);
+      const exec = expectDefined(
+        tools.tools.find((tool) => tool.name === "exec"),
+        "exec",
+      );
+      if (openClaw) {
+        expect(exec.parameters).toMatchObject({
+          properties: { host: { enum: expect.arrayContaining(["gateway"]) } },
         });
-        expect(tools.tools.some((tool) => tool.name === "web_search")).toBe(managed);
-        const exec = tools.tools.find((tool) => tool.name === "exec");
-        expect(exec).toBeDefined();
-        if (openClaw) {
-          expect(exec!.parameters).toMatchObject({
-            properties: { host: { enum: expect.arrayContaining(["gateway"]) } },
-          });
-        } else {
-          expect.soft(exec!.parameters).toMatchObject({ properties: { host: { enum: ["node"] } } });
-          await exec!.execute(
-            "node-proof",
-            { command: "node-proof" },
-            new AbortController().signal,
-          );
-          expect(nodeExecution).toHaveBeenCalledWith(expect.objectContaining({ host: "node" }), {
-            command: "node-proof",
-          });
-        }
-      } finally {
-        await context.preparedBackend.cleanup?.();
+      } else {
+        expect.soft(exec.parameters).toMatchObject({ properties: { host: { enum: ["node"] } } });
+        await exec.execute("node-proof", { command: "node-proof" }, new AbortController().signal);
+        expect(nodeExecution).toHaveBeenCalledWith(expect.objectContaining({ host: "node" }), {
+          command: "node-proof",
+        });
       }
-    },
-  );
-});
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
+  },
+);
