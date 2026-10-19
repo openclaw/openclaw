@@ -1,7 +1,8 @@
+// Register shared mocks before importing the production CLI graph.
+import "./update-repair.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -18,82 +19,62 @@ import * as childTree from "../../process/child-process-tree.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
 
-const mocks = vi.hoisted(() => ({
-  root: vi.fn(),
-  doctor: vi.fn(),
-  plugins: vi.fn(),
-  convergence: vi.fn(),
-}));
-vi.mock("./shared.js", async (original) => ({
-  ...(await original<typeof import("./shared.js")>()),
-  resolveUpdateRoot: mocks.root,
-  tryWriteCompletionCache: async () => "skipped",
-}));
+const { createRepairState, mocks } = await import("./update-repair.test-support.js");
+
 vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveUpdateInstallKind: async () => "package",
 }));
-vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./update-command-fresh-doctor.js", async (original) => ({
-  ...(await original<typeof import("./update-command-fresh-doctor.js")>()),
-  runUpdateFinalizationDoctorInFreshProcess: mocks.doctor,
-  completePostCorePluginUpdate: mocks.convergence,
-}));
-// Keep the registered command, finalizer lifecycle, handoff owner, and ledger real.
-vi.mock("../../commands/doctor-maintenance.js", () => ({
-  beginDoctorMaintenance: async () => undefined,
-}));
-vi.mock("../../infra/update-triage.js", () => ({
-  prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
-}));
-
-const pluginResult: ProducedPluginUpdateResult = {
-  assessment: { kind: "no-payload-repair" },
-  status: "ok",
-  changed: false,
-  sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-};
 let state: OpenClawTestState;
 let fixture: ReturnType<typeof createManagedHandoffRecoveryFixture>;
 
+function repair(flags = ["--yes", "--json", "--timeout", "15"]) {
+  return withCliProcessScope(() =>
+    runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair", ...flags] }),
+  );
+}
+
+function insertChild(root: string, owner: string, payload: string, updatedAt: number) {
+  createManagedHandoffLeaseDatabase(state.path("handoff-control/managed-update-handoffs.sqlite"))(
+    true,
+    (db) =>
+      executeSqliteQuerySync(
+        db,
+        leaseQueries(db).insertInto("managed_update_handoffs").values({
+          install_root: root,
+          owner,
+          payload_json: payload,
+          updated_at: updatedAt,
+        }),
+      ),
+  );
+}
+
+async function expectAdmitted(owner: string) {
+  await expect(
+    withUpdateCommandExecutor(owner, async (executor) => {
+      const fence = await executor.enter(state.root);
+      fence.assertCurrent();
+      return "admitted";
+    }),
+  ).resolves.toBe("admitted");
+}
+
 beforeEach(async () => {
-  vi.clearAllMocks();
-  state = await createOpenClawTestState({
-    label: "repair-handoff",
-    env: {
-      OPENCLAW_UPDATE_RUN_ID: undefined,
-      OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
-      OPENCLAW_UPDATE_POST_CORE: undefined,
-    },
+  state = await createRepairState("repair-handoff", {
+    OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+    OPENCLAW_UPDATE_POST_CORE: undefined,
   });
   fixture = createManagedHandoffRecoveryFixture(state.root);
-  await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
   await fs.writeFile(
     state.path("package.json"),
     JSON.stringify({ name: "openclaw", version: "1.0.0" }),
   );
-  mocks.root.mockResolvedValue(state.root);
-  mocks.doctor.mockReset().mockResolvedValue(undefined);
-  mocks.plugins.mockReset().mockResolvedValue(pluginResult);
-  mocks.convergence.mockReset().mockImplementation(async ({ pluginUpdate }) => ({
-    pluginUpdate,
-    configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-  }));
-  for (const method of ["log", "error", "writeJson"] as const) {
-    vi.spyOn(defaultRuntime, method).mockImplementation(() => undefined);
-  }
-  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -114,12 +95,7 @@ it("registered update repair settles a dead uncertain lease and admits the next 
     }),
   ).rejects.toThrow("Another update executor owns this installation");
 
-  await withCliProcessScope(() =>
-    runRegisteredCli({
-      register: registerUpdateCli,
-      argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
-    }),
-  );
+  await repair();
 
   expect(mocks.doctor).toHaveBeenCalledOnce();
   expect(mocks.plugins).toHaveBeenCalledOnce();
@@ -137,13 +113,7 @@ it("registered update repair settles a dead uncertain lease and admits the next 
     ]),
   });
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
-  await expect(
-    withUpdateCommandExecutor("next-update", async (executor) => {
-      const fence = await executor.enter(state.root);
-      fence.assertCurrent();
-      return "admitted";
-    }),
-  ).resolves.toBe("admitted");
+  await expectAdmitted("next-update");
 });
 
 it("does not reclaim a handoff from a programmatic call without CLI process ownership", async () => {
@@ -163,12 +133,7 @@ it("registered update repair leaves a live current root owner alone", async () =
   expect(acquired.kind).toBe("acquired");
   const retained = fixture.store.read(state.root);
 
-  await withCliProcessScope(() =>
-    runRegisteredCli({
-      register: registerUpdateCli,
-      argv: ["update", "repair", "--yes", "--no-restart", "--json"],
-    }),
-  );
+  await repair(["--yes", "--no-restart", "--json"]);
 
   expect(defaultRuntime.error).not.toHaveBeenCalled();
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -203,20 +168,11 @@ function seedLegacyLineage(nested = false, bound = false) {
     if (retained.kind !== "current") {
       throw new Error("Missing lineage fixture");
     }
-    createManagedHandoffLeaseDatabase(state.path("handoff-control/managed-update-handoffs.sqlite"))(
-      true,
-      (db) =>
-        executeSqliteQuerySync(
-          db,
-          leaseQueries(db)
-            .insertInto("managed_update_handoffs")
-            .values({
-              install_root: `${key}/.openclaw-update-child-nested`,
-              owner: retained.lease.owner,
-              payload_json: retained.lease.payload,
-              updated_at: retained.lease.updatedAt,
-            }),
-        ),
+    insertChild(
+      `${key}/.openclaw-update-child-nested`,
+      retained.lease.owner,
+      retained.lease.payload,
+      retained.lease.updatedAt,
     );
   }
   // An unbound legacy reservation never had a detached executor. An unrelated group
@@ -239,12 +195,7 @@ it.each(["dead", "reused", "nested"] as const)(
     if (identity === "reused") {
       fixture.births.set(fixture.helper.pid, 99);
     }
-    await withCliProcessScope(() =>
-      runRegisteredCli({
-        register: registerUpdateCli,
-        argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
-      }),
-    );
+    await repair();
     expect(fixture.store.read(key)).toEqual({ kind: "absent" });
     expect(fixture.store.read(`${key}/.openclaw-update-child-nested`)).toEqual({ kind: "absent" });
     expect(listUpdateRuns()[0]).toMatchObject({
@@ -257,13 +208,7 @@ it.each(["dead", "reused", "nested"] as const)(
         }),
       ]),
     });
-    await expect(
-      withUpdateCommandExecutor("after-lineage-repair", async (executor) => {
-        const fence = await executor.enter(state.root);
-        fence.assertCurrent();
-        return "admitted";
-      }),
-    ).resolves.toBe("admitted");
+    await expectAdmitted("after-lineage-repair");
   },
 );
 
@@ -294,12 +239,7 @@ it.each(preservedOwnerCases)(
       });
     }
     const retained = fixture.store.read(key);
-    await withCliProcessScope(() =>
-      runRegisteredCli({
-        register: registerUpdateCli,
-        argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
-      }),
-    );
+    await repair();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringMatching(
         identity === "surviving group"
@@ -327,25 +267,16 @@ it.each([false, true])(
       recordUpdateRunStep(run.runId, { step: "package rollback", status: "in_progress" });
     }
     finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" });
-    createManagedHandoffLeaseDatabase(state.path("handoff-control/managed-update-handoffs.sqlite"))(
-      true,
-      (db) =>
-        executeSqliteQuerySync(
-          db,
-          leaseQueries(db)
-            .insertInto("managed_update_handoffs")
-            .values({
-              install_root: second,
-              owner: run.runId,
-              payload_json: JSON.stringify({
-                version: 2,
-                executor: identity,
-                helper: identity,
-                action: { kind: "update" },
-              }),
-              updated_at: Date.now() - 13 * 60 * 60_000,
-            }),
-        ),
+    insertChild(
+      second,
+      run.runId,
+      JSON.stringify({
+        version: 2,
+        executor: identity,
+        helper: identity,
+        action: { kind: "update" },
+      }),
+      Date.now() - 13 * 60 * 60_000,
     );
     const retained = [fixture.store.read(first), fixture.store.read(second)];
     if (!pendingRollback) {
@@ -355,12 +286,7 @@ it.each([false, true])(
         );
       });
     }
-    await withCliProcessScope(() =>
-      runRegisteredCli({
-        register: registerUpdateCli,
-        argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
-      }),
-    );
+    await repair();
     if (pendingRollback) {
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("unverified rollback"),

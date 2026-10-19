@@ -1,9 +1,10 @@
+// Register shared mocks before importing the production CLI graph.
+import "./update-repair.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
 import { noteStaleUpdateRuns } from "../../commands/doctor-update-run.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -18,77 +19,25 @@ import { isAcknowledgedAbandonedUpdateRun } from "../../infra/update-run-record.
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
-const mocks = vi.hoisted(() => ({
-  root: vi.fn(),
-  doctor: vi.fn(),
-  plugins: vi.fn(),
-  convergence: vi.fn(),
-}));
+const { createRepairState, mocks, pluginResult } = await import("./update-repair.test-support.js");
+
 vi.mock("../../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-vi.mock("./shared.js", async (original) => ({
-  ...(await original<typeof import("./shared.js")>()),
-  resolveUpdateRoot: mocks.root,
-  tryWriteCompletionCache: async () => "skipped",
-}));
-vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./update-command-fresh-doctor.js", async (original) => ({
-  ...(await original<typeof import("./update-command-fresh-doctor.js")>()),
-  runUpdateFinalizationDoctorInFreshProcess: mocks.doctor,
-  completePostCorePluginUpdate: mocks.convergence,
-}));
-// Service and subprocess effects are covered by update-command-lease.test.ts.
-// Keep public selection, finalization, SQLite, leases, and Doctor history reads real.
-vi.mock("../../commands/doctor-maintenance.js", () => ({
-  beginDoctorMaintenance: async () => undefined,
-}));
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
   resolveGatewayRestartProbeContext: async () => ({ config: {} }),
   confirmGatewayReachable: async () => ({ reachable: false }),
   waitForGatewayHttpReadiness: async () => ({ healthz: 503, readyz: 503 }),
 }));
-vi.mock("../../infra/update-triage.js", () => ({
-  prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
-}));
-
-const pluginResult: ProducedPluginUpdateResult = {
-  assessment: { kind: "no-payload-repair" },
-  status: "ok",
-  changed: false,
-  sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-};
 let state: OpenClawTestState;
 
 beforeEach(async () => {
-  vi.clearAllMocks();
-  state = await createOpenClawTestState({
-    label: "repair-history",
-    env: { OPENCLAW_UPDATE_RUN_ID: undefined },
-  });
+  state = await createRepairState("repair-history");
+  await fs.writeFile(state.path("package.json"), JSON.stringify({ version: "1.0.0" }));
   const control = state.path("control");
   await fs.mkdir(control, { mode: 0o700 });
   vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-  await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
-  await fs.writeFile(state.path("package.json"), JSON.stringify({ version: "1.0.0" }));
-  mocks.root.mockResolvedValue(state.root);
-  mocks.doctor.mockReset().mockResolvedValue(undefined);
-  mocks.plugins.mockReset().mockResolvedValue(pluginResult);
-  mocks.convergence.mockReset().mockImplementation(async ({ pluginUpdate }) => ({
-    pluginUpdate,
-    configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-  }));
-  for (const method of ["log", "error", "writeJson"] as const) {
-    vi.spyOn(defaultRuntime, method).mockImplementation(() => undefined);
-  }
-  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
 });
 afterEach(async () => {
   vi.restoreAllMocks();

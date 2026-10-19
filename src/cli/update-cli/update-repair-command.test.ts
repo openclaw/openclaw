@@ -87,6 +87,27 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 
 const tempDirs = createTempDirTracker();
 const now = Date.now();
+const reconciledMessage =
+  "Gateway is healthy. Reconciled 1 abandoned update run. No maintenance or service restart was needed.";
+
+function registeredRepair(...flags: string[]) {
+  return runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair", ...flags] });
+}
+
+function expectJson(fields: Record<string, unknown>) {
+  expect(mocks.runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
+function completedSteps(...steps: string[]) {
+  return expect.arrayContaining(
+    steps.map((step) => expect.objectContaining({ step, status: "completed" })),
+  );
+}
+
+async function expectFullRepair(opts: Parameters<typeof updateRepairCommand>[0] = {}) {
+  mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
+  await expect(updateRepairCommand(opts)).rejects.toThrow("Stop the service through its owner");
+}
 
 function seedRun(
   params: {
@@ -194,10 +215,7 @@ describe("update repair ledger recovery", () => {
       }
       const before = fs.readFileSync(journal);
 
-      await runRegisteredCli({
-        register: registerUpdateCli,
-        argv: ["update", "repair", "--yes", "--json"],
-      });
+      await registeredRepair("--yes", "--json");
 
       expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.runtime.error).toHaveBeenCalledWith(
@@ -245,10 +263,7 @@ describe("update repair ledger recovery", () => {
       });
       mocks.resolveChannel.mockResolvedValue({ tag: "latest", version: target });
 
-      await runRegisteredCli({
-        register: registerUpdateCli,
-        argv: ["update", "repair", "--yes", "--json"],
-      });
+      await registeredRepair("--yes", "--json");
 
       expect(mocks.finalize).not.toHaveBeenCalled();
       expect(mocks.reachable).not.toHaveBeenCalled();
@@ -276,14 +291,7 @@ describe("update repair ledger recovery", () => {
         );
       }
       expect(renderUpdateRunReport(lastRun).headline).not.toContain("update failed");
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "ok",
-          mode: "repair",
-          restart: false,
-          reconciledRuns: [run.runId],
-        }),
-      );
+      expectJson({ status: "ok", mode: "repair", restart: false, reconciledRuns: [run.runId] });
       await updateRepairCommand({});
       expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined);
     },
@@ -368,9 +376,7 @@ describe("update repair ledger recovery", () => {
       expect(getUpdateRun(run.runId)).toMatchObject({
         status: "running",
         phase: "validating",
-        steps: expect.arrayContaining([
-          expect.objectContaining({ step: "finalize:repair-continuation", status: "completed" }),
-        ]),
+        steps: completedSteps("finalize:repair-continuation"),
       });
       expect(mocks.reachable).not.toHaveBeenCalled();
     },
@@ -444,19 +450,12 @@ describe("update repair ledger recovery", () => {
       });
       vi.mocked(Date.now).mockReturnValue(now);
 
-      await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair", "--json"] });
+      await registeredRepair("--json");
 
       expect(getUpdateRun(run.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
       expect(listUpdateRuns({ active: true })).toEqual([]);
       expect(mocks.finalize).not.toHaveBeenCalled();
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "ok",
-          mode: "repair",
-          restart: false,
-          reconciledRuns: [run.runId],
-        }),
-      );
+      expectJson({ status: "ok", mode: "repair", restart: false, reconciledRuns: [run.runId] });
       expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
       const repaired = getUpdateRun(run.runId)!;
       expect(await buildStatusUpdateRows(null)).toEqual([
@@ -494,22 +493,18 @@ describe("update repair ledger recovery", () => {
     });
     expect(getUpdateRun(run.runId)).toEqual(recorded);
 
-    await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
+    await registeredRepair();
 
     expect(getUpdateRun(run.runId)).toMatchObject({
       status: "failed",
       phase: "finished",
       reason: "abandoned",
-      steps: expect.arrayContaining([
-        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-      ]),
+      steps: completedSteps("reconcile:acknowledged"),
     });
     expect(listUpdateRuns({ active: true })).toEqual([]);
     expect(listUpdateRuns()).toHaveLength(1);
     expect(mocks.finalize).not.toHaveBeenCalled();
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      "Gateway is healthy. Reconciled 1 abandoned update run. No maintenance or service restart was needed.",
-    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith(reconciledMessage);
     expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
   });
 
@@ -521,20 +516,14 @@ describe("update repair ledger recovery", () => {
 
       await updateRepairCommand({ json: true });
 
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ reconciledRuns: [run.runId] }),
-      );
+      expectJson({ reconciledRuns: [run.runId] });
       expect(getUpdateRun(run.runId)).toMatchObject({
         status: "failed",
         reason,
-        steps: expect.arrayContaining([
-          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-        ]),
+        steps: completedSteps("reconcile:acknowledged"),
       });
       expect(mocks.finalize).not.toHaveBeenCalled();
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining("already reconciled") }),
-      );
+      expectJson({ message: expect.stringContaining("already reconciled") });
       expect(await buildStatusUpdateRows(null)).toEqual([
         { Item: "Update run", Value: "ℹ️ OpenClaw abandoned update reconciled." },
       ]);
@@ -629,8 +618,7 @@ describe("update repair ledger recovery", () => {
         finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
       }
       const recorded = getUpdateRun(run.runId);
-      mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
-      await expect(updateRepairCommand(opts)).rejects.toThrow("Stop the service through its owner");
+      await expectFullRepair(opts);
       expect(getUpdateRun(run.runId)).toEqual(recorded);
       if (failedStep) {
         expect(getUpdateRun(run.runId)?.status).toBe("running");
@@ -669,8 +657,7 @@ describe("update repair ledger recovery", () => {
         expect(getUpdateRun(old.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
         expect(mocks.finalize).not.toHaveBeenCalled();
       } else {
-        mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
-        await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
+        await expectFullRepair();
         if (!overflow) {
           expect(mocks.finalize).toHaveBeenCalledWith({}, [old.runId, newer.runId], undefined);
         }
@@ -746,7 +733,7 @@ describe("update repair ledger recovery", () => {
           };
         });
       try {
-        await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
+        await registeredRepair();
         expect(injected).toBe(true);
         expect(mocks.finalize).not.toHaveBeenCalled();
         if (added) {
@@ -759,14 +746,10 @@ describe("update repair ledger recovery", () => {
           expect(getUpdateRun(created.runId)).toMatchObject({
             status: "failed",
             reason: "abandoned",
-            steps: expect.arrayContaining([
-              expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-            ]),
+            steps: completedSteps("reconcile:acknowledged"),
           });
           expect(listUpdateRuns({ active: true })).toEqual([]);
-          expect(mocks.runtime.log).toHaveBeenCalledWith(
-            "Gateway is healthy. Reconciled 1 abandoned update run. No maintenance or service restart was needed.",
-          );
+          expect(mocks.runtime.log).toHaveBeenCalledWith(reconciledMessage);
         } else {
           expect(mocks.runtime.error).toHaveBeenCalledWith(
             expect.stringContaining("needs post-core maintenance"),
@@ -820,9 +803,7 @@ describe("update repair ledger recovery", () => {
       activatedPluginErrors: problem === "plugin" ? [{ id: "test", error: "failed" }] : [],
       channelProbeErrors: problem === "channel" ? [{ id: "test", error: "failed" }] : [],
     });
-    mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
-
-    await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
+    await expectFullRepair();
 
     expect(getUpdateRun(run.runId)).toEqual(run);
     expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
