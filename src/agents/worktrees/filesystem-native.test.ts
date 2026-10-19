@@ -2,21 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
-import {
-  afterAll,
-  afterEach,
-  assert,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -28,22 +17,15 @@ import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 describe.skipIf(process.platform !== "darwin")("isolated native worktree operations", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const options = { commitGuard: () => {} };
-  let receipts: FixtureReceiptChannel;
+  let root: string, source: string, destination: string;
   let cleanupWrite: (() => Promise<void>) | undefined;
-  beforeAll(async () => {
-    receipts = await openFixtureReceiptChannel();
-  });
-  afterAll(async () => {
-    await receipts.close();
-  });
   beforeEach(() => {
-    for (const name of [
-      "FS_SAFE_NATIVE_MODE",
-      "OPENCLAW_FS_SAFE_NATIVE_MODE",
-      "FS_SAFE_PYTHON_MODE",
-      "OPENCLAW_FS_SAFE_PYTHON_MODE",
-    ]) {
-      vi.stubEnv(name, undefined);
+    root = tempDirs.make("openclaw-native-");
+    source = path.join(root, "source");
+    destination = path.join(root, "destination");
+    for (const family of ["NATIVE", "PYTHON"]) {
+      vi.stubEnv(`FS_SAFE_${family}_MODE`, undefined);
+      vi.stubEnv(`OPENCLAW_FS_SAFE_${family}_MODE`, undefined);
     }
     configureFsSafeNative({ mode: "off" });
   });
@@ -61,12 +43,9 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
   });
 
   it("clones and reads provenance with the host's native helper still off", async () => {
-    const root = tempDirs.make("openclaw-native-policy-");
     const backend = await detectWorktreeFilesystemBackend(root, options);
     assert(backend);
     expect(backend?.id).toBe("apfs");
-    const source = path.join(root, "source");
-    const destination = path.join(root, "destination");
     await backend.createTemplate(source, options);
     await fs.writeFile(path.join(source, "payload"), Buffer.alloc(1024 * 1024, 0x5a));
     await backend.cloneTemplate(source, destination, options);
@@ -92,9 +71,6 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     "OPENCLAW_FS_SAFE_PYTHON_MODE",
   ])("honors explicit %s=off in read and write children", async (name) => {
     vi.stubEnv(name, "off");
-    const root = tempDirs.make("openclaw-native-disabled-");
-    const source = path.join(root, "source");
-    const destination = path.join(root, "destination");
     await fs.mkdir(source);
     await fs.writeFile(path.join(source, "payload"), "source");
     expect(await detectWorktreeFilesystemBackend(root, options)).toBeNull();
@@ -110,9 +86,6 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
   it.each(["copy", "createSource"])(
     "revalidates allocation authority before child %s input",
     async (operation) => {
-      const root = tempDirs.make("openclaw-native-admission-");
-      const source = path.join(root, "source");
-      const destination = path.join(root, "destination");
       await fs.mkdir(source);
       await fs.writeFile(path.join(source, "payload"), "source");
       const run = runner.runCommandBuffersWithTimeout;
@@ -150,10 +123,8 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     },
   );
 
-  it("joins an admitted write child after cancellation before returning to cleanup", async ({
-    signal,
-  }) => {
-    const root = tempDirs.make("openclaw-native-settlement-");
+  it("joins a canceled write child before cleanup", async ({ signal }) => {
+    const receipts = await openFixtureReceiptChannel();
     const ready = path.join(root, "ready");
     const canceled = path.join(root, "canceled");
     const release = path.join(root, "release");
@@ -185,7 +156,7 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     const controller = new AbortController();
     let settled = false;
     const pending = nativeWorktreeFilesystem
-      .copy(path.join(root, "source"), path.join(root, "destination"), {
+      .copy(source, destination, {
         ...options,
         signal: controller.signal,
       })
@@ -199,8 +170,12 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
-        await fs.writeFile(release, "yes");
-        await pending;
+        try {
+          await fs.writeFile(release, "yes");
+          await pending;
+        } finally {
+          await receipts.close();
+        }
       })());
     cleanupWrite = cleanup;
     const waitForMarker = (marker: string) =>

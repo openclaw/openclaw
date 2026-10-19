@@ -1,18 +1,13 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import * as commandExec from "../../process/exec.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import { requireGit, runGit } from "./git.js";
@@ -20,6 +15,7 @@ import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const identity = {
   GIT_AUTHOR_NAME: "OpenClaw Test",
@@ -29,16 +25,7 @@ const identity = {
 };
 
 describe("empty managed workspaces", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      clearRuntimeConfigSnapshot();
-      cleanup();
-    }),
-  );
+  const tempDirs = useWorktreeStateRoots(undefined, clearRuntimeConfigSnapshot);
   let root: string;
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;

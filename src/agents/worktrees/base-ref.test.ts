@@ -1,40 +1,22 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import { git, gitIdentity } from "./git-fixture.test-support.js";
 import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-
-const execFileAsync = promisify(execFile);
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 describe("managed worktree creation groups", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const tempDirs = useWorktreeStateRoots();
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
@@ -57,19 +39,8 @@ describe("managed worktree creation groups", () => {
   }
   async function advanceRemote() {
     const remote = path.join(root, "remote.git");
-    const commit = await git(
-      remote,
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "commit-tree",
-      "HEAD^{tree}",
-      "-p",
-      "HEAD",
-      "-m",
-      "remote update",
-    );
+    const args = ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "remote update"];
+    const commit = await git(remote, ...gitIdentity, ...args);
     await git(remote, "update-ref", "refs/heads/main", commit);
     return commit;
   }
@@ -146,11 +117,7 @@ describe("managed worktree creation groups", () => {
     const second = caller.run("second", () => create("cohort-second"));
     try {
       await withinTest(
-        awaitGateBeforeSettlement(
-          secondAdmitted.promise,
-          first,
-          "second creator did not reach allocation",
-        ),
+        awaitGateBeforeSettlement(secondAdmitted.promise, first, "second creator not admitted"),
         signal,
       );
       const createdFirst = await withinTest(first, signal);
@@ -188,11 +155,9 @@ describe("managed worktree creation groups", () => {
     const original = await create("original");
     const oldHead = await head(original.path);
     const newHead = await advanceRemote();
-
     clock.mockReturnValue(now + 29_000);
     const recent = await create("recent");
     expect(await head(recent.path)).toBe(oldHead);
-
     clock.mockReturnValue(now + 30_000);
     const refreshed = await create("refreshed");
     expect(await head(refreshed.path)).toBe(newHead);

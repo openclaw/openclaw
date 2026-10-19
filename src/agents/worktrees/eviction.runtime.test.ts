@@ -9,6 +9,7 @@ import {
   prepareWorktreeEvictionRepositories,
   purgeWorktreeCheckout,
 } from "./eviction.runtime.js";
+import { gitIdentity, initializeGitFixture } from "./git-fixture.test-support.js";
 import { listGitWorktrees, requireGit, runGit } from "./git.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -19,10 +20,7 @@ afterEach(() => {
 
 async function commitFixture(repo: string, message: string, allowEmpty = false) {
   await requireGit(repo, [
-    "-c",
-    "user.name=OpenClaw Test",
-    "-c",
-    "user.email=openclaw-test@example.invalid",
+    ...gitIdentity,
     "-c",
     "commit.gpgSign=false",
     "commit",
@@ -152,14 +150,7 @@ it("refuses a purge target redirected through its parent during admission", asyn
 
 it("recognizes a multi-commit squash, invalidates changed heads, and purges only the claimed checkout", async () => {
   const root = tempDirs.make("openclaw-eviction-");
-  const repoRoot = path.join(root, "repo");
-  await init(root, repoRoot);
-  await requireGit(repoRoot, ["config", "user.name", "OpenClaw Test"]);
-  await requireGit(repoRoot, ["config", "user.email", "openclaw-test@example.invalid"]);
-  await requireGit(repoRoot, ["config", "commit.gpgSign", "false"]);
-  await fs.writeFile(path.join(repoRoot, "base"), "base\n");
-  await requireGit(repoRoot, ["add", "."]);
-  await requireGit(repoRoot, ["commit", "-m", "base"]);
+  const repoRoot = await initializeGitFixture(root, "repo", "base", "base\n");
   const merged = { id: "merged", path: path.join(root, "merged"), repoRoot, branch: "merged" };
   const squashed = {
     id: "squashed",

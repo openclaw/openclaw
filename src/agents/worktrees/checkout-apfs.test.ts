@@ -1,19 +1,14 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers";
 import timers from "node:timers/promises";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
+import { git, gitIdentity } from "./git-fixture.test-support.js";
 
-const exec = promisify(execFile);
 const originalTime = 1_600_000_000;
-async function git(cwd: string, ...args: string[]) {
-  return (await exec("git", ["-C", cwd, ...args])).stdout.trim();
-}
 async function modify(directory: string, name: string) {
   const file = path.join(directory, name);
   await fs.writeFile(file, "modified\n");
@@ -41,16 +36,7 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     }
     await fs.symlink("clean", path.join(source, "link"));
     await git(source, "add", ".");
-    await git(
-      source,
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "commit",
-      "-qm",
-      "fixture",
-    );
+    await git(source, ...gitIdentity, "commit", "-qm", "fixture");
     await git(
       source,
       "worktree",
