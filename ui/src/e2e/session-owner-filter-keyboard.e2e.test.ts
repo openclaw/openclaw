@@ -55,8 +55,8 @@ async function expectContained(locator: Locator, viewport: { width: number; heig
 }
 
 suite.define(() => {
-  it("navigates session filters and display controls with Tab, arrows, Space, and Escape", async () => {
-    await suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+  it("navigates session filters and display controls with Tab, arrows, Space, and Escape", () =>
+    suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
       const gateway = await openRoster(
         page,
         [
@@ -112,16 +112,15 @@ suite.define(() => {
       await menu.getByRole("link", { name: "Session sources", exact: true }).focus();
       await page.keyboard.press("Tab");
       await expectBrowser(menu).toHaveCount(0);
-    });
-  });
+    }));
 
   it.each([
     { name: "desktop", ownerCount: 60, viewport: { height: 800, width: 1200 } },
     { name: "compact", ownerCount: 30, viewport: { height: 650, width: 390 } },
   ])(
     "contains the filters and a large owner roster in the $name viewport",
-    async ({ name, ownerCount, viewport }) => {
-      await suite.withPage({ viewport }, async ({ page }) => {
+    ({ name, ownerCount, viewport }) =>
+      suite.withPage({ viewport }, async ({ page }) => {
         const ownerOptions = largeOwnerList(ownerCount);
         await openRoster(
           page,
@@ -154,12 +153,11 @@ suite.define(() => {
         const selectedBounds = await owners.boundingBox();
         expect(selectedBounds).not.toBeNull();
         expect(selectedBounds!.x + selectedBounds!.width).toBeLessThanOrEqual(viewport.width);
-      });
-    },
+      }),
   );
 
-  it("keeps owner selection and radio navigation usable in RTL", async () => {
-    await suite.withPage({ viewport: { height: 650, width: 390 } }, async ({ page }) => {
+  it("keeps owner selection and radio navigation usable in RTL", () =>
+    suite.withPage({ viewport: { height: 650, width: 390 } }, async ({ page }) => {
       await openRoster(
         page,
         [sessionRow("agent:main:rtl-owners", "RTL owners", Date.now())],
@@ -189,6 +187,5 @@ suite.define(() => {
       await expectBrowser(
         page.getByRole("button", { name: "Filter & sort", exact: true }),
       ).toBeFocused();
-    });
-  });
+    }));
 });

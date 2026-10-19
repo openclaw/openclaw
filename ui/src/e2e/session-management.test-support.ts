@@ -34,9 +34,9 @@ export function createSessionManagementE2eSuite(source = false) {
 export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> {
   const drawer = page.locator(".shell--mobile-nav.shell--nav-drawer-open > .shell-nav");
   await drawer.waitFor({ state: "visible" });
-  await drawer.evaluate(async (element) => {
-    await Promise.all(element.getAnimations().map((animation) => animation.finished));
-  });
+  await drawer.evaluate((element) =>
+    Promise.all(element.getAnimations().map((animation) => animation.finished)),
+  );
 }
 
 /** Foreground chat startup admits the canonical roster after document load. */
@@ -136,28 +136,22 @@ export async function focusSessionMenuItem(page: Page, name: string): Promise<Lo
   const parent = page.getByRole("menuitem", { name, exact: true });
   const index = await parent.evaluate((element) => {
     const panel = element.closest('[role="menu"]');
-    return [...(panel?.querySelectorAll('[role^="menuitem"]') ?? [])]
-      .filter(
-        (item) =>
-          item.closest('[role="menu"]') === panel &&
-          !item.matches(":disabled") &&
-          item.getAttribute("aria-disabled") !== "true",
-      )
+    const selector = '[role^="menuitem"]:not(:disabled):not([aria-disabled="true"])';
+    return [...(panel?.querySelectorAll(selector) ?? [])]
+      .filter((item) => item.closest('[role="menu"]') === panel)
       .indexOf(element);
   });
   expect(index).toBeGreaterThanOrEqual(0);
   await parent.focus();
   await expect
     .poll(() =>
-      parent.evaluate((element) => {
-        const active = document.activeElement;
-        return (
-          active?.matches('[role^="menuitem"]') &&
-          active.closest('[role="menu"]') === element.closest('[role="menu"]')
-        );
-      }),
+      parent.evaluate((element) => ({
+        menuItem: document.activeElement?.matches('[role^="menuitem"]'),
+        sameMenu:
+          document.activeElement?.closest('[role="menu"]') === element.closest('[role="menu"]'),
+      })),
     )
-    .toBe(true);
+    .toEqual({ menuItem: true, sameMenu: true });
   await page.keyboard.press("Home");
   for (let step = 0; step < index; step += 1) {
     await page.keyboard.press("ArrowDown");
@@ -168,7 +162,6 @@ export async function focusSessionMenuItem(page: Page, name: string): Promise<Lo
   return parent;
 }
 
-/** Opens a native submenu through its roving-focus keyboard path. */
 export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
   const parent = await focusSessionMenuItem(page, name);
   await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
@@ -177,7 +170,6 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   await sessionMenuSubmenu(parent).waitFor({ state: "visible" });
 }
 
-/** Fills the owned input dialog and submits it the way Enter does. */
 export async function submitInputDialog(page: Page, value: string): Promise<void> {
   const field = page.locator("openclaw-modal-dialog input");
   await field.waitFor({ state: "visible" });

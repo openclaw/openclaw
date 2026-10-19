@@ -44,52 +44,42 @@ async function openRowRename(page: Page, row: Locator) {
 }
 
 suite.define(() => {
-  it("disambiguates same-name sessions from different Telegram accounts in the sidebar", async () => {
-    await suite.withPage(
-      { ...createControlUiE2eContextOptions(), colorScheme: "dark" },
-      async ({ page }) => {
-        await openDirectSession(page, true);
-        const defaultRow = page.locator(`[data-session-key="${defaultKey}"]`);
-        const cardsRow = page.locator(`[data-session-key="${cardsKey}"]`);
-        await defaultRow.waitFor({ state: "visible", timeout: 10_000 });
-        await cardsRow.waitFor({ state: "visible" });
-        await expect
-          .poll(() => trimmedTextContents(defaultRow.locator(".sidebar-recent-session__name")))
-          .toEqual(["Alice"]);
-        await expect
-          .poll(() => trimmedTextContents(cardsRow.locator(".sidebar-recent-session__name")))
-          .toEqual(["Alice · cards"]);
-      },
-    );
-  });
-
   it.each(["sidebar", "header"] as const)(
-    "opens %s rename on the stored label, not the account-decorated name",
-    async (surface) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        await openDirectSession(page);
-        let field: Locator;
-        if (surface === "header") {
-          const title = page.locator(".chat-pane__session-title-button");
-          await expect.poll(() => title.textContent()).toContain("Alice · cards");
-          await title.click();
-          field = page.locator(".chat-pane__session-title-input");
-        } else {
-          const row = page.locator(`[data-session-key="${cardsKey}"]`);
-          await row.waitFor({ state: "visible", timeout: 10_000 });
-          await expect
-            .poll(() => trimmedTextContents(row.locator(".sidebar-recent-session__name")))
-            .toEqual(["Alice · cards"]);
-          await openRowRename(page, row);
-          field = page
-            .locator('openclaw-modal-dialog[label="Rename session"]')
-            .getByRole("textbox", { name: "Rename session" });
-        }
-        await field.waitFor({ state: "visible" });
-        // Never persist the rendered account discriminator as a user label.
-        expect(await field.inputValue()).toBe("");
-      });
-    },
+    "disambiguates account labels and opens %s rename on the stored label",
+    (surface) =>
+      suite.withPage(
+        {
+          ...createControlUiE2eContextOptions(),
+          colorScheme: surface === "sidebar" ? "dark" : undefined,
+        },
+        async ({ page }) => {
+          await openDirectSession(page, surface === "sidebar");
+          let field: Locator;
+          if (surface === "header") {
+            const title = page.locator(".chat-pane__session-title-button");
+            await expect.poll(() => title.textContent()).toContain("Alice · cards");
+            await title.click();
+            field = page.locator(".chat-pane__session-title-input");
+          } else {
+            const defaultRow = page.locator(`[data-session-key="${defaultKey}"]`);
+            await defaultRow.waitFor({ state: "visible", timeout: 10_000 });
+            await expect
+              .poll(() => trimmedTextContents(defaultRow.locator(".sidebar-recent-session__name")))
+              .toEqual(["Alice"]);
+            const row = page.locator(`[data-session-key="${cardsKey}"]`);
+            await row.waitFor({ state: "visible", timeout: 10_000 });
+            await expect
+              .poll(() => trimmedTextContents(row.locator(".sidebar-recent-session__name")))
+              .toEqual(["Alice · cards"]);
+            await openRowRename(page, row);
+            field = page
+              .locator('openclaw-modal-dialog[label="Rename session"]')
+              .getByRole("textbox", { name: "Rename session" });
+          }
+          await field.waitFor({ state: "visible" });
+          expect(await field.inputValue()).toBe("");
+        },
+      ),
   );
 
   it.each(["sidebar", "sessions", "header"] as const)(

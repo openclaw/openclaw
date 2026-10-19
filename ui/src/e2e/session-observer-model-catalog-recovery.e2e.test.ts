@@ -59,9 +59,7 @@ suite.define(() => {
                     message: "Model catalog temporarily unavailable",
                   },
                 }
-              : {
-                  models: [model("old-model", "Old model")],
-                },
+              : { models: [model("old-model", "Old model")] },
           },
         });
 

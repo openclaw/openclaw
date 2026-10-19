@@ -208,8 +208,8 @@ async function expandAssignment(assignTo: Locator, compact: boolean) {
 suite.define(() => {
   it.each([1280, 390])(
     "keeps the Sessions page owner selected and assignment failures visible at width %i",
-    async (width) => {
-      await suite.withPage(
+    (width) =>
+      suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
           const gateway = await installOwnerGateway(page);
@@ -237,14 +237,13 @@ suite.define(() => {
           await expectBrowser(roster.getByRole("alert").filter({ hasText: message })).toBeVisible();
           await expectBrowser(row).toContainText("Owner outcome");
         },
-      );
-    },
+      ),
   );
 
   it.each(["sidebar", "header"] as const)(
     "moves from a tall assignee submenu to sibling rows and back from the %s",
-    async (surface) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    (surface) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installOwnerGateway(
           page,
           false,
@@ -320,12 +319,11 @@ suite.define(() => {
         await expect.poll(() => choice.evaluate((element) => element.matches(":hover"))).toBe(true);
         await page.mouse.click(toX, toY);
         await expectAssignmentRequest(gateway, "profile-carol");
-      });
-    },
+      }),
   );
 
-  it("assigns named and self owners through one themed keyboard-accessible submenu", async () => {
-    await suite.withPage(
+  it("assigns named and self owners through one themed keyboard-accessible submenu", () =>
+    suite.withPage(
       { ...createControlUiE2eContextOptions(), colorScheme: "dark" },
       async ({ page }) => {
         await page.addInitScript(
@@ -404,61 +402,57 @@ suite.define(() => {
           sessionMenuSubmenu(selfAssignment).locator('[role="menuitemradio"] .session-menu__text'),
         ).toHaveText(ownerNames);
       },
-    );
-  });
+    ));
 
   it.each([
     { surface: "sidebar", width: 1280 },
     { surface: "header", width: 1280 },
     { surface: "compact header", width: 390 },
-  ])(
-    "assigns an archived session to an offline teammate from the $surface",
-    async ({ surface, width }) => {
-      await suite.withPage(
-        { ...createControlUiE2eContextOptions(), viewport: { height: 900, width } },
-        async ({ page }) => {
-          const extraNames =
-            surface === "sidebar"
-              ? Array.from(
-                  { length: 30 },
-                  (_, index) => `Teammate ${String(index + 1).padStart(2, "0")}`,
-                )
-              : [];
-          const gateway = await installOwnerGateway(page, true, extraNames);
-          const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-          await expectBrowser(activePane.locator(".agent-chat__disabled-banner")).toContainText(
-            "This session is archived.",
-          );
-          await openSessionActions(page, surface);
-          const { assignTo } = ownerControls(page);
-          await expandAssignment(assignTo, surface === "compact header");
-          await assignee(page, "Me").waitFor();
-          await expectBrowser(
-            page.getByRole("menuitemradio").locator(".session-menu__text"),
-          ).toHaveText([...ownerNames, ...extraNames]);
-          await expectAssignmentAvatarLayout(page);
-          const target = extraNames.at(-1) ?? "Carol";
-          if (extraNames.length > 0) {
-            await page.getByRole("searchbox", { name: "Search people and agents…" }).fill(target);
-            await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1);
-          }
-          const owner = assignee(page, target);
-          await owner.scrollIntoViewIfNeeded();
-          await expectBrowser(owner).toBeInViewport();
-          await owner.click();
-          await expectAssignmentRequest(
-            gateway,
-            `profile-${target.toLowerCase().replaceAll(" ", "-")}`,
-          );
-        },
-      );
-    },
+  ])("assigns an archived session to an offline teammate from the $surface", ({ surface, width }) =>
+    suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { height: 900, width } },
+      async ({ page }) => {
+        const extraNames =
+          surface === "sidebar"
+            ? Array.from(
+                { length: 30 },
+                (_, index) => `Teammate ${String(index + 1).padStart(2, "0")}`,
+              )
+            : [];
+        const gateway = await installOwnerGateway(page, true, extraNames);
+        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        await expectBrowser(activePane.locator(".agent-chat__disabled-banner")).toContainText(
+          "This session is archived.",
+        );
+        await openSessionActions(page, surface);
+        const { assignTo } = ownerControls(page);
+        await expandAssignment(assignTo, surface === "compact header");
+        await assignee(page, "Me").waitFor();
+        await expectBrowser(
+          page.getByRole("menuitemradio").locator(".session-menu__text"),
+        ).toHaveText([...ownerNames, ...extraNames]);
+        await expectAssignmentAvatarLayout(page);
+        const target = extraNames.at(-1) ?? "Carol";
+        if (extraNames.length > 0) {
+          await page.getByRole("searchbox", { name: "Search people and agents…" }).fill(target);
+          await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1);
+        }
+        const owner = assignee(page, target);
+        await owner.scrollIntoViewIfNeeded();
+        await expectBrowser(owner).toBeInViewport();
+        await owner.click();
+        await expectAssignmentRequest(
+          gateway,
+          `profile-${target.toLowerCase().replaceAll(" ", "-")}`,
+        );
+      },
+    ),
   );
 
   it.each([1280, 390])(
     "assigns a renamed teammate from a 1,000-person directory at width %i",
-    async (width) => {
-      await suite.withPage(
+    (width) =>
+      suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
           const names = Array.from(
@@ -513,14 +507,13 @@ suite.define(() => {
           await page.keyboard.press("Enter");
           await expectAssignmentRequest(gateway, "profile-teammate-0999");
         },
-      );
-    },
+      ),
   );
 
   it.each(["header", "sidebar"] as const)(
     "keeps rejected owner assignments visible from the %s, retrying a failed header directory",
-    async (surface) => {
-      await suite.withPage(
+    (surface) =>
+      suite.withPage(
         {
           ...createControlUiE2eContextOptions(),
           ...(surface === "header" ? { colorScheme: "dark" as const } : {}),
@@ -592,7 +585,6 @@ suite.define(() => {
             }),
           ).toHaveCount(1);
         },
-      );
-    },
+      ),
   );
 });

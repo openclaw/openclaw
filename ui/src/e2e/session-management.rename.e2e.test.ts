@@ -16,8 +16,8 @@ const renameKey = "agent:main:rename-me";
 suite.define(() => {
   it.each([false, true])(
     "keeps a duplicate rename in the dialog (concurrent failure: %s)",
-    async (concurrent) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    (concurrent) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           deferredMethods: ["sessions.patch"],
           methodResponses: {
@@ -93,9 +93,7 @@ suite.define(() => {
         await gateway.deferNext("sessions.patch");
         await field.fill("Unavailable rename");
         await save.click();
-        const retry = await gateway.waitForRequest("sessions.patch", {
-          after: concurrent ? 2 : 1,
-        });
+        const retry = await gateway.waitForRequest("sessions.patch", { after: concurrent ? 2 : 1 });
         await gateway.deliverLatest({
           type: "res",
           id: retry.id,
@@ -121,12 +119,11 @@ suite.define(() => {
         await dialog.waitFor({ state: "detached" });
         await error.getByRole("button", { name: "Dismiss error" }).click();
         await expect.poll(() => error.count()).toBe(0);
-      });
-    },
+      }),
   );
 
-  it("renames a sidebar session through an in-app dialog", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+  it("renames a sidebar session through an in-app dialog", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.list": sessionsListResponse([
@@ -156,11 +153,7 @@ suite.define(() => {
         gateway,
         (params) => params.key === renameKey && params.label === "Renamed session",
       );
-      expect(patch.params).toMatchObject({
-        key: renameKey,
-        label: "Renamed session",
-      });
+      expect(patch.params).toMatchObject({ key: renameKey, label: "Renamed session" });
       await expect.poll(() => row.textContent()).toContain("Renamed session");
-    });
-  });
+    }));
 });
