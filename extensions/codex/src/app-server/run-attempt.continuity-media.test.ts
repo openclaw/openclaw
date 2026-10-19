@@ -27,12 +27,24 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
+async function mediaParams(name: string) {
+  const sessionId = `session-${name}`;
+  const workspaceDir = path.join(tempDir, name);
+  await fs.mkdir(workspaceDir, { recursive: true });
+  const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), sessionId);
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: params.sessionKey!,
+    storePath: params.sessionTarget!.storePath!,
+  };
+  return { params, target };
+}
+
 describe("Codex attachment continuity", () => {
   it("rejects real restored-document overage before native effects instead of clipping it", async () => {
-    const sessionId = "session-selected-document";
-    const workspaceDir = path.join(tempDir, "selected-document");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+    const { params, target } = await mediaParams("selected-document");
     params.authoredContextTokenCap = 8_192;
     params.contextTokenBudget = 8_192;
     params.contextWindowInfo = {
@@ -41,17 +53,6 @@ describe("Codex attachment continuity", () => {
       source: "agentContextTokens",
     };
     params.model = { ...params.model, maxTokens: 256 };
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "selected-document.sqlite"),
-      sessionId,
-    );
-    const target = {
-      agentId: "main",
-      sessionId,
-      sessionKey: params.sessionKey!,
-      storePath: params.sessionTarget!.storePath!,
-    };
     const saved = await saveMediaBuffer(
       Buffer.from(`SAVED_DOCUMENT_PREFIX\n${"d".repeat(100_000)}\nSAVED_DOCUMENT_TAIL`),
       "text/plain",
@@ -212,19 +213,12 @@ describe("Codex attachment continuity", () => {
   it.each(["current", "closed"] as const)(
     "restores real image bytes with exact source ownership (%s)",
     async (mode) => {
-      const sessionId = "session-continuity-images";
-      const sessionFile = `agent:main:${sessionId}`;
-      const storePath = path.join(tempDir, "image-continuity.sqlite");
-      const workspaceDir = path.join(tempDir, "image-workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const params = createParams(sessionFile, workspaceDir);
+      const { params, target } = await mediaParams("continuity-images");
       params.model = { ...params.model, input: ["text", "image"] };
-      await attachSqliteSessionTarget(params, storePath, sessionId);
-      const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
       const cutoff = Date.now();
-      await writeCodexAppServerBinding(sessionFile, {
+      await writeCodexAppServerBinding(params.sessionFile, {
         threadId: "thread-existing",
-        cwd: workspaceDir,
+        cwd: params.workspaceDir,
         model: params.modelId,
         modelProvider: "openai",
         historyCoveredThrough: new Date(cutoff).toISOString(),
@@ -342,9 +336,7 @@ describe("Codex attachment continuity", () => {
               ),
               text_elements: [],
             },
-            ...(mode === "current"
-              ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
-              : []),
+            { type: "image", url: `data:image/png;base64,${green.toString("base64")}` },
           ]);
         }
         const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {

@@ -33,6 +33,15 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 setupRunAttemptTestHooks();
 
+async function registeredInputHandle(sessionId: string) {
+  let handle: Parameters<typeof setActiveEmbeddedRun>[1] | undefined;
+  await vi.waitFor(() => {
+    handle = registrations.mock.calls.findLast((call) => call[0] === sessionId)?.[1];
+    expect(handle?.messageInjectionV2).toBeDefined();
+  }, fastWait);
+  return handle!;
+}
+
 describe("Codex source-bound pending input", () => {
   it("retains the resolved agent in a raw global registration", async () => {
     registrations.mockClear();
@@ -95,11 +104,7 @@ describe("Codex source-bound pending input", () => {
     let delivery: Promise<unknown> | undefined;
     try {
       await harness.waitForMethod("turn/start");
-      let handle: Parameters<typeof setActiveEmbeddedRun>[1] | undefined;
-      await vi.waitFor(() => {
-        handle = registrations.mock.calls.findLast((call) => call[0] === params.sessionId)?.[1];
-        expect(handle?.messageInjectionV2).toBeDefined();
-      }, fastWait);
+      const handle = await registeredInputHandle(params.sessionId);
       delivery = handle!
         .messageInjectionV2!.queueMessage(
           "read this document",
@@ -117,7 +122,7 @@ describe("Codex source-bound pending input", () => {
       resume.resolve();
       expect(await delivery).toMatchObject({ message: "message source closed" });
       expect(writeRemoteFile).not.toHaveBeenCalled();
-      expect(handle!.isAborted?.()).toBe(false);
+      expect(handle.isAborted?.()).toBe(false);
       expect(harness.requests.some(({ method }) => method === "turn/steer")).toBe(false);
     } finally {
       resume.resolve();
@@ -128,108 +133,97 @@ describe("Codex source-bound pending input", () => {
     }
   });
 
-  it.each(["closed"] as const)(
-    "guards a Codex pending-question claim across registration: %s",
-    async () => {
-      registrations.mockClear();
-      const harness = createStartedThreadHarness();
-      const params = createTestParams();
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      let handle: Parameters<typeof setActiveEmbeddedRun>[1] | undefined;
-      await vi.waitFor(() => {
-        handle = registrations.mock.calls.findLast((call) => call[0] === params.sessionId)?.[1];
-        expect(handle?.messageInjectionV2).toBeDefined();
-      }, fastWait);
-      const registration = createDeferred<void>();
-      const registering = createDeferred<void>();
-      const answer = createDeferred<Awaited<ReturnType<typeof runAgentHarnessGatewayQuestion>>>();
-      const questionAbort = new AbortController();
-      const gatewayCall = vi.fn(async (method: string, _options: unknown, raw: unknown) => {
-        const input = raw as {
-          id: string;
-          answers?: { answers: Record<string, string[]> };
-          cancel?: boolean;
-        };
-        if (method === "question.request") {
-          registering.resolve();
-          await registration.promise;
-          return { id: input.id };
-        }
-        if (method === "question.waitAnswer") {
-          return await answer.promise;
-        }
-        const result = input.cancel
-          ? { status: "cancelled" as const }
-          : { status: "answered" as const, answers: input.answers! };
-        answer.resolve(result);
-        return result;
-      });
-      const question = runAgentHarnessGatewayQuestion({
-        sessionKey: params.sessionKey!,
-        questions: [{ id: "mode", header: "Mode", question: "Continue?", options: [] }],
-        timeoutMs: 60_000,
-        gatewayCall: {
-          version: 2,
-          call: ({ method, options, params: requestParams, authority }) => {
-            if (authority.kind === "source-bound") {
-              authority.assertCurrent();
-            }
-            return gatewayCall(method, options, requestParams);
-          },
-        } satisfies QuestionDispatcher,
-        delivery: {},
-        signal: questionAbort.signal,
-      });
-      const questionOutcome = question.catch(() => undefined);
-      try {
-        await registering.promise;
-        let sourceCurrent = true;
-        const delivery = handle!
-          .messageInjectionV2!.queueMessage(
-            "controlled answer",
-            { isInboundUserMessage: true },
-            () => {
-              if (!sourceCurrent) {
-                throw new Error("source closed");
-              }
-            },
-            "source-bound",
-          )
-          .then(
-            () => "accepted",
-            () => "rejected",
-          );
-        sourceCurrent = false;
-        registration.resolve();
-        expect(await delivery).toBe(sourceCurrent ? "accepted" : "rejected");
-        expect(
-          gatewayCall.mock.calls.filter(([method]) => method === "question.resolve"),
-        ).toHaveLength(sourceCurrent ? 1 : 0);
-        expect(handle!.isAborted?.()).toBe(false);
-        if (!sourceCurrent) {
-          await handle!.messageInjectionV2!.queueMessage(
-            "independent answer",
-            { isInboundUserMessage: true },
-            () => {},
-            "source-bound",
-          );
-        }
-        await expect(questionOutcome).resolves.toMatchObject({
-          status: "answered",
-          answers: {
-            answers: { mode: [sourceCurrent ? "controlled answer" : "independent answer"] },
-          },
-        });
-        expect(harness.requests.some(({ method }) => method === "turn/steer")).toBe(false);
-        expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
-      } finally {
-        registration.resolve();
-        questionAbort.abort();
-        await questionOutcome;
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        await run;
+  it("guards a Codex pending-question claim across registration when the source closes", async () => {
+    registrations.mockClear();
+    const harness = createStartedThreadHarness();
+    const params = createTestParams();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const handle = await registeredInputHandle(params.sessionId);
+    const registration = createDeferred<void>();
+    const registering = createDeferred<void>();
+    const answer = createDeferred<Awaited<ReturnType<typeof runAgentHarnessGatewayQuestion>>>();
+    const questionAbort = new AbortController();
+    const gatewayCall = vi.fn(async (method: string, _options: unknown, raw: unknown) => {
+      const input = raw as {
+        id: string;
+        answers?: { answers: Record<string, string[]> };
+        cancel?: boolean;
+      };
+      if (method === "question.request") {
+        registering.resolve();
+        await registration.promise;
+        return { id: input.id };
       }
-    },
-  );
+      if (method === "question.waitAnswer") {
+        return await answer.promise;
+      }
+      const result = input.cancel
+        ? { status: "cancelled" as const }
+        : { status: "answered" as const, answers: input.answers! };
+      answer.resolve(result);
+      return result;
+    });
+    const question = runAgentHarnessGatewayQuestion({
+      sessionKey: params.sessionKey!,
+      questions: [{ id: "mode", header: "Mode", question: "Continue?", options: [] }],
+      timeoutMs: 60_000,
+      gatewayCall: {
+        version: 2,
+        call: ({ method, options, params: requestParams, authority }) => {
+          if (authority.kind === "source-bound") {
+            authority.assertCurrent();
+          }
+          return gatewayCall(method, options, requestParams);
+        },
+      } satisfies QuestionDispatcher,
+      delivery: {},
+      signal: questionAbort.signal,
+    });
+    const questionOutcome = question.catch(() => undefined);
+    try {
+      await registering.promise;
+      let sourceCurrent = true;
+      const delivery = handle!
+        .messageInjectionV2!.queueMessage(
+          "controlled answer",
+          { isInboundUserMessage: true },
+          () => {
+            if (!sourceCurrent) {
+              throw new Error("source closed");
+            }
+          },
+          "source-bound",
+        )
+        .then(
+          () => "accepted",
+          () => "rejected",
+        );
+      sourceCurrent = false;
+      registration.resolve();
+      expect(await delivery).toBe("rejected");
+      expect(
+        gatewayCall.mock.calls.filter(([method]) => method === "question.resolve"),
+      ).toHaveLength(0);
+      expect(handle.isAborted?.()).toBe(false);
+      await handle.messageInjectionV2!.queueMessage(
+        "independent answer",
+        { isInboundUserMessage: true },
+        () => {},
+        "source-bound",
+      );
+      await expect(questionOutcome).resolves.toMatchObject({
+        status: "answered",
+        answers: { answers: { mode: ["independent answer"] } },
+      });
+      expect(harness.requests.some(({ method }) => method === "turn/steer")).toBe(false);
+      expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+    } finally {
+      registration.resolve();
+      questionAbort.abort();
+      await questionOutcome;
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    }
+  });
 });
