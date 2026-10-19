@@ -284,6 +284,8 @@ should not be added as distinct turns.
 Shutdown rejects new requests before canceling admitted turns. Their in-process
 Gateway binding remains available until execution and finalizers settle, so
 interrupted inputs can preserve recovery state before the instance is retired.
+Worker reconciliation also cancels recovery waiting for session admission;
+provider operations and writes that already started still finish before teardown.
 
 Transcript index reconciliation gets five seconds to finish during final cleanup.
 After that, shutdown logs the stalled worker, cancels further projection work,
