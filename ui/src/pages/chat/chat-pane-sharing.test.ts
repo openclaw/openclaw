@@ -60,7 +60,6 @@ type SharingPane = TestChatPane & {
     enabled: boolean,
   ) => Promise<ChatSessionSharingOutcome>;
   copySessionPublicLink: (row: GatewaySessionRow) => Promise<ChatSessionSharingOutcome>;
-
 };
 
 const SHARING_METHODS = [
@@ -182,8 +181,8 @@ const mutations = [
       "sessions.reconcileMutation",
       "session.members.listEvidence",
     ],
-    invoke: (pane: SharingPane, row: GatewaySessionRow) => pane.mutateSessionSharing(row, { visibility: "shared" }),
-
+    invoke: (pane: SharingPane, row: GatewaySessionRow) =>
+      pane.mutateSessionSharing(row, { visibility: "shared" }),
   },
   {
     name: "member",
@@ -1056,5 +1055,4 @@ describe("chat pane current sharing mutation refresh order", () => {
       ).toEqual(sharingResult(row));
     },
   );
-
 });
