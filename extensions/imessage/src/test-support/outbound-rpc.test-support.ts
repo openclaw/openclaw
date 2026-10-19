@@ -102,7 +102,7 @@ if (args.join(" ") === "rpc --json") {
     readRequests,
     readActions: () => readLog<string[]>(actionLogPath),
     countNativeRequests: () => readRequests().length,
-    async deliver(text: string, textLimit = 4000) {
+    deliver: async (text: string, textLimit = 4000) => {
       const { deliverIMessageReply } = await import("../monitor/deliver.js");
       return await deliverIMessageReply({
         cfg,
@@ -114,7 +114,7 @@ if (args.join(" ") === "rpc --json") {
         textLimit,
       });
     },
-    createChannelDelivery() {
+    createChannelDelivery: () => {
       // The registered renderers are stateless; share them across per-case module resets.
       const channelChunker = imessagePlugin.outbound?.chunker;
       const channelSanitizer = imessagePlugin.outbound?.sanitizeText;
