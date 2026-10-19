@@ -333,7 +333,7 @@ export function captureSessionWorkspaceNavigation(
 }
 
 /** The tabs owner calls this without changing preview identity or reader contents. */
-export function restoreSessionWorkspaceNavigation(
+function restoreSessionWorkspaceNavigation(
   state: SessionWorkspaceHost,
   navigation: SessionWorkspaceNavigation,
 ) {
