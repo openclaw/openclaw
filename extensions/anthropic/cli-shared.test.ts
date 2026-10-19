@@ -91,6 +91,7 @@ function executionArgs(overrides: Partial<Parameters<typeof resolveClaudeCliExec
     workspaceDir: "/tmp",
     provider: "claude-cli",
     modelId: "claude-opus-4-8",
+    config: { tools: { exec: { mode: "ask" } } },
     useResume: false,
     baseArgs: ["-p"],
     ...overrides,
@@ -200,6 +201,61 @@ it.each([
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
+  it.each([
+    [undefined, true],
+    [{ mode: "full" }, true],
+    [{ mode: "ask" }, false],
+    [{ security: "allowlist", ask: "always" }, false],
+  ] as const)(
+    "derives permission mode from global exec policy %j for normal runs",
+    (exec, bypass) => {
+      const args = executionArgs({ config: { tools: { exec } } });
+      expect(args.includes("bypassPermissions")).toBe(bypass);
+    },
+  );
+
+  it("keeps per-agent exec policy for normal runs and omits only the injected mode for compaction", () => {
+    const forAgent = (
+      globalMode: "ask" | "full",
+      agentMode: "ask" | "full",
+      controlOperation?: "compact",
+    ) =>
+      executionArgs({
+        agentId: "worker",
+        controlOperation,
+        config: {
+          tools: { exec: { mode: globalMode } },
+          agents: { entries: { worker: { tools: { exec: { mode: agentMode } } } } },
+        },
+      });
+
+    expect(forAgent("full", "ask")).not.toContain("bypassPermissions");
+    expect(forAgent("ask", "full")).toContain("bypassPermissions");
+    expect(forAgent("ask", "full", "compact")).not.toContain("bypassPermissions");
+  });
+
+  it("omits policy-derived bypass for initial and resumed manual compaction", () => {
+    const config = { tools: { exec: { mode: "full" as const } } };
+    for (const [useResume, baseArgs] of [
+      [false, argv("-p")],
+      [true, argv("-p --resume native-session")],
+    ] as const) {
+      const args = executionArgs({ config, controlOperation: "compact", useResume, baseArgs });
+      expect(args).not.toContain("bypassPermissions");
+    }
+  });
+
+  it("preserves explicitly supplied Claude permission modes during manual compaction", () => {
+    const args = executionArgs({
+      config: { tools: { exec: { mode: "full" } } },
+      controlOperation: "compact",
+      baseArgs: argv("-p --permission-mode acceptEdits"),
+    });
+    expect(args).toContain("--permission-mode");
+    expect(args).toContain("acceptEdits");
+    expect(args).not.toContain("bypassPermissions");
+  });
+
   it("keeps the real resumed manual-compaction command enabled", () => {
     expect(backend.config.systemPromptWhen).toBe("always");
     const manualCompaction = backend.manualCompaction;
@@ -310,10 +366,10 @@ function registeredBackend(
 }
 
 describe("normalizeClaudeBackendConfig", () => {
-  it("normalizes both args and resumeArgs for custom overrides", () => {
+  it("normalizes args and resumeArgs without deriving an exec-policy permission mode", () => {
     const streamArgs = argv("-p --output-format stream-json --verbose");
     const resumeArgs = [...streamArgs, "--resume", "{sessionId}"];
-    const permissions = argv("--setting-sources user --permission-mode bypassPermissions");
+    const settingSources = argv("--setting-sources user");
     const normalized = normalizeClaudeBackendConfig({
       command: "claude",
       args: [...streamArgs],
@@ -321,39 +377,14 @@ describe("normalizeClaudeBackendConfig", () => {
     });
 
     expect(normalized).toMatchObject({
-      args: [...streamArgs, ...permissions],
-      resumeArgs: [...resumeArgs, ...permissions],
+      args: [...streamArgs, ...settingSources],
+      resumeArgs: [...resumeArgs, ...settingSources],
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
     });
-  });
-
-  it.each([
-    [undefined, true],
-    [{ mode: "ask" }, false],
-    [{ security: "allowlist", ask: "always" }, false],
-  ] as const)("derives Claude bypass from global exec policy %j", (exec, bypass) => {
-    expect(
-      normalizeClaudeArgs(["-p"], {
-        backendId: "claude-cli",
-        config: { tools: { exec } },
-      })?.includes("bypassPermissions"),
-    ).toBe(bypass);
-  });
-
-  it("derives Claude bypass from per-agent OpenClaw exec policy", () => {
-    const forAgent = (agentId: string, globalMode: "ask" | "full", agentMode: "ask" | "full") =>
-      normalizeClaudeArgs(["-p"], {
-        backendId: "claude-cli",
-        agentId,
-        config: {
-          tools: { exec: { mode: globalMode } },
-          agents: { entries: { [agentId]: { tools: { exec: { mode: agentMode } } } } },
-        },
-      });
-    expect(forAgent("safe-agent", "full", "ask")).not.toContain("bypassPermissions");
-    expect(forAgent("yolo-agent", "ask", "full")).toContain("bypassPermissions");
+    expect(normalized.args).not.toContain("bypassPermissions");
+    expect(normalized.resumeArgs).not.toContain("bypassPermissions");
   });
 
   it("gates the Claude cache-control flag on the capability probe", () => {
