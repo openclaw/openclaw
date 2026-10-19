@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
+// mock-isolation: Exercise Google Chat response handling with controlled local HTTP, not DNS policy.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist:
     mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist,

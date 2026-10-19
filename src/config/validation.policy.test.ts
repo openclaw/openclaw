@@ -7,6 +7,7 @@ import {
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 
+// mock-isolation: Supply fixed unsupported surfaces without loading plugin policy discovery.
 vi.mock("../secrets/unsupported-surface-policy.js", async () => {
   const { isRecord } = await import("../utils.js");
 

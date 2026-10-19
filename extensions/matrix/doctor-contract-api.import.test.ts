@@ -29,8 +29,11 @@ const failImport = vi.hoisted(() => (name: string): never => {
 });
 vi.mock("matrix-js-sdk/lib/matrix.js", () => failImport("Matrix SDK"));
 vi.mock("fake-indexeddb", () => failImport("IndexedDB"));
+// mock-isolation: These migration cases must fail if schema repair is loaded.
 vi.mock("openclaw/plugin-sdk/doctor-repair-runtime", () => failImport("Schema repair"));
+// mock-isolation: These migration cases must not initialize the Matrix client storage runtime.
 vi.mock("./src/matrix/client/storage.js", () => failImport("Client storage"));
+// mock-isolation: These migration cases must not resolve account topology.
 vi.mock("./src/account-selection.js", () => failImport("Account topology"));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const warn = vi.hoisted(() => vi.fn<(message: string, record: Record<string, unknown>) => void>());
 
+// mock-isolation: Capture timeout warnings without creating real logging sinks.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({ warn })),
 }));

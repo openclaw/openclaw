@@ -137,11 +137,11 @@ it.each<
   expect(sendMessage).toHaveBeenCalledOnce();
   const payload = mockCallArg(sendMessage);
   const [content, mediaUrls, asVoice] = expected;
-  expect(payload).toMatchObject({
-    ...(content === undefined ? {} : { content }),
-    mediaUrls,
-    asVoice,
-  });
+  if (content !== undefined) {
+    expect(payload.content).toBe(content);
+  }
+  expect(payload.mediaUrls).toEqual(mediaUrls);
+  expect(payload.asVoice).toBe(asVoice);
 });
 
 it("does not settle or retry a partially sent media batch", async () => {

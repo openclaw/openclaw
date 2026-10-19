@@ -33,7 +33,7 @@ export function createBroadcastPeer<Payload = unknown>(
   const callbacks: Array<(error?: Error) => void> = [];
   const frames: BroadcastFrame<Payload>[] = [];
   const socket = Object.assign(new EventEmitter(), {
-    readyState: Number(WebSocket.OPEN),
+    readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     close: vi.fn(),
     terminate: vi.fn(),

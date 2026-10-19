@@ -5,6 +5,7 @@ import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.te
 import type { PluginEntryConfig } from "./types.plugins.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
+// mock-isolation: Synthetic channel shapes isolate DM warning policy from schema admission.
 vi.mock("./zod-schema.js", () => ({
   OpenClawSchema: { safeParse: (raw: unknown) => ({ success: true, data: raw }) },
 }));

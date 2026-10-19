@@ -1,7 +1,7 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { guardedJsonApiRequestMock } = vi.hoisted(() => ({
   guardedJsonApiRequestMock: vi.fn(),
@@ -13,21 +13,15 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
 }));
 
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import type { MediaStreamHandler } from "../media-stream.js";
-import { createHandler, startWsServer } from "../media-stream.test-support.js";
-import {
-  createTelephonyTtsProvider,
-  type TelephonyTtsProvider,
-  type TelephonyTtsRuntime,
-} from "../telephony-tts.js";
-import { connectWs, withTimeout } from "../websocket-test-support.js";
+import { MediaStreamHandler } from "../media-stream.js";
+import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "../telephony-tts.js";
+import { connectWs, startUpgradeWsServer, withTimeout } from "../websocket-test-support.js";
 import { TwilioProvider } from "./twilio.js";
 
 beforeEach(() => {
   vi.useRealTimers();
   guardedJsonApiRequestMock.mockReset();
 });
-afterEach(() => vi.useRealTimers());
 
 function createProvider(): TwilioProvider {
   return new TwilioProvider(
@@ -36,40 +30,28 @@ function createProvider(): TwilioProvider {
   );
 }
 
-function timedPlayback(synthesizeForTelephony: TelephonyTtsProvider["synthesizeForTelephony"]) {
-  vi.useFakeTimers();
-  const provider = createProvider();
-  provider.registerCallStream("CA-timed", "MZ-timed");
-  const controller = new AbortController();
-  const sendAudio = vi.fn<MediaStreamHandler["sendAudio"]>(() => true);
-  const sendMarkAndWait = vi.fn(async () => {});
-  provider.setMediaStreamHandler({
-    queueTts: async (_streamSid: string, play: (signal: AbortSignal) => Promise<void>) =>
-      await play(controller.signal),
-    sendAudio,
-    sendMarkAndWait,
-    clearAudio: vi.fn(),
-  } as never);
-  provider.setTTSProvider({ synthesisTimeoutMs: 5000, synthesizeForTelephony });
-  return {
-    controller,
-    sendAudio,
-    sendMarkAndWait,
-    play: (text: string) =>
-      provider.playTts({ callId: "call-timed", providerCallId: "CA-timed", text }),
-  };
-}
-
 type StreamFrame =
   | { event: "media"; streamSid: string; media: { payload: string } }
   | { event: "mark"; streamSid: string; mark: { name: string } }
   | { event: "clear"; streamSid: string };
 
-function createStreamFixture() {
+async function withStreamingProvider(
+  run: (fixture: {
+    provider: TwilioProvider;
+    messages: StreamFrame[];
+    beforeSend: ReturnType<typeof vi.fn<(frame: StreamFrame) => void>>;
+    synthesize: ReturnType<typeof vi.fn<TelephonyTtsRuntime["textToSpeechTelephony"]>>;
+    result: Awaited<ReturnType<TelephonyTtsRuntime["textToSpeechTelephony"]>>;
+    play: (text: string) => Promise<void>;
+    marks: () => Array<Extract<StreamFrame, { event: "mark" }>>;
+    speech: () => Buffer[];
+    acknowledge: (index: number) => void;
+  }) => Promise<void>,
+): Promise<void> {
   const provider = createProvider();
+  const connected = createDeferred<void>();
   const messages: StreamFrame[] = [];
   const playbacks: Promise<void>[] = [];
-  const releaseSynthesis: Array<() => void> = [];
   const beforeSend = vi.fn<(frame: StreamFrame) => void>();
   const result = {
     success: true,
@@ -78,55 +60,6 @@ function createStreamFixture() {
     outputFormat: "pcm",
   };
   const synthesize = vi.fn<TelephonyTtsRuntime["textToSpeechTelephony"]>(async () => result);
-  const marks = () => messages.filter((frame) => frame.event === "mark");
-  return {
-    provider,
-    messages,
-    playbacks,
-    releaseSynthesis,
-    beforeSend,
-    result,
-    synthesize,
-    marks,
-    texts: () => synthesize.mock.calls.map(([request]) => request.text),
-    deferSynthesis: (audio = result.audioBuffer) => {
-      const pending = createDeferred<void>();
-      releaseSynthesis.push(pending.resolve);
-      synthesize.mockImplementationOnce(async () => {
-        await pending.promise;
-        return { ...result, audioBuffer: audio };
-      });
-      return pending.resolve;
-    },
-    play: (text: string) => {
-      const playback = provider.playTts({
-        callId: "call-stream",
-        providerCallId: "CA-stream",
-        text,
-      });
-      playbacks.push(playback);
-      return playback;
-    },
-    speech: () =>
-      messages.flatMap((frame) => {
-        if (frame.event !== "media") {
-          return [];
-        }
-        const audio = Buffer.from(frame.media.payload, "base64");
-        return audio.every((byte) => byte === 0xff) ? [] : [audio];
-      }),
-  };
-}
-
-async function withStreamingProvider(
-  run: (
-    fixture: ReturnType<typeof createStreamFixture> & { acknowledge: (index: number) => void },
-  ) => Promise<void>,
-) {
-  const fixture = createStreamFixture();
-  const { provider, messages, beforeSend, synthesize, marks, releaseSynthesis, playbacks } =
-    fixture;
-  const connected = createDeferred<void>();
   provider.setTTSProvider(
     await createTelephonyTtsProvider({
       coreConfig: {},
@@ -139,7 +72,19 @@ async function withStreamingProvider(
       },
     }),
   );
-  const handler = createHandler({
+  const handler = new MediaStreamHandler({
+    transcriptionProvider: {
+      id: "fixture",
+      label: "Fixture",
+      isConfigured: () => true,
+      createSession: () => ({
+        connect: async () => {},
+        sendAudio: () => {},
+        close: () => {},
+        isConnected: () => true,
+      }),
+    },
+    providerConfig: {},
     shouldAcceptStream: ({ callId, streamSid }) =>
       callId === "CA-stream" && streamSid === "MZ-stream",
     onConnect: (callId, streamSid) => provider.registerCallStream(callId, streamSid),
@@ -149,9 +94,11 @@ async function withStreamingProvider(
   guardedJsonApiRequestMock.mockImplementation(() => {
     throw new Error("Unexpected Twilio REST request during stream playback");
   });
-  const server = await startWsServer(handler);
+  const server = await startUpgradeWsServer({
+    urlPath: "/voice/stream",
+    onUpgrade: (request, socket, head) => handler.handleUpgrade(request, socket, head),
+  });
   let peer: WebSocket | undefined;
-  let restoreSend: (() => void) | undefined;
   try {
     const client = await connectWs(server.url);
     peer = client;
@@ -162,36 +109,70 @@ async function withStreamingProvider(
       JSON.stringify({ event: "start", streamSid: "MZ-stream", start: { callSid: "CA-stream" } }),
     );
     await withTimeout(connected.promise);
-    const originalSend = WebSocket.prototype.send;
-    const send = vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (
-      this: WebSocket,
-      ...args
-    ) {
-      const data = args[0];
-      // Intercept only the server's frames; client acknowledgements use the original transport.
-      if (this !== client) {
-        if (typeof data !== "string" && !Buffer.isBuffer(data) && !(data instanceof ArrayBuffer)) {
-          throw new Error("Expected a JSON text or byte frame from the media handler");
-        }
-        beforeSend(
-          JSON.parse(typeof data === "string" ? data : rawDataToString(data)) as StreamFrame,
-        );
+    const discovery = vi.spyOn(WebSocket.prototype, "send");
+    let serverSocket: WebSocket;
+    try {
+      expect(handler.sendMark("MZ-stream", "fixture-ready")).toBe(true);
+      const receiver = discovery.mock.contexts[0];
+      if (!(receiver instanceof WebSocket)) {
+        throw new Error("Expected the stream's WebSocket receiver");
       }
-      originalSend.apply(this, args);
-    });
-    restoreSend = () => send.mockRestore();
-    await run({
-      ...fixture,
-      acknowledge: (index) =>
-        client.send(JSON.stringify(expectDefined(marks()[index], "playback mark"))),
-    });
-    expect(guardedJsonApiRequestMock).not.toHaveBeenCalled();
-  } finally {
-    for (const release of releaseSynthesis) {
-      release();
+      serverSocket = receiver;
+      await vi.waitFor(() => expect(messages).toHaveLength(1));
+      expect(messages.shift()).toEqual({
+        event: "mark",
+        streamSid: "MZ-stream",
+        mark: { name: "fixture-ready" },
+      });
+    } finally {
+      discovery.mockRestore();
     }
+    const originalSend = serverSocket.send.bind(serverSocket);
+    const send = vi.spyOn(serverSocket, "send").mockImplementation((...args) => {
+      const data = args[0];
+      if (typeof data !== "string" && !Buffer.isBuffer(data) && !(data instanceof ArrayBuffer)) {
+        throw new Error("Expected a JSON text or byte frame from the media handler");
+      }
+      beforeSend(
+        JSON.parse(typeof data === "string" ? data : rawDataToString(data)) as StreamFrame,
+      );
+      originalSend(...args);
+    });
+    const marks = () => messages.filter((frame) => frame.event === "mark");
+    try {
+      await run({
+        provider,
+        messages,
+        beforeSend,
+        synthesize,
+        result,
+        play: (text) => {
+          const playback = provider.playTts({
+            callId: "call-stream",
+            providerCallId: "CA-stream",
+            text,
+          });
+          playbacks.push(playback);
+          return playback;
+        },
+        marks,
+        speech: () =>
+          messages.flatMap((frame) => {
+            if (frame.event !== "media") {
+              return [];
+            }
+            const audio = Buffer.from(frame.media.payload, "base64");
+            return audio.every((byte) => byte === 0xff) ? [] : [audio];
+          }),
+        acknowledge: (index) =>
+          client.send(JSON.stringify(expectDefined(marks()[index], "playback mark"))),
+      });
+      expect(guardedJsonApiRequestMock).not.toHaveBeenCalled();
+    } finally {
+      send.mockRestore();
+    }
+  } finally {
     provider.clearTtsQueue("CA-stream", "test cleanup");
-    restoreSend?.();
     peer?.terminate();
     await handler.close();
     await Promise.allSettled(playbacks);
@@ -201,14 +182,45 @@ async function withStreamingProvider(
 
 describe("TwilioProvider", () => {
   it("times out telephony synthesis in stream mode and does not send completion mark", async () => {
-    const f = timedPlayback(async () => await new Promise<Buffer>(() => {}));
-    const playExpectation = expect(f.play("Timeout me")).rejects.toThrow(
-      "Telephony TTS synthesis timed out after 5000ms",
-    );
-    await vi.advanceTimersByTimeAsync(5_100);
-    await playExpectation;
-    expect(f.sendAudio).toHaveBeenCalled();
-    expect(f.sendMarkAndWait).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-timeout", "MZ-timeout");
+
+      const sendAudio = vi.fn<MediaStreamHandler["sendAudio"]>(() => true);
+      const sendMarkAndWait = vi.fn();
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(new AbortController().signal);
+        },
+        sendAudio,
+        sendMarkAndWait,
+        clearAudio: vi.fn(),
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
+        synthesizeForTelephony: async () => await new Promise<Buffer>(() => {}),
+      });
+
+      const playExpectation = expect(
+        provider.playTts({
+          callId: "call-timeout",
+          providerCallId: "CA-timeout",
+          text: "Timeout me",
+        }),
+      ).rejects.toThrow("Telephony TTS synthesis timed out after 5000ms");
+      await vi.advanceTimersByTimeAsync(5_100);
+      await playExpectation;
+      expect(sendAudio).toHaveBeenCalled();
+      expect(sendMarkAndWait).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stops and clears real stream playback on the first failed audio chunk", async () => {
@@ -257,54 +269,102 @@ describe("TwilioProvider", () => {
   });
 
   it("exits chunk pacing early when the abort signal fires after the first chunk", async () => {
-    const f = timedPlayback(async () => Buffer.alloc(160 * 10, 0x80));
-    f.sendAudio.mockImplementation(() => {
-      // The first send is the synthesis keepalive; the second is the first real audio chunk.
-      if (f.sendAudio.mock.calls.length === 2) {
-        f.controller.abort();
-      }
-      return true;
-    });
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-abort-chunk", "MZ-abort-chunk");
 
-    const startedAt = Date.now();
-    await expect(f.play("hello")).resolves.toBeUndefined();
-    expect(Date.now()).toBe(startedAt);
-    expect(f.sendAudio).toHaveBeenCalledTimes(2);
-    expect(f.sendMarkAndWait).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+      const sendMarkAndWait = vi.fn(async () => {});
+      const controller = new AbortController();
+      const sendAudio = vi.fn<MediaStreamHandler["sendAudio"]>(() => {
+        // The first send is the synthesis keepalive; the second is the first real audio chunk.
+        if (sendAudio.mock.calls.length === 2) {
+          controller.abort();
+        }
+        return true;
+      });
+
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(controller.signal);
+        },
+        sendAudio,
+        sendMarkAndWait,
+        clearAudio: vi.fn(),
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
+        synthesizeForTelephony: async () => Buffer.alloc(160 * 10, 0x80),
+      });
+
+      const startedAt = Date.now();
+      await expect(
+        provider.playTts({
+          callId: "call-abort-chunk",
+          providerCallId: "CA-abort-chunk",
+          text: "hello",
+          voice: "default",
+          locale: "en-US",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(Date.now()).toBe(startedAt);
+      expect(sendAudio).toHaveBeenCalledTimes(2);
+      expect(sendMarkAndWait).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("streams exact PCM output and gates the real queue on echoed playback marks", async () => {
     await withStreamingProvider(async (f) => {
-      const finishSynthesis = f.deferSynthesis();
+      const synthesis = createDeferred<void>();
+      f.synthesize.mockImplementationOnce(async () => {
+        await synthesis.promise;
+        return f.result;
+      });
       let completed = false;
       const first = f.play("first").then(() => {
         completed = true;
       });
-      f.playbacks.push(first);
       const second = f.play("second");
-      await vi.waitFor(() => expect(f.messages.length).toBeGreaterThanOrEqual(2));
-      for (const frame of f.messages) {
-        expect(frame).toEqual({
-          event: "media",
-          streamSid: "MZ-stream",
-          media: { payload: Buffer.alloc(160, 0xff).toString("base64") },
-        });
+      try {
+        await vi.waitFor(() => expect(f.messages.length).toBeGreaterThanOrEqual(2));
+        for (const frame of f.messages) {
+          expect(frame).toEqual({
+            event: "media",
+            streamSid: "MZ-stream",
+            media: { payload: Buffer.alloc(160, 0xff).toString("base64") },
+          });
+        }
+        synthesis.resolve();
+        await vi.waitFor(() => expect(f.marks()).toHaveLength(1));
+        expect(f.speech()).toEqual([Buffer.alloc(160, 0xce), Buffer.alloc(160, 0xce)]);
+        expect(completed).toBe(false);
+        expect(f.synthesize).toHaveBeenCalledTimes(1);
+        f.acknowledge(0);
+        await withTimeout(first);
+        expect(completed).toBe(true);
+        await vi.waitFor(() => expect(f.marks()).toHaveLength(2));
+        expect(f.marks()[1]?.mark.name).not.toBe(f.marks()[0]?.mark.name);
+        expect(f.synthesize.mock.calls.map(([request]) => request.text)).toEqual([
+          "first",
+          "second",
+        ]);
+        f.acknowledge(1);
+        await withTimeout(second);
+        expect(Buffer.concat(f.speech())).toEqual(Buffer.alloc(640, 0xce));
+      } finally {
+        synthesis.resolve();
+        f.provider.clearTtsQueue("CA-stream", "test cleanup");
+        await Promise.allSettled([first, second]);
       }
-      finishSynthesis();
-      await vi.waitFor(() => expect(f.marks()).toHaveLength(1));
-      expect(f.speech()).toEqual([Buffer.alloc(160, 0xce), Buffer.alloc(160, 0xce)]);
-      expect(completed).toBe(false);
-      expect(f.synthesize).toHaveBeenCalledTimes(1);
-      f.acknowledge(0);
-      await withTimeout(first);
-      expect(completed).toBe(true);
-      await vi.waitFor(() => expect(f.marks()).toHaveLength(2));
-      expect(f.marks()[1]?.mark.name).not.toBe(f.marks()[0]?.mark.name);
-      expect(f.texts()).toEqual(["first", "second"]);
-      f.acknowledge(1);
-      await withTimeout(second);
-      expect(Buffer.concat(f.speech())).toEqual(Buffer.alloc(640, 0xce));
     });
   });
 
@@ -343,21 +403,34 @@ describe("TwilioProvider", () => {
 
   it("cancels active and queued synthesis and recovers through the real stream queue", async () => {
     await withStreamingProvider(async (f) => {
-      const finishSynthesis = f.deferSynthesis(Buffer.alloc(1_920, Buffer.from([0x18, 0xfc])));
+      const lateSynthesis = createDeferred<void>();
+      f.synthesize.mockImplementationOnce(async () => {
+        await lateSynthesis.promise;
+        return { ...f.result, audioBuffer: Buffer.alloc(1_920, Buffer.from([0x18, 0xfc])) };
+      });
       const cancelled = f.play("cancel me");
       const queued = f.play("discard me");
-      await vi.waitFor(() => expect(f.synthesize).toHaveBeenCalledTimes(1));
-      f.provider.clearTtsQueue("CA-stream", "barge-in");
-      await withTimeout(Promise.all([cancelled, queued]));
-      expect(f.speech()).toEqual([]);
-      expect(f.marks()).toEqual([]);
-      const next = f.play("play next");
-      finishSynthesis();
-      await vi.waitFor(() => expect(f.marks()).toHaveLength(1));
-      expect(f.texts()).toEqual(["cancel me", "play next"]);
-      expect(f.speech()).toEqual([Buffer.alloc(160, 0xce), Buffer.alloc(160, 0xce)]);
-      f.acknowledge(0);
-      await withTimeout(next);
+      try {
+        await vi.waitFor(() => expect(f.synthesize).toHaveBeenCalledTimes(1));
+        f.provider.clearTtsQueue("CA-stream", "barge-in");
+        await withTimeout(Promise.all([cancelled, queued]));
+        expect(f.speech()).toEqual([]);
+        expect(f.marks()).toEqual([]);
+        const next = f.play("play next");
+        lateSynthesis.resolve();
+        await vi.waitFor(() => expect(f.marks()).toHaveLength(1));
+        expect(f.synthesize.mock.calls.map(([request]) => request.text)).toEqual([
+          "cancel me",
+          "play next",
+        ]);
+        expect(f.speech()).toEqual([Buffer.alloc(160, 0xce), Buffer.alloc(160, 0xce)]);
+        f.acknowledge(0);
+        await withTimeout(next);
+      } finally {
+        lateSynthesis.resolve();
+        f.provider.clearTtsQueue("CA-stream", "test cleanup");
+        await Promise.allSettled([cancelled, queued]);
+      }
     });
   });
 });
