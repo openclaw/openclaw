@@ -1082,7 +1082,8 @@ export function attachActiveEmbeddedRun(
   }
   if (operation) {
     if (toolAuthority?.sourceTurnId) {
-      getSessionControllerEntryForOperation(operation).sourceTurnId = toolAuthority.sourceTurnId;
+      // Native attempts may carry an execution ID; durable admission owns the logical source.
+      getSessionControllerEntryForOperation(operation).sourceTurnId ??= toolAuthority.sourceTurnId;
     }
     markReplyOperationExecutionStarted(operation);
     if (operation.phase === "queued") {
