@@ -792,7 +792,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
           allowedRoots: effectiveAttachmentRoots,
-          deps: { logVerbose },
         });
     const mediaAttachments = staged.attachments;
     const unavailableCount = staged.unavailableCount;
