@@ -88,7 +88,7 @@ function createPage(
     page,
     request,
     updateGateway,
-    replaceGateway(kind: "source" | "client" | "account" | "recovery scope") {
+    replaceGateway(this: void, kind: "source" | "client" | "account" | "recovery scope") {
       if (kind === "source") {
         currentGateway = createApplicationGateway(currentGateway.gateway.snapshot);
         provider.setContext({ ...context, gateway: currentGateway.gateway });
@@ -101,7 +101,7 @@ function createPage(
       }
       flush();
     },
-    emitGatewayEvent(event: string, payload: unknown) {
+    emitGatewayEvent(this: void, event: string, payload: unknown) {
       initialGateway.publishEvent({ event, payload, type: "event" } as GatewayEventFrame);
     },
   };

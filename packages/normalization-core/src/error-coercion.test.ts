@@ -189,11 +189,14 @@ describe("toStructuredErrorObject", () => {
     Object.defineProperty(cause, "hidden", { value: "secret", enumerable: false });
     withGetter(cause, throwingDetailKey);
     const functionCause = Object.assign(function requestFailure() {}, details);
-    for (const value of [cause, functionCause]) {
+    for (const [value, message] of [
+      [cause, "[object Object]"],
+      [functionCause, String(functionCause)],
+    ] as const) {
       const error = toStructuredErrorObject(value);
       expect(error).not.toBe(value);
       expect(error.cause).toBe(value);
-      expect(error).toMatchObject({ message: String(value), ...details });
+      expect(error).toMatchObject({ message, ...details });
       expect(Reflect.get(error, detailKey)).toBe("symbol detail");
     }
     const error = toStructuredErrorObject(cause);
