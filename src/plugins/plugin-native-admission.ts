@@ -35,7 +35,7 @@ import type {
   PluginNativeNamespaceFact,
 } from "./plugin-source-admission.types.js";
 import {
-  createPluginNativeCaptureRoot,
+  type createPluginNativeCaptureRoot,
   isPluginSourceCaptureRetained,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
@@ -311,10 +311,7 @@ export function createPluginNativeAdmission(
     previous?: PluginNativeNamespaceFact,
     retainedRoot?: string,
   ) => {
-    const root = createPluginNativeCaptureRoot(
-      state.captureStorage.stateDir,
-      state.captureStorage.placement,
-    );
+    const root = state.createRoot();
     state.roots.add(root);
     snapshotOwners.set(root, new Set([state]));
     const { fact, changed } = capturePluginNativeNamespace({

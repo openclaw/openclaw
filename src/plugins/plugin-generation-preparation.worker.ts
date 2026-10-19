@@ -32,6 +32,7 @@ const orphaned = new Set<Resource>();
 const owned = new WeakSet<Resource>();
 const sentReceipts: PluginNativeAdmissionTransfer["receipts"] = new Map();
 const sentRoots = new Set<string>();
+const borrowedRootIds = new WeakMap<object, number>();
 
 function admissionChanges() {
   const state = nativeAdmissionStateFor();
@@ -48,7 +49,7 @@ function admissionChanges() {
     .filter((root) => directories.has(root.directory) && !sentRoots.has(root.directory))
     .map((root) => {
       sentRoots.add(root.directory);
-      return own(retainPluginNativeRoot(root));
+      return retainPluginNativeRoot(root);
     });
   for (const [key, receipt] of receipts) {
     sentReceipts.set(key, receipt);
@@ -87,9 +88,23 @@ function ownRecovery(resource: PluginRecoverySource): PluginRecoverySource {
   resource.fork = markPluginSourceCaptureOperation(() => ownRecovery(fork()));
   return resource;
 }
-const codec = new GenerationCodec(() => {
-  throw new Error("Host functions cannot enter plugin preparation");
-}, own);
+const codec = new GenerationCodec(
+  () => {
+    throw new Error("Host functions cannot enter plugin preparation");
+  },
+  {
+    exportRoot(root) {
+      const id = borrowedRootIds.get(root);
+      if (id === undefined) {
+        throw new Error("Plugin native root is not owned by the preparation host");
+      }
+      return id;
+    },
+    importRoot() {
+      throw new Error("Native root leases cannot enter plugin preparation");
+    },
+  },
+);
 let context: Extract<GenerationWorkerInput, { operation: "capture" }> | undefined;
 let callbacks: MessagePort | undefined;
 let nextCallback = 0;
@@ -124,18 +139,18 @@ function observe(message: GenerationWorkerCallback): void {
     recordPluginNativeLoad(message.filename);
   }
 }
-function mapSource(captureId: number, filename: string): string {
+function requestHost(
+  request: { kind: "mapping"; captureId: number; filename: string } | { kind: "native-root" },
+): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
   if (!callbacks) {
-    return filename;
+    throw new Error("Plugin preparation host is unavailable");
   }
   const id = ++nextCallback;
   const signal = new Int32Array(new SharedArrayBuffer(4));
   callbacks.postMessage(
     {
-      kind: "mapping",
+      ...request,
       id,
-      captureId,
-      filename,
       signal,
     } satisfies GenerationWorkerCallback,
     [],
@@ -146,20 +161,41 @@ function mapSource(captureId: number, filename: string): string {
     const message = receiveMessageOnPort(callbacks)?.message as
       | GenerationWorkerCallback
       | undefined;
-    if (message?.kind === "mapped" && message.id === id) {
+    if (message?.kind === "callback-result" && message.id === id) {
       if (message.error) {
         throw new Error(message.error);
       }
-      return message.filename ?? filename;
+      return message;
     }
     if (message) {
       observe(message);
     }
     if (performance.now() > deadline) {
-      throw new Error("Plugin source mapping timed out");
+      throw new Error("Plugin preparation callback timed out");
     }
     Atomics.wait(signal, 0, 0, 2);
   }
+}
+function mapSource(captureId: number, filename: string): string {
+  return callbacks
+    ? (requestHost({ kind: "mapping", captureId, filename }).filename ?? filename)
+    : filename;
+}
+function createNativeRoot() {
+  const reference = requestHost({ kind: "native-root" }).root;
+  if (!reference) {
+    throw new Error("Plugin preparation host did not allocate native custody");
+  }
+  const root = {
+    directory: reference.directory,
+    // The host commits before acknowledging publication and releases custody
+    // after worker exit. This isolate owns neither action on the physical root.
+    commit() {},
+    dispose() {},
+    async disposeAsync() {},
+  };
+  borrowedRootIds.set(root, reference.id);
+  return root;
 }
 function scoped<T>(run: () => T): T {
   if (!context) {
@@ -214,6 +250,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
       try {
         if (command.operation === "capture") {
           const state = nativeAdmissionStateFor();
+          state.createRoot = createNativeRoot;
           for (const key of [
             "owners",
             "managedRoots",

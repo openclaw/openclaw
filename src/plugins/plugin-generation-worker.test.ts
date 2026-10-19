@@ -89,6 +89,11 @@ it("scopes worker admission metadata while reusing native captures from another 
                   } finally {
                     await prepared.artifact.disposeAsync();
                   }
+                  expect(
+                    captureRetainedNativeWorkerSource({ runtimeGeneration: undefined })
+                      .hasActiveWorkers,
+                  ).toBe(false);
+                  expect(nativeAdmissionStateFor().roots.size).toBeGreaterThan(0);
                 }
               } finally {
                 await shared.disposeAsync();
@@ -99,6 +104,92 @@ it("scopes worker admission metadata while reusing native captures from another 
       );
     } finally {
       posts.mockRestore();
+      await retirePluginCache(cache);
+    }
+  });
+});
+
+it("keeps a native-only recovery fork after its worker and admission cache retire", async () => {
+  await withOpenClawTestState({ label: "worker-native-fork" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), false);
+    const cache = createPluginCache();
+    try {
+      await withArtifactPreservingStateReads(() =>
+        withPluginCache(cache, () =>
+          withPluginSourceCaptureStorage(
+            { stateDir: state.stateDir, placement: "temporary" },
+            async () => {
+              preparePluginNativeAdmissions(fixture.index, cache);
+              const prepared = await preparePluginGenerationArtifact({
+                rootDir: fixture.root,
+                source: fixture.entry,
+              });
+              const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
+              const recovery = prepared.artifact.captureRecoverySource();
+              const native = recovery.native!.fork();
+              try {
+                await recovery.disposeAsync();
+                await prepared.artifact.disposeAsync();
+                expect(
+                  captureRetainedNativeWorkerSource({ runtimeGeneration: undefined })
+                    .hasActiveWorkers,
+                ).toBe(false);
+                await retirePluginCache(cache);
+                expect(fs.readFileSync(captured)).toEqual(fixture.bytes);
+                const child = native.fork();
+                await child.disposeAsync();
+                expect(fs.readFileSync(captured)).toEqual(fixture.bytes);
+              } finally {
+                await native.disposeAsync();
+                await recovery.disposeAsync();
+                await prepared.artifact.disposeAsync();
+              }
+              expect(fs.existsSync(captured)).toBe(false);
+            },
+          ),
+        ),
+      );
+    } finally {
+      await retirePluginCache(cache);
+    }
+  });
+});
+
+it("releases host preparation custody after unexpected worker exit with an outstanding artifact", async () => {
+  await withOpenClawTestState({ label: "worker-native-exit" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), false);
+    const cache = createPluginCache();
+    const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+    try {
+      await withArtifactPreservingStateReads(() =>
+        withPluginCache(cache, () =>
+          withPluginSourceCaptureStorage(
+            { stateDir: state.stateDir, placement: "temporary" },
+            async () => {
+              preparePluginNativeAdmissions(fixture.index, cache);
+              const prepared = await preparePluginGenerationArtifact({
+                rootDir: fixture.root,
+                source: fixture.entry,
+              });
+              const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
+              const capture = posts.mock.calls.findIndex(
+                ([value]) =>
+                  isRecord(value) && isRecord(value.input) && value.input.operation === "capture",
+              );
+              expect(capture).toBeGreaterThanOrEqual(0);
+              const worker = posts.mock.contexts[capture] as NativeWorker;
+              await worker.terminate();
+              expect(fs.readFileSync(captured)).toEqual(fixture.bytes);
+              await retirePluginCache(cache);
+              // Pool retirement releases preparation custody asynchronously after confirmed exit.
+              await vi.waitFor(() => expect(fs.existsSync(captured)).toBe(false));
+            },
+          ),
+        ),
+      );
+    } finally {
+      posts.mockRestore();
+      await closeDefaultRetainedNativeWorkerSource();
       await retirePluginCache(cache);
     }
   });
@@ -406,11 +497,11 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
             await second.artifact.disposeAsync();
             expect(fs.readFileSync(recovery.resolve(fixture.entry), "utf8")).toContain("fixture");
             await recovery.disposeAsync();
-            // Native custody keeps each worker alive until its admission owner retires.
-            await retirePluginCache(cache);
-            await retirePluginCache(siblingCache);
+            // Admission keeps native bytes, but source workers retire with their last artifact.
             expect(fs.existsSync(firstDirectory)).toBe(false);
             expect(fs.existsSync(secondDirectory)).toBe(false);
+            await retirePluginCache(cache);
+            await retirePluginCache(siblingCache);
           }
         }),
       ),

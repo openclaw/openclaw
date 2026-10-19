@@ -33,5 +33,12 @@ export type GenerationWorkerCallback =
   | { kind: "publish"; id: number; publication: PluginSourceAdmissionPublication }
   | { kind: "published"; id: number; accepted?: boolean; error?: string }
   | { kind: "mapping"; id: number; captureId: number; filename: string; signal: Int32Array }
-  | { kind: "mapped"; id: number; filename?: string; error?: string }
+  | { kind: "native-root"; id: number; signal: Int32Array }
+  | {
+      kind: "callback-result";
+      id: number;
+      filename?: string;
+      root?: { id: number; directory: string };
+      error?: string;
+    }
   | { kind: "native-load"; filename: string };

@@ -12,6 +12,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
 import type {
   GenerationWorkerInput,
@@ -76,6 +77,7 @@ export async function preparePluginGenerationArtifact(
   });
   const readOnly = isArtifactPreservingStateRead();
   const admission = nativeAdmissionStateFor();
+  const nativeRoots = createPluginGenerationNativeRoots(storage, admission);
   const admissionRoot = path.resolve(params.rootDir);
   const admissionOwner = admission.owners.get(admissionRoot);
   const root = createPluginSourceCaptureRoot(
@@ -84,7 +86,8 @@ export async function preparePluginGenerationArtifact(
     storage.placement,
   );
   let releasedRoot: Promise<void> | undefined;
-  const releaseRoot = () => (releasedRoot ??= root.release());
+  const releaseRoot = () =>
+    (releasedRoot ??= Promise.all([nativeRoots.close(), root.release()]).then(() => {}));
   const { port1, port2 } = new MessageChannel();
   let moduleSource: ((filename: string) => string) | undefined;
   let resources = 0;
@@ -111,7 +114,12 @@ export async function preparePluginGenerationArtifact(
   function callback(message: GenerationWorkerCallback): void {
     if (message.kind === "publish") {
       void Promise.resolve()
-        .then(() => publishAdmission?.(message.publication) ?? false)
+        .then(() =>
+          nativeRoots.publish(
+            message.publication,
+            async (publication) => publishAdmission?.(publication) ?? false,
+          ),
+        )
         .then(
           (accepted) =>
             port1.postMessage({
@@ -128,22 +136,23 @@ export async function preparePluginGenerationArtifact(
         );
       return;
     }
-    if (message.kind !== "mapping") {
+    if (message.kind !== "mapping" && message.kind !== "native-root") {
       return;
     }
-    let filename: string | undefined;
-    let error: string | undefined;
-    try {
-      filename = moduleSource?.(message.filename) ?? message.filename;
-    } catch (failure) {
-      error = failure instanceof Error ? failure.message : String(failure);
-    }
-    port1.postMessage({
-      kind: "mapped",
+    const reply: Extract<GenerationWorkerCallback, { kind: "callback-result" }> = {
+      kind: "callback-result",
       id: message.id,
-      filename,
-      error,
-    } satisfies GenerationWorkerCallback);
+    };
+    try {
+      if (message.kind === "native-root") {
+        reply.root = nativeRoots.allocate();
+      } else {
+        reply.filename = moduleSource?.(message.filename) ?? message.filename;
+      }
+    } catch (failure) {
+      reply.error = failure instanceof Error ? failure.message : String(failure);
+    }
+    port1.postMessage(reply);
     Atomics.store(message.signal, 0, 1);
     Atomics.notify(message.signal, 0);
   }
@@ -160,6 +169,7 @@ export async function preparePluginGenerationArtifact(
         // them before the pool joins its physical execution lifetime.
         await pool.closeResources();
         await pool.close();
+        // Also release when construction failed before the pool registered custody.
         await releaseRoot();
         owner.clients.delete(close);
       } finally {
@@ -181,8 +191,11 @@ export async function preparePluginGenerationArtifact(
       };
       return asynchronous ? request(command) : requestSync(command, sourceCapture);
     },
-    () => {
-      throw new Error("Host-owned native leases must return to their original owner");
+    {
+      exportRoot: () => {
+        throw new Error("Host-owned native leases cannot enter plugin preparation");
+      },
+      importRoot: (id) => nativeRoots.retain(id),
     },
   );
   function accept(reply: GenerationWorkerReply): unknown {

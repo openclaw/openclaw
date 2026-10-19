@@ -31,6 +31,7 @@ export type AdmissionState = {
   readonly captureStorage: PluginSourceCaptureStorage;
   readonly publicationStateDir: string;
   readonly artifactPreservingReadOnly: boolean;
+  createRoot(): NativeSnapshot;
   preparedIndexes: WeakSet<InstalledPluginIndex>;
   owners: Map<
     string,
@@ -195,6 +196,8 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
       captureStorage,
       publicationStateDir,
       artifactPreservingReadOnly,
+      createRoot: () =>
+        createPluginNativeCaptureRoot(captureStorage.stateDir, captureStorage.placement),
       preparedIndexes: new WeakSet(),
       owners: new Map(),
       managedRoots: new Map(),
