@@ -54,9 +54,9 @@ function createCaptureDatabase(env: NodeJS.ProcessEnv, schemaVersion: number): s
     db.prepare(
       `INSERT INTO capture_events (
          id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-         method, host, path, status, content_type, data_blob_id
+         host, data_blob_id
        ) VALUES (1, 'session-1', 3, 'openclaw', 'candidate', 'https', 'outbound', 'request',
-                 'flow-1', 'POST', 'slack.com', '/api/chat.postMessage', 200, 'application/json', 'blob-1')`,
+                 'flow-1', 'slack.com', 'blob-1')`,
     ).run();
   } finally {
     db.close();
@@ -97,16 +97,11 @@ describe("createDebugProxyCaptureReader", () => {
       const before = inspectDatabase(databasePath);
       const reader = createDebugProxyCaptureReader({ env });
 
-      expect(reader.getSessionEvents("session-1")).toEqual([
-        expect.objectContaining({
-          id: 1,
-          sessionId: "session-1",
-          flowId: "flow-1",
-          host: "slack.com",
-        }),
-      ]);
-      expect(reader.readBlob("blob-1")).toBe('{"ok":true}');
-      expect(inspectDatabase(databasePath)).toEqual(before);
+    expect(reader.getSessionEvents("session-1")).toMatchObject([
+      { id: 1, sessionId: "session-1", flowId: "flow-1", host: "slack.com" },
+    ]);
+    expect(reader.readBlob("blob-1")).toBe('{"ok":true}');
+    expect(inspectDatabase(databasePath)).toEqual(before);
     },
   );
 
@@ -141,13 +136,9 @@ describe("createDebugProxyCaptureReader", () => {
       writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
       expect(reader.getSessionEvents("session-1")).toHaveLength(1);
 
-      writer
-        .prepare(
-          `INSERT INTO capture_events (
+      writer.exec(`INSERT INTO capture_events (
              id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(2, "session-1", 4, "openclaw", "candidate", "https", "inbound", "response", "flow-1");
+           ) VALUES (2, 'session-1', 4, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-1')`);
 
       expect(reader.getSessionEvents("session-1").map((event) => event.id)).toEqual([2, 1]);
     } finally {

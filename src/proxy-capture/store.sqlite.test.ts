@@ -19,8 +19,12 @@ import {
 import type { CaptureEventRecord, CaptureQueryPreset, CaptureSessionRecord } from "./types.js";
 
 const cleanupDirs: string[] = [];
+const cleanups: Array<() => void> = [];
 
 afterEach(() => {
+  while (cleanups.length) {
+    cleanups.pop()!();
+  }
   closeDebugProxyCaptureStore();
   closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
@@ -32,16 +36,38 @@ function makeStore(
   kind: "shared" | "path" = "shared",
   env = makeStateEnv("openclaw-proxy-capture-"),
 ) {
-  return kind === "shared"
-    ? new DebugProxyCaptureStore({ env })
-    : new DebugProxyCaptureStore(
-        path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
-        path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
-      );
+  return makeLease(kind, env).store;
 }
 
-function makeStateEnv(prefix: string): NodeJS.ProcessEnv {
+function makeStateEnv(prefix = "openclaw-proxy-capture-"): NodeJS.ProcessEnv {
   return { OPENCLAW_STATE_DIR: makeTempDir(cleanupDirs, prefix) };
+}
+
+function storagePaths(env: NodeJS.ProcessEnv) {
+  return {
+    dbPath: path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
+    blobDir: path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
+  };
+}
+
+function makeLease(kind: "shared" | "path", env = makeStateEnv()) {
+  const { dbPath, blobDir } = storagePaths(env);
+  const lease =
+    kind === "path"
+      ? acquireDebugProxyCaptureStore(dbPath, blobDir)
+      : acquireDebugProxyCaptureStore({ env });
+  cleanups.push(lease.release);
+  return { ...lease, dbPath, blobDir };
+}
+
+function deny(store: DebugProxyCaptureStore, action: number, table: string) {
+  const db = requireNativeSqliteDatabase(store.db);
+  db.setAuthorizer((a, t) =>
+    a === action && t === table ? constants.SQLITE_DENY : constants.SQLITE_OK,
+  );
+  const allow = () => db.setAuthorizer(null);
+  cleanups.push(allow);
+  return allow;
 }
 
 function upsertSession(store: DebugProxyCaptureStore, overrides: Partial<CaptureSessionRecord>) {
@@ -73,6 +99,16 @@ function recordEvent(store: DebugProxyCaptureStore, overrides: Partial<CaptureEv
   store.recordEvent(makeEvent(overrides));
 }
 
+function recordPayload(store: DebugProxyCaptureStore, sessionId: string, data: string) {
+  const blob = store.persistPayload(Buffer.from(data), "text/plain");
+  recordEvent(store, { sessionId, dataBlobId: blob.blobId, dataSha256: blob.sha256 });
+  return blob;
+}
+
+function observed(...entries: Array<[string, number]>) {
+  return entries.map(([value, count]) => ({ value, count }));
+}
+
 function readMode(target: string): number {
   return fs.statSync(target).mode & 0o777;
 }
@@ -81,8 +117,7 @@ describe("DebugProxyCaptureStore", () => {
   it.each(["shared", "path"] as const)(
     "summarizes %s capture labels without materializing every metadata row",
     (kind) => {
-      const env = makeStateEnv("openclaw-proxy-capture-coverage-");
-      const store = makeStore(kind, env);
+      const store = makeStore(kind);
       const events = [
         { host: " localhost:7 ", metaJson: '{"provider":" alpha ","api":"chat","model":"one"}' },
         { host: "localhost:7", metaJson: '{"provider":"alpha","api":"chat","model":"two"}' },
@@ -97,75 +132,54 @@ describe("DebugProxyCaptureStore", () => {
         { metaJson: '"text"' },
         { host: "remote", metaJson: '{"provider":"gamma","api":" ","model":""}' },
       ];
-      try {
-        for (const [index, metadata] of [
-          ...events,
-          { metaJson: '{"provider":"excluded"}' },
-        ].entries()) {
-          recordEvent(store, {
-            sessionId: index < events.length ? "coverage" : "other",
-            ts: index,
-            sourceProcess: "test",
-            protocol: "http",
-            direction: "local",
-            flowId: `flow-${index}`,
-            ...metadata,
-          });
-        }
-        const db = requireNativeSqliteDatabase(store.db);
-        const prepare = db.prepare.bind(db);
-        const materializations: MockInstance[] = [];
-        vi.spyOn(db, "prepare").mockImplementation((sql) => {
-          const statement = prepare(sql);
-          materializations.push(vi.spyOn(statement, "all"));
-          return statement;
+      for (const [index, metadata] of [
+        ...events,
+        { metaJson: '{"provider":"excluded"}' },
+      ].entries()) {
+        recordEvent(store, {
+          sessionId: index < events.length ? "coverage" : "other",
+          ...metadata,
         });
+      }
+      const db = requireNativeSqliteDatabase(store.db);
+      const prepare = db.prepare.bind(db);
+      const materializations: MockInstance[] = [];
+      vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        materializations.push(vi.spyOn(statement, "all"));
+        return statement;
+      });
 
-        const summary = store.summarizeSessionCoverage("coverage");
+      const summary = store.summarizeSessionCoverage("coverage");
 
-        expect(summary).toMatchObject({
-          sessionId: "coverage",
-          totalEvents: 12,
-          unlabeledEventCount: 8,
-          providers: [
-            { value: "alpha", count: 2 },
-            { value: "beta", count: 1 },
-            { value: "gamma", count: 1 },
-          ],
-          apis: [
-            { value: "chat", count: 2 },
-            { value: "other", count: 1 },
-          ],
-          models: [
-            { value: "two", count: 2 },
-            { value: "one", count: 1 },
-          ],
-          localPeers: [{ value: "localhost:7", count: 2 }],
-        });
-        expect(Object.fromEntries(summary.hosts.map(({ value, count }) => [value, count]))).toEqual(
-          {
-            "localhost:7": 2,
-            remote: 2,
-            localhost: 1,
-            "LOCALHOST:7": 1,
-            "[::1]:7": 1,
-          },
-        );
-        expect(store.summarizeSessionCoverage("missing")).toEqual({
-          sessionId: "missing",
-          totalEvents: 0,
-          unlabeledEventCount: 0,
-          providers: [],
-          apis: [],
-          models: [],
-          hosts: [],
-          localPeers: [],
-        });
-        for (const materialization of materializations) {
-          expect(materialization).not.toHaveBeenCalled();
-        }
-      } finally {
-        store.close();
+      expect(summary).toMatchObject({
+        sessionId: "coverage",
+        totalEvents: 12,
+        unlabeledEventCount: 8,
+        providers: observed(["alpha", 2], ["beta", 1], ["gamma", 1]),
+        apis: observed(["chat", 2], ["other", 1]),
+        models: observed(["two", 2], ["one", 1]),
+        localPeers: observed(["localhost:7", 2]),
+      });
+      expect(Object.fromEntries(summary.hosts.map(({ value, count }) => [value, count]))).toEqual({
+        "localhost:7": 2,
+        remote: 2,
+        localhost: 1,
+        "LOCALHOST:7": 1,
+        "[::1]:7": 1,
+      });
+      expect(store.summarizeSessionCoverage("missing")).toEqual({
+        sessionId: "missing",
+        totalEvents: 0,
+        unlabeledEventCount: 0,
+        providers: [],
+        apis: [],
+        models: [],
+        hosts: [],
+        localPeers: [],
+      });
+      for (const materialization of materializations) {
+        expect(materialization).not.toHaveBeenCalled();
       }
     },
   );
@@ -181,6 +195,8 @@ describe("DebugProxyCaptureStore", () => {
     expect(first.store.isClosed).toBe(false);
 
     second.release();
+    expect(first.store.isClosed).toBe(true);
+    first.store.close();
     expect(first.store.isClosed).toBe(true);
 
     const reopened = getDebugProxyCaptureStore(options);
@@ -198,33 +214,29 @@ describe("DebugProxyCaptureStore", () => {
         activity === "quiet"
           ? [SQLITE_IDLE_HANDLE_TTL_MS + 1]
           : [SQLITE_IDLE_HANDLE_TTL_MS / 2 + 1, SQLITE_IDLE_HANDLE_TTL_MS / 2 + 1];
-      try {
-        for (const [index, interval] of intervals.entries()) {
-          vi.advanceTimersByTime(interval);
-          recordEvent(store, {
-            sessionId: "retained-capture",
-            ts: index,
-            sourceProcess: "test",
-            flowId: `retained-${index}`,
-          });
-        }
-        expect(store.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
-          intervals.map((_, index) => `retained-${index}`).toReversed(),
-        );
-        store.close();
-        expect(store.db.isOpen).toBe(true);
-        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-        expect(store.db.isOpen).toBe(true);
-        vi.advanceTimersByTime(1);
-        expect(store.db.isOpen).toBe(false);
-
-        const reopened = getDebugProxyCaptureStore(options);
-        expect(reopened.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
-          intervals.map((_, index) => `retained-${index}`).toReversed(),
-        );
-      } finally {
-        store.close();
+      for (const [index, interval] of intervals.entries()) {
+        vi.advanceTimersByTime(interval);
+        recordEvent(store, {
+          sessionId: "retained-capture",
+          ts: index,
+          sourceProcess: "test",
+          flowId: `retained-${index}`,
+        });
       }
+      expect(store.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
+        intervals.map((_, index) => `retained-${index}`).toReversed(),
+      );
+      store.close();
+      expect(store.db.isOpen).toBe(true);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(store.db.isOpen).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(store.db.isOpen).toBe(false);
+
+      const reopened = getDebugProxyCaptureStore(options);
+      expect(reopened.getSessionEvents("retained-capture").map((event) => event.flowId)).toEqual(
+        intervals.map((_, index) => `retained-${index}`).toReversed(),
+      );
     },
   );
 
@@ -233,8 +245,6 @@ describe("DebugProxyCaptureStore", () => {
     const stale = getDebugProxyCaptureStore(options);
     upsertSession(stale, { id: "exit-session", sourceProcess: "cli" });
 
-    // Explicit acquisition after shared-handle retirement must rebind; retained
-    // capture finalizers instead keep their exact owner and must not reopen it.
     closeOpenClawStateDatabaseForTest();
     expect(stale.isClosed).toBe(true);
 
@@ -273,11 +283,8 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("preserves the shipped path-based Plugin SDK overloads", () => {
-    const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-legacy-sdk-");
-    const dbPath = path.join(root, "capture.sqlite");
-    const blobDir = path.join(root, "blobs");
-    const lease = acquireDebugProxyCaptureStore(dbPath, blobDir);
-    lease.store.db.exec(`
+    const { store, release, dbPath, blobDir } = makeLease("path");
+    store.db.exec(`
       CREATE TABLE config_machine_state (
         state_key TEXT PRIMARY KEY,
         value_json TEXT NOT NULL,
@@ -286,15 +293,15 @@ describe("DebugProxyCaptureStore", () => {
       INSERT INTO config_machine_state VALUES ('gateway.supervision', '{"malformed":true}', 1);
     `);
 
-    expect(getDebugProxyCaptureStore(dbPath, blobDir)).toBe(lease.store);
-    upsertSession(lease.store, {
+    expect(getDebugProxyCaptureStore(dbPath, blobDir)).toBe(store);
+    upsertSession(store, {
       id: "legacy-sdk-session",
       mode: "sdk",
       sourceProcess: "plugin",
       dbPath,
       blobDir,
     });
-    upsertSession(lease.store, {
+    upsertSession(store, {
       id: "legacy-sdk-session",
       startedAt: 0,
       mode: "replacement",
@@ -302,42 +309,34 @@ describe("DebugProxyCaptureStore", () => {
       dbPath: "unused-database",
       blobDir: "unused-blobs",
     });
-    expect(lease.store.listSessions()).toEqual([
-      expect.objectContaining({
+    expect(store.listSessions()).toMatchObject([
+      {
         startedAt: 1,
         mode: "sdk",
         sourceProcess: "updated-plugin",
         endedAt: null,
         proxyUrl: null,
-      }),
+      },
     ]);
-    const blob = lease.store.persistPayload(Buffer.from("legacy sdk payload"), "text/plain");
-    recordEvent(lease.store, {
-      sessionId: "legacy-sdk-session",
-      ts: 2,
-      sourceProcess: "plugin",
-      flowId: "legacy-sdk-flow",
-      dataBlobId: blob.blobId,
-      dataSha256: blob.sha256,
-    });
+    const blob = recordPayload(store, "legacy-sdk-session", "legacy sdk payload");
 
-    expect(lease.store.readBlob(blob.blobId)).toBe("legacy sdk payload");
+    expect(store.readBlob(blob.blobId)).toBe("legacy sdk payload");
     expect(blob.path).toBe(path.join(blobDir, `${blob.blobId}.bin.gz`));
     expect(fs.existsSync(dbPath)).toBe(true);
     expect(fs.existsSync(blob.path)).toBe(true);
     expect(
-      lease.store.db
+      store.db
         .prepare("SELECT db_path AS dbPath, blob_dir AS blobDir FROM capture_sessions WHERE id = ?")
         .get("legacy-sdk-session"),
     ).toEqual({ dbPath, blobDir });
     expect(
-      lease.store.db
+      store.db
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_blobs'")
         .get(),
     ).toBeUndefined();
-    lease.store.db.exec("DROP TABLE config_machine_state;");
+    store.db.exec("DROP TABLE config_machine_state;");
     expect(
-      lease.store.db
+      store.db
         .prepare(
           `SELECT name, strict FROM pragma_table_list
            WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -348,16 +347,16 @@ describe("DebugProxyCaptureStore", () => {
       { name: "capture_events", strict: 1 },
       { name: "capture_sessions", strict: 1 },
     ]);
-    expect(lease.store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-    expect(lease.store.deleteSessions(["legacy-sdk-session"])).toEqual({
+    expect(store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+    expect(store.deleteSessions(["legacy-sdk-session"])).toEqual({
       sessions: 1,
       events: 1,
       blobs: 1,
     });
     expect(fs.existsSync(blob.path)).toBe(false);
 
-    lease.release();
-    expect(lease.store.isClosed).toBe(true);
+    release();
+    expect(store.isClosed).toBe(true);
   });
 
   it.each([
@@ -368,105 +367,52 @@ describe("DebugProxyCaptureStore", () => {
     ["shared", "deleteSessions", "capture_blobs"],
     ["shared", "purgeAll", "capture_blobs"],
   ] as const)("rolls back %s %s when %s deletion fails", (kind, operation, deniedTable) => {
-    const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-rollback-");
-    const dbPath = path.join(root, "capture.sqlite");
-    const blobDir = path.join(root, "blobs");
-    const lease =
-      kind === "path"
-        ? acquireDebugProxyCaptureStore(dbPath, blobDir)
-        : acquireDebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
+    const { store, dbPath, blobDir } = makeLease(kind);
     const sessionId = "rollback-session";
-    const db = requireNativeSqliteDatabase(lease.store.db);
 
-    try {
-      upsertSession(lease.store, {
-        id: sessionId,
-        mode: "sdk",
-        sourceProcess: "plugin",
-        dbPath,
-        blobDir,
-      });
-      const blob = lease.store.persistPayload(Buffer.from("rollback payload"), "text/plain");
-      const blobPath = path.join(blobDir, `${blob.blobId}.bin.gz`);
-      recordEvent(lease.store, {
-        sessionId,
-        ts: 2,
-        sourceProcess: "plugin",
-        flowId: "path-based-rollback-flow",
-        dataBlobId: blob.blobId,
-        dataSha256: blob.sha256,
-      });
+    upsertSession(store, { id: sessionId, dbPath, blobDir });
+    const blob = recordPayload(store, sessionId, "rollback payload");
+    const blobPath = path.join(blobDir, `${blob.blobId}.bin.gz`);
 
-      const cleanup = () =>
-        operation === "deleteSessions"
-          ? lease.store.deleteSessions([sessionId])
-          : lease.store.purgeAll();
-      db.setAuthorizer((action, table) =>
-        action === constants.SQLITE_DELETE && table === deniedTable
-          ? constants.SQLITE_DENY
-          : constants.SQLITE_OK,
-      );
+    const cleanup = () =>
+      operation === "deleteSessions" ? store.deleteSessions([sessionId]) : store.purgeAll();
+    const allow = deny(store, constants.SQLITE_DELETE, deniedTable);
 
-      if (deniedTable === "capture_blobs" && operation === "deleteSessions") {
-        expect(() => lease.store.deleteSessions(["missing"])).toThrow(/not authorized/u);
-      }
-      expect(cleanup).toThrow(/not authorized/u);
-      db.setAuthorizer(null);
-      expect(lease.store.listSessions()).toHaveLength(1);
-      expect(lease.store.getSessionEvents(sessionId)).toHaveLength(1);
-      expect(lease.store.readBlob(blob.blobId)).toBe("rollback payload");
-      if (kind === "path") {
-        expect(fs.existsSync(blobPath)).toBe(true);
-      }
-
-      expect(cleanup()).toEqual({ sessions: 1, events: 1, blobs: 1 });
-      expect(lease.store.listSessions()).toEqual([]);
-      expect(lease.store.getSessionEvents(sessionId)).toEqual([]);
-      expect(lease.store.readBlob(blob.blobId)).toBeNull();
-      if (kind === "path") {
-        expect(fs.existsSync(blobPath)).toBe(false);
-      }
-      expect(cleanup()).toEqual({ sessions: 0, events: 0, blobs: 0 });
-    } finally {
-      db.setAuthorizer(null);
-      lease.release();
+    if (deniedTable === "capture_blobs" && operation === "deleteSessions") {
+      expect(() => store.deleteSessions(["missing"])).toThrow(/not authorized/u);
     }
+    expect(cleanup).toThrow(/not authorized/u);
+    allow();
+    expect(store.listSessions()).toHaveLength(1);
+    expect(store.getSessionEvents(sessionId)).toHaveLength(1);
+    expect(store.readBlob(blob.blobId)).toBe("rollback payload");
+    if (kind === "path") {
+      expect(fs.existsSync(blobPath)).toBe(true);
+    }
+
+    expect(cleanup()).toEqual({ sessions: 1, events: 1, blobs: 1 });
+    expect(store.listSessions()).toEqual([]);
+    expect(store.getSessionEvents(sessionId)).toEqual([]);
+    expect(store.readBlob(blob.blobId)).toBeNull();
+    if (kind === "path") {
+      expect(fs.existsSync(blobPath)).toBe(false);
+    }
+    expect(cleanup()).toEqual({ sessions: 0, events: 0, blobs: 0 });
   });
 
   it("uses rollback journaling for captures on NFS-backed volumes", () => {
-    vi.spyOn(fs, "statfsSync").mockReturnValue({
-      type: 0x6969,
-      bsize: 1024,
-      blocks: 1,
-      bfree: 1,
-      bavail: 1,
-      files: 0,
-      frsize: 1024,
-      ffree: 0,
-    });
+    vi.spyOn(fs, "statfsSync").mockReturnValue({ ...fs.statfsSync("."), type: 0x6969 });
 
-    const store = new DebugProxyCaptureStore({ env: makeStateEnv("openclaw-proxy-capture-nfs-") });
-    try {
-      expect(store.db.prepare("PRAGMA journal_mode").get()).toMatchObject({
-        journal_mode: "delete",
-      });
-    } finally {
-      store.close();
-    }
+    const store = makeStore();
+    expect(store.db.prepare("PRAGMA journal_mode").get()).toMatchObject({
+      journal_mode: "delete",
+    });
   });
 
   it.each(["shared", "path"] as const)(
     "retries a rejected %s event without retaining an implicit session",
     (kind) => {
-      const env = makeStateEnv("openclaw-proxy-capture-write-");
-      const lease =
-        kind === "shared"
-          ? acquireDebugProxyCaptureStore({ env })
-          : acquireDebugProxyCaptureStore(
-              path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
-              path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
-            );
-      const db = requireNativeSqliteDatabase(lease.store.db);
+      const { store } = makeLease(kind);
       const rejectedEvent = makeEvent({
         sessionId: "rejected-event",
         ts: 7,
@@ -483,27 +429,18 @@ describe("DebugProxyCaptureStore", () => {
         errorText: "fixture error",
         metaJson: '{"fixture":true}',
       });
-      try {
-        db.setAuthorizer((action, table) =>
-          action === constants.SQLITE_INSERT && table === "capture_events"
-            ? constants.SQLITE_DENY
-            : constants.SQLITE_OK,
-        );
-        expect(() => lease.store.recordEvent(rejectedEvent)).toThrow(/not authorized/u);
-        db.setAuthorizer(null);
-        expect(lease.store.listSessions()).toEqual([]);
-        expect(lease.store.getSessionEvents(rejectedEvent.sessionId)).toEqual([]);
+      const allow = deny(store, constants.SQLITE_INSERT, "capture_events");
+      expect(() => store.recordEvent(rejectedEvent)).toThrow(/not authorized/u);
+      allow();
+      expect(store.listSessions()).toEqual([]);
+      expect(store.getSessionEvents(rejectedEvent.sessionId)).toEqual([]);
 
-        lease.store.recordEvent(rejectedEvent);
+      store.recordEvent(rejectedEvent);
 
-        expect(lease.store.getSessionEvents(rejectedEvent.sessionId)).toEqual([
-          expect.objectContaining({ ...rejectedEvent, dataBlobId: null }),
-        ]);
-        expect(lease.store.listSessions()).toHaveLength(kind === "shared" ? 1 : 0);
-      } finally {
-        db.setAuthorizer(null);
-        lease.release();
-      }
+      expect(store.getSessionEvents(rejectedEvent.sessionId)).toMatchObject([
+        { ...rejectedEvent, dataBlobId: null },
+      ]);
+      expect(store.listSessions()).toHaveLength(kind === "shared" ? 1 : 0);
     },
   );
 
@@ -512,7 +449,7 @@ describe("DebugProxyCaptureStore", () => {
     () => {
       const env = makeStateEnv("openclaw-proxy-capture-permissions-");
       const root = env.OPENCLAW_STATE_DIR!;
-      const store = new DebugProxyCaptureStore({ env });
+      const store = makeStore("shared", env);
       const blob = store.persistPayload(Buffer.from("authorization: Bearer secret"));
       const row = store.db
         .prepare(
@@ -542,14 +479,6 @@ describe("DebugProxyCaptureStore", () => {
     },
   );
 
-  it("ignores duplicate close calls", () => {
-    const store = makeStore();
-
-    store.close();
-    store.close();
-    expect(store.isClosed).toBe(true);
-  });
-
   it("stores sessions and deduplicates complete payloads", () => {
     const store = makeStore();
     upsertSession(store, { startedAt: Date.now() });
@@ -568,12 +497,7 @@ describe("DebugProxyCaptureStore", () => {
     expect(
       store.db.prepare("SELECT * FROM capture_blobs WHERE blob_id = ?").get(duplicateBlob.blobId),
     ).toEqual(firstBlob);
-    recordEvent(store, {
-      method: "POST",
-      host: "api.example.com",
-      path: "/v1/send",
-      ...firstPayload,
-    });
+    recordEvent(store, firstPayload);
     expect(store.listSessions(10)).toHaveLength(1);
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
@@ -581,9 +505,7 @@ describe("DebugProxyCaptureStore", () => {
   it.each(["shared", "path"] as const)(
     "preserves %s diagnostic grouping, session scope, and native read retries",
     (kind) => {
-      const env = makeStateEnv("openclaw-proxy-capture-diagnostics-");
-      const store = makeStore(kind, env);
-      const db = requireNativeSqliteDatabase(store.db);
+      const store = makeStore(kind);
       const record = (overrides: Partial<CaptureEventRecord>) =>
         recordEvent(store, {
           sessionId: "captured",
@@ -594,99 +516,88 @@ describe("DebugProxyCaptureStore", () => {
           method: "POST",
           ...overrides,
         });
-      try {
-        for (const [index, id] of ["captured", "other", "empty"].entries()) {
-          upsertSession(store, { id, startedAt: index, mode: "test", sourceProcess: "test" });
+      for (const [index, id] of ["captured", "other", "empty"].entries()) {
+        upsertSession(store, { id, startedAt: index, mode: "test", sourceProcess: "test" });
+      }
+      for (const eventKind of ["request", "ws-frame"] as const) {
+        for (const dataSha256 of ["first", "second"]) {
+          record({ kind: eventKind, dataSha256 });
+          record({ kind: eventKind, dataSha256 });
         }
-        for (const eventKind of ["request", "ws-frame"] as const) {
-          for (const dataSha256 of ["first", "second"]) {
-            record({ kind: eventKind, dataSha256 });
-            record({ kind: eventKind, dataSha256 });
-          }
-        }
-        for (const status of [428, 429, 500]) {
-          record({ kind: "response", direction: "inbound", status });
-        }
-        record({ path: "/cache?variant" });
-        record({ path: "/cache", headersJson: "CACHE-CONTROL" });
-        record({ path: "/pragma", headersJson: "pragma" });
-        record({ sessionId: "other", kind: "ws-frame", direction: "inbound" });
-        record({ kind: "error", host: undefined, path: undefined });
-        const presets: CaptureQueryPreset[] = [
-          "double-sends",
-          "retry-storms",
-          "cache-busting",
-          "ws-duplicate-frames",
-          "missing-ack",
-          "error-bursts",
-        ];
-        const location = { host: "api.example", path: "/send" };
-        const results = Object.fromEntries(
+      }
+      for (const status of [428, 429, 500]) {
+        record({ kind: "response", direction: "inbound", status });
+      }
+      record({ path: "/cache?variant" });
+      record({ path: "/cache", headersJson: "CACHE-CONTROL" });
+      record({ path: "/pragma", headersJson: "pragma" });
+      record({ sessionId: "other", kind: "ws-frame", direction: "inbound" });
+      record({ kind: "error", host: undefined, path: undefined });
+      const presets: CaptureQueryPreset[] = [
+        "double-sends",
+        "retry-storms",
+        "cache-busting",
+        "ws-duplicate-frames",
+        "missing-ack",
+        "error-bursts",
+      ];
+      const location = { host: "api.example", path: "/send" };
+      const queryPresets = () =>
+        Object.fromEntries(
           presets.map((preset) => [preset, store.queryPreset(preset, "captured")]),
         );
-        expect(results).toEqual({
-          "double-sends": [
-            { ...location, method: "POST", duplicateCount: 2 },
-            { ...location, method: "POST", duplicateCount: 2 },
-          ],
-          "retry-storms": [{ ...location, errorCount: 2 }],
-          "cache-busting": expect.arrayContaining([
-            { host: "api.example", path: "/cache", variantCount: 1 },
-            { host: "api.example", path: "/cache?variant", variantCount: 1 },
-            { host: "api.example", path: "/pragma", variantCount: 1 },
-          ]),
-          "ws-duplicate-frames": [
-            { ...location, duplicateFrames: 2 },
-            { ...location, duplicateFrames: 2 },
-          ],
-          "missing-ack": [{ flowId: "cross-session", ...location, outboundFrames: 4 }],
-          "error-bursts": [{ host: null, path: null, errorCount: 1 }],
-        });
-        expect(results["cache-busting"]).toHaveLength(3);
-        expect(store.queryPreset("missing-ack")).toEqual([]);
-        expect(store.queryPreset("missing-ack", "")).toEqual([]);
-        expect(store.queryPreset("error-bursts", " captured ")).toEqual([]);
-        expect(store.listSessions(1)).toEqual([
-          {
-            id: "empty",
-            startedAt: 2,
-            endedAt: null,
-            mode: "test",
-            sourceProcess: "test",
-            proxyUrl: null,
-            eventCount: 0,
-          },
-        ]);
-        for (const id of ["empty-z", "empty-a"]) {
-          upsertSession(store, { id, startedAt: 2, mode: "test", sourceProcess: "test" });
-        }
-        expect(store.listSessions(2).map(({ id, eventCount }) => ({ id, eventCount }))).toEqual([
-          { id: "empty", eventCount: 0 },
-          { id: "empty-a", eventCount: 0 },
-        ]);
-        expect(store.listSessions(0)).toEqual([]);
-        expect(store.listSessions(-1)).toHaveLength(5);
-
-        db.setAuthorizer((action, table) =>
-          action === constants.SQLITE_READ && table === "capture_events"
-            ? constants.SQLITE_DENY
-            : constants.SQLITE_OK,
-        );
-        for (const preset of presets) {
-          expect(() => store.queryPreset(preset, "captured")).toThrow(/prohibited/u);
-        }
-        expect(() => store.listSessions()).toThrow(/prohibited/u);
-        expect(store.db.isOpen).toBe(true);
-        db.setAuthorizer(null);
-        expect(
-          Object.fromEntries(
-            presets.map((preset) => [preset, store.queryPreset(preset, "captured")]),
-          ),
-        ).toEqual(results);
-      } finally {
-        db.setAuthorizer(null);
-        store.close();
+      const results = queryPresets();
+      expect(results).toEqual({
+        "double-sends": [
+          { ...location, method: "POST", duplicateCount: 2 },
+          { ...location, method: "POST", duplicateCount: 2 },
+        ],
+        "retry-storms": [{ ...location, errorCount: 2 }],
+        "cache-busting": expect.arrayContaining([
+          { host: "api.example", path: "/cache", variantCount: 1 },
+          { host: "api.example", path: "/cache?variant", variantCount: 1 },
+          { host: "api.example", path: "/pragma", variantCount: 1 },
+        ]),
+        "ws-duplicate-frames": [
+          { ...location, duplicateFrames: 2 },
+          { ...location, duplicateFrames: 2 },
+        ],
+        "missing-ack": [{ flowId: "cross-session", ...location, outboundFrames: 4 }],
+        "error-bursts": [{ host: null, path: null, errorCount: 1 }],
+      });
+      expect(results["cache-busting"]).toHaveLength(3);
+      expect(store.queryPreset("missing-ack")).toEqual([]);
+      expect(store.queryPreset("missing-ack", "")).toEqual([]);
+      expect(store.queryPreset("error-bursts", " captured ")).toEqual([]);
+      expect(store.listSessions(1)).toEqual([
+        {
+          id: "empty",
+          startedAt: 2,
+          endedAt: null,
+          mode: "test",
+          sourceProcess: "test",
+          proxyUrl: null,
+          eventCount: 0,
+        },
+      ]);
+      for (const id of ["empty-z", "empty-a"]) {
+        upsertSession(store, { id, startedAt: 2, mode: "test", sourceProcess: "test" });
       }
+      expect(store.listSessions(2).map(({ id, eventCount }) => ({ id, eventCount }))).toEqual([
+        { id: "empty", eventCount: 0 },
+        { id: "empty-a", eventCount: 0 },
+      ]);
+      expect(store.listSessions(0)).toEqual([]);
+      expect(store.listSessions(-1)).toHaveLength(5);
+
+      const allow = deny(store, constants.SQLITE_READ, "capture_events");
+      for (const preset of presets) {
+        expect(() => store.queryPreset(preset, "captured")).toThrow(/prohibited/u);
+      }
+      expect(() => store.listSessions()).toThrow(/prohibited/u);
+      expect(store.db.isOpen).toBe(true);
+      allow();
+      expect(queryPresets()).toEqual(results);
     },
   );
 
@@ -750,47 +661,35 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it.each(["shared", "path"] as const)("preserves %s blob custody and cleanup counts", (kind) => {
-    const env = makeStateEnv("openclaw-proxy-capture-cleanup-");
+    const env = makeStateEnv();
     const blobDir = path.join(env.OPENCLAW_STATE_DIR!, "blobs");
     const store = makeStore(kind, env);
-    try {
-      const sharedPayload = persistEventPayload(store, {
-        data: '{"shared":true}',
-        contentType: "application/json",
-      });
+    const sharedPayload = persistEventPayload(store, {
+      data: '{"shared":true}',
+      contentType: "application/json",
+    });
 
-      for (const sessionId of ["session-a", "session-b"]) {
-        upsertSession(store, { id: sessionId, startedAt: Date.now() });
-        recordEvent(store, {
-          sessionId,
-          ts: Date.now(),
-          flowId: `flow-${sessionId}`,
-          method: "POST",
-          host: "api.example.com",
-          path: "/v1/shared",
-          ...sharedPayload,
-        });
-      }
-
-      const result = store.deleteSessions([" session-a ", "session-a", "", " "]);
-
-      expect(result).toEqual({ sessions: 1, events: 1, blobs: 0 });
-      expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
-      expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
-
-      expect(store.deleteSessions(["session-b"])).toEqual({ sessions: 1, events: 1, blobs: 1 });
-      expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBeNull();
-      store.persistPayload(Buffer.from("unreferenced capture"));
-      if (kind === "path") {
-        fs.writeFileSync(path.join(blobDir, "extra-artifact.txt"), "capture artifact");
-      }
-      expect(store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: kind === "path" ? 2 : 1 });
-      if (kind === "path") {
-        expect(fs.readdirSync(blobDir)).toEqual([]);
-      }
-      expect(store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: 0 });
-    } finally {
-      store.close();
+    for (const sessionId of ["session-a", "session-b"]) {
+      upsertSession(store, { id: sessionId, startedAt: Date.now() });
+      recordEvent(store, { sessionId, ...sharedPayload });
     }
+
+    const result = store.deleteSessions([" session-a ", "session-a", "", " "]);
+
+    expect(result).toEqual({ sessions: 1, events: 1, blobs: 0 });
+    expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
+    expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
+
+    expect(store.deleteSessions(["session-b"])).toEqual({ sessions: 1, events: 1, blobs: 1 });
+    expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBeNull();
+    store.persistPayload(Buffer.from("unreferenced capture"));
+    if (kind === "path") {
+      fs.writeFileSync(path.join(blobDir, "extra-artifact.txt"), "capture artifact");
+    }
+    expect(store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: kind === "path" ? 2 : 1 });
+    if (kind === "path") {
+      expect(fs.readdirSync(blobDir)).toEqual([]);
+    }
+    expect(store.purgeAll()).toEqual({ sessions: 0, events: 0, blobs: 0 });
   });
 });
