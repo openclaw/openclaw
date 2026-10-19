@@ -124,7 +124,6 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
         } catch {
           return;
         }
-        assertCurrent?.();
         await stopCachedBrowserBridgesForContainer(current.containerName, assertCurrent);
         assertCurrent?.();
         await dockerSandboxBackendManager.removeRuntime({
