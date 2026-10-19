@@ -95,6 +95,15 @@ describe("worker deploy build plugin", () => {
     afterEach(() => fixtureLifetime.cleanup());
 
     beforeAll(async () => {
+      const watchTransformInputs = new Map<string, string>();
+      const describeSource = (source: string | null | undefined) =>
+        source == null
+          ? null
+          : {
+              bytes: Buffer.byteLength(source),
+              sha256: createHash("sha256").update(source).digest("hex"),
+              source: source.slice(0, 16 * 1024),
+            };
       const { default: configs } = await import("../../tsdown.config.ts");
       const config = configs.find(
         (candidate) =>
@@ -158,10 +167,16 @@ describe("worker deploy build plugin", () => {
                     sideEffects: info?.moduleSideEffects,
                     isEntry: info?.isEntry,
                     imports: info?.importedIds,
+                    disk: describeSource(fs.readFileSync(id, "utf8")),
+                    transformInput: describeSource(watchTransformInputs.get(id)),
+                    parsed: describeSource(info?.code),
                   };
                 });
             },
             transform(code, id) {
+              if (id.endsWith("/watch-io-worker.js")) {
+                watchTransformInputs.set(id, code);
+              }
               if (id === entrySource) {
                 return `${code}
 export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js";
