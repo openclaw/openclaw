@@ -294,6 +294,7 @@ export function useMenuMachine(
   };
   onSettled(() => {
     props.dir = direction();
+    // Machine transitions move roving focus synchronously; markup follows through the revision.
     const unsubscribe = service.subscribe((state) => {
       setRevision((n) => n + 1);
       focusItem(state);

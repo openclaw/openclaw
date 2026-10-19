@@ -271,13 +271,11 @@ export class BrokerResourceClaims {
         );
       }
     } else if (response.type === "resource-failed") {
-      // Factory/operation failure is observable, but the broker can still own cleanup.
+      // A delayed factory/operation failure cannot settle the separate native close obligation.
       const error = toErrorObject(
         decodeNativeWorkerFailure(response.error),
         "Native resource failed",
       );
-      claim.pending?.completion.reject(error);
-      claim.pending = undefined;
       claim.inContext(() => claim.callbacks.failed(error));
       return;
     }

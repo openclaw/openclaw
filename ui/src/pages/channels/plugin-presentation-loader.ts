@@ -9,7 +9,16 @@ import {
   createChannelSettingsPresentation,
   type ChannelSettingsHooks,
 } from "./channel-settings-presentation.tsx";
-import { resolveChannelIconOwner } from "./plugin-presentation.ts";
+
+function resolveChannelIconOwner(
+  plugins: Readonly<PluginListResult["plugins"]>,
+  channelId: string,
+) {
+  return (
+    plugins.find((plugin) => plugin.hasIcon && plugin.id === channelId) ??
+    plugins.find((plugin) => plugin.hasIcon && plugin.channelIds?.includes(channelId))
+  );
+}
 
 type PluginPresentationHooks = ChannelSettingsHooks & {
   getContext: () => ApplicationContext;

@@ -314,14 +314,12 @@ export function Logbook(props: LogbookProps) {
     locale.locale();
     return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
   };
-  const model = createLogbook();
+  // PluginPage's keyed host keeps this client fixed until the model is disposed.
+  const initialClient = props.initialClient;
+  const model = createLogbook(initialClient);
   const state = () => model.state;
   // PluginPageOwner remounts this view when the connection changes.
-  onSettled(() => {
-    if (model.connect(props.initialClient)) {
-      void model.load();
-    }
-  });
+  onSettled(() => void model.load());
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
   return (
     <section class="logbook">

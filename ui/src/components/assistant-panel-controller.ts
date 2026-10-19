@@ -198,6 +198,7 @@ export function createAssistantPanel(
     }
     sourceStops.forEach((stop) => stop?.());
     sources = { context, store };
+    // Source receipts synchronously retire target scopes and reconcile dock reservations.
     sourceStops = [
       context?.assistantDock?.attach(owner),
       context ? subscribePluginHelp(context, refresh) : undefined,
@@ -233,7 +234,6 @@ export function createAssistantPanel(
       }
       initialized = mounted = true;
       stops = [
-        contentLoader.subscribe(notify),
         listen(document, CHAT_ROUTE_READY_EVENT, refresh),
         listen(document, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, refresh),
         listen(window, CUSTODIAN_PANEL_TOGGLE_EVENT, handleToggleRequest),
@@ -500,13 +500,6 @@ export function createAssistantPanel(
     refresh();
   }
 
-  function contentDefined() {
-    return isOptionalElementDefined(ASSISTANT_CONTENT_ELEMENT);
-  }
-  function acceptStore(store: CustodianSessionStore) {
-    element.store = store;
-  }
-
   function toggle(): void {
     if (!available()) {
       return;
@@ -548,7 +541,7 @@ export function createAssistantPanel(
     homeStarted: () => homeStarted,
     homeTarget,
     available,
-    contentDefined,
+    contentDefined: () => isOptionalElementDefined(ASSISTANT_CONTENT_ELEMENT),
     get openSessionKey() {
       return openSessionKey();
     },
@@ -563,7 +556,9 @@ export function createAssistantPanel(
     setOpen,
     toggle,
     handleToggleRequest,
-    acceptStore,
+    acceptStore(store: CustodianSessionStore) {
+      element.store = store;
+    },
     refresh,
     notify,
     attach,
@@ -571,8 +566,10 @@ export function createAssistantPanel(
     inputsChanged,
     subscribe(listener: () => void) {
       listeners.add(listener);
+      const stopLoader = contentLoader.subscribe(listener);
       return () => {
         listeners.delete(listener);
+        stopLoader();
       };
     },
   };

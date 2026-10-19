@@ -313,11 +313,14 @@ export function createTerminalPanel(
             handleToggleRequest(event);
           }
         }),
+        // Hosted tab labels are published to the external header after the panel commits.
         i18n.subscribe(publish),
+        // Configuration receipts retire disallowed uploads before their next operation.
         context?.config.subscribe(() => {
           terminalPanelUploadController.syncPolicy();
           publish();
         }),
+        // The commit applies font changes to imperative Ghostty controllers.
         context?.theme.subscribe(publish),
       ];
       if (element.embedded || dockLayout.open) {

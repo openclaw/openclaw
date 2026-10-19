@@ -193,6 +193,7 @@ function createBoardDocument(
       ownedProvider = provider;
       providerLease = lease;
       ownedBinding = { ...binding, session };
+      // Reconcile tab intent from provider receipts and preserve ordered focus commands.
       providerSubscriptions.push(
         provider.snapshot$.subscribe(() => reconcileProvider(provider)),
         provider.loadError$.subscribe(() => reconcileProvider(provider)),
@@ -216,24 +217,16 @@ function createBoardDocument(
     }
   }
 
-  function selectAvailableTab(): void {
-    const snapshot = ownedSnapshot;
-    if (!snapshot) {
-      return;
-    }
-    if (snapshot.tabs.some((tab) => tab.tabId === activeTabId)) {
-      return;
-    }
-    activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
-  }
-
   function reconcileProvider(provider: BoardProvider): void {
     if (ownedProvider !== provider) {
       return;
     }
     if (provider.hasLoadedSnapshot) {
-      ownedSnapshot = provider.snapshot$.value;
-      selectAvailableTab();
+      const snapshot = provider.snapshot$.value;
+      ownedSnapshot = snapshot;
+      if (!snapshot.tabs.some((tab) => tab.tabId === activeTabId)) {
+        activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
+      }
       documentState = "ready";
       notify();
       return;
@@ -349,6 +342,7 @@ function BoardDocumentContent(
       });
     };
     inputUpdates.set(host, scheduleUpdate);
+    // Gateway receipts rebind the provider lease and its admitted capabilities after settlement.
     const unsubscribeGateway = context?.gateway.subscribe(scheduleUpdate);
     document.update();
     return () => {

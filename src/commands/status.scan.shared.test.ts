@@ -7,7 +7,6 @@ import { WebSocketServer } from "ws";
 import * as clientReadiness from "../../packages/gateway-client/src/readiness.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { parseStatusRouteArgs } from "../cli/program/route-args.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -364,9 +363,6 @@ describe("resolveGatewayProbeSnapshot", () => {
         await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
       return await callGateway(...(args as Parameters<typeof callGateway>));
     });
-    const parsed = parseStatusRouteArgs(["node", "openclaw", "status", "--timeout", "250"]);
-    expect(parsed?.timeoutMs).toBe(250);
-
     const startup = createDeferred<{
       completion: ReturnType<typeof clientReadiness.startGatewayClientWhenEventLoopReady>;
     }>();
@@ -400,7 +396,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     try {
       pending = resolveGatewayProbeSnapshot({
         cfg: { gateway: { auth: { mode: "token", token: "tok" } } },
-        opts: createStatusGatewayProbeBudget(parsed?.timeoutMs),
+        opts: createStatusGatewayProbeBudget(250),
       });
 
       // Drive deadline time only after real socket requests cross their boundary.

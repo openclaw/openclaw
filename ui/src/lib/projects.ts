@@ -73,7 +73,6 @@ function projectGitHubRepositories(
   });
 }
 
-/** One authorized registered-project read shared by New Session and cold chat. */
 export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog {
   const existing = catalogs.get(gateway);
   if (existing) {
@@ -183,6 +182,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
     subscribe(listener) {
       listeners.add(listener);
       if (!unsubscribe) {
+        // Gateway receipts refresh the shared authorized project catalog for New Session and cold chat.
         const unsubscribeGateway = gateway.subscribe(() => {
           if (synchronize()) {
             notify();

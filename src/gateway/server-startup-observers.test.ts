@@ -2,8 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
+import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 
 const mocks = vi.hoisted(() => ({
   prewarm: vi.fn(async () => {}),
@@ -46,17 +49,35 @@ it.for(["prewarm", "delivery", "exec"] as const)(
     const activated = createDeferred();
     const refreshed = createDeferred();
     const entered = createDeferred();
+    const context = createContext();
+    const resolveGatewayContext = () => context;
+    const sessionKey = "agent:main:startup-exec-recovery";
+    const sessionId = "startup-exec-recovery";
+    const storePath = "/synthetic/startup-exec-recovery";
+    let operation: ReturnType<typeof createReplyOperation> | undefined;
     mocks[blocked].mockImplementation(async () => {
+      if (blocked === "exec") {
+        operation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope: storePath,
+            sessionKey,
+            incarnation: sessionId,
+          }),
+        });
+      }
       entered.resolve();
       await prepared.promise;
+      operation?.complete();
     });
     const controller = new AbortController();
-    const context = createContext();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     let settled = false;
     const observers = runGatewayStartupObservers({
       registry: createEmptyPluginRegistry(),
-      resolveGatewayContext: () => context,
+      resolveGatewayContext,
       loadSubagentRegistryActivation: () => async () => {
         activated.resolve();
       },
@@ -80,6 +101,11 @@ it.for(["prewarm", "delivery", "exec"] as const)(
         await withinTest(entered.promise, signal);
         expect(settled).toBe(false);
       }
+      if (blocked === "exec") {
+        expect(operation).toBeDefined();
+        expect(captureGatewayScopeMatcher(resolveGatewayContext)(operation!)).toBe(true);
+        expect(captureGatewayScopeMatcher(() => context)(operation!)).toBe(false);
+      }
       prepared.resolve();
       await observers;
       expect(log.warn).not.toHaveBeenCalled();
@@ -87,6 +113,8 @@ it.for(["prewarm", "delivery", "exec"] as const)(
       controller.abort();
       prepared.resolve();
       await observers;
+      operation?.complete();
+      await operation?.ownerSettlement;
     }
   },
 );

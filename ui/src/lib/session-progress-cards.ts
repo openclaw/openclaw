@@ -459,6 +459,7 @@ export function sessionProgressCardsForGateway(
       retireClientEntries();
     }
     knownAvailable = available();
+    // Active card consumers keep cached snapshots fresh through Gateway connection and event receipts.
     stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
     stopGatewayEvents = gateway.subscribeEvents(handleGatewayEvent);
   };
@@ -470,7 +471,6 @@ export function sessionProgressCardsForGateway(
     stopGatewayEvents?.();
     stopGatewaySnapshots = null;
     stopGatewayEvents = null;
-    // Without event/client subscriptions these snapshots cannot remain fresh.
     entries.forEach(retireRefresh);
     entries.clear();
   };

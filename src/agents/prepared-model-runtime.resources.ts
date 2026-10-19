@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   aggregatePluginRuntimeCloseErrors,
@@ -227,10 +228,5 @@ export async function closeEphemeralPreparedModelRuntimeResources(): Promise<voi
       }
     }),
   );
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Prepared plugin resources failed to close");
-  }
+  throwSettledAggregate(results, "Prepared plugin resources failed to close");
 }

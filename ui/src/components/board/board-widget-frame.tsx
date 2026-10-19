@@ -604,6 +604,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         );
       }
     },
+    // Forward the widget owner's event stream to its projection subscribers.
     subscribe: (listener: () => void) => changes.subscribe(listener),
     confirmation,
     bindFrame(frame: HTMLIFrameElement) {

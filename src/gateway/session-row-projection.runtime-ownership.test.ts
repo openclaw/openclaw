@@ -396,15 +396,13 @@ it("prepares native model ownership in workers and invalidates only its committe
       { assertCurrent() {} },
     );
     await bindings.register(key, "gpt-5.6-sol");
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: "row-native-session",
-        updatedAt: 1,
-        agentHarnessId: "row-native",
-        modelSelectionLocked: true,
-      },
-    );
+    const entry = {
+      sessionId: "row-native-session",
+      updatedAt: 1,
+      agentHarnessId: "row-native",
+      modelSelectionLocked: true,
+    };
+    replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
     const previousRegistry = captureActivePluginRegistrySnapshot();
     const registry = createEmptyPluginRegistry();
     let ownershipReads = 0;
@@ -447,6 +445,8 @@ it("prepares native model ownership in workers and invalidates only its committe
       await projection.ensureMaterialized();
       const snapshot = () => projection!.snapshot({ agentId: "main", key }).row;
       snapshot();
+      const initialRevision = snapshot()?.sessionModelRevision;
+      expect(initialRevision).toEqual(expect.any(String));
       const sql = observeHostDataSql();
       try {
         expect(snapshot()).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });
@@ -455,6 +455,15 @@ it("prepares native model ownership in workers and invalidates only its committe
       } finally {
         sql.restore();
       }
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { ...entry, label: "Renamed native session", updatedAt: 2, lastReadAt: 2 },
+      );
+      await projection.ensureMaterialized();
+      expect(snapshot()).toMatchObject({
+        label: "Renamed native session",
+        sessionModelRevision: initialRevision,
+      });
       const initialReads = ownershipReads;
       const source = projection.capture({ agentId: "main", key })?.runtimeOwnershipDependencies?.[0]
         ?.identity;
@@ -470,17 +479,27 @@ it("prepares native model ownership in workers and invalidates only its committe
       await bindings.register("unrelated", "gpt-5.6-luna");
       await projection.ensureMaterialized();
       expect(ownershipReads).toBe(initialReads);
+      expect(snapshot()?.sessionModelRevision).toBe(initialRevision);
+      const saved = projection.capture({ agentId: "main", key })?.entry;
       await bindings.register(key, "gpt-5.6-luna");
       await projection.ensureMaterialized();
       expect(snapshot()).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-luna" });
+      const changedRevision = snapshot()?.sessionModelRevision;
+      expect(changedRevision).toEqual(expect.any(String));
+      expect(changedRevision).not.toBe(initialRevision);
+      expect(projection.capture({ agentId: "main", key })?.entry).toEqual(saved);
       await bindings.delete(key);
       await projection.ensureMaterialized();
       expect(snapshot()).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
+      const removedRevision = snapshot()?.sessionModelRevision;
+      expect(removedRevision).toEqual(expect.any(String));
+      expect(removedRevision).not.toBe(changedRevision);
       const beforeUnknown = ownershipReads;
       beginPluginStatePublication(() => source!).finish("unknown");
       await projection.ensureMaterialized();
       expect(ownershipReads).toBeGreaterThan(beforeUnknown);
       expect(snapshot()?.model).toBe("gpt-5.5");
+      expect(snapshot()?.sessionModelRevision).toBe(removedRevision);
       expect(syncOwnership).not.toHaveBeenCalled();
     } finally {
       projection?.dispose();
