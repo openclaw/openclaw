@@ -175,9 +175,6 @@ function progressView(input: NonNullable<ChatActivityPillsProps["progress"]>): P
     input.endedAt,
     input.hasActiveRun,
   );
-  if (!view.counts) {
-    return { label: t("sessionProgressCard.composerTitle"), icon: "listChecks" };
-  }
   let badge: Badge;
   if (input.refresh === "pending") {
     badge = { icon: "spinner", tone: "normal", label: t("chat.activityPills.progress.updating") };
@@ -187,6 +184,8 @@ function progressView(input: NonNullable<ChatActivityPillsProps["progress"]>): P
       tone: "warn",
       label: t("chat.activityPills.progress.updateUnavailable"),
     };
+  } else if (!view.counts) {
+    return { label: t("sessionProgressCard.composerTitle"), icon: "listChecks" };
   } else if (view.hasCurrentRunActivity) {
     badge = { icon: "spinner", tone: "normal", label: t("common.running") };
   } else if (view.complete) {
@@ -205,6 +204,14 @@ function progressView(input: NonNullable<ChatActivityPillsProps["progress"]>): P
     badge = { icon: "pause", tone: "warn", label: t("chat.activityPills.paused") };
   } else {
     badge = { icon: "clock", tone: "warn", label: t("chat.activityPills.pending") };
+  }
+  if (!view.counts) {
+    return {
+      label: t("sessionProgressCard.composerTitle"),
+      icon: "listChecks",
+      badge,
+      attention: input.refresh === "failed" || input.refresh === "timeout",
+    };
   }
   return {
     label: view.stepLabel,

@@ -75,6 +75,41 @@ it("reports a pursuing goal only after execution is confirmed and opens its curr
   expect(view.queryByRole("button", { name: /Pursuing goal/ })).toBeNull();
 });
 
+it("preserves Markdown-only progress refresh outcomes and clears them after recovery", () => {
+  const onOpen = vi.fn();
+  const progress: NonNullable<ChatActivityPillsProps["progress"]> = {
+    card: {
+      sessionKey: "agent:main:test",
+      revision: 1,
+      updatedAt: 1,
+      markdown: "Release notes preserved",
+    },
+    showInChat: true,
+    hasActiveRun: false,
+    onOpen,
+  };
+  const initial: ChatActivityPillsProps = {
+    presented: true,
+    approvalPending: false,
+    progress,
+  };
+  const view = mountPills(initial);
+  expect(view.getByRole("button", { name: "Task progress" })).toBeTruthy();
+  for (const refresh of ["pending", "failed", "timeout"] as const) {
+    view.update({ ...initial, progress: { ...progress, refresh } });
+    const status =
+      refresh === "pending"
+        ? "Updating saved progress"
+        : "Progress update unavailable; last plan preserved";
+    expect(view.getByRole("button", { name: `Task progress, ${status}` })).toBeTruthy();
+  }
+  view.update(initial);
+  const button = view.getByRole<HTMLButtonElement>("button", { name: "Task progress" });
+  expect(view.queryByRole("button", { name: /Progress update unavailable/ })).toBeNull();
+  button.click();
+  expect(onOpen).toHaveBeenCalledExactlyOnceWith(button);
+});
+
 it("retains the goal action while approval hides subagent activity, then restores it", () => {
   const onGoal = vi.fn();
   const onSubagents = vi.fn();
