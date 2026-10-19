@@ -112,6 +112,7 @@ vi.mock("./refresh.js", () => ({
   ensureSkillsWatcher: ensureSkillsWatcherMock,
 }));
 
+// mock-isolation: Version clocks are shared refresh-state module state; cases control snapshot refresh decisions without cross-case version drift.
 vi.mock("./refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   getSkillsSourceVersion: getSkillsSnapshotVersionMock,
