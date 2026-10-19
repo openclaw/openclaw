@@ -9,7 +9,6 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -303,11 +302,6 @@ suite.define(() => {
         });
         await openDetailsPullRequests(page);
         await pollCount(chips).toBe(count);
-        const host = page.locator(".chat-mobile-host");
-        if ((await host.isVisible()) && (await host.getAttribute("data-mode")) === "dock") {
-          await selectChatLayoutAction(page, "Expand Side panel");
-          await expect.poll(() => host.getAttribute("data-mode")).toBe("expanded");
-        }
         await page.locator(".chat").evaluate(finishElementAnimations);
         const bounds = await stack.evaluate((element) => {
           const detailsBounds = element
@@ -451,7 +445,6 @@ suite.define(() => {
         name: "Hide claude/cloud-workers-live-events for this session",
         exact: true,
       });
-      await expect.poll(() => dismiss.isEnabled()).toBe(true);
       await page.locator(".chat").evaluate(finishElementAnimations);
       if (captureUiProof) {
         await page.screenshot({

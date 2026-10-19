@@ -425,6 +425,8 @@
   stroke-width: 1.8;
 }
 
+/* Header composition supplies the approved glyph to the native Details trigger. */
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle {
   width: var(--rail-header-action-size);
   min-width: var(--rail-header-action-size);

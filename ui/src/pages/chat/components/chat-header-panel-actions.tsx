@@ -45,7 +45,6 @@ export type ChatPaneLayoutMenuProps = {
   panelMenuActions?: HeaderPanelAction[];
   layoutMenuActions?: HeaderMenuQuickAction[];
   sidebarLayout?: SidebarLayout;
-  sidePanelOpen?: boolean;
   panelDefinitions?: SidebarPanelDefinition[];
   onLayoutChange?: ChatPageHost["updateSidebarLayout"];
   onToggleSidePanel?: () => void;
@@ -64,7 +63,6 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
   const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
   const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
   const split = layout?.open === true && !layout.expanded;
-  const sidePanelOpen = props.sidePanelOpen ?? split;
   const actions: ChatQuickAction[] = [];
   if (layout && props.onLayoutChange && (split || layout.expanded)) {
     actions.push({
@@ -135,9 +133,9 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
     actions.push({
       id: "side-panel",
       className: "chat-side-panel-toggle",
-      label: t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
-      icon: sidePanelOpen ? "panelRightClose" : "panelRightOpen",
-      active: sidePanelOpen,
+      label: t(split ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
+      icon: split ? "panelRightClose" : "panelRightOpen",
+      active: split,
       onActivate: props.onToggleSidePanel,
     });
   }

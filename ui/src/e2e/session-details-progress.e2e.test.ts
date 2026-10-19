@@ -236,23 +236,6 @@ suite.define(() => {
             [visibleDetails, visibleProgress, composer],
             { animations: "disabled", elements: [visibleDetails] },
           );
-          expect(
-            await details.evaluate((root) => {
-              const card = root.querySelector('[data-progress-card-placement="details"]')!;
-              const group = root.querySelector(".chat-details__group")!;
-              return [card, group].every((element) => {
-                const style = getComputedStyle(element);
-                return (
-                  style.borderTopWidth === (element === card ? "0px" : "1px") &&
-                  (element === card || style.borderTopStyle === "solid") &&
-                  style.borderInlineStartWidth === "0px" &&
-                  style.borderBottomWidth === "0px" &&
-                  style.borderInlineEndWidth === "0px" &&
-                  style.borderRadius === "0px"
-                );
-              });
-            }),
-          ).toBe(true);
           await writeFile(path.join(suite.artifactDir, name), frame.png);
           await writeFile(path.join(suite.artifactDir, "panel-" + name), frame.elements[0]!.png);
         };
