@@ -1,4 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
+import type { AgentMessage } from "@openclaw/agent-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
@@ -15,12 +16,14 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { toWorkerTranscriptMessage } from "../../worker/transcript-message.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -259,16 +262,19 @@ describe("worker detached model-context branch parity", () => {
         store: createWorkerTranscriptCommitStore({ database }),
       });
       const identity = { ...createTranscriptCommitIdentity(SESSION_ID, 3), runId };
-      const commit = async (
-        baseLeafId: string | null,
-        seq: number,
-        messages: Parameters<typeof committer.commit>[0]["request"]["messages"],
-      ) => {
+      const commit = async (baseLeafId: string | null, seq: number, messages: AgentMessage[]) => {
+        const workerMessages = messages.map((message) => {
+          const projected = toWorkerTranscriptMessage(message, "transcript");
+          if (projected?.kind !== "complete") {
+            throw new Error("expected a complete worker transcript message");
+          }
+          return projected.message;
+        });
         const result = await committer.commit({
           identity,
           sessionTarget,
           assertCurrent: () => undefined,
-          request: { runEpoch: 3, baseLeafId, seq, messages },
+          request: { runEpoch: 3, baseLeafId, seq, messages: workerMessages },
         });
         if (!result.ok) {
           throw new Error(`Worker transcript commit rejected: ${result.reason}`);
@@ -296,51 +302,51 @@ describe("worker detached model-context branch parity", () => {
               workerLaunches++;
               const { baseLeafId, nextSeq } = plan.assignment.transcript;
               if (candidate === 1) {
-                await commit(baseLeafId, nextSeq, [
-                  ...(customType
-                    ? [
+                const messages: AgentMessage[] = [];
+                if (customType) {
+                  messages.push({
+                    role: "custom",
+                    customType,
+                    content: "runtime context",
+                    display: false,
+                    details:
+                      customType === "openclaw.system-update"
+                        ? { kind: "runtime-context", turnScoped: true }
+                        : { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+                    timestamp: 1,
+                  });
+                }
+                if (withToolActivity) {
+                  messages.push(
+                    makeAgentAssistantMessage({
+                      content: [
                         {
-                          role: "custom" as const,
-                          customType,
-                          content: "runtime context",
-                          display: false,
-                          details:
-                            customType === "openclaw.system-update"
-                              ? { kind: "runtime-context", turnScoped: true }
-                              : { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-                          timestamp: 1,
+                          type: "toolCall",
+                          id: "effect",
+                          name: "exec",
+                          arguments: { command: "effect-once" },
                         },
-                      ]
-                    : []),
-                  ...(withToolActivity
-                    ? [
-                        makeAgentAssistantMessage({
-                          content: [
-                            {
-                              type: "toolCall" as const,
-                              id: "effect",
-                              name: "exec",
-                              arguments: { command: "effect-once" },
-                            },
-                          ],
-                          stopReason: "toolUse",
-                        }),
-                        {
-                          role: "toolResult" as const,
-                          toolCallId: "effect",
-                          toolName: "exec",
-                          content: [{ type: "text" as const, text: "effect completed" }],
-                          isError: false,
-                          timestamp: 2,
-                        },
-                      ]
-                    : []),
+                      ],
+                      stopReason: "toolUse",
+                    }),
+                    {
+                      role: "toolResult",
+                      toolCallId: "effect",
+                      toolName: "exec",
+                      content: [{ type: "text", text: "effect completed" }],
+                      isError: false,
+                      timestamp: 2,
+                    },
+                  );
+                }
+                messages.push(
                   makeAgentAssistantMessage({
                     content: [],
                     stopReason: "error",
                     errorMessage: "rate limit",
                   }),
-                ]);
+                );
+                await commit(baseLeafId, nextSeq, messages);
               } else {
                 await commit(baseLeafId, nextSeq, [assistant("fallback answer")]);
               }
@@ -385,6 +391,48 @@ describe("worker detached model-context branch parity", () => {
       });
     },
   );
+
+  it.each([
+    "context-only",
+    "foreign-output",
+    "foreign-context",
+    "user",
+    "other-custom",
+    "other-entry",
+  ])("keeps the admission fence for a %s suffix", async (suffix) => {
+    const runId = "worker-context-fence";
+    const inputRecorder = recorder();
+    await inputRecorder.persistApproved();
+    const admittedLeaf = inputRecorder.getAdmissionReceipt()?.entryId;
+    expect(admittedLeaf).toEqual(expect.any(String));
+    const writer = await SessionManager.openAsync(sessionTarget);
+    const context: AgentMessage = {
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      content: "runtime context",
+      display: false,
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+      timestamp: 1,
+    };
+    await writer.appendMessageAsync(context);
+    if (suffix !== "context-only") {
+      await writer.appendMessageAsync(attachSessionTranscriptRunId(assistant("own output"), runId));
+    }
+    if (suffix === "foreign-output") {
+      await writer.appendMessageAsync(attachSessionTranscriptRunId(assistant("foreign"), "other"));
+    } else if (suffix === "foreign-context") {
+      const foreignContext = { ...context, __openclaw: { runId: "other" } };
+      await writer.appendMessageAsync(foreignContext);
+    } else if (suffix === "user") {
+      await writer.appendMessageAsync(user("later input"));
+    } else if (suffix === "other-custom") {
+      await writer.appendMessageAsync({ ...context, customType: "unrelated" });
+    } else if (suffix === "other-entry") {
+      await writer.appendCustomEntryAsync("unrelated", {});
+    }
+    const result = await launchProbe(runId, { userTurnTranscriptRecorder: inputRecorder });
+    expect(result.launch).toEqual({ baseLeafId: admittedLeaf, history: [] });
+  });
 
   it("launches a continuation from the committed interruption writes instead of the original admission", async () => {
     const original = recorder();

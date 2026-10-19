@@ -199,15 +199,27 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     const branch = current.getBranch();
     const admittedIndex = branch.findIndex((entry) => entry.id === admission.entryId);
     const suffix = branch.slice(admittedIndex + 1);
-    // A fallback continues its own committed work. Foreign appends keep the admission fence.
-    if (
-      admittedIndex >= 0 &&
-      suffix.length > 0 &&
-      suffix.every(
-        (entry) =>
-          entry.type === "message" && readSessionTranscriptRunId(entry.message) === turn.runId,
-      )
-    ) {
+    let hasRunOutput = false;
+    const isRunContinuation = suffix.every((entry) => {
+      if (entry.type !== "message") {
+        return false;
+      }
+      const { message } = entry;
+      const runId = readSessionTranscriptRunId(message);
+      if (runId !== undefined) {
+        const ownedOutput =
+          runId === turn.runId && (message.role === "assistant" || message.role === "toolResult");
+        hasRunOutput ||= ownedOutput;
+        return ownedOutput;
+      }
+      return (
+        message.role === "custom" &&
+        (message.customType === "openclaw.runtime-context" ||
+          message.customType === "openclaw.system-update")
+      );
+    });
+    // Untagged runtime context may accompany this run's output, but cannot establish ownership.
+    if (admittedIndex >= 0 && hasRunOutput && isRunContinuation) {
       manager = current;
       baseLeafId = current.getLeafId();
     }

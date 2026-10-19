@@ -37,19 +37,13 @@ export type SessionTranscriptUpdate = Omit<
   target: Omit<SessionTranscriptUpdateTarget, "storePath">;
 };
 
-/** Persists run ownership on model output and the runtime context emitted with it. */
+/** Persists authoritative run ownership on assistant and tool-result rows. */
 export function attachSessionTranscriptRunId<T>(message: T, runId: string | null | undefined): T {
   const normalizedRunId = normalizeOptionalString(runId);
   if (
     !normalizedRunId ||
     !isRecord(message) ||
-    (message.role !== "assistant" &&
-      message.role !== "toolResult" &&
-      !(
-        message.role === "custom" &&
-        (message.customType === "openclaw.runtime-context" ||
-          message.customType === "openclaw.system-update")
-      ))
+    (message.role !== "assistant" && message.role !== "toolResult")
   ) {
     return message;
   }
