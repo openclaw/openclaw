@@ -116,10 +116,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => {
     waitForGatewayHttpReadiness: mocks.readyz,
   };
 });
-vi.mock("./update-command-supervisor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-supervisor.js")>()),
-  hasLoadedLaunchdKeepAliveSupervisor: async () => false,
-}));
 vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
@@ -159,12 +155,14 @@ describe("post-activation failure settlement without inference", () => {
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       dirs.make("post-update-repair-native-"),
     );
+    const actualService =
+      await vi.importActual<typeof import("../../daemon/service.js")>("../../daemon/service.js");
     vi.mocked(resolveGatewayService)
       .mockReset()
-      .mockImplementation(
-        (await vi.importActual<typeof import("../../daemon/service.js")>("../../daemon/service.js"))
-          .resolveGatewayService,
-      );
+      .mockImplementation((...args) => ({
+        ...actualService.resolveGatewayService(...args),
+        isLoaded: async () => false,
+      }));
     const verification = await vi.importActual<typeof import("./update-command-verification.js")>(
       "./update-command-verification.js",
     );

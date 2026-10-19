@@ -269,13 +269,11 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
 
 export interface TaglineOptions {
   env?: NodeJS.ProcessEnv;
-  random?: () => number;
-  now?: () => Date;
   mode?: TaglineMode;
 }
 
-function activeTaglines(options: TaglineOptions = {}): string[] {
-  const today = options.now ? options.now() : new Date();
+function activeTaglines(): string[] {
+  const today = new Date();
   return TAGLINES.filter((tagline) => HOLIDAY_RULES.get(tagline)?.(today) ?? true);
 }
 
@@ -297,8 +295,7 @@ export function pickTagline(options: TaglineOptions = {}): string {
       );
     }
   }
-  const pool = activeTaglines(options);
-  const rand = options.random ?? Math.random;
-  const index = Math.floor(rand() * pool.length) % pool.length;
+  const pool = activeTaglines();
+  const index = Math.floor(Math.random() * pool.length) % pool.length;
   return expectDefined(pool[index], "pool entry at index");
 }

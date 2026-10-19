@@ -35,9 +35,9 @@ export function createDesktopPanelLifecycle(
   scheduleAfterRender: (callback: () => void | (() => void)) => void,
   options: DesktopPanelLifecycleOptions,
 ) {
-  const listeners = new Set<() => void>();
+  let publish: (() => void) | undefined;
   const notify = () => {
-    listeners.forEach((listener) => listener());
+    publish?.();
     scheduleReconciliation();
   };
   let mounted = false;
@@ -112,9 +112,9 @@ export function createDesktopPanelLifecycle(
   return {
     notify,
     subscribe(this: void, listener: () => void) {
-      listeners.add(listener);
+      publish = listener;
       return () => {
-        listeners.delete(listener);
+        publish = undefined;
       };
     },
     surface: () => surface,

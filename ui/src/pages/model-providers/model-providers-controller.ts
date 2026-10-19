@@ -52,8 +52,8 @@ export function createModelProviders(
   const gatewayState = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.settingsAgentSelection);
   const overlays = projectOverlays(context.overlays);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const mutationBlockedReason = (): string | null =>
     modelProviderConfigMutationBlockedReason(context) ??
     (state.selectedAgentId ? null : t("agents.noAgents"));
@@ -229,8 +229,10 @@ export function createModelProviders(
   const projection = projectSource(state, {
     read: (value) => value,
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => {
+        publish = undefined;
+      };
     },
     equality: "revision",
   });
@@ -336,7 +338,7 @@ export function createModelProviders(
     syncAgent();
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
-      listeners.clear();
+      publish = undefined;
       connected = false;
       for (const cleanup of cleanups) {
         cleanup();

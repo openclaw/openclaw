@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +29,7 @@ import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
 import {
   sanitizeHostExecEnv,
   withHostExecInheritedEnvOmitted,
@@ -74,10 +74,10 @@ describe("agent exec stored auth", () => {
         started.resolve();
         return pendingRows.promise;
       });
-      const signals = new EventEmitter();
       const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
-      vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
-        createSignalBridge(signals),
+      const signals = captureNativeSignalBridge(createSignalBridge);
+      vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+        signals.create,
       );
       const runAgent = vi.fn(async () => success());
       const runtime = createTestRuntime();
@@ -97,8 +97,12 @@ describe("agent exec stored auth", () => {
         expect(runAgent).not.toHaveBeenCalled();
         expect((await fs.stat(stateDir)).isDirectory()).toBe(true);
       } finally {
-        pendingRows.resolve(emptyRows);
-        await executing;
+        try {
+          pendingRows.resolve(emptyRows);
+          await executing;
+        } finally {
+          signals.dispose();
+        }
       }
     });
   });

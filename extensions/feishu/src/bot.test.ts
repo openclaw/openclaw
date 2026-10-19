@@ -30,6 +30,8 @@ import {
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
+  sentMessage,
+  withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { parseMergeForwardContent } from "./message-content.js";
@@ -81,22 +83,6 @@ function replyDispatcher(ensureNoVisibleReplyFallback = vi.fn()) {
 
 function senderClient(get = vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } })) {
   return { contact: { user: { get } } };
-}
-
-function sentMessage(
-  messageId: string,
-  chatId: string,
-): Awaited<ReturnType<typeof import("./send.js").sendMessageFeishu>> {
-  return {
-    messageId,
-    chatId,
-    receipt: {
-      primaryPlatformMessageId: messageId,
-      platformMessageIds: [messageId],
-      parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
-      sentAt: 1,
-    },
-  };
 }
 
 function savedMedia(id: string, contentType: string, size: number, path = `/tmp/${id}`) {
@@ -215,7 +201,7 @@ const {
   ),
   sendMessage: vi
     .fn<typeof import("./send.js").sendMessageFeishu>()
-    .mockResolvedValue(sentMessage("pairing-msg", "oc-dm")),
+    .mockImplementation(async () => sentMessage("pairing-msg", "oc-dm")),
   getMessage: vi.fn<typeof import("./send.js").getMessageFeishu>().mockResolvedValue(null),
   listThreadMessages: vi.fn().mockResolvedValue([]),
   saveMessageResource: vi
@@ -372,7 +358,7 @@ async function dispatchMessage(params: {
     feishuConfig?.dmPolicy === "open" && feishuConfig.allowFrom === undefined
       ? createFeishuTestConfig({ ...feishuConfig, allowFrom: ["*"] }, params.cfg)
       : params.cfg;
-  currentRuntimeConfig = params.currentCfg ?? cfg;
+  currentRuntimeConfig = withFeishuRuntimeDefaults(params.currentCfg ?? cfg);
   await handleFeishuMessage({
     cfg,
     event: params.event,

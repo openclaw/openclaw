@@ -26,7 +26,11 @@ import type {
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
 import type { BootRecord } from "../../app/boot-record.ts";
-import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type {
+  ApplicationGateway,
+  ApplicationGatewayPhase,
+  ApplicationGatewaySnapshot,
+} from "../../app/gateway.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import type {
@@ -201,11 +205,14 @@ export type SessionResetOptions = {
 export type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 export type SessionGateway = {
+  defer?: ApplicationGateway["defer"];
   readonly connection?: { readonly gatewayUrl: string; readonly token?: string };
   readonly connectionRevision?: number;
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     phase: ApplicationGatewayPhase;
+    deferredIntentCount?: number;
+    deferredIntentDraining?: boolean;
     restartPending?: boolean;
     suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
     hello: GatewayHelloOk | null;

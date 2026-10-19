@@ -10,7 +10,6 @@ import {
   Switch,
   untrack,
 } from "solid-js";
-import { registerListener } from "../../../../../src/shared/listeners.js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -184,7 +183,7 @@ export class ChatTranscriptRenderer {
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
   private readonly mediaDisconnect = new Set<() => void>();
-  private readonly listeners = new Set<() => void>();
+  private publish?: () => void;
   private readonly presentationChanged = () => this.publishPresentation?.();
 
   get columnElement(): HTMLDivElement | undefined {
@@ -192,7 +191,10 @@ export class ChatTranscriptRenderer {
   }
 
   subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
   }
 
   private isPresented(): boolean {
@@ -346,9 +348,7 @@ export class ChatTranscriptRenderer {
       );
     } else {
       this.publishPresentation?.();
-      for (const listener of this.listeners) {
-        listener();
-      }
+      this.publish?.();
     }
     this.commit();
     next.scrollElementRef(this.element);

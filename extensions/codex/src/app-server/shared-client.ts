@@ -653,9 +653,7 @@ export async function createIsolatedCodexAppServerClient(
 function startInitializedCodexAppServerClient(params: CodexAppServerClientStartupOptions) {
   return withCodexWebSocketOpenRetry({
     timeoutMs: params.timeoutMs ?? 0,
-    signal: params.abandonSignal
-      ? AbortSignal.any([params.lifetime.controller.signal, params.abandonSignal])
-      : params.lifetime.controller.signal,
+    signal: params.abandonSignal ?? params.lifetime.controller.signal,
     start: (timeoutMs) => startInitializedCodexAppServerClientOnce({ ...params, timeoutMs }),
   });
 }
@@ -665,9 +663,7 @@ async function startInitializedCodexAppServerClientOnce(
 ): Promise<CodexAppServerClient> {
   const acquireStartedAt = performance.now();
   const timeoutMs = params.timeoutMs ?? 0;
-  const abandonSignal = params.abandonSignal
-    ? AbortSignal.any([params.lifetime.controller.signal, params.abandonSignal])
-    : params.lifetime.controller.signal;
+  const abandonSignal = params.abandonSignal ?? params.lifetime.controller.signal;
   const waitForStartup = <T>(
     operation: () => Promise<T>,
     timeoutErrorFactory?: () => CodexAppServerStartupError,

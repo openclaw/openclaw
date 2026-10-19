@@ -40,8 +40,8 @@ type SidebarCatalogMenuHost = Pick<
 
 export function createSidebarCatalogMenu(host: SidebarCatalogMenuHost, beforeOpen: () => void) {
   let state: { menu: SidebarCatalogSessionMenuState; trigger: HTMLElement | null } | null = null;
-  const listeners = new Set<() => void>();
-  const publish = () => listeners.forEach((notify) => notify());
+  let notify: (() => void) | undefined;
+  const publish = () => notify?.();
   const isOpenFor = (key: CatalogSessionKey) => matchesMenu(state?.menu, key);
 
   function open(
@@ -200,11 +200,11 @@ export function createSidebarCatalogMenu(host: SidebarCatalogMenuHost, beforeOpe
     close,
     retargetTrigger,
     createView(viewHost: SidebarCatalogMenuHost) {
-      const snapshot = projectSource(listeners, {
+      const snapshot = projectSource(null, {
         read: () => state,
-        subscribe: (source, notify) => {
-          source.add(notify);
-          return () => source.delete(notify);
+        subscribe: (_, listener) => {
+          notify = listener;
+          return () => (notify = undefined);
         },
         equality: "revision",
       });

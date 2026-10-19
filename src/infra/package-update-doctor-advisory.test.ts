@@ -57,7 +57,7 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
         termination: "exit" as const,
       },
       createDeferredConfiguredPluginRepairDoctorResult([
-        `deferred configured plugin repair ${"x".repeat(10_000)}`,
+        `Deferred configured plugin repair. ${"x".repeat(10_000)}`,
       ]),
     );
 
@@ -65,7 +65,7 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
     expect(step.stderrTail).toMatch(/^…/u);
     expect(step.stderrTail).toContain("recoverable update-time repair warning");
     expect(step.warnings).toEqual([
-      `${`deferred configured plugin repair ${"x".repeat(10_000)}`.slice(0, 500)}\nRun openclaw doctor --fix to finish deferred repairs.`,
+      "Deferred configured plugin repair. …\nRun openclaw doctor --fix to finish deferred repairs.",
     ]);
   });
 

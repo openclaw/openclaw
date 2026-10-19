@@ -37,6 +37,13 @@ same projection contract. Top-level assignments publish automatically; use
 Reads remain synchronous, and disposal retires notifications without changing
 the state or owning its requests. Existing domain owners still use `projectOwner()`.
 
+For a private leaf owner created with its view, `projectCallbackOwner(create, read)`
+from `callback-owner.ts`
+supplies its sole notification callback and returns `{ owner, view }`. The view
+uses the same lazy observation and disposal contract, without requiring a
+subscription API on the leaf. Retained owners that outlive a view still need a
+rebindable subscription; use `projectOwner` for those lifetimes.
+
 ## Adapter families
 
 | Module                   | Owners                                                            |

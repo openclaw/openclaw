@@ -78,7 +78,7 @@ export function captureRequesterOrigin(
     return undefined;
   }
   const facts = source ?? params;
-  return Object.freeze({
+  const origin: RequesterOrigin = {
     sessionKey,
     operatorProfileId: facts.operatorProfileId,
     messageProvider: normalizeMessageChannel(
@@ -95,7 +95,14 @@ export function captureRequesterOrigin(
     senderName: facts.senderName,
     senderUsername: facts.senderUsername,
     senderE164: facts.senderE164,
-  });
+  };
+  // JSON persistence drops undefined keys; replay must capture the same envelope.
+  for (const [key, value] of Object.entries(origin)) {
+    if (value === undefined) {
+      Reflect.deleteProperty(origin, key);
+    }
+  }
+  return Object.freeze(origin);
 }
 
 /** Compare authenticated requester identity; captured context and display facts are not identity. */

@@ -98,8 +98,8 @@ export function createAssistantPanel(
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     hello?: ApplicationContext["gateway"]["snapshot"]["hello"];
   } = {};
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const getContext = () => props.context ?? application;
   const contentLoader = createLazyCustomElementRequests(element);
   const dockLayout = createDockLayout({
@@ -565,10 +565,10 @@ export function createAssistantPanel(
     detach,
     inputsChanged,
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      publish = listener;
       const stopLoader = contentLoader.subscribe(listener);
       return () => {
-        listeners.delete(listener);
+        publish = undefined;
         stopLoader();
       };
     },

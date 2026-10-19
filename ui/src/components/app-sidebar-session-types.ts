@@ -301,6 +301,7 @@ export type SidebarSectionDropTarget = {
 
 export type SidebarSessionMutationScope = {
   epoch: number;
+  allowDeferred?: boolean;
   context: ApplicationContext;
   gateway: ApplicationContext["gateway"];
   sessions: SessionCapability;

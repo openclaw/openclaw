@@ -18,8 +18,11 @@ is neither React nor Solid 1, and both priors produce plausible-looking bugs.
 production `ui/src`. Unlike the quick grep below, it counts generic calls,
 optional calls, computed literal method names, and named import aliases. It
 enforces zero feature-code render effects, zero direct TSX listeners, and zero
-DOM queries outside the explicit foreign-DOM owners in the guard. Four per-file
-baselines also prevent counts from rising or moving into unrelated files. After
+DOM queries outside the explicit foreign-DOM owners in the guard, and option-free
+literal-only memos. Per-file baselines cover effects, untrack, listeners, DOM
+queries, flush, and both owner APIs; Solid owner/flush calls resolve actual imports
+including aliases and namespaces, excluding shadowed locals and domain methods.
+These baselines prevent counts from rising or moving into unrelated files. After
 removing calls, run `pnpm check:control-ui-controllers --prune` and commit the
 shrunk baselines with the source change. Staged lint checks the index; CI and
 `--base <ref>` compare allowances against the merge base. Do not raise allowances.
@@ -52,6 +55,7 @@ prod 'runWithOwner\(|getOwner\(' | wc -l
 | Direct `addEventListener` in a Solid component                                                               | A JSX handler (`onClick={(e) => props.onX(e)}`), or `lib/reactive/listener.ts` returning teardown from `onSettled` / effect apply                                        | Never in TSX. Plain owners may keep paired platform listeners (AbortSignal, IDB, Worker, WebSocket, RTC, MediaStream).                   |
 | `querySelector` to find your own DOM                                                                         | A `ref` callback or a two-phase ref directive factory                                                                                                                    | Querying a deliberate island (xterm, noVNC, PDF, canvas, markdown reconciler) owned by that island's code.                               |
 | Class strings: template literals, `.filter(Boolean).join(" ")`, string concatenation                         | `class={["base", props.class, { active: active() }]}`                                                                                                                    | Never.                                                                                                                                   |
+| A memo whose callback only returns a literal                                                                 | The literal or a plain accessor                                                                                                                                          | Property/equality boundaries, async reads, and explicit memo options are outside this narrow ban.                                        |
 | `flush()` in production code                                                                                 | Derive the value instead of write-then-read; let microtask batching run                                                                                                  | An imperative integration that must observe committed DOM synchronously. Name the integration and keep it at the owner.                  |
 | `runWithOwner`/`getOwner` capturing owners for nested mounts                                                 | Create primitives in the component or factory body                                                                                                                       | A library adapter mounting Solid content inside a foreign DOM island.                                                                    |
 | Manual `subscribe`/notify loops in a view                                                                    | `projectOwner`/`projectSource` from `lib/reactive/projection.ts`                                                                                                         | Event APIs whose ordering, replay, or completion contract a latest-value read would lose. Those stay direct subscriptions.               |

@@ -5,11 +5,6 @@ import type { GatewayLockIdentity, GatewayLockOptions } from "./gateway-lock.js"
 
 export type EmbeddedStateSignal = "SIGINT" | "SIGTERM";
 
-export type EmbeddedStateSignalProcess = {
-  on(signal: EmbeddedStateSignal, handler: () => void): unknown;
-  off(signal: EmbeddedStateSignal, handler: () => void): unknown;
-};
-
 export type EmbeddedStateLockHandle = {
   release: () => Promise<void>;
 };
@@ -17,13 +12,13 @@ export type EmbeddedStateLockHandle = {
 const EMBEDDED_STATE_SIGNALS: readonly EmbeddedStateSignal[] = ["SIGINT", "SIGTERM"];
 
 /** Bridges process signals into embedded-run cancellation so lock cleanup can unwind. */
-export function createEmbeddedStateSignalBridge(processLike: EmbeddedStateSignalProcess = process) {
+export function createEmbeddedStateSignalBridge() {
   const controller = new AbortController();
   let receivedSignal: EmbeddedStateSignal | undefined;
   const handlers = new Map<EmbeddedStateSignal, () => void>();
   const dispose = () => {
     for (const [signal, handler] of handlers) {
-      processLike.off(signal, handler);
+      process.off(signal, handler);
     }
     handlers.clear();
   };
@@ -36,7 +31,7 @@ export function createEmbeddedStateSignalBridge(processLike: EmbeddedStateSignal
       }
     };
     handlers.set(signal, handler);
-    processLike.on(signal, handler);
+    process.on(signal, handler);
   }
   return {
     signal: controller.signal,

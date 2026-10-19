@@ -32,6 +32,7 @@ import {
   expectOnboardLocalJsonSetupFailure,
 } from "./onboard-non-interactive.test-helpers.js";
 import type { WaitForGatewayReachableMock } from "./onboard-non-interactive.test-helpers.js";
+import type { OnboardOptions } from "./onboard-types.js";
 
 const localDefaults = {
   nonInteractive: true,
@@ -451,6 +452,136 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(ensureWorkspaceAndSessionsMock.mock.calls[0]?.[1]).toBe(runtime);
     });
   }, 60_000);
+
+  const remoteCredentialUrl = "wss://gateway.example.test";
+  const remoteTokenRef = { source: "env", provider: "default", id: "OLD_REMOTE_TOKEN" } as const;
+  const remoteTlsFingerprint = "sha256:test-fingerprint";
+  const remoteEdgeAuth = { "X-Edge-Auth": "existing-edge-secret" };
+  const remoteCredentialConfig = (
+    remote: NonNullable<OpenClawConfig["gateway"]>["remote"],
+  ): OpenClawConfig => ({ gateway: { mode: "remote", remote } });
+
+  async function setupRemoteCredentials(opts: Partial<OnboardOptions>, baseConfig: OpenClawConfig) {
+    let remote: NonNullable<OpenClawConfig["gateway"]>["remote"];
+    await withStateDir("state-remote-credentials-", async () => {
+      testConfigStore.set(resolveTestConfigPath(), baseConfig);
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: remoteCredentialUrl,
+          skipHooks: true,
+          ...opts,
+        },
+        runtime,
+      );
+      remote = readTestConfig().gateway?.remote;
+    });
+    return remote;
+  }
+
+  it.each([
+    {
+      name: "fresh remote configuration",
+      baseConfig: {},
+      expectedRemote: { url: remoteCredentialUrl, password: "replacement-password" },
+    },
+    {
+      name: "a token SecretRef on the same endpoint",
+      baseConfig: remoteCredentialConfig({
+        url: remoteCredentialUrl,
+        token: remoteTokenRef,
+        tlsFingerprint: remoteTlsFingerprint,
+        edgeAuth: remoteEdgeAuth,
+      }),
+      expectedRemote: {
+        url: remoteCredentialUrl,
+        password: "replacement-password",
+        tlsFingerprint: remoteTlsFingerprint,
+        edgeAuth: remoteEdgeAuth,
+      },
+    },
+    {
+      name: "credentials and routing from a different endpoint",
+      baseConfig: remoteCredentialConfig({
+        url: "wss://old-gateway.example.test",
+        token: remoteTokenRef,
+        password: { source: "env", provider: "default", id: "OLD_REMOTE_PASSWORD" },
+        tlsFingerprint: "sha256:old-fingerprint",
+        sshTarget: "operator@old-gateway.example.test",
+        edgeAuth: { "X-Edge-Auth": "old-edge-secret" },
+      }),
+      expectedRemote: { url: remoteCredentialUrl, password: "replacement-password" },
+    },
+  ])("stores a remote password while replacing $name", async ({ baseConfig, expectedRemote }) => {
+    expect(
+      await setupRemoteCredentials({ remotePassword: "replacement-password" }, baseConfig),
+    ).toEqual(expectedRemote);
+  });
+
+  it.each([
+    ["remoteToken", "token", "OPENCLAW_GATEWAY_TOKEN", "password"],
+    ["remotePassword", "password", "OPENCLAW_GATEWAY_PASSWORD", "token"],
+  ] as const)(
+    "stores %s as a configured-provider env reference and clears the old credential",
+    async (option, field, envName, previousField) => {
+      await withEnvAsync({ [envName]: "replacement-credential" }, async () => {
+        const remote = await setupRemoteCredentials(
+          { [option]: "replacement-credential", secretInputMode: "ref" },
+          {
+            secrets: {
+              defaults: { env: "gatewayenv" },
+              providers: { gatewayenv: { source: "env" } },
+            },
+            ...remoteCredentialConfig({
+              url: remoteCredentialUrl,
+              [previousField]: { source: "env", provider: "default", id: "OLD_GATEWAY_CREDENTIAL" },
+              tlsFingerprint: remoteTlsFingerprint,
+            }),
+          },
+        );
+        expect(remote).toEqual({
+          url: remoteCredentialUrl,
+          [field]: { source: "env", provider: "gatewayenv", id: envName },
+          tlsFingerprint: remoteTlsFingerprint,
+        });
+      });
+    },
+  );
+
+  it("clears a stale remote password when a token replaces auth for the same endpoint", async () => {
+    const remote = await setupRemoteCredentials(
+      { remoteToken: "replacement-token" },
+      remoteCredentialConfig({
+        url: remoteCredentialUrl,
+        password: "old-password",
+        tlsFingerprint: remoteTlsFingerprint,
+      }),
+    );
+    expect(remote).toEqual({
+      url: remoteCredentialUrl,
+      token: "replacement-token",
+      tlsFingerprint: remoteTlsFingerprint,
+    });
+  });
+
+  it.each([
+    "existing-password",
+    { source: "env", provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
+  ] as const)(
+    "preserves existing remote token and password %j without a replacement",
+    async (password) => {
+      const remote = {
+        url: remoteCredentialUrl,
+        token: "existing-token",
+        password,
+        tlsFingerprint: remoteTlsFingerprint,
+      };
+      expect(
+        await setupRemoteCredentials({ secretInputMode: "ref" }, remoteCredentialConfig(remote)),
+      ).toEqual(remote);
+    },
+  );
 
   it("writes gateway.remote url/token", async () => {
     await withStateDir("state-remote-", async (_stateDir) => {

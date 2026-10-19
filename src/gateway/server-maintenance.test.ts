@@ -10,6 +10,7 @@ import {
   onGatewaySuspendAdmissionChange,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -83,6 +84,76 @@ function createMaintenanceTimerDeps() {
 
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
 
+async function createThawScenario() {
+  const clock = createGatewaySchedulerClock();
+  let nowMs = 0;
+  let cpuUsage = { user: 0, system: 0 };
+  vi.spyOn(process, "cpuUsage").mockImplementation(() => cpuUsage);
+  const state: { restartReason?: "active-work" | "channel-restart-incomplete" } = {};
+  let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission>;
+  const base = createMaintenanceTimerDeps();
+  const deps = {
+    ...base,
+    scheduler: createTestGatewayScheduler(clock.clock),
+    isNixMode: true,
+    activeWorkInspectors: {
+      getChatRuns: vi.fn(() => (state.restartReason === "active-work" ? 1 : 0)),
+    },
+    restartRunningChannels: vi.fn(
+      async (_mode: "new-thaw" | "deferred-retry", _shouldContinue?: () => boolean) =>
+        state.restartReason !== "channel-restart-incomplete",
+    ),
+    refreshGatewayHealthSnapshot: vi.fn<
+      (opts?: { probe?: boolean; includeSensitive?: boolean }) => Promise<HealthSummary>
+    >(base.refreshGatewayHealthSnapshot),
+    refreshPresence: vi.fn(),
+    resetEventLoopHealth: vi.fn(),
+  };
+  const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+  const timers = startGatewayMaintenanceTimers(deps);
+  await clock.advanceBy(0);
+  const elapse = (gapMs: number, cpuCoreRatio = 0) => {
+    nowMs += gapMs;
+    clock.setTime(nowMs);
+    cpuUsage = {
+      user: cpuUsage.user + gapMs * 1_000 * cpuCoreRatio * 0.6,
+      system: cpuUsage.system + gapMs * 1_000 * cpuCoreRatio * 0.4,
+    };
+  };
+  return {
+    deps,
+    state,
+    elapse,
+    setAdmissionClosed(closed: boolean) {
+      if (closed) {
+        suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspension?.commit()).toBe(true);
+      } else {
+        suspension?.release();
+        suspension = null;
+      }
+    },
+    advance: async (gapMs: number, cpuCoreRatio = 0) => {
+      elapse(gapMs, cpuCoreRatio);
+      await clock.wake();
+    },
+    stop: async () => {
+      suspension?.release();
+      await stopMaintenanceTimers(timers);
+    },
+    expectRecoveryCount(count: number, restarts = count, resets = count) {
+      expect(deps.restartRunningChannels).toHaveBeenCalledTimes(restarts);
+      expect(
+        deps.refreshGatewayHealthSnapshot.mock.calls.filter(([opts]) => opts?.probe),
+      ).toHaveLength(count);
+      expect(deps.refreshPresence).toHaveBeenCalledTimes(count);
+      expect(deps.resetEventLoopHealth).toHaveBeenCalledTimes(resets);
+    },
+    restartLogs: (kind: string) =>
+      deps.logHealth.info.mock.calls.filter(([message]) => message.includes(`restart ${kind}`)),
+  };
+}
+
 function seedStableDedupeEntries(deps: MaintenanceTimerDeps, now: number): void {
   for (let index = 0; index < DEDUPE_MAX; index += 1) {
     deps.dedupe.set(`stable-${index}`, { ts: now - 1_000 + index, ok: true });
@@ -123,6 +194,155 @@ describe("startGatewayMaintenanceTimers", () => {
       retainedCount: 0,
     });
   });
+
+  it("does not recover channels after a CPU-busy timing gap", async () => {
+    const harness = await createThawScenario();
+    try {
+      await harness.advance(TICK_INTERVAL_MS);
+      const gap = TICK_INTERVAL_MS + 45_000;
+      await harness.advance(gap, 0.5);
+      await harness.advance(TICK_INTERVAL_MS);
+      harness.expectRecoveryCount(0);
+      expect(harness.deps.logHealth.info).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`gap ${gap}ms, CPU ratio 0.50`),
+      );
+      await harness.advance(gap);
+      harness.expectRecoveryCount(1);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("excludes slow thaw recovery work from later timing samples", async () => {
+    const harness = await createThawScenario();
+    const health = await harness.deps.refreshGatewayHealthSnapshot();
+    harness.deps.refreshGatewayHealthSnapshot
+      .mockImplementationOnce(async () => {
+        harness.elapse(45_000);
+        return health;
+      })
+      .mockImplementationOnce(async () => {
+        harness.elapse(45_000, 1);
+        return health;
+      });
+    try {
+      for (const [gap, count] of [
+        [TICK_INTERVAL_MS + 45_000, 1],
+        [TICK_INTERVAL_MS, 1],
+        [TICK_INTERVAL_MS + 45_000, 2],
+        [TICK_INTERVAL_MS + 45_000, 3],
+      ] as const) {
+        await harness.advance(gap);
+        harness.expectRecoveryCount(count);
+      }
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it.each(["active-work", "channel-restart-incomplete"] as const)(
+    "retries thaw recovery deferred by %s",
+    async (reason) => {
+      const harness = await createThawScenario();
+      harness.state.restartReason = reason;
+      try {
+        await harness.advance(TICK_INTERVAL_MS + 45_000);
+        harness.expectRecoveryCount(1, reason === "active-work" ? 0 : 1);
+        await harness.advance(TICK_INTERVAL_MS);
+        harness.expectRecoveryCount(1, reason === "active-work" ? 0 : 2);
+        harness.state.restartReason = undefined;
+        await harness.advance(TICK_INTERVAL_MS);
+        harness.expectRecoveryCount(1, reason === "active-work" ? 1 : 3);
+        expect(harness.deps.restartRunningChannels.mock.calls.map(([mode]) => mode)).toEqual(
+          reason === "active-work"
+            ? ["deferred-retry"]
+            : ["new-thaw", "deferred-retry", "deferred-retry"],
+        );
+        expect(harness.restartLogs("deferred")).toEqual([
+          [
+            reason === "active-work"
+              ? "host thaw channel restart deferred: gateway still has active work"
+              : "host thaw channel restart deferred: one or more channel accounts remain pending",
+          ],
+        ]);
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "expires thaw restart recovery while admission is closed: %s",
+    async (closed) => {
+      const harness = await createThawScenario();
+      harness.setAdmissionClosed(closed);
+      harness.state.restartReason = closed ? undefined : "active-work";
+      try {
+        await harness.advance(TICK_INTERVAL_MS + 45_000);
+        for (
+          let elapsedMs = TICK_INTERVAL_MS;
+          elapsedMs < 10 * 60_000;
+          elapsedMs += TICK_INTERVAL_MS
+        ) {
+          await harness.advance(TICK_INTERVAL_MS);
+        }
+        if (!closed) {
+          expect(harness.deps.activeWorkInspectors.getChatRuns).toHaveBeenCalledTimes(20);
+        }
+        await harness.advance(TICK_INTERVAL_MS);
+        harness.setAdmissionClosed(false);
+        harness.state.restartReason = undefined;
+        await harness.advance(TICK_INTERVAL_MS);
+        expect(harness.deps.restartRunningChannels).not.toHaveBeenCalled();
+        expect(harness.restartLogs("abandoned")).toHaveLength(1);
+        if (closed) {
+          harness.expectRecoveryCount(1, 0);
+        } else {
+          expect(harness.restartLogs("deferred")).toEqual([
+            ["host thaw channel restart deferred: gateway still has active work"],
+          ]);
+          expect(harness.restartLogs("abandoned")).toEqual([
+            [expect.stringContaining("gateway stayed busy")],
+          ]);
+          await harness.advance(TICK_INTERVAL_MS + 45_000);
+          expect(harness.deps.restartRunningChannels).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
+
+  it.each(["before", "during"])(
+    "resumes thaw recovery when admission closes %s recovery",
+    async (when) => {
+      const harness = await createThawScenario();
+      const midRecovery = when === "during";
+      if (midRecovery) {
+        harness.deps.resetEventLoopHealth.mockImplementationOnce(() =>
+          harness.setAdmissionClosed(true),
+        );
+      } else {
+        harness.setAdmissionClosed(true);
+      }
+      try {
+        await harness.advance(TICK_INTERVAL_MS + 45_000);
+        harness.expectRecoveryCount(0, 0, midRecovery ? 1 : 0);
+        harness.setAdmissionClosed(false);
+        await harness.advance(TICK_INTERVAL_MS);
+        if (midRecovery) {
+          expect(harness.deps.logHealth.info).toHaveBeenCalledWith(
+            "host thaw recovery deferred: gateway suspension began mid-recovery",
+          );
+        } else {
+          await harness.advance(TICK_INTERVAL_MS);
+        }
+        harness.expectRecoveryCount(1, 1, midRecovery ? 2 : 1);
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
 
   it("leaves admission untouched on busy thaw ticks and retries a failed idle pass", async () => {
     vi.useFakeTimers();

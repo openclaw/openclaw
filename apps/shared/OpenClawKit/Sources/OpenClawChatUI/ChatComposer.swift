@@ -192,13 +192,13 @@ struct OpenClawChatComposer: View {
                 .accessibilityIdentifier("chat-composer-model-sign-in-notice")
             }
             self.lifecycleComposer
-            if self.viewModel.modelCatalogMessage != nil || !self.usesDesktopModelMenu {
+            if self.viewModel.modelCatalogMessage != nil || self.showsModelSignInRow {
                 HStack {
                     if let message = self.viewModel.modelCatalogMessage {
                         Text(message).font(OpenClawChatTypography.caption)
                     }
                     Spacer()
-                    if !self.usesDesktopModelMenu {
+                    if self.showsModelSignInRow {
                         self.modelSignInButton
                     }
                 }
