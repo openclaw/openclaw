@@ -18,6 +18,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import {
   createReplyOperation as createSessionReplyOperation,
@@ -349,11 +350,21 @@ describe("runReplyAgent runtime config", () => {
         throw new Error("Expected the queued recovery runner");
       }
       expect(queuedCall[1].strandedReplyRetry).toBe(true);
-      await queuedCall[4](queuedCall[1]);
+      try {
+        await queuedCall[4](queuedCall[1]);
 
-      expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
-      expect(onAgentRunTerminalOutcome.mock.calls).toEqual([["completed"], ["failed"]]);
-      expect(isSessionRunActive(sessionEntry.sessionId)).toBe(false);
+        expect(queuedCall[1].controllerInput?.claim).toBeDefined();
+        expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
+        expect(onAgentRunTerminalOutcome.mock.calls).toEqual([["completed"], ["failed"]]);
+        expect(isSessionRunActive(sessionEntry.sessionId)).toBe(false);
+      } finally {
+        // This direct invocation also owns the claim cleanup normally performed by the queue drain.
+        const claim = queuedCall[1].controllerInput?.claim;
+        if (claim) {
+          releaseSessionControllerClaim(claim);
+          await claim.settlement.promise;
+        }
+      }
     });
   });
 
