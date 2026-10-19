@@ -8,7 +8,7 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -56,6 +56,9 @@ function fixture() {
   };
   return { provider, context, probe };
 }
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+});
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -488,7 +491,6 @@ it("rejects malformed native output instead of guessing an answer", async () => 
 it.each(["abort", "deadline"])(
   "bounds the registered whole response and releases on %s",
   async (kind) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const started = createDeferred<void>();
     const cancel = vi.fn();
     vi.stubGlobal(
@@ -529,7 +531,6 @@ it.each(["abort", "deadline"])(
 it.each(["abort", "deadline"])(
   "settles a pending image probe on %s without later HTTP",
   async (kind) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const started = createDeferred<void>();
     const probeResult = createDeferred<{ width: number; height: number }>();
     const fetch = vi.fn();
