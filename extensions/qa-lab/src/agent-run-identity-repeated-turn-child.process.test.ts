@@ -53,7 +53,6 @@ it(
         repoRoot,
         providerBaseUrl: `${mock.baseUrl}/v1`,
         providerMode: "mock-openai",
-        mockAuthAgentIds: ["qa"],
         mutateConfig: (cfg) => ({
           ...cfg,
           logging: { ...cfg.logging, audit: { enabled: true, executionIdentity: true } },

@@ -21,8 +21,8 @@ export function createQaGatewaySetupHarness() {
       await fs.writeFile(path.join(repoRoot, "package.json"), '{"version":"2026.4.8"}\n');
       for (const key of [
         ...QA_PROVIDER_SECRET_ENV_VARS,
-        ...Object.keys(process.env).filter((key) =>
-          QA_PROVIDER_SECRET_ENV_KEY_PATTERNS.some((pattern) => pattern.test(key)),
+        ...Object.keys(process.env).filter((envKey) =>
+          QA_PROVIDER_SECRET_ENV_KEY_PATTERNS.some((pattern) => pattern.test(envKey)),
         ),
         "CODEX_HOME",
         "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV",

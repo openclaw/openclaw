@@ -39,7 +39,7 @@ describe("cleanupQaGatewayTempRoots", () => {
     const inheritedTemp = { TMPDIR: parentTemp, TMP: parentTemp, TEMP: parentTemp };
     const { tempRoot, env, lifetime } = await setup.prepare(
       { runtimeEnvPatch: inheritedTemp },
-      { ...inheritedTemp, NODE_DISABLE_COMPILE_CACHE: undefined },
+      { ...inheritedTemp, NODE_DISABLE_COMPILE_CACHE: undefined, NODE_COMPILE_CACHE: undefined },
     );
     const result = await runQaScenarioCommandLifecycle({
       command: await resolveQaNodeExecPath(),
