@@ -89,7 +89,13 @@ suite.define(() => {
       await stop.click();
       const dialog = await waitForConfirmModal(page);
       expect(menuText).toBe("Stop device worker…");
-      expect(await dialog.textContent()).toContain('Stop the device worker for "Device startup"?');
+      expect(
+        await dialog.getByRole("heading", { name: "Stop worker?", exact: true }).textContent(),
+      ).toBe("Stop worker?");
+      expect(await dialog.textContent()).toContain(
+        "This will save workspace changes and stop this session’s worker.",
+      );
+      expect(await dialog.textContent()).toContain("Send a new message to continue.");
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await dialog.waitFor({ state: "detached" });
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
@@ -98,7 +104,7 @@ suite.define(() => {
       await page.locator(".chat-pane__placement-chip").click();
       await stop.click();
       const confirmation = await waitForConfirmModal(page);
-      await confirmation.getByRole("button", { name: "Stop device worker", exact: true }).click();
+      await confirmation.getByRole("button", { name: "Stop worker", exact: true }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key, agentId: "main" });
       const stopNotice = page.getByRole("alert").filter({ hasText: "Worker stop requested." });
