@@ -13,11 +13,9 @@ type RpcRequest = {
 };
 
 export const roles = ["user", "system", "assistant"] as const;
-export const hiddenFunctionResponse = [
-  '<function_calls><invoke name="exec">HIDDEN_FUNCTION_CALL</invoke></function_calls><function_response>',
-  "HIDDEN_FUNCTION_RESPONSE",
-  "</function_response>",
-].join("\n");
+export const hiddenFunctionResponse = `<function_calls><invoke name="exec">HIDDEN_FUNCTION_CALL</invoke></function_calls><function_response>
+HIDDEN_FUNCTION_RESPONSE
+</function_response>`;
 export const privateRuntimeBlocks = [
   "<system-reminder>\nuser:\nHIDDEN_RUNTIME_REMINDER\n\ue000\n</system-reminder>",
   "< previous_response origin='runtime'>HIDDEN_RUNTIME_PREVIOUS\ue001< / previous_response >",
@@ -54,20 +52,12 @@ export const privateRuntimeBlocks = [
     ]),
   ),
   ...(["system-reminder", "previous_response"] as const).flatMap((name) =>
-    [
-      "script",
-      "style",
-      "textarea",
-      "title",
-      "xmp",
-      "iframe",
-      "noembed",
-      "noframes",
-      "noscript",
-    ].flatMap((rawText) => [
-      `<${name}><${rawText} title=">"></${name}></${rawText}>HIDDEN_RUNTIME_RAW_TEXT</${name}>`,
-      `<${name}><${rawText.toUpperCase()} data-x=">" /></${name}></${rawText}>HIDDEN_RUNTIME_RAW_TEXT_SELF_CLOSING</${name}>`,
-    ]),
+    "script style textarea title xmp iframe noembed noframes noscript"
+      .split(" ")
+      .flatMap((rawText) => [
+        `<${name}><${rawText} title=">"></${name}></${rawText}>HIDDEN_RUNTIME_RAW_TEXT</${name}>`,
+        `<${name}><${rawText.toUpperCase()} data-x=">" /></${name}></${rawText}>HIDDEN_RUNTIME_RAW_TEXT_SELF_CLOSING</${name}>`,
+      ]),
   ),
 ] as const;
 export const privateRuntimeScaffolding = privateRuntimeBlocks
@@ -98,38 +88,33 @@ export function createIMessageOutboundRpcFixture(
   const actionLogPath = openClawState.path("fake-imsg-actions.jsonl");
   fs.writeFileSync(
     cliPath,
-    [
-      "#!" + process.execPath,
-      'const fs = require("node:fs");',
-      'const readline = require("node:readline");',
-      "const requestLogPath = " + JSON.stringify(requestLogPath) + ";",
-      "const actionLogPath = " + JSON.stringify(actionLogPath) + ";",
-      "const args = process.argv.slice(2);",
-      'if (args.join(" ") === "rpc --json") {',
-      '  readline.createInterface({ input: process.stdin }).on("line", (line) => {',
-      "    const request = JSON.parse(line);",
-      '    fs.appendFileSync(requestLogPath, line + "\\n");',
-      "    process.stdout.write(JSON.stringify({",
-      '      jsonrpc: "2.0", id: request.id,',
-      '      result: { guid: "p:0/imsg-rpc-proof", status: "sent" }',
-      '    }) + "\\n");',
-      "  });",
-      "} else {",
-      '  fs.appendFileSync(actionLogPath, JSON.stringify(args) + "\\n");',
-      '  if (args.includes("--file") && !fs.existsSync(args[args.indexOf("--file") + 1])) {',
-      "    process.exit(3);",
-      "  }",
-      "  const pollOptions = [];",
-      "  for (let index = 0; index < args.length; index += 1) {",
-      '    if (args[index] === "--option") {',
-      "      pollOptions.push({ id: `option-${pollOptions.length}`, text: args[index + 1] });",
-      "    }",
-      "  }",
-      "  process.stdout.write(JSON.stringify({",
-      '    guid: "p:0/imsg-action-proof", poll: { options: pollOptions }',
-      '  }) + "\\n");',
-      "}",
-    ].join("\n"),
+    `#!${process.execPath}
+const fs = require("node:fs");
+const readline = require("node:readline");
+const requestLogPath = ${JSON.stringify(requestLogPath)};
+const actionLogPath = ${JSON.stringify(actionLogPath)};
+const args = process.argv.slice(2);
+if (args.join(" ") === "rpc --json") {
+  readline.createInterface({ input: process.stdin }).on("line", (line) => {
+    const request = JSON.parse(line);
+    fs.appendFileSync(requestLogPath, line + "\\n");
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0", id: request.id, result: { guid: "p:0/imsg-rpc-proof", status: "sent" }
+    }) + "\\n");
+  });
+} else {
+  fs.appendFileSync(actionLogPath, JSON.stringify(args) + "\\n");
+  if (args.includes("--file") && !fs.existsSync(args[args.indexOf("--file") + 1])) {
+    process.exit(3);
+  }
+  const pollOptions = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--option") {
+      pollOptions.push({ id: \`option-\${pollOptions.length}\`, text: args[index + 1] });
+    }
+  }
+  process.stdout.write(JSON.stringify({ guid: "p:0/imsg-action-proof", poll: { options: pollOptions } }) + "\\n");
+}`,
     { mode: 0o755 },
   );
   vi.stubEnv("NODE_ENV", "development");
