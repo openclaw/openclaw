@@ -222,13 +222,11 @@ failed-run diagnostics without adding a retry notice to an already successful
 conversation. User-requested missing replies and actual provider or storage
 failures still show their failure notice.
 
-The chat header keeps **Share**, **Layout**, and the session menu together.
-**Layout** contains focus, split, swap, panel selection, and dock-position actions,
-with their keyboard shortcuts. Open **Subagents** there, from the side-panel
-**+** menu, or by clicking the header’s **Subagents · N running** status to inspect
-child runs, including swarm workers. The header status also supports Enter and
-Space. An empty conversation starts with the panel closed. The first running batch adds it automatically,
-preserving another panel you selected; closing it keeps it closed for that batch.
+Open **Panels**, then choose **Subagents** to inspect child runs, including swarm
+workers. **Details** also lists the conversation's subagents and opens a selected
+child. Both entry points support keyboard navigation. An empty conversation starts
+with the panel closed. New running batches stay collapsed until you open the panel;
+closing it keeps it closed for that batch.
 Finished results stay open until you close them. While the parent waits on
 subagents, the conversation keeps each child’s claw, name, and current activity
 together in one clickable row. A single muted timer at the far right shows total
