@@ -98,7 +98,12 @@ carry the previously loaded bundle's fingerprint, and recorded emissions
 from a prior generation stay attributed to the bundle they were proven
 from. Routes that run without a
 watcher (for example the cron snapshot path, `watch: false`) carry the
-previously loaded identity until their next reload.
+previously loaded identity until their next reload. A session discovered
+while tracing is inactive is recorded without bundle fingerprints; if
+tracing is enabled later in the same live session, the fingerprint appears
+only after the next skill edit advances the resource version — absence is
+the safe direction, and no span ever carries a fingerprint that does not
+match the served bundle.
 
 The fingerprint is emitted only while tracing is active: `skill.used` events on
 an install with no active tracing consumer (for example a metrics-only
