@@ -16,6 +16,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
+  assertAgentDatabaseResourceAdmission,
   matchesAgentDatabaseReadCandidatePath,
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
@@ -85,6 +86,7 @@ export type HistoryDatabaseResource = {
   aborters: Set<() => void>;
   closing?: Promise<void>;
   unregister: () => void;
+  observeMaintenance: () => void;
   retainAlias: (alias: string) => void;
   retainCandidate: (candidate: SessionStoreReadCandidate) => void;
   matchesPath: (pathname: string) => boolean;
@@ -93,10 +95,7 @@ export type HistoryDatabaseResource = {
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
 // An exact lexical lookup derives from the physical owner; it owns no separate lifecycle.
-const historyReadCandidates = new Map<
-  string,
-  { resource: HistoryDatabaseResource; candidate: SessionStoreReadCandidate }
->();
+const historyReadCandidates = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 const databaseWorkerLanes: SessionDatabaseWorkerLane[] = [];
@@ -329,6 +328,7 @@ export function acquireHistoryDatabaseResource(
   let created = false;
   if (resource?.revoked) {
     // Failed retirement keeps cleanup custody until the existing close/prune owner settles it.
+    assertAgentDatabaseResourceAdmission(resource.database);
     throw new WorkerTaskError("Session database work is still draining", "unavailable");
   }
   if (!resource) {
@@ -345,6 +345,7 @@ export function acquireHistoryDatabaseResource(
       cleanups: new Set(),
       aborters: new Set(),
       unregister: () => {},
+      observeMaintenance: () => observeOpenClawDatabaseMaintenanceResource(unregister),
       matchesPath: (pathname) =>
         pathname === database.path ||
         [...aliases.values()].some(({ candidate }) =>
@@ -371,23 +372,21 @@ export function acquireHistoryDatabaseResource(
         }
       },
       retainCandidate(candidate) {
-        observeOpenClawDatabaseMaintenanceResource(unregister);
+        // The physical registration owns maintenance; aliases only select its cleanup.
         for (const pathname of new Set([candidate.path, candidate.physicalPath])) {
           const aliasKey = JSON.stringify([pathname, candidate.scope]);
           if (!aliases.has(aliasKey)) {
             aliases.set(aliasKey, {
               candidate: { ...candidate, path: pathname },
-              unregister: registerOpenClawAgentDatabaseReadCandidateResource({
-                path: pathname,
-                scope: candidate.scope,
-                revoke,
-                close,
-              }),
+              unregister: runOutsideOpenClawDatabaseMaintenanceScope(() =>
+                registerOpenClawAgentDatabaseReadCandidateResource({
+                  path: pathname,
+                  scope: candidate.scope,
+                  revoke,
+                  close,
+                }),
+              ),
             });
-          }
-          const alias = aliases.get(aliasKey);
-          if (alias) {
-            observeOpenClawDatabaseMaintenanceResource(alias.unregister);
           }
         }
       },
@@ -434,7 +433,7 @@ export function acquireHistoryDatabaseResource(
       unregister?.();
       unregister = undefined;
       for (const [pathname, retained] of historyReadCandidates) {
-        if (retained.resource === owned) {
+        if (retained === owned) {
           historyReadCandidates.delete(pathname);
         }
       }
@@ -447,6 +446,7 @@ export function acquireHistoryDatabaseResource(
     created = true;
   }
   try {
+    resource.observeMaintenance();
     for (const requestedPath of options.requestedPaths ?? []) {
       const alias = resolveOpenClawAgentSqlitePath({ ...options, path: requestedPath });
       if (alias !== database.path) {
@@ -466,28 +466,27 @@ export function acquireHistoryDatabaseResource(
 }
 
 export function acquireSessionTranscriptReadResource(storePath: string): HistoryDatabaseResource {
-  let retained = historyReadCandidates.get(storePath);
-  if (!retained) {
-    const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-    const candidate = captureSessionStoreReadCandidate(
-      target.path,
-      target.agentId || target.shared ? undefined : "sibling-family",
-    );
-    retained = {
-      candidate,
-      resource: acquireHistoryDatabaseResource({
-        agentId: target.agentId || "main",
-        path: candidate.physicalPath,
-      }),
-    };
+  const retained = historyReadCandidates.get(storePath);
+  if (retained) {
+    if (retained.revoked) {
+      assertAgentDatabaseResourceAdmission(retained.database);
+      throw new WorkerTaskError("Session database work is still draining", "unavailable");
+    }
+    retained.observeMaintenance();
+    return retained;
   }
-  if (retained.resource.revoked) {
-    throw new WorkerTaskError("Session database work is still draining", "unavailable");
-  }
-  // Existing registrations remain visible to each caller's maintenance scope.
-  retained.resource.retainCandidate(retained.candidate);
-  historyReadCandidates.set(storePath, retained);
-  return retained.resource;
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const candidate = captureSessionStoreReadCandidate(
+    target.path,
+    target.agentId || target.shared ? undefined : "sibling-family",
+  );
+  const resource = acquireHistoryDatabaseResource({
+    agentId: target.agentId || "main",
+    path: candidate.physicalPath,
+  });
+  resource.retainCandidate(candidate);
+  historyReadCandidates.set(storePath, resource);
+  return resource;
 }
 
 /** Keep captured discovery aliases until the existing history worker retires its readers. */

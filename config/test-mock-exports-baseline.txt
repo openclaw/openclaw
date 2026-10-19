@@ -5549,7 +5549,6 @@
 ["src/config/sessions/session-history-worker-errors.test-support.ts","../../gateway/session-history-readonly-reader.js","aeac2da5df785a619f08441af6798a98aab53f1336b00d9f78e26b1c01bcfce2",1]
 ["src/config/sessions/session-history-worker-errors.test-support.ts","../../infra/runtime-worker-url.js","af7801f4577fb09936ca5e24dda3f7b092f186dd164aa20e57b1b3fe0f2b676b",1]
 ["src/config/sessions/session-history-worker-errors.test-support.ts","../../state/openclaw-agent-db-readonly-scope.js","304923e5d545911e6efa4d677b7ef798c06b851828b23b30c424ca600181c577",1]
-["src/config/sessions/session-history-worker-errors.test-support.ts","../../state/openclaw-agent-db-resources.js","cf9aa83bc65afe0b639ee967185940b203a28d40bb8101287ff2d51cd9214465",1]
 ["src/config/sessions/session-history-worker-errors.test-support.ts","./disk-budget-runtime.js","96a65b3e512a97eba31cc8e5ed1fa56260dfff775469ff1bb329454dbaafdc39",1]
 ["src/config/sessions/session-history-worker-errors.test-support.ts","./session-accessor.sqlite-exact-read.js","1e84b077c2aed79b63160020fb76d506a01ac6cbe78685ea27272d4e894cae80",1]
 ["src/config/state-dir-dotenv.test.ts","../logging/subsystem.js","6b154f74290d6c84838b4a5b1e90ccd0fb1ccc3f52262c70817046790e4337ab",1]
