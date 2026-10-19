@@ -1,19 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onSettled, Show, untrack } from "solid-js";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import {
   machineShapeText,
@@ -150,7 +142,7 @@ function SessionPlacementPicker(props: {
       return options
         .loadCatalog()
         .catch((error: unknown) =>
-          untrack(() => formatUiError(error, t("sessionsView.moveSessionCatalogFailed"))),
+          formatUiError(error, t("sessionsView.moveSessionCatalogFailed")),
         );
     },
     { loadingValue: null },
@@ -286,6 +278,15 @@ function SessionPlacementPicker(props: {
     return options.source?.label;
   });
   const tabKey = () => selectedKey() || rows().find((row) => !row.disabledReason)?.key;
+  const destinationButtons = new Map<string, HTMLButtonElement>();
+  const registerButton = (key: string, button: HTMLButtonElement) => {
+    destinationButtons.set(key, button);
+    return () => {
+      if (destinationButtons.get(key) === button) {
+        destinationButtons.delete(key);
+      }
+    };
+  };
   let scroller!: HTMLDivElement;
   let observation: ReturnType<typeof observeScrollState> | undefined;
   onSettled(() => {
@@ -314,9 +315,12 @@ function SessionPlacementPicker(props: {
     if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       return;
     }
-    const buttons = [...scroller.querySelectorAll<HTMLButtonElement>('[role="radio"]')].filter(
-      (button) => !button.disabled && !button.closest("[inert]") && !button.hidden,
-    );
+    const buttons = rows().flatMap((row) => {
+      const button = destinationButtons.get(row.key);
+      return button?.isConnected && !button.disabled && !button.closest("[inert]") && !button.hidden
+        ? [button]
+        : [];
+    });
     const index = buttons.findIndex((button) => button === event.target);
     const next =
       event.key === "Home"
@@ -423,6 +427,7 @@ function SessionPlacementPicker(props: {
                   selectedKey={selectedKey()}
                   tabKey={tabKey()}
                   onSelect={select}
+                  registerButton={registerButton}
                 />
                 <DestinationGroup
                   label={t("sessionsView.moveServerCloud")}
@@ -430,6 +435,7 @@ function SessionPlacementPicker(props: {
                   selectedKey={selectedKey()}
                   tabKey={tabKey()}
                   onSelect={select}
+                  registerButton={registerButton}
                   renderConfig={options.allowMachineOverrides === false ? undefined : config}
                 />
               </Show>
@@ -461,6 +467,7 @@ function DestinationGroup(props: {
   selectedKey: string;
   tabKey?: string;
   onSelect: (target: SessionMoveTarget) => void;
+  registerButton: (key: string, button: HTMLButtonElement) => () => void;
   renderConfig?: (profile: DraftCloudProfile) => JSX.Element;
 }) {
   const [expanded, expand] = createSignal(false);
@@ -476,38 +483,27 @@ function DestinationGroup(props: {
   });
   let list!: HTMLDivElement;
   let animation: Animation | undefined;
-  let fromHeight: number | undefined;
-  let immediate = false;
-  let restoreFocus: HTMLButtonElement | undefined;
-  const prepare = (keyboard: boolean) => {
-    fromHeight = list.getBoundingClientRect().height;
+  let motionRevision = 0;
+  const prepare = (keyboard: boolean, restoreFocus?: HTMLButtonElement) => {
+    const revision = ++motionRevision;
+    const height = list.getBoundingClientRect().height;
     animation?.cancel();
-    immediate = keyboard;
-  };
-  createEffect(
-    () => ({ expanded: expanded(), preview: preview() }),
-    () => {
-      if (!list || fromHeight === undefined) {
+    onSettled(() => {
+      if (revision !== motionRevision || !list.isConnected) {
         return;
       }
-      const height = fromHeight;
-      fromHeight = undefined;
       restoreFocus?.focus({ preventScroll: true });
-      restoreFocus = undefined;
       const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (!immediate) {
+      if (!keyboard) {
         animation = list.animate(
           reduced
             ? [{ opacity: 0.6 }, { opacity: 1 }]
             : [{ height: `${height}px` }, { height: `${list.scrollHeight}px` }],
-          {
-            duration: reduced ? 100 : 300,
-            easing: "ease-in-out",
-          },
+          { duration: reduced ? 100 : 300, easing: "ease-in-out" },
         );
       }
-    },
-  );
+    });
+  };
   onCleanup(() => animation?.cancel());
   return (
     <Show when={props.rows.length > 0}>
@@ -534,6 +530,7 @@ function DestinationGroup(props: {
                   inert={!visible()}
                 >
                   <button
+                    ref={[elementRef(props.registerButton.bind(undefined, row().key))]}
                     type="button"
                     role="radio"
                     aria-checked={selected() ? "true" : "false"}
@@ -544,8 +541,7 @@ function DestinationGroup(props: {
                     disabled={Boolean(row().disabledReason)}
                     title={row().disabledReason}
                     onClick={(event) => {
-                      prepare(event.detail === 0);
-                      restoreFocus = event.currentTarget;
+                      prepare(event.detail === 0, event.currentTarget);
                       props.onSelect(row().target);
                       retain(row().key);
                       expand(false);
