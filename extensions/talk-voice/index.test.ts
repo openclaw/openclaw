@@ -114,7 +114,7 @@ it.each(["owner", "revoked owner", "gateway admin"])(
       return [{ id: "en-US-AvaNeural", name: "Ava" }];
     });
     const pending = command.handler(ctx);
-    if (gatewayAdmin || current) {
+    if (authority !== "revoked owner") {
       await expect(pending).resolves.toEqual({
         text: "✅ Microsoft Talk voice set to Ava\nen-US-AvaNeural",
       });
