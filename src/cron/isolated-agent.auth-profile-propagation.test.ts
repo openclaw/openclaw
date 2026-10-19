@@ -22,6 +22,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
+import { makeJob } from "./isolated-agent.test-harness.js";
 import {
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
@@ -71,6 +72,7 @@ function runWithConfig(
 }
 
 function setupClaudeCliBackend(): void {
+  isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [
       {
@@ -187,18 +189,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         authority.dispose();
       }
       const job: CronStoredJob = {
+        ...makeJob({ kind: "agentTurn", message: "check status" }),
         id: "durable-auth",
         name: "Durable auth",
         agentId: "main",
-        enabled: true,
         createdAtMs: 1,
         updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
         delivery: { mode: "none" },
-        payload: { kind: "agentTurn", message: "check status" },
-        state: {},
         inferenceBinding: binding,
       };
       const storePath = state.statePath("cron", "jobs.json");
@@ -323,7 +320,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
   it("runs a native Claude CLI job without adopting an unrelated host account", async () => {
     await saveProfiles({ [platformId]: apiKey() });
     setupClaudeCliBackend();
-    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
     resolveConfiguredModelRefMock.mockReturnValue({ provider: "claude-cli", model: "sonnet" });
     resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     mockRunCronFallbackPassthrough();
@@ -343,7 +339,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
   it.each(["cron", "event"] as const)(
     "keeps %s CLI fallback on its account boundary (#144047)",
     async (trigger) => {
-      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
       setupClaudeCliBackend();
       resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
       resolveSessionAuthSelectionMock.mockResolvedValue({ profileId: platformId, source: "auto" });
@@ -394,7 +389,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         model: "openai/gpt-4.1@openai:work",
       });
       expect(binding).toMatchObject({ profileId: "openai:work", source: "user" });
-      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
       mockRunCronFallbackPassthrough();
       setupClaudeCliBackend();
       resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4o" });

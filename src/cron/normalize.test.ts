@@ -1,4 +1,3 @@
-// Cron normalization tests cover job config normalization and defaults.
 import { describe, expect, it, vi } from "vitest";
 import {
   validateCronAddParams,
@@ -25,20 +24,6 @@ const CHANNEL_REQUESTER = {
   accountId: "work",
   senderId: "123456789012345678",
 };
-const STALE_AT_SCHEDULE = {
-  kind: "at",
-  at: "2026-01-12T18:00:00Z",
-  expr: "* * * * *",
-  everyMs: 60_000,
-  anchorMs: 123,
-  tz: "UTC",
-  staggerMs: 30_000,
-};
-const NORMALIZED_AT_SCHEDULE = {
-  kind: "at",
-  at: new Date("2026-01-12T18:00:00Z").toISOString(),
-};
-const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function normalizeCreate(raw: UnknownRecord, sessionKey?: string): UnknownRecord {
   return normalizeCronJobCreate(
@@ -48,10 +33,7 @@ function normalizeCreate(raw: UnknownRecord, sessionKey?: string): UnknownRecord
 }
 
 function createMain(overrides: UnknownRecord = {}): UnknownRecord {
-  return normalizeCreate({
-    name: "test",
-    enabled: true,
-    schedule: CRON_SCHEDULE,
+  return createAgent({
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: SYSTEM_EVENT,
@@ -86,59 +68,44 @@ function child(record: UnknownRecord, key: string): UnknownRecord {
   return record[key] as UnknownRecord;
 }
 
-function mainSchedule(schedule: UnknownRecord): UnknownRecord {
-  return child(createMain({ schedule }), "schedule");
-}
-
-function agentDelivery(delivery: UnknownRecord): UnknownRecord {
-  return child(createAgent({ delivery }), "delivery");
+function provenance(source: string, channelRequester: unknown): UnknownRecord {
+  return { version: 1, source, callerOrigin: { kind: "local" }, channelRequester };
 }
 
 describe("normalizeCronJobCreate", () => {
-  it.each(["create"] as const)(
-    "does not validate absent delivery fields during %s normalization",
-    (mode) => {
-      const parsers = [
-        vi.spyOn(LowercaseNonEmptyStringFieldSchema, "safeParse"),
-        vi.spyOn(TrimmedNonEmptyStringFieldSchema, "safeParse"),
-        vi.spyOn(DeliveryThreadIdFieldSchema, "safeParse"),
-      ];
-      try {
-        for (const delivery of [
-          { mode: "none" },
-          {
-            mode: "none",
-            channel: undefined,
-            to: undefined,
-            threadId: undefined,
-            accountId: undefined,
-          },
-        ]) {
-          const normalized =
-            mode === "create" ? createAgent({ delivery }) : normalizePatch({ delivery });
-          expect(normalized.delivery).toEqual({ mode: "none" });
-        }
-        for (const parser of parsers) {
-          expect(parser).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const parser of parsers) {
-          parser.mockRestore();
-        }
+  it("does not validate absent delivery fields during create normalization", () => {
+    const parsers = [
+      vi.spyOn(LowercaseNonEmptyStringFieldSchema, "safeParse"),
+      vi.spyOn(TrimmedNonEmptyStringFieldSchema, "safeParse"),
+      vi.spyOn(DeliveryThreadIdFieldSchema, "safeParse"),
+    ];
+    try {
+      for (const delivery of [
+        { mode: "none" },
+        {
+          mode: "none",
+          channel: undefined,
+          to: undefined,
+          threadId: undefined,
+          accountId: undefined,
+        },
+      ]) {
+        expect(createAgent({ delivery }).delivery).toEqual({ mode: "none" });
       }
-    },
-  );
+      for (const parser of parsers) {
+        expect(parser).not.toHaveBeenCalled();
+      }
+    } finally {
+      for (const parser of parsers) {
+        parser.mockRestore();
+      }
+    }
+  });
 
-  describe.each(["create"] as const)("%s authority envelopes", (mode) => {
-    const normalize = mode === "create" ? normalizeCreate : normalizePatch;
+  describe("create authority envelopes", () => {
     const envelopes = {
       scheduledToolPolicy: { version: 1, mode: "trusted" },
-      toolsAllowProvenance: {
-        version: 1,
-        source: "authenticated-requester",
-        callerOrigin: { kind: "local" },
-        channelRequester: CHANNEL_REQUESTER,
-      },
+      toolsAllowProvenance: provenance("authenticated-requester", CHANNEL_REQUESTER),
       toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
       toolsAllowExecTargetRequirement: {
         version: 1,
@@ -156,29 +123,20 @@ describe("normalizeCronJobCreate", () => {
     it("does not materialize omitted, undefined, or inherited authority fields", () => {
       for (const input of [
         {},
-        {
-          scheduledToolPolicy: undefined,
-          toolsAllowProvenance: undefined,
-          toolsAllowExecTarget: undefined,
-          toolsAllowExecTargetRequirement: undefined,
-          runtimeAuthority: undefined,
-        },
+        Object.fromEntries(Object.keys(envelopes).map((key) => [key, undefined])),
         Object.create(envelopes) as UnknownRecord,
       ]) {
-        const normalized = normalize(input);
-
-        expect(normalized).not.toHaveProperty("scheduledToolPolicy");
-        expect(normalized).not.toHaveProperty("toolsAllowProvenance");
-        expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
-        expect(normalized).not.toHaveProperty("toolsAllowExecTargetRequirement");
-        expect(normalized).not.toHaveProperty("runtimeAuthority");
+        const normalized = normalizeCreate(input);
+        for (const field of Object.keys(envelopes)) {
+          expect(normalized).not.toHaveProperty(field);
+        }
       }
     });
 
     it("retains valid envelopes without mutating or freezing the input", () => {
       const input = structuredClone(envelopes);
 
-      const normalized = normalize(input);
+      const normalized = normalizeCreate(input);
 
       expect(normalized).toMatchObject(envelopes);
       expect(input).toEqual(envelopes);
@@ -186,16 +144,17 @@ describe("normalizeCronJobCreate", () => {
       const payload = child(authority, "payload");
       expect(authority).not.toBe(input.runtimeAuthority);
       expect(payload).not.toBe(input.runtimeAuthority.payload);
-      expect(Object.isFrozen(authority)).toBe(true);
-      expect(Object.isFrozen(payload)).toBe(true);
-      expect(Object.isFrozen((payload.tools as unknown[])[0])).toBe(true);
-      expect(Object.isFrozen(input.runtimeAuthority)).toBe(false);
-      expect(Object.isFrozen(input.runtimeAuthority.payload)).toBe(false);
-      expect(Object.isFrozen(input.runtimeAuthority.payload.tools[0])).toBe(false);
+      for (const item of [authority, payload, (payload.tools as unknown[])[0]]) {
+        expect(Object.isFrozen(item)).toBe(true);
+      }
+      const original = input.runtimeAuthority;
+      for (const item of [original, original.payload, original.payload.tools[0]]) {
+        expect(Object.isFrozen(item)).toBe(false);
+      }
     });
 
     it("retains a recovery marker while dropping invalid peer envelopes", () => {
-      const normalized = normalize({
+      const normalized = normalizeCreate({
         scheduledToolPolicy: { version: 2, mode: "trusted" },
         toolsAllowProvenance: { version: 2, source: "authenticated-requester" },
         toolsAllowExecTarget: { version: 1, host: "remote" },
@@ -214,19 +173,15 @@ describe("normalizeCronJobCreate", () => {
     });
   });
 
-  it.each(["create"] as const)(
-    "does not promote prototype-only schedule fields during %s normalization",
-    (mode) => {
-      const schedule = Object.assign(Object.create({ expr: "*/17 * * * *" }) as UnknownRecord, {
-        kind: "cron",
-      });
-      const normalized =
-        mode === "create" ? createMain({ schedule }) : normalizePatch({ schedule });
+  it("does not promote prototype-only schedule fields during create normalization", () => {
+    const schedule = Object.assign(Object.create({ expr: "*/17 * * * *" }) as UnknownRecord, {
+      kind: "cron",
+    });
+    const normalized = createMain({ schedule });
 
-      expect(Object.hasOwn(schedule, "expr")).toBe(false);
-      expect(Object.hasOwn(child(normalized, "schedule"), "expr")).toBe(false);
-    },
-  );
+    expect(Object.hasOwn(schedule, "expr")).toBe(false);
+    expect(Object.hasOwn(child(normalized, "schedule"), "expr")).toBe(false);
+  });
   it("does not promote prototype-only payload fields", () => {
     const payload = Object.assign(
       Object.create({ model: "openai/gpt-5" }) as UnknownRecord,
@@ -249,41 +204,28 @@ describe("normalizeCronJobCreate", () => {
       { enumerable: true, get: ignoredGetter },
     );
     const normalized = createAgent({
-      toolsAllowProvenance: {
-        version: 1,
-        source: "authenticated-requester",
-        callerOrigin: { kind: "local" },
-        channelRequester,
-      },
+      toolsAllowProvenance: provenance("authenticated-requester", channelRequester),
+    });
+
+    expect(normalized.toolsAllowProvenance).toEqual(
+      provenance("authenticated-requester", CHANNEL_REQUESTER),
+    );
+    expect(ignoredGetter).not.toHaveBeenCalled();
+  });
+  it("drops non-string sender facts without losing genuine tool-surface proof", () => {
+    const normalized = createAgent({
+      toolsAllowProvenance: provenance("final-executable-surface", {
+        ...CHANNEL_REQUESTER,
+        senderId: 123,
+      }),
     });
 
     expect(normalized.toolsAllowProvenance).toEqual({
       version: 1,
-      source: "authenticated-requester",
+      source: "final-executable-surface",
       callerOrigin: { kind: "local" },
-      channelRequester: CHANNEL_REQUESTER,
     });
-    expect(ignoredGetter).not.toHaveBeenCalled();
   });
-  it.each([{ label: "non-string sender", patch: { senderId: 123 } }])(
-    "drops $label requester facts without losing genuine tool-surface proof",
-    ({ patch }) => {
-      const normalized = createAgent({
-        toolsAllowProvenance: {
-          version: 1,
-          source: "final-executable-surface",
-          callerOrigin: { kind: "local" },
-          channelRequester: { ...CHANNEL_REQUESTER, ...patch },
-        },
-      });
-
-      expect(normalized.toolsAllowProvenance).toEqual({
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: { kind: "local" },
-      });
-    },
-  );
   it("rejects accessor and inherited requester identities without invoking getters", () => {
     const senderGetter = vi.fn(() => CHANNEL_REQUESTER.senderId);
     const accessorRequester = Object.defineProperty({ ...CHANNEL_REQUESTER }, "senderId", {
@@ -303,20 +245,24 @@ describe("normalizeCronJobCreate", () => {
     }
     expect(senderGetter).not.toHaveBeenCalled();
   });
-  it.each<{
-    label: string;
-    input: UnknownRecord;
-    expected: UnknownRecord;
-  }>([
-    { label: "blank timezone", input: { ...CRON_SCHEDULE, tz: " " }, expected: CRON_SCHEDULE },
-    {
-      label: "one-shot",
-      input: { ...STALE_AT_SCHEDULE, at: "2026-01-12T18:00:00" },
-      expected: NORMALIZED_AT_SCHEDULE,
-    },
-    {
-      label: "interval",
-      input: {
+  it.each<[string, UnknownRecord, UnknownRecord]>([
+    ["blank timezone", { ...CRON_SCHEDULE, tz: " " }, CRON_SCHEDULE],
+    [
+      "one-shot",
+      {
+        ...CRON_SCHEDULE,
+        ...EVERY_SCHEDULE,
+        kind: "at",
+        at: "2026-01-12T18:00:00",
+        anchorMs: 123,
+        tz: "UTC",
+        staggerMs: 30_000,
+      },
+      { kind: "at", at: "2026-01-12T18:00:00.000Z" },
+    ],
+    [
+      "interval",
+      {
         kind: "every",
         everyMs: "60000",
         anchorMs: "123.9",
@@ -324,11 +270,11 @@ describe("normalizeCronJobCreate", () => {
         command: "leftover",
         cwd: "/x",
       },
-      expected: { ...EVERY_SCHEDULE, anchorMs: 123 },
-    },
-    {
-      label: "on-exit",
-      input: {
+      { ...EVERY_SCHEDULE, anchorMs: 123 },
+    ],
+    [
+      "on-exit",
+      {
         kind: "on-exit",
         command: "make build",
         cwd: "/repo",
@@ -336,14 +282,14 @@ describe("normalizeCronJobCreate", () => {
         expr: "* * * * *",
         at: "2026-01-01T00:00:00Z",
       },
-      expected: { kind: "on-exit", command: "make build", cwd: "/repo" },
-    },
-    {
-      label: "on-exit escaped trailing space",
-      input: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
-      expected: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
-    },
-  ])("canonicalizes $label schedules on create and patch", ({ input, expected }) => {
+      { kind: "on-exit", command: "make build", cwd: "/repo" },
+    ],
+    [
+      "on-exit escaped trailing space",
+      { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
+      { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
+    ],
+  ])("canonicalizes %s schedules on create and patch", (_label, input, expected) => {
     const created = createMain({ schedule: input });
     const patch = normalizePatch({ schedule: input });
     expect(created.schedule).toEqual(expected);
@@ -356,22 +302,19 @@ describe("normalizeCronJobCreate", () => {
   });
 
   it.each([
-    { input: {}, created: DEFAULT_TOP_OF_HOUR_STAGGER_MS, patched: undefined },
+    { input: {}, created: 5 * 60 * 1000, patched: undefined },
     { input: { staggerMs: "30000" }, created: 30_000, patched: 30_000 },
   ])("defaults only omitted create stagger: $input", ({ input, created, patched }) => {
     const schedule = { kind: "cron", expr: "0 * * * *", tz: "UTC", ...input };
-    expect(mainSchedule(schedule).staggerMs).toBe(created);
+    expect(child(createMain({ schedule }), "schedule").staggerMs).toBe(created);
     expect(child(normalizePatch({ schedule }), "schedule").staggerMs).toBe(patched);
   });
 
-  it.each(["abc"])(
-    "rejects invalid explicit cron stagger %j before create or patch defaults",
-    (staggerMs) => {
-      const schedule = { kind: "cron", expr: "0 * * * *", staggerMs };
-      expect(() => createMain({ schedule })).toThrow(/staggerMs/);
-      expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
-    },
-  );
+  it("rejects invalid explicit cron stagger before create or patch defaults", () => {
+    const schedule = { kind: "cron", expr: "0 * * * *", staggerMs: "abc" };
+    expect(() => createMain({ schedule })).toThrow(/staggerMs/);
+    expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
+  });
 
   it("normalizes trigger scripts and preserves patch clears", () => {
     expect(
@@ -429,13 +372,12 @@ describe("normalizeCronJobCreate", () => {
     );
   });
 
-  it.each<[UnknownRecord, UnknownRecord]>([
-    [
-      { mode: "announce", channel: "telegram", accountId: " ", threadId: 1008013 },
-      { mode: "announce", channel: "telegram", threadId: 1008013 },
-    ],
-  ])("normalizes delivery fields %j", (input, expected) => {
-    expect(agentDelivery(input)).toEqual(expected);
+  it("normalizes delivery fields", () => {
+    expect(
+      createAgent({
+        delivery: { mode: "announce", channel: "telegram", accountId: " ", threadId: 1008013 },
+      }).delivery,
+    ).toEqual({ mode: "announce", channel: "telegram", threadId: 1008013 });
   });
 
   it("normalizes completion destinations without inventing an enclosing mode", () => {
@@ -486,18 +428,7 @@ describe("normalizeCronJobCreate", () => {
   });
 
   it("defaults command jobs while retaining argv bytes and normalizing execution options", () => {
-    const normalized = createDefaulted({
-      kind: "command",
-      argv: ["printf", "%s", "  padded value  "],
-      cwd: " /srv/example ",
-      env: { FOO: "bar" },
-      timeoutSeconds: 30,
-      noOutputTimeoutSeconds: 5,
-      outputMaxBytes: 4096,
-    });
-    expect(normalized.sessionTarget).toBe("isolated");
-    expect(normalized.delivery).toEqual({ mode: "announce" });
-    expect(normalized.payload).toEqual({
+    const payload = {
       kind: "command",
       argv: ["printf", "%s", "  padded value  "],
       cwd: "/srv/example",
@@ -505,35 +436,32 @@ describe("normalizeCronJobCreate", () => {
       timeoutSeconds: 30,
       noOutputTimeoutSeconds: 5,
       outputMaxBytes: 4096,
-    });
+    };
+    const normalized = createDefaulted({ ...structuredClone(payload), cwd: " /srv/example " });
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.delivery).toEqual({ mode: "announce" });
+    expect(normalized.payload).toEqual(payload);
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
-  it.each([-5])(
-    "normalizes agentTurn timeout %s without inventing no-timeout",
-    (timeoutSeconds) => {
-      const normalized = createDefaulted({ ...AGENT_TURN, timeoutSeconds });
-      if (timeoutSeconds < 0) {
-        expect(normalized.payload).not.toHaveProperty("timeoutSeconds");
-        expect(createDefaulted(AGENT_TURN, { timeoutSeconds }).payload).not.toHaveProperty(
-          "timeoutSeconds",
-        );
-      } else {
-        expect(child(normalized, "payload").timeoutSeconds).toBe(timeoutSeconds);
-      }
-    },
-  );
+  it("normalizes negative agentTurn timeouts without inventing no-timeout", () => {
+    expect(createDefaulted({ ...AGENT_TURN, timeoutSeconds: -5 }).payload).not.toHaveProperty(
+      "timeoutSeconds",
+    );
+    expect(createDefaulted(AGENT_TURN, { timeoutSeconds: -5 }).payload).not.toHaveProperty(
+      "timeoutSeconds",
+    );
+  });
 
   it("promotes implicit text payloads with agentTurn hints to agentTurn create jobs", () => {
+    const options = { timeoutSeconds: 45, lightContext: true, allowUnsafeExternalContent: true };
     const normalized = createDefaulted({
       text: " summarize the build ",
       model: " openai/gpt-5 ",
       fallbacks: [" anthropic/claude-haiku-3-5 "],
       thinking: " high ",
-      timeoutSeconds: 45,
-      lightContext: true,
+      ...options,
       toolsAllow: [" read "],
-      allowUnsafeExternalContent: true,
     });
     expect(normalized.sessionTarget).toBe("isolated");
     expect(normalized.delivery).toEqual({ mode: "announce" });
@@ -543,10 +471,8 @@ describe("normalizeCronJobCreate", () => {
       model: "openai/gpt-5",
       fallbacks: ["anthropic/claude-haiku-3-5"],
       thinking: "high",
-      timeoutSeconds: 45,
-      lightContext: true,
+      ...options,
       toolsAllow: ["read"],
-      allowUnsafeExternalContent: true,
     });
     expect(validateCronAddParams(normalized)).toBe(true);
   });
@@ -564,16 +490,11 @@ describe("normalizeCronJobPatch", () => {
     expect(normalizePatch({ payload: input }).payload).toStrictEqual(expected);
   });
 
-  it.each<[UnknownRecord, UnknownRecord]>([
-    [
-      { model: null, thinking: null, fallbacks: null, toolsAllow: null },
-      { model: null, thinking: null, fallbacks: null, toolsAllow: null },
-    ],
-    [
-      { fallbacks: [], toolsAllow: [] },
-      { fallbacks: [], toolsAllow: [] },
-    ],
-  ])("normalizes explicit agentTurn overrides %j", (input, expected) => {
+  it.each([
+    { model: null, thinking: null, fallbacks: null, toolsAllow: null },
+    { fallbacks: [], toolsAllow: [] },
+  ])("normalizes explicit agentTurn overrides %j", (input) => {
+    const expected = structuredClone(input);
     const patch = normalizePatch({ payload: { kind: "agentTurn", ...input } });
     expect(patch.payload).toStrictEqual({ kind: "agentTurn", ...expected });
     expect(validateCronUpdateParams({ id: "job-1", patch })).toBe(true);
