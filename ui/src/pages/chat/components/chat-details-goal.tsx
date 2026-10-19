@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
@@ -135,19 +135,8 @@ function GoalEditDialog(props: {
 
 /** Controlled mobile interior. The host owns the state title, navigation and domain facts. */
 export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
-  let editDialog: { controller: AbortController; sessionId?: string; goalId: string } | undefined;
-  onCleanup(() => editDialog?.controller.abort());
-  createEffect(
-    () => [props.sessionId, props.goal?.id, props.presented] as const,
-    ([sessionId, goalId, presented]) => {
-      if (
-        editDialog &&
-        (!presented || editDialog.sessionId !== sessionId || editDialog.goalId !== goalId)
-      ) {
-        editDialog.controller.abort();
-      }
-    },
-  );
+  let editDialog: { controller: AbortController; identity: string } | undefined;
+  const goalIdentity = createMemo(() => JSON.stringify([props.sessionId, props.goal?.id]));
   const canAct = () =>
     props.presented &&
     props.connected &&
@@ -168,7 +157,7 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
     }
     const sessionId = props.sessionId;
     const controller = new AbortController();
-    editDialog = { controller, sessionId, goalId: goal.id };
+    editDialog = { controller, identity: goalIdentity() };
     const submit = async (objective: string): Promise<string | null> => {
       // The dialog can outlive its entry click; submit only against its original session/goal.
       if (
@@ -215,6 +204,16 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
 
   return (
     <div class="chat-details-goal" aria-busy={props.recovery?.pending ? "true" : "false"}>
+      <Show when={props.presented && goalIdentity()} keyed>
+        {(identity) => {
+          onSettled(() => () => {
+            if (editDialog?.identity === identity) {
+              editDialog.controller.abort();
+            }
+          });
+          return null;
+        }}
+      </Show>
       <div class="chat-details-goal__body" ref={[elementRef(props.onScrollPortRef)]}>
         <Show when={props.recovery}>
           <div class="chat-details-goal__recovery" role="status">
