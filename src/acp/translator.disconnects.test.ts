@@ -1,6 +1,6 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
@@ -87,75 +87,71 @@ async function createReconnectHarness(
   };
 }
 
-describe("acp translator reconnect settlement", () => {
-  it("recovers an indented timeout reply beyond the terminal summary cap", async () => {
-    const prefix = "    " + "A".repeat(5_000);
-    const full = prefix + "B".repeat(1_000) + "\n";
-    const result = visibleReply(full.slice(0, 4_096), "timeout");
-    const harness = await createReconnectHarness(result, full);
-    await harness.chat(prefix);
-    harness.reconnect();
-    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    expect(harness.chunks().join("")).toBe(full);
-    expect((await harness.replay()).join("")).toBe(full);
+it("recovers an indented timeout reply beyond the terminal summary cap", async () => {
+  const prefix = "    " + "A".repeat(5_000);
+  const full = prefix + "B".repeat(1_000) + "\n";
+  const result = visibleReply(full.slice(0, 4_096), "timeout");
+  const harness = await createReconnectHarness(result, full);
+  await harness.chat(prefix);
+  harness.reconnect();
+  await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(harness.chunks().join("")).toBe(full);
+  expect((await harness.replay()).join("")).toBe(full);
+});
+
+it("reports missing authoritative history instead of settling with the terminal summary", async () => {
+  const harness = await createReconnectHarness(visibleReply("summary"), null);
+  harness.reconnect();
+  await expect(harness.promptPromise).rejects.toThrow("Full reply recovery unavailable");
+  expect(harness.chunks()).toEqual([
+    "[OpenClaw interruption] Full reply recovery unavailable (reply-not-found). Check the session history.",
+  ]);
+});
+
+it("recovers visible text before rejecting a failed run", async () => {
+  const harness = await createReconnectHarness({
+    ...visibleReply("final answer", "error"),
+    error: "boom",
   });
+  harness.reconnect();
+  await expect(harness.promptPromise).rejects.toThrow("boom");
+  expect(harness.chunks()).toEqual(["final answer", "[OpenClaw interruption] boom"]);
+});
 
-  it("reports missing authoritative history instead of settling with the terminal summary", async () => {
-    const harness = await createReconnectHarness(visibleReply("summary"), null);
-    harness.reconnect();
-    await expect(harness.promptPromise).rejects.toThrow("Full reply recovery unavailable");
-    expect(harness.chunks()).toEqual([
-      "[OpenClaw interruption] Full reply recovery unavailable (reply-not-found). Check the session history.",
-    ]);
-  });
+it("claims recovery before a late final event can emit the suffix twice", async () => {
+  const harness = await createReconnectHarness();
+  await harness.chat("final");
+  const recordBlocked = createDeferred();
+  const recordUpdate = harness.eventLedger.recordUpdate.bind(harness.eventLedger);
+  harness.eventLedger.recordUpdate = async (params) => {
+    if (
+      params.update.sessionUpdate === "agent_message_chunk" &&
+      params.update.content.type === "text" &&
+      params.update.content.text === " answer"
+    ) {
+      await recordBlocked.promise;
+    }
+    await recordUpdate(params);
+  };
 
-  it("recovers visible text before rejecting a failed run", async () => {
-    const harness = await createReconnectHarness({
-      ...visibleReply("final answer", "error"),
-      error: "boom",
-    });
+  harness.reconnect();
+  await vi.waitFor(() => expect(harness.chunks()).toContain(" answer"));
+  const lateFinal = harness.chat("final answer", "final");
+  recordBlocked.resolve();
+  await lateFinal;
 
-    harness.reconnect();
+  await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(harness.chunks().filter((text) => text === " answer")).toHaveLength(1);
+});
 
-    await expect(harness.promptPromise).rejects.toThrow("boom");
-    expect(harness.chunks()).toEqual(["final answer", "[OpenClaw interruption] boom"]);
-  });
+it("settles after recovered update delivery rejects", async () => {
+  const harness = await createReconnectHarness();
+  harness.connection.sessionUpdate = vi.fn(async () => {
+    throw new Error("client gone");
+  }) as typeof harness.connection.sessionUpdate;
 
-  it("claims recovery before a late final event can emit the suffix twice", async () => {
-    const harness = await createReconnectHarness();
-    await harness.chat("final");
-    const recordBlocked = createDeferred();
-    const recordUpdate = harness.eventLedger.recordUpdate.bind(harness.eventLedger);
-    harness.eventLedger.recordUpdate = async (params) => {
-      if (
-        params.update.sessionUpdate === "agent_message_chunk" &&
-        params.update.content.type === "text" &&
-        params.update.content.text === " answer"
-      ) {
-        await recordBlocked.promise;
-      }
-      await recordUpdate(params);
-    };
+  harness.reconnect();
 
-    harness.reconnect();
-    await vi.waitFor(() => expect(harness.chunks()).toContain(" answer"));
-    const lateFinal = harness.chat("final answer", "final");
-    recordBlocked.resolve();
-    await lateFinal;
-
-    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    expect(harness.chunks().filter((text) => text === " answer")).toHaveLength(1);
-  });
-
-  it("settles after recovered update delivery rejects", async () => {
-    const harness = await createReconnectHarness();
-    harness.connection.sessionUpdate = vi.fn(async () => {
-      throw new Error("client gone");
-    }) as typeof harness.connection.sessionUpdate;
-
-    harness.reconnect();
-
-    await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    expect(await harness.replay()).toContain("final answer");
-  });
+  await expect(harness.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(await harness.replay()).toContain("final answer");
 });
