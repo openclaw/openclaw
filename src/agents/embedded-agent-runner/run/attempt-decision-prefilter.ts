@@ -89,10 +89,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
   }
   const promptBuildFields = params.promptBuildFields;
   const promptBuildChars = promptBuildFields
-    ? Object.values(promptBuildFields).reduce(
-        (total, value) => total + (typeof value === "string" ? value.length : 0),
-        0,
-      )
+    ? Object.values(promptBuildFields).reduce((total, value) => total + (value?.length ?? 0), 0)
     : 0;
   if (context.facts.contextChars + promptBuildChars > MAX_DECISION_TEXT_CHARS) {
     return skip("prompt-build-context-too-large", context.facts);

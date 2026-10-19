@@ -151,7 +151,7 @@ function ActivityGroupBody(props: {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const state = () => props.state;
-  const overrides = createMemo(() => props.state.toolCardOverrides);
+  const overrides = () => props.state.toolCardOverrides;
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
   const compact = () => Boolean(props.options.bubbleMode);
   return (

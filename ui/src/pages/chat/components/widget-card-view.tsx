@@ -676,11 +676,8 @@ export function ToolPreview(props: ToolPreviewProps) {
                     (error: unknown) =>
                       console.error("[openclaw] failed to load YouTube player", error),
                   );
-                  const key = createMemo(
-                    () => `${props.options?.sessionKey ?? ""}\0${item().watchUrl}`,
-                  );
                   return (
-                    <Show when={key()} keyed>
+                    <Show when={`${props.options?.sessionKey ?? ""}\0${item().watchUrl}`} keyed>
                       {(_key) => (
                         <openclaw-youtube-video
                           prop:video={item()}

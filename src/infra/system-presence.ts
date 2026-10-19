@@ -28,6 +28,7 @@ type StoredPresence = {
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, StoredPresence>();
 const presenceKeys = new WeakMap<SystemPresence, string>();
+let nextWireKey = 0;
 const TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
@@ -37,7 +38,10 @@ function setPresence(
   presence: SystemPresence,
   pending = entries.get(key)?.pending ?? false,
 ) {
-  presenceKeys.set(presence, typeof key === "string" ? `entry:${key}` : "gateway");
+  // Keys repeat in every delta's order. Keep them short and never reuse an expired row's ID.
+  const existing = entries.get(key)?.presence;
+  const wireKey = (existing && presenceKeys.get(existing)) ?? (++nextWireKey).toString(36);
+  presenceKeys.set(presence, wireKey);
   entries.set(key, { presence, pending });
 }
 

@@ -93,9 +93,7 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
       if (cursor) {
         cursors.add(cursor);
       }
-      state.messages = cursor
-        ? mergeChatTranscriptPages(messages, state.messages).messages
-        : messages;
+      state.messages = cursor ? mergeChatTranscriptPages(messages, state.messages) : messages;
       state.nextCursor =
         result.nextCursor && !cursors.has(result.nextCursor) ? result.nextCursor : undefined;
       state.failedCursor = undefined;
