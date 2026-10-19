@@ -421,14 +421,6 @@ suite.define(() => {
                 .getByRole("button", { name: "Stop generating", exact: true })
                 .waitFor({ state: "detached" });
               await bubble.getByText(closing, { exact: true }).waitFor();
-              // Stream retirement can precede the durable history receipt. Local MEDIA
-              // previews are replaced at that handoff; capture the managed images, not
-              // decoded nodes whose custody is still waiting to transfer.
-              await expect
-                .poll(() =>
-                  bubble.locator(".chat-image-frame--managed img.chat-message-image").count(),
-                )
-                .toBe(2);
               const assertDecoded = async () => {
                 // Run retirement starts a final history read that can replace live image nodes.
                 await page.waitForFunction((expectedSessionKey) => {
@@ -598,6 +590,30 @@ suite.define(() => {
                   rendered: true,
                   images,
                 });
+              // Sidebar rows omit full policy fields. Wait for the pane's own list
+              // read and rendered managed images, not equality with a full CLI row.
+              await expect
+                .poll(() =>
+                  page.locator(".chat-pane-cache__pane--active").evaluate((element) => {
+                    const state = (element as HTMLElement & { state: ChatPageHost }).state;
+                    const selected = state.sessionsResult?.sessions.find(
+                      (row) => row.key === state.sessionKey,
+                    );
+                    return {
+                      sessionId: selected?.sessionId,
+                      loading: state.sessionsLoading,
+                      error: state.sessionsError,
+                    };
+                  }),
+                )
+                .toEqual({ sessionId, loading: false, error: null });
+              // Stream retirement can precede the durable history receipt. Capture
+              // managed images after that handoff, then retain strict node identity.
+              await expect
+                .poll(() =>
+                  bubble.locator(".chat-image-frame--managed img.chat-message-image").count(),
+                )
+                .toBe(2);
               await assertDecoded();
               // The terminal session recap arrives independently of final text and image decode.
               // It adds height beside the bubble, so admit it before freezing live ancestry.
