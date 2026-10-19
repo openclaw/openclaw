@@ -169,6 +169,7 @@ describe("loadSessionDiff", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     for (const dir of tempDirs) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -822,7 +823,6 @@ describe("loadSessionDiff", () => {
     fs.renameSync(path.join(repoRoot, ".git", "objects"), objects);
     fs.mkdirSync(path.join(repoRoot, ".git", "objects"));
     vi.stubEnv("GIT_ALTERNATE_OBJECT_DIRECTORIES", objects);
-    onTestFinished(() => vi.unstubAllEnvs());
     fs.mkdirSync(path.join(repoRoot, "outside"), { recursive: true });
     write("outside/loose.txt", "$Id: original $\n");
     const indexFiles = () =>
@@ -871,7 +871,6 @@ describe("loadSessionDiff", () => {
     async () => {
       vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
       vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
-      onTestFinished(() => vi.unstubAllEnvs());
       await drainGlobalSingletonLifecycleState("restart");
       seedRepo({ "tracked.txt": "before\n", ".gitignore": "ignored.txt\n" });
       append("tracked.txt", "after\n");
@@ -933,7 +932,6 @@ fi
       vi.stubEnv("GIT_CONFIG_SYSTEM", undefined);
       vi.stubEnv("GIT_CONFIG_NOSYSTEM", "0");
       vi.stubEnv("PATH", `${installation}${path.delimiter}${process.env.PATH ?? ""}`);
-      onTestFinished(() => vi.unstubAllEnvs());
       await drainGlobalSingletonLifecycleState("restart");
       seedRepo({ "tracked.txt": "base\n" });
       write("system-ignored.txt", "new\n");
