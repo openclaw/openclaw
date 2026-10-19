@@ -365,27 +365,22 @@ export function updateStoredChatComposerQueueItems(
     let changed = false;
     for (const { expected, next } of updates) {
       const index = nextQueue.findIndex((entry) => entry.id === expected.id);
-      if (next === null) {
-        if (index < 0) {
-          continue;
-        }
-        if (!queueItemVersionMatches(nextQueue[index]!, expected, scope)) {
-          return false;
-        }
-        nextQueue.splice(index, 1);
-        changed = true;
+      if (index < 0 && next === null) {
         continue;
       }
-      const stored = index >= 0 ? nextQueue[index] : undefined;
-      const serializedNext =
-        stored && queueItemVersionMatches(stored, expected, scope)
-          ? serializeQueueItemForScope(next, scope)
-          : null;
-      if (!serializedNext) {
-        // A missing or stale row rejects the whole batch before anything is written.
+      // A missing or stale row rejects the whole batch before anything is written.
+      if (index < 0 || !queueItemVersionMatches(nextQueue[index]!, expected, scope)) {
         return false;
       }
-      nextQueue[index] = serializedNext;
+      if (next === null) {
+        nextQueue.splice(index, 1);
+      } else {
+        const serializedNext = serializeQueueItemForScope(next, scope);
+        if (!serializedNext) {
+          return false;
+        }
+        nextQueue[index] = serializedNext;
+      }
       changed = true;
     }
     if (!changed) {
