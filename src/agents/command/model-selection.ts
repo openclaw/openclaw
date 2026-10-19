@@ -451,6 +451,7 @@ export async function resolveEmbeddedModelSelection(params: {
       });
     const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
       store,
+      recordedProvider: { provider: profile?.provider },
       cfg: authConfig,
       agentDir,
       entry,
