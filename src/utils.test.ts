@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAbortError } from "./infra/abort-signal.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
@@ -28,20 +28,18 @@ describe("ensureDir", () => {
 });
 
 describe("sleep", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   it("clamps oversized sleep delays before scheduling", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const promise = sleep(Number.MAX_SAFE_INTEGER);
-
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-
-      vi.advanceTimersByTime(MAX_TIMER_TIMEOUT_MS);
-      await expect(promise).resolves.toBeUndefined();
-    } finally {
-      setTimeoutSpy.mockRestore();
-      vi.useRealTimers();
-    }
+    const promise = sleep(Number.MAX_SAFE_INTEGER);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    vi.advanceTimersByTime(MAX_TIMER_TIMEOUT_MS);
+    await expect(promise).resolves.toBeUndefined();
   });
 
   it("rejects a pre-aborted zero-duration wait with the canonical abort error", async () => {
@@ -57,29 +55,18 @@ describe("sleep", () => {
 
   it("resolves a non-aborted zero-duration wait without scheduling", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await expect(sleep(0, new AbortController().signal)).resolves.toBeUndefined();
-      expect(setTimeoutSpy).not.toHaveBeenCalled();
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+    await expect(sleep(0, new AbortController().signal)).resolves.toBeUndefined();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
 
   it("removes abort listeners after normal resolution", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const removeListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
-    try {
-      const promise = sleep(5, controller.signal);
-
-      await vi.advanceTimersByTimeAsync(5);
-      await expect(promise).resolves.toBeUndefined();
-
-      expect(removeListenerSpy).toHaveBeenCalledWith("abort", expect.any(Function));
-    } finally {
-      removeListenerSpy.mockRestore();
-      vi.useRealTimers();
-    }
+    const promise = sleep(5, controller.signal);
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(promise).resolves.toBeUndefined();
+    expect(removeListenerSpy).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
   it("rejects cancellation with the canonical abort classification and cause", async () => {
@@ -107,18 +94,16 @@ describe("normalizeE164", () => {
 describe("resolveConfigDir", () => {
   it("resolves the default config directory", () => {
     const root = path.resolve("config-dir-home");
-    const newDir = path.join(root, ".openclaw");
-    const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);
-    expect(resolved).toBe(newDir);
+    expect(resolveConfigDir({}, () => root)).toBe(path.join(root, ".openclaw"));
   });
 
   it("expands OPENCLAW_STATE_DIR using the provided env", () => {
-    const env = {
-      HOME: "/tmp/openclaw-home",
-      OPENCLAW_STATE_DIR: "~/state",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
+    expect(
+      resolveConfigDir({
+        HOME: "/tmp/openclaw-home",
+        OPENCLAW_STATE_DIR: "~/state",
+      }),
+    ).toBe(path.resolve("/tmp/openclaw-home", "state"));
   });
 
   it("re-pins the exported configuration root after startup environment selection", () => {
@@ -142,16 +127,13 @@ describe("resolveConfigDir", () => {
 });
 
 describe("shortenHomePath", () => {
-  it.each([["undefined", "/home/other", "~"]])(
-    "uses the effective home prefix for OPENCLAW_HOME=%j",
-    (override, home, prefix) => {
-      withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
-        expect(shortenHomePath(`${path.resolve(home)}/.openclaw/openclaw.json`)).toBe(
-          `${prefix}/.openclaw/openclaw.json`,
-        );
-      });
-    },
-  );
+  it("uses the effective home prefix for OPENCLAW_HOME=undefined", () => {
+    withEnv({ OPENCLAW_HOME: "undefined", HOME: "/home/other" }, () => {
+      expect(shortenHomePath(`${path.resolve("/home/other")}/.openclaw/openclaw.json`)).toBe(
+        "~/.openclaw/openclaw.json",
+      );
+    });
+  });
 
   it.skipIf(process.platform === "win32")("preserves POSIX home path boundaries and case", () => {
     withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
@@ -189,16 +171,15 @@ describe("shortenHomePath", () => {
 });
 
 describe("shortenHomeInString", () => {
-  it.each([["/srv/openclaw-home", "/srv/openclaw-home", "$OPENCLAW_HOME"]])(
-    "uses the effective home prefix for OPENCLAW_HOME=%j",
-    (override, home, prefix) => {
-      withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
-        expect(shortenHomeInString(`config: ${path.resolve(home)}/.openclaw/openclaw.json`)).toBe(
-          `config: ${prefix}/.openclaw/openclaw.json`,
-        );
-      });
-    },
-  );
+  it("uses the explicit OPENCLAW_HOME prefix", () => {
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
+      expect(
+        shortenHomeInString(
+          `config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
+        ),
+      ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
+    });
+  });
 
   it.skipIf(process.platform === "win32")(
     "keeps embedded POSIX home matching case-sensitive",

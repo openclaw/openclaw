@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { ExpectedCliError } from "./cli/failure-output.js";
 import { runMainOrRootHelp } from "./entry.js";
@@ -15,8 +15,17 @@ import { PluginInstance } from "./plugins/plugin-instance.js";
 import type { OpenClawPluginCliRegistrar } from "./plugins/plugin-registration.types.js";
 
 describe("entry run-main boundary", () => {
+  let previousExitCode: typeof process.exitCode;
+  let errorSpy: MockInstance<typeof console.error>;
+  beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
   afterEach(() => {
     vi.doUnmock("./cli/run-main.js");
+    vi.restoreAllMocks();
+    process.exitCode = previousExitCode;
   });
 
   it("retains JSON console routing through process finalization", async () => {
@@ -34,26 +43,18 @@ describe("entry run-main boundary", () => {
   });
 
   it("frames a command-phase failure as a command failure, not a startup failure", async () => {
-    const previousExitCode = process.exitCode;
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    process.exitCode = undefined;
-    try {
-      // mock-isolation: Exercise entry failure framing without starting the real CLI runtime.
-      vi.doMock("./cli/run-main.js", async () => ({
-        runCli: vi.fn(async () => {
-          throw new Error(
-            "Multiple agents are configured, but this operation has no explicit owner.",
-          );
-        }),
-      }));
-      await runMainOrRootHelp(["node", "openclaw", "onboard", "recommendations"]);
-      expect(process.exitCode).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith("[openclaw] The CLI command failed.");
-      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Could not start the CLI"));
-    } finally {
-      errorSpy.mockRestore();
-      process.exitCode = previousExitCode;
-    }
+    // mock-isolation: Exercise entry failure framing without starting the real CLI runtime.
+    vi.doMock("./cli/run-main.js", async () => ({
+      runCli: vi.fn(async () => {
+        throw new Error(
+          "Multiple agents are configured, but this operation has no explicit owner.",
+        );
+      }),
+    }));
+    await runMainOrRootHelp(["node", "openclaw", "onboard", "recommendations"]);
+    expect(process.exitCode).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith("[openclaw] The CLI command failed.");
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Could not start the CLI"));
   });
 
   it.each([false, true])(
@@ -89,10 +90,7 @@ describe("entry run-main boundary", () => {
       );
       const host = new Command();
       await registrar?.({ program: host, parentPath: [], config: {}, logger: api.logger });
-      const previousExitCode = process.exitCode;
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-      process.exitCode = undefined;
       try {
         // mock-isolation: This command runs on the fixture program, not the real CLI runtime.
         vi.doMock("./cli/run-main.js", async () => ({
@@ -118,26 +116,17 @@ describe("entry run-main boundary", () => {
   );
 
   it("frames a failure before the command runs as a startup failure", async () => {
-    const previousExitCode = process.exitCode;
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    process.exitCode = undefined;
-    try {
-      // mock-isolation: Model an import failure before the real CLI runtime initializes.
-      vi.doMock("./cli/run-main.js", async () => {
-        throw new Error("cannot load run-main");
-      });
-      await runMainOrRootHelp(["node", "openclaw", "status"]);
-      expect(process.exitCode).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith("[openclaw] Could not start the CLI.");
-      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("The CLI command failed"));
-    } finally {
-      errorSpy.mockRestore();
-      process.exitCode = previousExitCode;
-    }
+    // mock-isolation: Model an import failure before the real CLI runtime initializes.
+    vi.doMock("./cli/run-main.js", async () => {
+      throw new Error("cannot load run-main");
+    });
+    await runMainOrRootHelp(["node", "openclaw", "status"]);
+    expect(process.exitCode).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith("[openclaw] Could not start the CLI.");
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("The CLI command failed"));
   });
 
   it("keeps expected conditions at exit 1 without crash framing", async () => {
-    const previousExitCode = process.exitCode;
     const message =
       'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.';
     const error = new ExpectedCliError({
@@ -145,24 +134,15 @@ describe("entry run-main boundary", () => {
       humanOutput: message,
       machineOutput: message,
     });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    process.exitCode = undefined;
-
-    try {
-      // mock-isolation: Exercise expected entry failures without starting the real CLI runtime.
-      vi.doMock("./cli/run-main.js", async () => ({
-        runCli: vi.fn(async () => {
-          throw error;
-        }),
-      }));
-      await runMainOrRootHelp(["node", "openclaw", "workboard", "list"]);
-
-      expect(process.exitCode).toBe(1);
-      expect(errorSpy.mock.calls).toEqual([[message]]);
-    } finally {
-      errorSpy.mockRestore();
-      process.exitCode = previousExitCode;
-    }
+    // mock-isolation: Exercise expected entry failures without starting the real CLI runtime.
+    vi.doMock("./cli/run-main.js", async () => ({
+      runCli: vi.fn(async () => {
+        throw error;
+      }),
+    }));
+    await runMainOrRootHelp(["node", "openclaw", "workboard", "list"]);
+    expect(process.exitCode).toBe(1);
+    expect(errorSpy.mock.calls).toEqual([[message]]);
   });
 });
 

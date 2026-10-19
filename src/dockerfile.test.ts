@@ -1,7 +1,6 @@
 // Tests Dockerfile metadata and expected install commands.
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
@@ -16,6 +15,21 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
+}
+
+function expectInOrder(text: string, ...fragments: string[]) {
+  let previous = -1;
+  for (const fragment of fragments) {
+    const index = text.indexOf(fragment);
+    expect(index, fragment).toBeGreaterThan(previous);
+    previous = index;
+  }
+}
+
+function expectContains(text: string, ...fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
+  }
 }
 
 async function stageDockerManifestCopies(params: { body: string; fixture: string; stage: string }) {
@@ -135,13 +149,11 @@ describe("Dockerfile", () => {
 
   it("keeps validated plugin selection outside the build-context copy destination", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const selectionCopyIndex = dockerfile.indexOf(
+    expectInOrder(
+      dockerfile,
       "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs",
+      "COPY . .",
     );
-    const buildContextCopyIndex = dockerfile.indexOf("COPY . .");
-
-    expect(selectionCopyIndex).toBeGreaterThan(-1);
-    expect(buildContextCopyIndex).toBeGreaterThan(selectionCopyIndex);
     expect(dockerfile).not.toContain("/app/.openclaw-selected-plugin-dirs");
     expect(dockerfile).not.toContain("./.openclaw-selected-plugin-dirs");
     expect(dockerfile).toContain(
@@ -158,75 +170,72 @@ describe("Dockerfile", () => {
       );
       const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
       expect(installIndex).toBeGreaterThan(-1);
-      const fixture = await mkdtemp(join(tmpdir(), "openclaw-docker-lifecycle-"));
-      try {
-        // Stage the actual local COPY inputs, not a separately maintained import list.
-        // Workspace manifests do not contribute executable root lifecycle modules.
-        for (const [, sources, destination] of dockerfile
-          .slice(0, installIndex)
-          .matchAll(/^COPY ([^\n]+) (\.\/\S*)$/gm)) {
-          if (!sources || !destination) {
-            throw new Error("Expected local COPY sources and destination");
-          }
-          if (sources.startsWith("--")) {
+      const fixture = tempDirs.make("openclaw-docker-lifecycle-");
+      // Stage the actual local COPY inputs, not a separately maintained import list.
+      // Workspace manifests do not contribute executable root lifecycle modules.
+      for (const [, sources, destination] of dockerfile
+        .slice(0, installIndex)
+        .matchAll(/^COPY ([^\n]+) (\.\/\S*)$/gm)) {
+        if (!sources || !destination) {
+          throw new Error("Expected local COPY sources and destination");
+        }
+        if (sources.startsWith("--")) {
+          continue;
+        }
+        for (const input of sources.split(/\s+/)) {
+          if (input !== "package.json" && !input.endsWith(".mjs")) {
             continue;
           }
-          for (const input of sources.split(/\s+/)) {
-            if (input !== "package.json" && !input.endsWith(".mjs")) {
-              continue;
-            }
-            const target = join(
-              fixture,
-              destination.endsWith("/") ? join(destination, basename(input)) : destination,
-            );
-            await mkdir(dirname(target), { recursive: true });
-            await cp(join(repoRoot, input), target);
-          }
+          const target = join(
+            fixture,
+            destination.endsWith("/") ? join(destination, basename(input)) : destination,
+          );
+          await mkdir(dirname(target), { recursive: true });
+          await cp(join(repoRoot, input), target);
         }
-        const packageJson = JSON.parse(await readFile(join(fixture, "package.json"), "utf8")) as {
-          scripts: Record<string, string>;
-        };
-        const home = join(fixture, "home");
-        await mkdir(home);
-        for (const lifecycle of ["preinstall", "install", "postinstall", "prepare"]) {
-          const command = packageJson.scripts[lifecycle];
-          if (!command) {
-            continue;
-          }
-          const scriptPath = command.match(/^node (scripts\/[^\s]+)$/)?.[1];
-          if (!scriptPath) {
-            throw new Error(`Unsupported root lifecycle command: ${command}`);
-          }
-          expect
-            .soft(
-              () =>
-                execFileSync(resolveTestNodeExecPath(), [scriptPath], {
-                  cwd: fixture,
-                  env: {
-                    HOME: home,
-                    USERPROFILE: home,
-                    PATH: process.env.PATH,
-                    npm_config_user_agent: "pnpm/12",
-                  },
-                  stdio: "pipe",
-                }),
-              lifecycle,
-            )
-            .not.toThrow();
+      }
+      const packageJson = JSON.parse(await readFile(join(fixture, "package.json"), "utf8")) as {
+        scripts: Record<string, string>;
+      };
+      const home = join(fixture, "home");
+      await mkdir(home);
+      for (const lifecycle of ["preinstall", "install", "postinstall", "prepare"]) {
+        const command = packageJson.scripts[lifecycle];
+        if (!command) {
+          continue;
         }
-      } finally {
-        await rm(fixture, { recursive: true, force: true });
+        const scriptPath = command.match(/^node (scripts\/[^\s]+)$/)?.[1];
+        if (!scriptPath) {
+          throw new Error(`Unsupported root lifecycle command: ${command}`);
+        }
+        expect
+          .soft(
+            () =>
+              execFileSync(resolveTestNodeExecPath(), [scriptPath], {
+                cwd: fixture,
+                env: {
+                  HOME: home,
+                  USERPROFILE: home,
+                  PATH: process.env.PATH,
+                  npm_config_user_agent: "pnpm/12",
+                },
+                stdio: "pipe",
+              }),
+            lifecycle,
+          )
+          .not.toThrow();
       }
     },
   );
 
   it("normalizes plugin and agent paths permissions in image layers", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain(
+    expectContains(
+      dockerfile,
       "RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \\",
+      'find "$dir" -type d -exec chmod 755 {} +',
+      'find "$dir" -type f -exec chmod 644 {} +',
     );
-    expect(dockerfile).toContain('find "$dir" -type d -exec chmod 755 {} +');
-    expect(dockerfile).toContain('find "$dir" -type f -exec chmod 644 {} +');
   });
 
   it("counts primary pub keys before Docker apt fingerprint compare and dearmor", async () => {
@@ -244,51 +253,29 @@ describe("Dockerfile", () => {
     expect(slice).toContain("docker_gpg_pub_count=");
     expect(slice).toContain('$1 == "pub"');
     expect(slice).not.toContain('\\"pub\\"');
-    const pubCountIdx = slice.indexOf("docker_gpg_pub_count=");
-    const fpIdx = slice.indexOf("actual_fingerprint=");
-    const dearmorIdx = slice.indexOf("gpg --dearmor");
-    expect(pubCountIdx).toBeLessThan(fpIdx);
-    expect(fpIdx).toBeLessThan(dearmorIdx);
+    expectInOrder(slice, "docker_gpg_pub_count=", "actual_fingerprint=", "gpg --dearmor");
     expect(slice).toContain('[ "$docker_gpg_pub_count" != "1" ]');
   });
 
   it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
-    const parentConfigDirIndex = dockerfile.indexOf(
+    const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM base-runtime"));
+    // #85968: the node-owned parent must precede the private leaf directories.
+    expectInOrder(
+      runtime,
+      "FROM base-runtime",
       "RUN install -d -m 0755 -o node -g node /home/node/.config",
-      runtimeStageIndex,
-    );
-    const stateDirIndex = dockerfile.indexOf(
       "install -d -m 0700 -o node -g node \\",
-      parentConfigDirIndex,
+      "USER node",
     );
-    const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
-
-    expect(runtimeStageIndex).toBeGreaterThan(-1);
-    // Regression: /home/node/.config parent must be created with node ownership
-    // before the leaf .config/openclaw dir (issue #85968).
-    expect(parentConfigDirIndex).toBeGreaterThan(-1);
-    expect(stateDirIndex).toBeGreaterThan(-1);
-    expect(userIndex).toBeGreaterThan(-1);
-    expect(parentConfigDirIndex).toBeGreaterThan(runtimeStageIndex);
-    expect(parentConfigDirIndex).toBeLessThan(stateDirIndex);
-    expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
-    expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
-    expect(dockerfile).toContain("/home/node/.openclaw/workspace");
-    expect(dockerfile).toContain("/home/node/.config/openclaw");
-    expect(dockerfile).toContain(
+    expectContains(
+      dockerfile,
+      "/home/node/.openclaw/workspace",
+      "/home/node/.config/openclaw",
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
-    );
-    expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
-    );
-    // Regression: assert parent /home/node/.config is also node-owned (issue #85968).
-    expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755'",
-    );
-    expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",
     );
   });
