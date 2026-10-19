@@ -7,18 +7,36 @@ import {
 import type { CoreConfig } from "./types.js";
 
 const mocks = getMatrixActionMocks();
+const cfg: CoreConfig = {};
+const disabledCfg: CoreConfig = {
+  channels: {
+    matrix: { actions: { messages: false, reactions: false, pins: false, memberInfo: false } },
+  },
+};
+const verificationParams = { operation: "verification-list" };
+const owner = { accountId: "ops", senderIsOwner: true };
+const expectError = (result: ReturnType<typeof runMatrixAction>, message: string) =>
+  expect(result).rejects.toThrow(message);
+
+function run(
+  action: Parameters<typeof runMatrixAction>[0],
+  params: Record<string, unknown>,
+  context?: Parameters<typeof runMatrixAction>[3],
+  config = cfg,
+) {
+  return runMatrixAction(action, params, config, context);
+}
 
 describe("Matrix public message actions", () => {
   beforeEach(resetMatrixActionMocks);
 
   it("keeps public send precedence, dropped fields, and optional property presence", async () => {
-    const cfg = {} as CoreConfig;
     const mediaAccess = {
       localRoots: ["/tmp/matrix-composition"],
       readFile: async () => Buffer.from("fixture"),
       workspaceDir: "/tmp/matrix-composition",
     };
-    await runMatrixAction(
+    await run(
       "send",
       {
         to: " room:!room:example ",
@@ -33,7 +51,6 @@ describe("Matrix public message actions", () => {
         accountId: "discarded",
         account_id: "discarded-alias",
       },
-      cfg,
       { accountId: " ops ", mediaAccess, mediaLocalRoots: mediaAccess.localRoots },
     );
 
@@ -54,24 +71,19 @@ describe("Matrix public message actions", () => {
   });
 
   it("does not revive shadowed snake-case fields or accept private send aliases", async () => {
-    const cfg = {} as CoreConfig;
-    await runMatrixAction(
-      "send",
-      {
-        to: "room:!room:example",
-        mediaUrl: undefined,
-        media_url: "discarded.png",
-        filePath: "kept.png",
-        file_path: "discarded-path.png",
-        replyToId: "$discarded",
-        threadId: undefined,
-        thread_id: "$discarded-thread",
-        as_voice: true,
-        audio_as_voice: true,
-        accountId: "discarded",
-      },
-      cfg,
-    );
+    await run("send", {
+      to: "room:!room:example",
+      mediaUrl: undefined,
+      media_url: "discarded.png",
+      filePath: "kept.png",
+      file_path: "discarded-path.png",
+      replyToId: "$discarded",
+      threadId: undefined,
+      thread_id: "$discarded-thread",
+      as_voice: true,
+      audio_as_voice: true,
+      accountId: "discarded",
+    });
 
     expect(mocks.sendMatrixMessage.mock.lastCall).toStrictEqual([
       "room:!room:example",
@@ -88,16 +100,7 @@ describe("Matrix public message actions", () => {
   });
 
   it("drops public delete reasons but preserves the downstream undefined property", async () => {
-    const cfg = {} as CoreConfig;
-    await runMatrixAction(
-      "delete",
-      {
-        roomId: "!room:example",
-        messageId: "$message",
-        reason: "discarded",
-      },
-      cfg,
-    );
+    await run("delete", { roomId: "!room:example", messageId: "$message", reason: "discarded" });
     expect(mocks.deleteMatrixMessage.mock.lastCall).toStrictEqual([
       "!room:example",
       "$message",
@@ -106,8 +109,7 @@ describe("Matrix public message actions", () => {
   });
 
   it("carries only trusted read context and retains undefined context properties", async () => {
-    const cfg = {} as CoreConfig;
-    await runMatrixAction(
+    await run(
       "reactions",
       {
         roomId: "!room:example",
@@ -117,7 +119,6 @@ describe("Matrix public message actions", () => {
         currentChannelId: "!untrusted:example",
         conversationReadOrigin: "untrusted",
       },
-      cfg,
       {
         accountId: "ops",
         requesterAccountId: "requester",
@@ -150,19 +151,7 @@ describe("Matrix public message actions", () => {
   ] as const)(
     "validates $action arguments before disabled action gates: $error",
     async ({ action, params, error }) => {
-      const cfg = {
-        channels: {
-          matrix: {
-            actions: {
-              messages: false,
-              reactions: false,
-              pins: false,
-              memberInfo: false,
-            },
-          },
-        },
-      } as CoreConfig;
-      await expect(runMatrixAction(action, params, cfg)).rejects.toThrow(error);
+      await expectError(run(action, params, undefined, disabledCfg), error);
       expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
       expect(mocks.sendMatrixMessage).not.toHaveBeenCalled();
     },
@@ -176,52 +165,43 @@ describe("Matrix public message actions", () => {
     },
   ])("retains late reaction validation: $enabledError", async ({ params, enabledError }) => {
     const input = { messageId: "$m", roomId: "!room:example", ...params };
-    await expect(
-      runMatrixAction("react", input, {
-        channels: { matrix: { actions: { reactions: false } } },
-      } as CoreConfig),
-    ).rejects.toThrow("Matrix reactions are disabled.");
-    await expect(runMatrixAction("react", input, {} as CoreConfig)).rejects.toThrow(enabledError);
+    await expectError(
+      run("react", input, undefined, disabledCfg),
+      "Matrix reactions are disabled.",
+    );
+    await expectError(run("react", input), enabledError);
     expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
   });
 
   it("uses the current Matrix room only for emoji discovery and retains late whitespace errors", async () => {
-    const cfg = {} as CoreConfig;
     const toolContext = {
       currentChannelId: " room:!current:example ",
       currentChannelProvider: "matrix",
     };
-    await runMatrixAction("emoji-list", { limit: 3 }, cfg, { toolContext });
+    await run("emoji-list", { limit: 3 }, { toolContext });
     expect(mocks.listMatrixEmojis.mock.lastCall).toStrictEqual([
       "!current:example",
       { cfg, client: mocks.matrixClient, limit: 3 },
     ]);
     mocks.withAuthorizedMatrixReadTarget.mockClear();
     const blankContext = { toolContext: { ...toolContext, currentChannelId: " " } };
-    await expect(
-      runMatrixAction(
-        "emoji-list",
-        {},
-        {
-          channels: { matrix: { actions: { reactions: false } } },
-        } as CoreConfig,
-        blankContext,
-      ),
-    ).rejects.toThrow("Matrix reactions are disabled.");
-    await expect(runMatrixAction("emoji-list", {}, cfg, blankContext)).rejects.toThrow(
-      "to required",
+    await expectError(
+      run("emoji-list", {}, blankContext, disabledCfg),
+      "Matrix reactions are disabled.",
     );
-    await expect(
-      runMatrixAction("emoji-list", { limit: 1.5 }, cfg, {
-        toolContext: { currentChannelId: "!foreign:example", currentChannelProvider: "slack" },
-      }),
-    ).rejects.toThrow("Matrix emoji-list requires a roomId or current Matrix conversation.");
+    await expectError(run("emoji-list", {}, blankContext), "to required");
+    const foreignContext = {
+      toolContext: { currentChannelId: "!foreign:example", currentChannelProvider: "slack" },
+    };
+    await expectError(
+      run("emoji-list", { limit: 1.5 }, foreignContext),
+      "Matrix emoji-list requires a roomId or current Matrix conversation.",
+    );
     expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
   });
 
   it("preserves profile aliases and dropped fields at the public owner boundary", async () => {
-    const cfg = {} as CoreConfig;
-    await runMatrixAction(
+    await run(
       "set-profile",
       {
         displayName: undefined,
@@ -235,8 +215,7 @@ describe("Matrix public message actions", () => {
         filePath: "/tmp/later.png",
         accountId: "discarded",
       },
-      cfg,
-      { accountId: "ops", senderIsOwner: true },
+      owner,
     );
     expect(mocks.applyMatrixProfileUpdate.mock.lastCall?.[0]).toStrictEqual({
       cfg,
@@ -249,31 +228,15 @@ describe("Matrix public message actions", () => {
   });
 
   it("retains owner checks and trusted account propagation for verification", async () => {
-    const cfg = {} as CoreConfig;
-    await expect(
-      runMatrixAction(
-        "permissions",
-        {
-          operation: "verification-list",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow("Matrix verification actions require owner access.");
-    await expect(
-      runMatrixAction("permissions", { operation: "verification-list" }, cfg, {
-        senderIsOwner: false,
-      }),
-    ).rejects.toThrow("Matrix verification actions require owner access.");
+    const ownerError = "Matrix verification actions require owner access.";
+    await expectError(run("permissions", verificationParams), ownerError);
+    await expectError(run("permissions", verificationParams, { senderIsOwner: false }), ownerError);
     expect(mocks.listMatrixVerifications).not.toHaveBeenCalled();
 
-    const result = await runMatrixAction(
+    const result = await run(
       "permissions",
-      {
-        operation: "verification-list",
-        accountId: "discarded",
-      },
-      cfg,
-      { accountId: "ops", senderIsOwner: true },
+      { ...verificationParams, accountId: "discarded" },
+      owner,
     );
     expect(mocks.listMatrixVerifications).toHaveBeenCalledWith({ cfg, accountId: "ops" });
     expect(result.details).toEqual({ ok: true, verifications: [] });
@@ -281,25 +244,23 @@ describe("Matrix public message actions", () => {
 
   it("rejects inherited verification operations before action gating", async () => {
     const operation = "constructor";
-    await expect(
-      runMatrixAction(
+    await expectError(
+      run(
         "permissions",
         { operation },
-        {
-          channels: { matrix: { actions: { verification: false } } },
-        } as CoreConfig,
         { senderIsOwner: true },
+        { channels: { matrix: { actions: { verification: false } } } },
       ),
-    ).rejects.toThrow(`Unsupported Matrix permissions operation: ${operation}.`);
+      `Unsupported Matrix permissions operation: ${operation}.`,
+    );
     expect(mocks.listMatrixVerifications).not.toHaveBeenCalled();
   });
 
   it("rejects profile mutation without trusted owner identity before applying the profile", async () => {
-    await expect(
-      runMatrixAction("set-profile", { displayName: "Ops Bot" }, {} as CoreConfig, {
-        accountId: "ops",
-      }),
-    ).rejects.toThrow("Matrix profile updates require owner access.");
+    await expectError(
+      run("set-profile", { displayName: "Ops Bot" }, { accountId: "ops" }),
+      "Matrix profile updates require owner access.",
+    );
     expect(mocks.applyMatrixProfileUpdate).not.toHaveBeenCalled();
   });
 });
