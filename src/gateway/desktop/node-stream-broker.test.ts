@@ -1,42 +1,14 @@
+import { once } from "node:events";
 import http from "node:http";
 import net from "node:net";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
+import { closeServer, listenLoopback, setupDesktopDiagnostics } from "./desktop.test-support.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 
 const cleanups: Array<() => Promise<void>> = [];
-const logPaths = createSuiteLogPathTracker("node-stream-broker-diagnostics-");
-const logCaptures: ReturnType<typeof createDiagnosticLogRecordCapture>[] = [];
-
-beforeAll(async () => logPaths.setup());
-beforeEach(() =>
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logPaths.nextPath() }),
-);
-afterAll(async () => logPaths.cleanup());
-
-afterEach(async () => {
-  try {
-    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-    await flushLogger();
-    for (const capture of logCaptures) {
-      await capture.flush();
-    }
-    if (vi.isFakeTimers()) {
-      expect(vi.getTimerCount()).toBe(0);
-    }
-  } finally {
-    for (const capture of logCaptures.splice(0)) {
-      capture.cleanup();
-    }
-    resetLogger();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  }
-});
+const captureLogs = setupDesktopDiagnostics(cleanups, "node-stream-broker-diagnostics-");
 
 async function startBrokerServer(params: {
   broker: ReturnType<typeof createNodeDesktopStreamBroker>;
@@ -61,21 +33,13 @@ async function startBrokerServer(params: {
     );
     void params.broker.handleUpgrade(req, socket, head, registry as never);
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected broker test address");
-  }
+  const port = await listenLoopback(server);
   cleanups.push(async () => {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeServer(server);
     // HTTP close excludes upgraded sockets; their late diagnostics belong to this test.
     await Promise.all(upgradedSocketsClosed);
   });
-  return `ws://127.0.0.1:${address.port}`;
+  return `ws://127.0.0.1:${port}`;
 }
 
 async function createBrokerFixture(pairingCurrent?: () => boolean | Promise<boolean>) {
@@ -87,10 +51,7 @@ async function createBrokerFixture(pairingCurrent?: () => boolean | Promise<bool
 async function openSocket(url: string): Promise<WebSocket> {
   const ws = new WebSocket(url);
   cleanups.push(async () => ws.terminate());
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
+  await once(ws, "open");
   return ws;
 }
 
@@ -133,8 +94,7 @@ describe("node desktop stream tickets", () => {
   ] as const)(
     "keeps idle $kind streams alive through remote backpressure and records $closeMode",
     async ({ kind, closeMode }) => {
-      const logCapture = createDiagnosticLogRecordCapture();
-      logCaptures.push(logCapture);
+      const logCapture = captureLogs();
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       const { broker, session, baseUrl } = await createBrokerFixture();
       const serverTimers = vi.getTimerCount();
@@ -295,8 +255,7 @@ describe("node desktop stream tickets", () => {
   it.each(["cancelled", "expired"] as const)(
     "rejects a redeemed ticket that is %s while metadata is pending",
     async (outcome) => {
-      const logCapture = createDiagnosticLogRecordCapture();
-      logCaptures.push(logCapture);
+      const logCapture = captureLogs();
       const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
       const { broker, session, baseUrl } = await createBrokerFixture();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -343,10 +302,7 @@ describe("node desktop stream tickets", () => {
     cleanups.push(async () => {
       socket.destroy();
     });
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("error", reject);
-    });
+    await once(socket, "connect");
     socket.write(
       [
         `GET ${minted.attachPath} HTTP/1.1`,

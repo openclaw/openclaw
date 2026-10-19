@@ -1,7 +1,9 @@
 import net from "node:net";
+import type { Duplex } from "node:stream";
 import { finished } from "node:stream/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { closeServer, listenLoopback } from "./desktop.test-support.js";
 import { classifyRfbSecurity, connectRfbServer, probeRfbServer } from "./rfb-probe.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -21,23 +23,14 @@ async function listenScriptedRfb(script: (socket: net.Socket) => void): Promise<
     socket.once("close", () => sockets.delete(socket));
     script(socket);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenLoopback(server);
   cleanups.push(async () => {
     for (const socket of sockets) {
       socket.destroy();
     }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeServer(server);
   });
-  const address = server.address();
-  if (typeof address === "string" || !address) {
-    throw new Error("scripted RFB server did not bind a port");
-  }
-  return address.port;
+  return port;
 }
 
 function probe(port: number) {
@@ -62,6 +55,14 @@ function serveHandshake(socket: net.Socket, onSelection: (selection: Buffer) => 
     socket.write(OFFER);
     socket.once("data", onSelection);
   });
+}
+
+async function collect(stream: Duplex) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 describe("RFB server probe", () => {
@@ -92,18 +93,14 @@ describe("RFB server probe", () => {
     await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [] });
   });
 
-  it("reports a non-RFB occupant without reading past its banner", async () => {
+  it.each([
+    ["HTTP/1.1 200 OK\r\n\r\n", "HTTP/1.1 200", false],
+    ["RFB 003", "RFB 003", true],
+  ])("reports a non-RFB or truncated banner (%s)", async (wire, banner, end) => {
     const port = await listenScriptedRfb((socket) => {
-      socket.write(Buffer.from("HTTP/1.1 200 OK\r\n\r\n", "ascii"));
+      socket[end ? "end" : "write"](Buffer.from(wire, "ascii"));
     });
-    await expect(probe(port)).resolves.toEqual({ kind: "not-rfb", banner: "HTTP/1.1 200" });
-  });
-
-  it("reports a truncated banner when the server hangs up early", async () => {
-    const port = await listenScriptedRfb((socket) => {
-      socket.end(Buffer.from("RFB 003", "ascii"));
-    });
-    await expect(probe(port)).resolves.toEqual({ kind: "not-rfb", banner: "RFB 003" });
+    await expect(probe(port)).resolves.toEqual({ kind: "not-rfb", banner });
   });
 
   it("reports an unreachable port", async () => {
@@ -260,15 +257,10 @@ describe("retained RFB connection", () => {
     result.stream.write(CLIENT_HELLO);
     // The peer has finished and closed while the caller has consumed no response.
     await peerClosed.promise;
-    expect(result.stream.destroyed).toBe(false);
-    expect(result.stream.writableEnded).toBe(true);
+    expect(result.stream).toMatchObject({ destroyed: false, writableEnded: true });
     const settled = finished(result.stream);
     void settled.catch(() => undefined);
-    const received: Buffer[] = [];
-    for await (const chunk of result.stream) {
-      received.push(Buffer.from(chunk));
-    }
-    expect(Buffer.concat(received)).toEqual(response);
+    expect(await collect(result.stream)).toEqual(response);
     await expect(settled).resolves.toBeUndefined();
   });
 
@@ -346,10 +338,9 @@ describe("retained RFB connection", () => {
       const result = await connect(port);
       await finSent.promise;
       const settled = finished(result.stream);
-      const received: Buffer[] = [];
-      result.stream.on("data", (chunk: Buffer) => received.push(chunk));
+      const received = collect(result.stream);
       await settled;
-      expect(Buffer.concat(received)).toEqual(wire);
+      expect(await received).toEqual(wire);
       expect(result.stream.writableFinished).toBe(true);
     },
   );

@@ -19,6 +19,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+function createRequester() {
+  const controller = new AbortController();
+  return {
+    controller,
+    identity: { signal: controller.signal, isCurrent: () => !controller.signal.aborted },
+  };
+}
+
+const rejected = (promise: Promise<unknown>) =>
+  promise.then(
+    () => false,
+    () => true,
+  );
+
 function createFixture(boundary: "activation" | "pairing" | "attachment") {
   let config: OpenClawConfig = {};
   const reached = createDeferred();
@@ -110,10 +124,23 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
     await desktopRegistry.stopAll();
     nodeRegistry.unregister(client.connId);
   });
+  const observe = (overrides: Partial<Parameters<typeof service.observe>[0]> = {}) =>
+    service.observe({ nodeId: "node", control: false, ...overrides });
   return {
     service,
-    observe: (overrides: Partial<Parameters<typeof service.observe>[0]> = {}) =>
-      service.observe({ nodeId: "node", control: false, ...overrides }),
+    observe,
+    async observeAttached(
+      identity?: Parameters<typeof service.observe>[0]["requester"],
+      stream = new PassThrough(),
+    ) {
+      const pending = observe({
+        credentials: { password: "synthetic-password" },
+        requester: identity,
+      });
+      await reached.promise;
+      attached.resolve({ stream, auth: "vnc-password" });
+      return pending;
+    },
     nodeRegistry,
     desktopRegistry,
     reached: reached.promise,
@@ -153,23 +180,13 @@ describe("node desktop runtime policy", () => {
         completionOrder.push("invocation");
         return result;
       });
-      const controller = new AbortController();
-      const requester = {
-        connId: "desktop-panel-client",
-        signal: controller.signal,
-        isCurrent: () => !controller.signal.aborted,
-      };
+      const { controller, identity } = createRequester();
+      const owner = { connId: "desktop-panel-client", ...identity };
       try {
-        const observing = fixture.observe({
-          credentials: { password: "synthetic-password" },
-          requester,
-        });
-        await fixture.reached;
-        fixture.attached.resolve({ stream: new PassThrough(), auth: "vnc-password" });
-        const observed = await observing;
+        const observed = await fixture.observeAttached(owner);
         const retiring = (
           firstAction === "release"
-            ? observeBridge.releaseDesktopObserverToken(observed.wsPath, requester)
+            ? observeBridge.releaseDesktopObserverToken(observed.wsPath, owner)
             : fixture.service.stopNode("node")
         ).then((result) => {
           completionOrder.push(firstAction);
@@ -198,12 +215,7 @@ describe("node desktop runtime policy", () => {
     const invoke = vi.spyOn(fixture.nodeRegistry, "invoke");
     const stream = new PassThrough();
     try {
-      const observing = fixture.observe({
-        credentials: { password: "synthetic-password" },
-      });
-      await fixture.reached;
-      fixture.attached.resolve({ stream, auth: "vnc-password" });
-      const observed = await observing;
+      const observed = await fixture.observeAttached(undefined, stream);
       const token = mint.mock.calls[0]![0];
       if (claimed) {
         if (token.attachment.kind !== "stream") {
@@ -238,22 +250,10 @@ describe("node desktop runtime policy", () => {
     "does not dispatch after $revoked revocation during $boundary",
     async ({ boundary, revoked }) => {
       const fixture = createFixture(boundary);
-      const controller = new AbortController();
-      const observed = fixture
-        .observe(
-          revoked === "requester"
-            ? {
-                requester: {
-                  signal: controller.signal,
-                  isCurrent: () => !controller.signal.aborted,
-                },
-              }
-            : {},
-        )
-        .then(
-          () => true,
-          () => false,
-        );
+      const { controller, identity } = createRequester();
+      const observed = rejected(
+        fixture.observe(revoked === "requester" ? { requester: identity } : {}),
+      );
       await fixture.reached;
       if (revoked === "requester") {
         controller.abort();
@@ -261,36 +261,22 @@ describe("node desktop runtime policy", () => {
         fixture.revoke();
       }
       fixture.release();
-      expect(await observed).toBe(false);
+      expect(await observed).toBe(true);
       expect(fixture.forwarded).toEqual([]);
     },
   );
 
   it("settles a canceled observer while its node pairing lookup is still pending", async () => {
     const fixture = createFixture("pairing");
-    const controller = new AbortController();
+    const { controller, identity } = createRequester();
     let settled = false;
-    const observed = fixture
-      .observe({
-        requester: {
-          signal: controller.signal,
-          isCurrent: () => !controller.signal.aborted,
-        },
-      })
-      .then(
-        () => {
-          settled = true;
-          return true;
-        },
-        () => {
-          settled = true;
-          return false;
-        },
-      );
+    const observed = rejected(fixture.observe({ requester: identity })).finally(() => {
+      settled = true;
+    });
     await fixture.reached;
     controller.abort();
     await expect.poll(() => settled).toBe(true);
-    expect(await observed).toBe(false);
+    expect(await observed).toBe(true);
     expect(fixture.forwarded).toEqual([]);
     fixture.release();
     await Promise.resolve();
@@ -306,14 +292,10 @@ describe("node desktop runtime policy", () => {
       signal: controller.signal,
       isCurrent: () => !client.invalidated,
     };
-    const observed = fixture.observe({
-      credentials: { password: "synthetic-password" },
-      requester,
+    await expect(fixture.observeAttached(requester)).resolves.toMatchObject({
+      transport: "rfb",
+      control: false,
     });
-    await fixture.reached;
-    fixture.attached.resolve({ stream: new PassThrough(), auth: "vnc-password" });
-
-    await expect(observed).resolves.toMatchObject({ transport: "rfb", control: false });
     const mintedRequester = mint.mock.calls[0]?.[0].requester;
     expect(mintedRequester).toBe(requester);
     expect(mintedRequester?.isCurrent()).toBe(true);
@@ -325,15 +307,12 @@ describe("node desktop runtime policy", () => {
   it("destroys a late attachment instead of publishing a revoked desktop", async () => {
     const fixture = createFixture("attachment");
     const stream = new PassThrough();
-    const observed = fixture.observe({ credentials: { password: "synthetic-password" } }).then(
-      () => true,
-      () => false,
-    );
+    const observed = rejected(fixture.observe({ credentials: { password: "synthetic-password" } }));
     await fixture.reached;
     fixture.revoke();
     fixture.attached.resolve({ stream, auth: "vnc-password" });
 
-    expect(await observed).toBe(false);
+    expect(await observed).toBe(true);
     expect(stream.destroyed).toBe(true);
   });
 });

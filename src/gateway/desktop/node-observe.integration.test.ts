@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -22,6 +23,7 @@ import type { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createWorkerNodeDesktopCarrier } from "../worker-environments/node-desktop-carrier.js";
 import * as workerSupport from "../worker-environments/service.test-support.js";
+import { closeServer, listenLoopback } from "./desktop.test-support.js";
 import { createNodeDesktopService } from "./node-source.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 import { handleDesktopObserveUpgrade } from "./observe-bridge.js";
@@ -60,32 +62,18 @@ class WebSocketReader {
   async next(): Promise<Buffer> {
     return (
       this.chunks.shift() ??
-      (await new Promise<Buffer>((resolve) => {
+      new Promise<Buffer>((resolve) => {
         this.waiters.push(resolve);
-      }))
+      })
     );
   }
 }
 
-type RfbHarness = {
-  completion: Promise<void>;
-  connectionCount: () => number;
-  peers: Set<net.Socket>;
-  port: number;
-};
-
-async function startRfbHarness(
-  expectedStreams: number,
-  endAfterRequest?: Promise<void>,
-): Promise<RfbHarness> {
+async function startRfbHarness(expectedStreams: number, endAfterRequest?: Promise<void>) {
   const peers = new Set<net.Socket>();
   let connectionCount = 0;
   let completedStreams = 0;
-  const {
-    promise: completion,
-    resolve: resolveCompletion,
-    reject: rejectCompletion,
-  } = createDeferred();
+  const done = createDeferred();
   const server = net.createServer((socket) => {
     peers.add(socket);
     socket.once("close", () => peers.delete(socket));
@@ -109,24 +97,18 @@ async function startRfbHarness(
         expect(await reader.readExactly(framebufferRequest.length)).toEqual(framebufferRequest);
         completedStreams += 1;
         if (completedStreams === expectedStreams) {
-          resolveCompletion();
+          done.resolve();
         }
         if (endAfterRequest) {
           await endAfterRequest;
           socket.end(Buffer.from("terminal-pixel-update", "ascii"));
         }
       } catch (error) {
-        rejectCompletion(error instanceof Error ? error : new Error(String(error)));
+        done.reject(error instanceof Error ? error : new Error(String(error)));
       }
     })();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected RFB address");
-  }
+  const port = await listenLoopback(server);
   cleanups.push(
     async () =>
       await new Promise<void>((resolve) => {
@@ -137,10 +119,10 @@ async function startRfbHarness(
       }),
   );
   return {
-    completion,
+    completion: done.promise,
     connectionCount: () => connectionCount,
     peers,
-    port: address.port,
+    port,
   };
 }
 
@@ -158,30 +140,16 @@ async function startDesktopGateway(params: {
       handleDesktopObserveUpgrade(req, socket, head, { registry: params.desktopRegistry });
     })();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected Gateway address");
-  }
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
-  );
-  return `ws://127.0.0.1:${address.port}`;
+  const port = await listenLoopback(server);
+  cleanups.push(async () => closeServer(server));
+  return `ws://127.0.0.1:${port}`;
 }
 
 async function openViewOnlyObserver(gatewayUrl: string, wsPath: string): Promise<WebSocket> {
   const ws = new WebSocket(`${gatewayUrl}${wsPath}`);
   const browser = new WebSocketReader(ws);
   cleanups.push(async () => ws.terminate());
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
+  await once(ws, "open");
   expect(await browser.next()).toEqual(VERSION);
   ws.send(Buffer.concat([VERSION, Buffer.from([1, 0])]));
   expect(await browser.next()).toEqual(Buffer.from([1, 1]));
@@ -199,12 +167,7 @@ async function expectObserversClosed(params: {
   peers: Set<net.Socket>;
   stop: () => Promise<unknown>;
 }): Promise<void> {
-  const closed = params.observers.map(
-    (observer) =>
-      new Promise<void>((resolve) => {
-        observer.once("close", () => resolve());
-      }),
-  );
+  const closed = params.observers.map((observer) => once(observer, "close"));
   await params.stop();
   await Promise.all(closed);
   await vi.waitFor(() => expect(params.peers.size).toBe(0));
@@ -230,6 +193,20 @@ async function expectPeerEof(params: {
   expect(terminalFrames.map((frames) => frames.join(""))).toEqual(
     params.observers.map(() => "terminal-pixel-update"),
   );
+}
+
+async function trackInvocation<T>(results: boolean[], invoke: () => Promise<T>) {
+  try {
+    const result = await invoke();
+    results.push(true);
+    return result;
+  } catch (error) {
+    results.push(false);
+    return {
+      ok: false,
+      error: { message: error instanceof Error ? error.message : String(error) },
+    };
+  }
 }
 
 describe("paired node desktop observe integration", () => {
@@ -265,25 +242,16 @@ describe("paired node desktop observe integration", () => {
           signal?: AbortSignal;
           onProgress?: (chunk: string) => void;
         }) => {
-          try {
+          return trackInvocation(completedInvocations, async () => {
             await invokeNodeDesktopStream({
-              paramsJSON: JSON.stringify({
-                ...(request.params as { ticket: string; attachPath: string }),
-              }),
+              paramsJSON: JSON.stringify(request.params),
               gatewayUrl,
               config: { enabled: true, port: rfb.port },
               signal: request.signal ?? new AbortController().signal,
               emitStatus: async (status) => request.onProgress?.(status),
             });
-            completedInvocations.push(true);
             return { ok: true };
-          } catch (error) {
-            completedInvocations.push(false);
-            return {
-              ok: false,
-              error: { message: error instanceof Error ? error.message : String(error) },
-            };
-          }
+          });
         },
       } as unknown as NodeRegistry;
       gatewayUrl = await startDesktopGateway({ desktopRegistry, nodeRegistry, streamBroker });
@@ -389,21 +357,14 @@ describe("worker environment node desktop observe integration", () => {
         if (!request.isDispatchAuthorized()) {
           return { ok: false, error: { code: "STALE", message: "desktop owner is stale" } };
         }
-        try {
+        return trackInvocation(completedInvocations, async () => {
           await invokeNodeWorkerDesktopStream({
             paramsJSON: JSON.stringify(request.params),
             gatewayUrl,
             signal: request.signal ?? new AbortController().signal,
           });
-          completedInvocations.push(true);
           return { ok: true, payload: null };
-        } catch (error) {
-          completedInvocations.push(false);
-          return {
-            ok: false,
-            error: { message: error instanceof Error ? error.message : String(error) },
-          };
-        }
+        });
       });
       const transport: NodeWorkerSupervisorTransport = {
         getCurrentNode: async (nodeId) => (proof.nodeId === nodeId ? proof : undefined),

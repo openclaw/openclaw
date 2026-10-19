@@ -1,16 +1,15 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { Duplex } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { WebSocket as NpmWebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
+import { closeServer, listenLoopback, setupDesktopDiagnostics } from "./desktop.test-support.js";
 import {
   DESKTOP_OBSERVE_PATH,
   handleDesktopObserveUpgrade,
@@ -27,43 +26,10 @@ const cleanup: Array<() => Promise<void>> = [];
 const HELLO = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1])]);
 const KEY_EVENT = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
 const UPDATE_REQUEST = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
-const logPaths = createSuiteLogPathTracker("desktop-observer-diagnostics-");
-const logCaptures: ReturnType<typeof createDiagnosticLogRecordCapture>[] = [];
-
-beforeAll(async () => logPaths.setup());
-beforeEach(() =>
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logPaths.nextPath() }),
-);
-afterAll(async () => logPaths.cleanup());
-
-afterEach(async () => {
-  try {
-    vi.restoreAllMocks();
-    await Promise.all(cleanup.splice(0).map((run) => run()));
-    await flushLogger();
-    for (const capture of logCaptures) {
-      await capture.flush();
-    }
-    if (vi.isFakeTimers()) {
-      expect(vi.getTimerCount()).toBe(0);
-    }
-  } finally {
-    for (const capture of logCaptures.splice(0)) {
-      capture.cleanup();
-    }
-    resetLogger();
-    vi.useRealTimers();
-  }
-});
-
-function captureLogs() {
-  const capture = createDiagnosticLogRecordCapture();
-  logCaptures.push(capture);
-  return capture;
-}
+const captureLogs = setupDesktopDiagnostics(cleanup, "desktop-observer-diagnostics-", true);
 
 async function expectCloseLog(
-  capture: ReturnType<typeof captureLogs>,
+  capture: ReturnType<ReturnType<typeof setupDesktopDiagnostics>>,
   attributes: Record<string, unknown>,
 ) {
   await expect
@@ -108,24 +74,16 @@ async function createProxyHarness(
   cleanup.push(async () => {
     desktopPeer?.destroy();
     params.stream?.destroy();
-    await new Promise<void>((resolveClose) => {
-      server.close(() => resolveClose());
-    });
+    await closeServer(server);
     await fs.rm(root, { recursive: true, force: true });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(localSocketPath, resolve);
-  });
+  const serverReady = once(server, "listening");
+  server.listen(localSocketPath);
+  await serverReady;
   const release = vi.fn();
   const closeObserver = vi.fn();
   const httpServer = http.createServer();
-  cleanup.push(
-    async () =>
-      await new Promise<void>((resolveClose) => {
-        httpServer.close(() => resolveClose());
-      }),
-  );
+  cleanup.push(async () => closeServer(httpServer));
   httpServer.on("upgrade", (req, socket, head) => {
     handleDesktopObserveUpgrade(req, socket, head, {
       registry: params.registry ?? {
@@ -139,15 +97,8 @@ async function createProxyHarness(
       },
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenLoopback(httpServer);
   const serverTimers = vi.isFakeTimers() ? vi.getTimerCount() : undefined;
-  const address = httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP test server address");
-  }
   const minted = mintDesktopObserverToken({
     sourceKey: "worker:pump",
     ownerEpoch: 2,
@@ -158,14 +109,9 @@ async function createProxyHarness(
     ...(params.preauth ? { preauth: params.preauth } : {}),
     requester: params.requester,
   });
-  const ws = new WebSocket(
-    `ws://127.0.0.1:${address.port}${DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
-  );
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${DESKTOP_OBSERVE_PATH}?token=${minted.token}`);
   cleanup.push(async () => ws.terminate());
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
+  await once(ws, "open");
   return {
     closeObserver,
     desktopPeer: params.stream ?? (await peerConnected.promise),
