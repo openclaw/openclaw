@@ -31,6 +31,7 @@ type DoctorMigrationBackup = (
 const captures = new AsyncLocalStorage<{
   capture?: UpdateDoctorMigrationCapture;
   source?: MigrationSource;
+  assertMigrationCurrent?: () => void;
   backup?: DoctorMigrationBackup;
 }>();
 
@@ -246,7 +247,7 @@ export function runUpdateSqliteMigration<T>(
         }
         const source: MigrationSource | undefined =
           before === null ? undefined : { path: pathname, generation: before, assertCurrent };
-        return captures.run({ capture, source }, () => {
+        return captures.run({ capture, source, assertMigrationCurrent: assertCurrent }, () => {
           const result = operation();
           if (isPromiseLike(result)) {
             throw new Error("Update migration callbacks must remain synchronous.");
@@ -280,7 +281,7 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   if (!capture || expected === undefined) {
     return undefined;
   }
-  const assertCurrent = context?.source?.assertCurrent;
+  const assertCurrent = context?.assertMigrationCurrent;
   if (!assertCurrent) {
     capture.refuse("Migration companion has no verified source custody.");
     throw new Error("Migration companion requires verified source custody.");
@@ -341,7 +342,7 @@ export function beginUpdatePostgresMigration(
   let publish: (() => void) | undefined;
   return {
     run<T>(operation: () => T): T {
-      return captures.run({ capture, source }, operation);
+      return captures.run({ capture, source, assertMigrationCurrent: assertCurrent }, operation);
     },
     beforeCommit() {
       assertCurrent();

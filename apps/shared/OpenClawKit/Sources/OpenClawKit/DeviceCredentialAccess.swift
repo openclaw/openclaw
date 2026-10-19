@@ -125,28 +125,21 @@ public enum DeviceCredentialAccess {
     {
         let candidate = operation.kind == .identityCreate ? operation.identity : nil
         if let candidate {
-            _ = try DeviceIdentityStore.material(
-                deviceId: candidate.deviceID,
-                publicKeyPEM: candidate.publicKeyPEM,
-                privateKeyPEM: candidate.privateKeyPEM,
-                createdAtMs: candidate.createdAtMs)
+            try self.validateIdentity(candidate)
         }
         guard operation.kind == .identityRepair, let replacement = operation.identity else {
             let result = try owner.execute(operation)
             if let identity = result.identity {
                 let matchesValidatedCandidate = candidate.map {
                     identity.createdAtMs == $0.createdAtMs &&
+                        identity.updatedAtMs == $0.updatedAtMs &&
                         identity.deviceID.utf8.elementsEqual($0.deviceID.utf8) &&
                         identity.publicKeyPEM.utf8.elementsEqual($0.publicKeyPEM.utf8) &&
                         identity.privateKeyPEM.utf8.elementsEqual($0.privateKeyPEM.utf8)
                 } ?? false
                 if !matchesValidatedCandidate {
                     do {
-                        _ = try DeviceIdentityStore.material(
-                            deviceId: identity.deviceID,
-                            publicKeyPEM: identity.publicKeyPEM,
-                            privateKeyPEM: identity.privateKeyPEM,
-                            createdAtMs: identity.createdAtMs)
+                        try self.validateIdentity(identity)
                     } catch {
                         throw DeviceIdentityStore.storageError(
                             "Local device identity row \"\(identity.key)\": \(error.localizedDescription). " +
@@ -158,12 +151,7 @@ public enum DeviceCredentialAccess {
         }
         let current = try owner.readIdentity(key: replacement.key)
         var result = ClientCredentialResult(kind: .identityRepair)
-        if let current, (try? DeviceIdentityStore.material(
-            deviceId: current.deviceID,
-            publicKeyPEM: current.publicKeyPEM,
-            privateKeyPEM: current.privateKeyPEM,
-            createdAtMs: current.createdAtMs)) != nil
-        {
+        if let current, (try? self.validateIdentity(current)) != nil {
             result.identity = current
             result.repaired = false
             result.rotated = false
@@ -179,7 +167,8 @@ public enum DeviceCredentialAccess {
             let material = DeviceIdentityStore.material(
                 publicKeyData: publicKey,
                 privateKeyData: privateKey,
-                createdAtMs: max(0, current.createdAtMs))
+                createdAtMs: self.validTimestamp(current.createdAtMs) ??
+                    self.validTimestamp(current.updatedAtMs) ?? replacement.updatedAtMs)
             selected = .init(
                 key: current.key,
                 deviceID: material.identity.deviceId,
@@ -189,16 +178,29 @@ public enum DeviceCredentialAccess {
                 updatedAtMs: replacement.updatedAtMs)
             salvaged = true
         }
-        _ = try DeviceIdentityStore.material(
-            deviceId: selected.deviceID,
-            publicKeyPEM: selected.publicKeyPEM,
-            privateKeyPEM: selected.privateKeyPEM,
-            createdAtMs: selected.createdAtMs)
+        try self.validateIdentity(selected)
         try owner.replaceIdentityForRepair(selected)
         result.identity = selected
         result.repaired = true
         result.rotated = !salvaged
         return result
+    }
+
+    private static func validTimestamp(_ value: Int64) -> Int64? {
+        (0...9_007_199_254_740_991).contains(value) ? value : nil
+    }
+
+    private static func validateIdentity(_ identity: OpenClawClientCredentialStore.Identity) throws {
+        guard self.validTimestamp(identity.createdAtMs) != nil,
+              self.validTimestamp(identity.updatedAtMs) != nil
+        else {
+            throw DeviceIdentityStore.storageError("Local device identity timestamps are invalid")
+        }
+        _ = try DeviceIdentityStore.material(
+            deviceId: identity.deviceID,
+            publicKeyPEM: identity.publicKeyPEM,
+            privateKeyPEM: identity.privateKeyPEM,
+            createdAtMs: identity.createdAtMs)
     }
 
     static func withOwner<T>(root: URL, _ operation: (OpenClawClientCredentialStore) throws -> T) throws -> T {

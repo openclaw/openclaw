@@ -59,6 +59,22 @@ it("reports store creation for rollback attribution without claiming an existing
   expect(reopened?.created).toBe(false);
 });
 
+it.each(["./../state/openclaw.sqlite", "./state//openclaw.sqlite", "./state\\openclaw.sqlite"])(
+  "refuses an unsafe relative receipt binding: %s",
+  (binding) => {
+    const { env } = fixture();
+    {
+      using owner = openClientCredentialCustody(env, { createIfMissing: true, migration: true })!;
+      owner.database
+        .prepare("INSERT INTO client_credential_migration VALUES (1, ?, 'complete', 0)")
+        .run(JSON.stringify(emptyClientCredentialReceipt({ path: binding, dev: "1", ino: "2" })));
+    }
+    expect(() =>
+      runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+    ).toThrow("invalid relative shared binding");
+  },
+);
+
 it("keeps read-existing credential operations local and does not bootstrap missing state", () => {
   const { root, run } = fixture();
   expect(run({ kind: "identity.read", identity_key: "primary" })).toEqual({

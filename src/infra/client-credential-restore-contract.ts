@@ -2,6 +2,7 @@ import type { ClientCredentialFileIdentity } from "./client-credential-receipt.j
 
 export type ClientCredentialRehearsalBinding = {
   sourceSharedFile: ClientCredentialFileIdentity;
+  sourceStateRoot: string;
   sharedPath: string;
   localPath: string;
   postgresStoreId?: string;

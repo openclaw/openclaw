@@ -619,6 +619,7 @@ describe("existing shared-state schema admission", () => {
 
     rebindRehearsalClientCredentials({
       sourceSharedFile,
+      sourceStateRoot: options.env.OPENCLAW_STATE_DIR,
       sharedPath: options.path,
       localPath: resolveClientCredentialStorePath(options.env),
     });

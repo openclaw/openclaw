@@ -36,6 +36,7 @@ import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
+import { serializeClientCredentialReceipt } from "./client-credential-receipt.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import {
   openClientCredentialCustody,
@@ -793,19 +794,17 @@ it("checks the Swift receipt fixture against actual canonical migration output",
     })!;
     const freshStored = readClientCredentialReceipt(freshOwner.database)!;
     freshStored.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
+    const fixtureReceipt = (name: string, stored: typeof actual, rootPath?: string) => ({
+      name,
+      phase: stored.phase,
+      source_store: serializeClientCredentialReceipt(stored.receipt, rootPath),
+    });
     const envelope = {
       format: 1,
       cases: [
-        {
-          name: "canonical-sqlite",
-          phase: actual.phase,
-          source_store: JSON.stringify(actual.receipt),
-        },
-        {
-          name: "fresh-canonical-binding",
-          phase: freshStored.phase,
-          source_store: JSON.stringify(freshStored.receipt),
-        },
+        fixtureReceipt("canonical-sqlite", actual),
+        fixtureReceipt("fresh-canonical-binding", freshStored),
+        fixtureReceipt("canonical-relative-binding", actual, "/fixture"),
       ],
     };
     const fixturePath = path.resolve(

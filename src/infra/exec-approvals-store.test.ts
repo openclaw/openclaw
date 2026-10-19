@@ -34,6 +34,7 @@ import {
   execApprovalsPublication,
   type ExecApprovalsPublicationValue,
 } from "./exec-approvals-publication.js";
+import * as execApprovalsSocket from "./exec-approvals-socket.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -255,6 +256,29 @@ describe("exec approvals SQLite store", () => {
     expect((await ensureExecApprovalsSnapshot()).file.socket?.token).toBe(
       "synthetic-rotated-socket-token",
     );
+  });
+
+  it("reports a saved policy when local socket attachment fails after commit", async () => {
+    const before = await ensureExecApprovalsSnapshot();
+    const security = before.file.defaults?.security === "deny" ? "allowlist" : "deny";
+    vi.spyOn(execApprovalsSocket, "attachExecApprovalsSocket").mockRejectedValueOnce(
+      new Error("client credentials are busy"),
+    );
+    await expect(
+      updateExecApprovals({
+        baseHash: before.hash,
+        update: {
+          kind: "replace",
+          preserveSocket: true,
+          file: { ...before.file, defaults: { security } },
+        },
+      }),
+    ).rejects.toThrow(
+      "Exec approval policy was saved, but local socket credentials could not be updated",
+    );
+    const after = readExecApprovalsSnapshot();
+    expect(after.file.defaults?.security).toBe(security);
+    expect(after.hash).not.toBe(before.hash);
   });
 
   it("throws typed snapshot failures while enforcement reads fail closed", () => {

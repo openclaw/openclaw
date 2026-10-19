@@ -72,6 +72,8 @@ records and publish `complete`. Interrupted work resumes through the same owner;
 normal clients refuse a pending or stale receipt. Shared records stay authoritative
 until this verified retirement finishes in that custody.
 
+Canonical receipt bindings relative to the local store root survive matched archive activation by directory rename; independent native-source bindings remain absolute.
+
 Outside an update, Doctor takes a fresh table-scoped backup in the same source
 transaction immediately before extraction and verifies its copied rows against
 the source. A previous backup never authorizes credential retirement. During an

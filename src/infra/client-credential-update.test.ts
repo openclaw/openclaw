@@ -272,12 +272,17 @@ async function fixture(
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
-async function capture(f: Fixture) {
+async function capture(f: Fixture, fresh = false) {
   const run = createUpdateRun({ trigger: "cli" }, { env: f.env });
   expect(run.phase).toBe("requested");
   // An installed driver's ledger admission must not run the candidate migration.
-  expect((await f.readShared()).version).toBe(f.native ? 0 : f.sourceVersion);
-  expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+  if (fresh) {
+    // Public ledger admission initializes a fresh installation before capture.
+    expect(fs.existsSync(f.pathname)).toBe(true);
+  } else {
+    expect((await f.readShared()).version).toBe(f.native ? 0 : f.sourceVersion);
+  }
+  expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(fresh);
   await closeOpenClawStateDatabaseAsync();
   const unexpected = () => {
     throw new Error("Database capture attempted unrelated update orchestration");
@@ -328,7 +333,7 @@ async function capture(f: Fixture) {
   return { run, backup: result.backup! };
 }
 
-async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>>) {
+async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>>, fresh = false) {
   const maintenance = await beginDoctorMaintenance({
     root: null,
     options: { repair: true, nonInteractive: true },
@@ -338,7 +343,7 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
   expect(maintenance).toBeDefined();
   try {
     const outcome = await maintenance!.run(() =>
-      f.native
+      f.native || fresh
         ? prepareOpenClawStateDatabaseSchema({ env: f.env }, "doctor")
         : prepareDoctorDatabaseMigrations({
             env: f.env,
@@ -384,7 +389,12 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
     await maintenance!.release();
     await closeOpenClawStateDatabaseAsync();
   }
-  assertMigratedCredentials(f);
+  if (fresh) {
+    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
+  } else {
+    assertMigratedCredentials(f);
+  }
 }
 
 function assertMigratedCredentials(f: Fixture) {
@@ -410,7 +420,7 @@ function assertMigratedCredentials(f: Fixture) {
   }
 }
 
-async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>>) {
+async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>>, fresh = false) {
   const result: UpdateRunResult = {
     status: "error",
     mode: "npm",
@@ -429,15 +439,48 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
     }),
     JSON.stringify(result),
   ).toBe(true);
-  expect(await f.readShared()).toEqual({
-    version: f.native ? 0 : f.sourceVersion,
-    token: "synthetic-original-token",
-    policy: f.native ? undefined : policy,
-  });
+  if (fresh) {
+    using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+    expect(shared.prepare("PRAGMA user_version").get()?.user_version).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+  } else {
+    expect(await f.readShared()).toEqual({
+      version: f.native ? 0 : f.sourceVersion,
+      token: "synthetic-original-token",
+      policy: f.native ? undefined : policy,
+    });
+  }
   expect(getUpdateRun(captured.run.runId, { env: f.env })).toEqual(captured.run);
 }
 
 describe("client credential public update custody", () => {
+  it("preserves a fresh installation through public capture, Doctor, and rollback", async () => {
+    const f = await fixture("sqlite");
+    await closeOpenClawStateDatabaseAsync();
+    fs.unlinkSync(f.pathname);
+    const captured = await capture(f, true);
+    expect(captured.backup.sourceGenerations[resolveClientCredentialStorePath(f.env)]).toEqual(
+      expect.any(String),
+    );
+    await migrate(f, captured, true);
+    expect(
+      runClientCredentialOperation(
+        f.env,
+        { kind: "identity.read", identity_key: "primary" },
+        { readOnly: true },
+      ),
+    ).toEqual({ kind: "identity", identity: null });
+    await rollback(f, captured, true);
+    expect(
+      runClientCredentialOperation(
+        f.env,
+        { kind: "identity.read", identity_key: "primary" },
+        { readOnly: true },
+      ),
+    ).toEqual({ kind: "identity", identity: null });
+  });
+
   it.each(["metadata", "key material"] as const)(
     "keeps Doctor repair reachable for predecessor identity %s without reimporting retained JSON",
     async (damage) => {
@@ -771,6 +814,14 @@ describe("client credential public update custody", () => {
 });
 
 describe.skipIf(!connection)("client credential PostgreSQL public update custody", () => {
+  it("captures PostgreSQL before cutover and restores shared credentials through public rollback", async () => {
+    const f = await fixture("postgres");
+    const captured = await capture(f);
+    await migrate(f, captured);
+    await rollback(f, captured);
+    expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+  });
+
   it("migrates PostgreSQL credentials through standalone Doctor and retains an exact backup", async () => {
     const f = await fixture("postgres");
     const registrar = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);

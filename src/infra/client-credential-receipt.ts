@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 
 export const CLIENT_CREDENTIAL_LEGACY_KEYS = [
@@ -57,7 +59,10 @@ function digest(value: unknown): value is string {
 }
 
 /** The private receipt is shared with Swift; reject unsupported formats rather than discarding claims. */
-export function parseClientCredentialReceipt(serialized: string): ClientCredentialReceipt {
+export function parseClientCredentialReceipt(
+  serialized: string,
+  rootPath?: string,
+): ClientCredentialReceipt {
   const invalid = () =>
     new Error("Client credential migration receipt is invalid; run openclaw doctor --fix.");
   let value: unknown;
@@ -122,14 +127,66 @@ export function parseClientCredentialReceipt(serialized: string): ClientCredenti
     }
     legacyImports[known] = { sha256: claim.sha256 };
   }
-  return {
-    format: 1,
-    source,
-    sharedFile,
-    legacyImports,
-  };
+  return rebaseCanonicalReceipt(
+    {
+      format: 1,
+      source,
+      sharedFile,
+      legacyImports,
+    },
+    rootPath,
+    false,
+  );
 }
 
-export function serializeClientCredentialReceipt(receipt: ClientCredentialReceipt): string {
-  return JSON.stringify(receipt);
+function rebaseCanonicalReceipt(
+  receipt: ClientCredentialReceipt,
+  rootPath: string | undefined,
+  storing: boolean,
+): ClientCredentialReceipt {
+  const shared = receipt.sharedFile;
+  if (!shared || receipt.source?.kind === "independent") {
+    return receipt;
+  }
+  const relative = !path.isAbsolute(shared.path);
+  if (
+    relative &&
+    (!rootPath ||
+      !shared.path.startsWith("./") ||
+      shared.path
+        .slice(2)
+        .split("/")
+        .some((part) => !part || part === "." || part === ".." || part.includes("\\")))
+  ) {
+    throw new Error("Client credential receipt has an invalid relative shared binding.");
+  }
+  if (!rootPath) {
+    return receipt;
+  }
+  const root = resolvePathViaExistingAncestorSync(rootPath);
+  const absolute = path.resolve(root, shared.path);
+  const descendant = path.relative(root, absolute);
+  const portable =
+    descendant &&
+    !path.isAbsolute(descendant) &&
+    descendant !== ".." &&
+    !descendant.startsWith(`..${path.sep}`);
+  const rebound = storing && portable ? `./${descendant.split(path.sep).join("/")}` : absolute;
+  let source = receipt.source;
+  if (source?.engine === "sqlite") {
+    const prefix = `${shared.path}:`;
+    if (source.identity.startsWith(prefix)) {
+      source = { ...source, identity: `${rebound}:${source.identity.slice(prefix.length)}` };
+    } else if (relative) {
+      throw new Error("Client credential receipt has an invalid relative source identity.");
+    }
+  }
+  return { ...receipt, source, sharedFile: { ...shared, path: rebound } };
+}
+
+export function serializeClientCredentialReceipt(
+  receipt: ClientCredentialReceipt,
+  rootPath?: string,
+): string {
+  return JSON.stringify(rebaseCanonicalReceipt(receipt, rootPath, true));
 }

@@ -5,6 +5,10 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import {
   getDoctorMigrationBackup,
@@ -14,8 +18,49 @@ import {
   runWithDoctorMigrationBackup,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+
+it("attributes a captured absent shared store and its new credential companion during bootstrap", async () => {
+  const root = fs.realpathSync(directories.make("captured-fresh-state-"));
+  const pathname = path.join(root, "state", "openclaw.sqlite");
+  const localPath = path.join(root, "client", "credentials.sqlite");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const generations = readUpdateDatabaseGenerations([pathname, localPath]);
+  expect(generations).toEqual({ [pathname]: null, [localPath]: null });
+  const warnings: string[] = [];
+  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+    env,
+    signal: new AbortController().signal,
+    warn: (message) => warnings.push(message),
+  })!;
+  const scope = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {},
+    assertDatabaseAccess(requested) {
+      expect(requested).toBe(pathname);
+    },
+  });
+  try {
+    await capture.admit();
+    await scope.run(() =>
+      capture.run(async () => {
+        openOpenClawStateDatabase({ env });
+        await closeOpenClawStateDatabaseAsync();
+      }),
+    );
+    await capture.settle();
+    expect(warnings).toEqual([]);
+    expect(capture.receipt).toMatchObject({
+      unchanged: true,
+      generations: { [pathname]: expect.any(String), [localPath]: expect.any(String) },
+    });
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    await scope.close();
+  }
+});
 
 it.each(["fresh", "foreign", "reversed"] as const)(
   "refuses a %s payload write while acquiring native migration custody",

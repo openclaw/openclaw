@@ -722,6 +722,7 @@ export async function snapshotUpdateCandidateState(
     if (sourceSharedFile) {
       copiedShared = {
         sourceSharedFile,
+        sourceStateRoot: sourceRoot,
         sharedPath: target,
         ...(engine?.engine === "postgres"
           ? { postgresStoreId: engine.storeId, postgresExportDirectory: `${target}.postgres` }

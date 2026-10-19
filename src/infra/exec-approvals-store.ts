@@ -440,21 +440,24 @@ export async function updateExecApprovals(
   },
   context = captureOpenClawStateWorkerContext(),
 ): Promise<ExecApprovalsSnapshot | null> {
+  const { update, assertCurrent, assertPreparationCurrent } = params;
   const snapshot = await mutateExecPolicy(
     context,
-    { type: "execApprovals.update", input: { baseHash: params.baseHash, update: params.update } },
-    params.assertCurrent,
-    params.assertPreparationCurrent,
+    { type: "execApprovals.update", input: { baseHash: params.baseHash, update } },
+    assertCurrent,
+    assertPreparationCurrent,
   );
-  if (!snapshot || params.update.kind !== "replace" || !params.update.preserveSocket) {
+  if (!snapshot || update.kind !== "replace" || !update.preserveSocket) {
     return snapshot;
   }
-  return attachExecApprovalsSocket(
-    snapshot,
-    context,
-    params.assertCurrent,
-    params.update.file.socket,
-  );
+  try {
+    return await attachExecApprovalsSocket(snapshot, context, assertCurrent, update.file.socket);
+  } catch (cause) {
+    throw new Error(
+      "Exec approval policy was saved, but local socket credentials could not be updated. Run openclaw approvals get --json to inspect current state before retrying.",
+      { cause },
+    );
+  }
 }
 
 type CommittedExecAuthorization = {

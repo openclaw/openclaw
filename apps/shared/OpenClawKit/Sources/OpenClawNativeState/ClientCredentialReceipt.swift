@@ -77,6 +77,39 @@ public struct ClientCredentialReceipt: Codable, Sendable {
 }
 
 extension OpenClawClientCredentialStore {
+    private func rebaseCanonicalReceipt(
+        _ receipt: ClientCredentialReceipt,
+        storing: Bool) throws -> ClientCredentialReceipt
+    {
+        guard var shared = receipt.sharedFile, receipt.source?.kind != "independent" else { return receipt }
+        var result = receipt
+        let original = shared.path
+        let relative = !original.hasPrefix("/")
+        if relative {
+            let components = original.dropFirst(2).split(separator: "/", omittingEmptySubsequences: false)
+            guard original.hasPrefix("./"), !components.contains(where: {
+                $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("\\")
+            }) else {
+                throw OpenClawNativeStateError("Client credential receipt has an invalid relative shared binding")
+            }
+        }
+        let root = try Self.canonicalPath(self.rootURL)
+        let absolute = relative ? root + "/" + original.dropFirst(2) : original
+        shared.path = storing && absolute.hasPrefix(root + "/")
+            ? "./" + absolute.dropFirst(root.count + 1) : absolute
+        if var source = result.source, source.engine == "sqlite" {
+            let prefix = original + ":"
+            if source.identity.hasPrefix(prefix) {
+                source.identity = shared.path + ":" + source.identity.dropFirst(prefix.count)
+                result.source = source
+            } else if relative {
+                throw OpenClawNativeStateError("Client credential receipt has an invalid relative source identity")
+            }
+        }
+        result.sharedFile = shared
+        return result
+    }
+
     public func readReceipt() throws -> (receipt: ClientCredentialReceipt, phase: String)? {
         try query("SELECT source_store, phase FROM client_credential_migration WHERE version=1") {
             let data = try Data(Self.text($0, 0).utf8)
@@ -92,14 +125,16 @@ extension OpenClawClientCredentialStore {
             else {
                 throw OpenClawNativeStateError("Client credential receipt requires a compatible OpenClaw build")
             }
-            return try (receipt, Self.text($0, 1))
+            return try (self.rebaseCanonicalReceipt(receipt, storing: false), Self.text($0, 1))
         }
     }
 
     public func writeReceipt(_ receipt: ClientCredentialReceipt, phase: String = "complete") throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let text = try String(bytes: encoder.encode(receipt), encoding: .utf8)!
+        let text = try String(
+            bytes: encoder.encode(self.rebaseCanonicalReceipt(receipt, storing: true)),
+            encoding: .utf8)!
         try run(
             "INSERT INTO client_credential_migration VALUES (1, ?, ?, ?) ON CONFLICT(version) DO UPDATE SET " +
                 "source_store=excluded.source_store, phase=excluded.phase, updated_at_ms=excluded.updated_at_ms",

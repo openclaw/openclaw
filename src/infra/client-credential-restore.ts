@@ -27,6 +27,7 @@ function prepareMatchedReceipt(options: {
   localPath: string;
   sharedPath: string;
   originalSharedPath: string;
+  originalStateRoot: string;
   restoredSharedPath: string;
   originalSharedFile?: ClientCredentialFileIdentity;
   postgresStoreId?: string;
@@ -35,7 +36,7 @@ function prepareMatchedReceipt(options: {
   preserveCopiedPhase?: boolean;
 }) {
   using local = openNodeSqliteDatabase(options.localPath, { readOnly: true });
-  const stored = readClientCredentialReceipt(local);
+  const stored = readClientCredentialReceipt(local, options.originalStateRoot);
   if (!stored?.receipt.sharedFile) {
     return null;
   }
@@ -151,6 +152,7 @@ export function rebindRehearsalClientCredentials(options: ClientCredentialRehear
       ? path.join(options.postgresExportDirectory, "anchor.sqlite")
       : options.sharedPath,
     originalSharedPath: options.sourceSharedFile.path,
+    originalStateRoot: options.sourceStateRoot,
     originalSharedFile: options.sourceSharedFile,
     restoredSharedPath: options.sharedPath,
     postgresStoreId: options.postgresStoreId,
@@ -190,6 +192,7 @@ export function prepareRestoredClientCredentials(options: {
     localPath,
     sharedPath,
     originalSharedPath: manifest.paths?.sharedDatabaseSourcePath ?? shared.sourcePath,
+    originalStateRoot: manifest.paths?.stateDir ?? state.sourcePath,
     restoredSharedPath: sharedPath,
     // The export is nested beneath this manifest-declared global snapshot.
     postgresExportDirectory: `${sharedPath}.postgres`,
@@ -221,6 +224,7 @@ export function prepareUpdateClientCredentialRestore(options: {
     localPath: local.snapshotPath,
     sharedPath: shared.snapshotPath,
     originalSharedPath: sharedPath,
+    originalStateRoot: path.dirname(path.dirname(localPath)),
     restoredSharedPath: sharedPath,
     postgresStoreId: shared.storeId,
     postgresExportDirectory: shared.exportDirectory,

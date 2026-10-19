@@ -139,25 +139,38 @@ struct ClientCredentialCutoverTests {
         }
     }
 
-    @Test func `owner read and create reject a corrupt persisted winner without replacing it`() throws {
+    @Test(arguments: [
+        "device-id", "negative-created", "unsafe-created", "negative-updated", "unsafe-updated", "both-invalid",
+    ])
+    func `owner rejects corrupt persisted identities and repairs metadata without rotating keys`(
+        _ corruption: String) throws
+    {
         let root = self.root()
         defer { try? FileManager.default.removeItem(at: root) }
         let material = DeviceIdentityStore.generateMaterial()
+        let timestamps: (created: Int64, updated: Int64, repaired: Int64) = switch corruption {
+        case "negative-created": (-1, 17, 17)
+        case "unsafe-created": (9_007_199_254_740_992, 17, 17)
+        case "negative-updated": (11, -1, 11)
+        case "unsafe-updated": (11, 9_007_199_254_740_992, 11)
+        case "both-invalid": (-1, 9_007_199_254_740_992, 23)
+        default: (11, 17, 11)
+        }
         let corrupt = OpenClawClientCredentialStore.Identity(
             key: "primary",
-            deviceID: "corrupt-persisted-device-id",
+            deviceID: corruption == "device-id" ? "corrupt-persisted-device-id" : material.identity.deviceId,
             publicKeyPEM: material.publicKeyPEM,
             privateKeyPEM: material.privateKeyPEM,
-            createdAtMs: material.identity.createdAtMs,
-            updatedAtMs: 17)
+            createdAtMs: timestamps.created,
+            updatedAtMs: timestamps.updated)
         let candidateMaterial = DeviceIdentityStore.generateMaterial()
         let candidate = OpenClawClientCredentialStore.Identity(
             key: "primary",
             deviceID: candidateMaterial.identity.deviceId,
             publicKeyPEM: candidateMaterial.publicKeyPEM,
             privateKeyPEM: candidateMaterial.privateKeyPEM,
-            createdAtMs: candidateMaterial.identity.createdAtMs,
-            updatedAtMs: 19)
+            createdAtMs: 19,
+            updatedAtMs: 23)
         let operations = [ClientCredentialOperation.Kind.identityRead, .identityCreate].map { kind in
             var operation = ClientCredentialOperation(kind: kind)
             operation.identity_key = "primary"
@@ -182,19 +195,24 @@ struct ClientCredentialCutoverTests {
             deviceID: material.identity.deviceId,
             publicKeyPEM: material.publicKeyPEM,
             privateKeyPEM: material.privateKeyPEM,
-            createdAtMs: material.identity.createdAtMs,
-            updatedAtMs: 17)
-        do {
-            let owner = try OpenClawClientCredentialStore(rootURL: root)
-            defer { owner.close() }
-            try owner.replaceIdentityForRepair(winner)
-        }
+            createdAtMs: timestamps.repaired,
+            updatedAtMs: 23)
+        var repair = ClientCredentialOperation(kind: .identityRepair)
+        repair.identity = candidate
+        let repaired = try DeviceCredentialAccess.executeOffline(root: root, operation: repair)
+        #expect(repaired.identity == winner)
+        #expect(repaired.repaired == true)
+        #expect(repaired.rotated == false)
         for operation in operations {
             #expect(try DeviceCredentialAccess.executeOffline(root: root, operation: operation).identity == winner)
             let owner = try OpenClawClientCredentialStore(rootURL: root)
             #expect(try owner.readIdentity(key: "primary") == winner)
             owner.close()
         }
+        let unchanged = try DeviceCredentialAccess.executeOffline(root: root, operation: repair)
+        #expect(unchanged.identity == winner)
+        #expect(unchanged.repaired == false)
+        #expect(unchanged.rotated == false)
     }
 
     @Test func `client bootstrap persists identity without opening shared state`() async throws {

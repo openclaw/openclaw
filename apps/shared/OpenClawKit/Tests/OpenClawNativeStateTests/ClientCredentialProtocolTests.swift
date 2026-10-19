@@ -15,8 +15,9 @@ struct ClientCredentialProtocolTests {
         ]) + seed
         let label = "PRIVATE KEY"
         let fence = String(repeating: "-", count: 5)
-        let privateKey = "\(fence)BEGIN \(label)\(fence)\n\(pkcs8.base64EncodedString())\n\(fence)END \(label)\(fence)\n"
-        let encodedKey = try String(decoding: JSONEncoder().encode(privateKey), as: UTF8.self)
+        let privateKey = "\(fence)BEGIN \(label)\(fence)\n"
+            + "\(pkcs8.base64EncodedString())\n\(fence)END \(label)\(fence)\n"
+        let encodedKey = try #require(String(data: JSONEncoder().encode(privateKey), encoding: .utf8))
         let source = try String(contentsOf: url, encoding: .utf8)
             .replacingOccurrences(of: "\"synthetic:ed25519-seed-0-through-31\"", with: encodedKey)
         let fixture = try #require(JSONSerialization.jsonObject(with: Data(source.utf8)) as? [String: Any])
@@ -64,12 +65,31 @@ struct ClientCredentialProtocolTests {
             var receipt = try #require(owner.readReceipt()?.receipt)
             #expect(receipt.source?.destinationVersion == nil || receipt.source?.destinationVersion == 1)
             receipt.sharedFile = try .inspect(source)
+            if receipt.source?.engine == "sqlite" {
+                receipt.source?.identity = try ClientCredentialReceipt.SharedFile.inspect(source).path + ":123"
+            }
             try owner.writeReceipt(receipt)
             owner.close()
-            let admitted = try OpenClawClientCredentialStore(rootURL: root)
+            let activatedRoot = root.appendingPathExtension("activated")
+            defer { try? FileManager.default.removeItem(at: activatedRoot) }
+            try FileManager.default.moveItem(at: root, to: activatedRoot)
+            let admitted = try OpenClawClientCredentialStore(rootURL: activatedRoot)
             admitted.close()
-            #expect(try Data(contentsOf: source) == before)
+            #expect(try Data(contentsOf: activatedRoot.appendingPathComponent("state/openclaw.sqlite")) == before)
         }
+    }
+
+    @Test(arguments: ["./../state/openclaw.sqlite", "./state//openclaw.sqlite", "./state\\openclaw.sqlite"])
+    func `unsafe relative receipt bindings are refused`(_ binding: String) throws {
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent("credential-relative-refusal-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = try OpenClawClientCredentialStore(rootURL: root, migration: true)
+        defer { owner.close() }
+        let receipt = ClientCredentialReceipt(sharedFile: .init(path: binding, dev: "1", ino: "2"))
+        let raw = try #require(String(data: JSONEncoder().encode(receipt), encoding: .utf8))
+        try owner.run("INSERT INTO client_credential_migration VALUES (1, ?, 'complete', 0)", [.text(raw)])
+        #expect(throws: OpenClawNativeStateError.self) { try owner.readReceipt() }
     }
 
     @Test func `receipt and empty result encode required explicit nulls`() throws {

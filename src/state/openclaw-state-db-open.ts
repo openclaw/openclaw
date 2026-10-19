@@ -301,7 +301,9 @@ function openNativeStateDatabase(
     };
     selected = engine
       ? openSelected()
-      : runUpdateSqliteMigration(db, params.pathname, openSelected);
+      : runUpdateSqliteMigration(db, params.pathname, openSelected, {
+          created: original === undefined,
+        });
     if (sqlite) {
       return sqlite;
     }

@@ -28,13 +28,23 @@ function notReady(): Error {
 
 export function readClientCredentialReceipt(
   database: DatabaseSync,
+  rootPath?: string,
 ): { phase: "copied" | "complete"; receipt: ClientCredentialReceipt } | null {
   const db = getNodeSqliteKysely<ClientCredentialDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
     database,
     db.selectFrom("client_credential_migration").selectAll().where("version", "=", 1),
   );
-  return row ? { phase: row.phase, receipt: parseClientCredentialReceipt(row.source_store) } : null;
+  const localPath = database.location();
+  return row
+    ? {
+        phase: row.phase,
+        receipt: parseClientCredentialReceipt(
+          row.source_store,
+          rootPath ?? (localPath ? path.dirname(path.dirname(localPath)) : undefined),
+        ),
+      }
+    : null;
 }
 
 export function writeClientCredentialReceipt(
@@ -44,9 +54,13 @@ export function writeClientCredentialReceipt(
   now = Date.now(),
 ): void {
   const db = getNodeSqliteKysely<ClientCredentialDatabase>(database);
+  const localPath = database.location();
   const row = {
     version: 1 as const,
-    source_store: serializeClientCredentialReceipt(receipt),
+    source_store: serializeClientCredentialReceipt(
+      receipt,
+      localPath ? path.dirname(path.dirname(localPath)) : undefined,
+    ),
     phase,
     updated_at_ms: now,
   };

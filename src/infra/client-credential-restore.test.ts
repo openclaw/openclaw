@@ -31,7 +31,6 @@ import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
-import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
 import { prepareRestoredClientCredentials } from "./client-credential-restore.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import {
@@ -186,12 +185,11 @@ describe("whole-archive credential relocation", () => {
             bindFreshClientCredentialStore(anchor, { path: sharedPath, env: state.env }),
           );
         }
-        let original: ClientCredentialReceipt;
         {
           using local = openClientCredentialCustody(state.env, { migration: true })!;
-          original = readClientCredentialReceipt(local.database)!.receipt;
-          expect(original.source).toBeNull();
+          expect(readClientCredentialReceipt(local.database)!.receipt.source).toBeNull();
         }
+        const original = fs.readFileSync(state.statePath("client", "credentials.sqlite"));
         const targetPath = state.path("restored");
         const archiveRoot = "synthetic-archive";
         const stateArchivePath = buildBackupArchivePath(archiveRoot, state.stateDir);
@@ -226,10 +224,9 @@ describe("whole-archive credential relocation", () => {
         };
         prepareRestoredClientCredentials({ manifest, targetPath })?.();
         const restoredEnv = { ...state.env, OPENCLAW_STATE_DIR: restoredStateDir };
-        {
-          using local = openClientCredentialCustody(restoredEnv, { migration: true })!;
-          expect(readClientCredentialReceipt(local.database)!.receipt).toEqual(original);
-        }
+        expect(
+          fs.readFileSync(path.join(restoredStateDir, "client", "credentials.sqlite")),
+        ).toEqual(original);
         expect(() =>
           runClientCredentialOperation(restoredEnv, {
             kind: "identity.read",
@@ -392,10 +389,17 @@ describe("whole-archive credential relocation", () => {
           }
           const restored = await restore;
           const asset = backup.assets.find((entry) => entry.kind === "state")!;
+          const activatedStateDir = state.path("activated-state");
+          fs.renameSync(path.join(restored.targetPath, asset.archivePath), activatedStateDir);
           const restoredEnv = {
             ...state.env,
-            OPENCLAW_STATE_DIR: path.join(restored.targetPath, asset.archivePath),
+            OPENCLAW_STATE_DIR: activatedStateDir,
           };
+          const activatedSharedPath = path.join(activatedStateDir, "state", "openclaw.sqlite");
+          {
+            using shared = openNodeSqliteDatabase(activatedSharedPath);
+            recoverClientCredentialStore(shared, { path: activatedSharedPath, env: restoredEnv });
+          }
           expect(
             runClientCredentialOperation(restoredEnv, {
               kind: "identity.read",

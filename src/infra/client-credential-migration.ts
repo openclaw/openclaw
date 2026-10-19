@@ -1,3 +1,4 @@
+import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -148,12 +149,12 @@ export function recoverClientCredentialStore(
         "Independent native credentials require copy admission, not canonical recovery.",
       );
     }
+    const sameNativeBootstrap =
+      provenance?.kind === "canonical" && provenance.engine === "native-v0" && sameFile;
     if (provenance) {
       const identity = isPostgresSqlConnection(source)
         ? String(readEngineAnchor(source.anchor, "identity", true)?.[0]?.store_id)
         : `${file.path}:${String(metadata?.created_at ?? 0)}`;
-      const sameNativeBootstrap =
-        provenance.kind === "canonical" && provenance.engine === "native-v0" && sameFile;
       if (provenance.identity !== identity && !sameNativeBootstrap) {
         throw new Error(
           "Local credentials do not match the shared database; restore their matched backup.",
@@ -164,8 +165,11 @@ export function recoverClientCredentialStore(
         provenance.identity = identity;
       }
     }
+    if (stored.phase === "complete" && sameFile && !sameNativeBootstrap) {
+      return;
+    }
     stored.receipt.sharedFile = file;
-    runSqliteImmediateTransactionSync(target.database, () =>
+    target.transaction(() =>
       writeClientCredentialReceipt(target.database, stored.receipt, "complete"),
     );
   } finally {
@@ -391,7 +395,10 @@ export function prepareClientCredentialMigration(
         database,
         db.insertInto("client_credential_migration").values({
           version: 1,
-          source_store: serializeClientCredentialReceipt(receipt),
+          source_store: serializeClientCredentialReceipt(
+            receipt,
+            path.dirname(path.dirname(target.path)),
+          ),
           phase: "copied",
           updated_at_ms: Date.now(),
         }),
