@@ -88,9 +88,8 @@ describe("prepared model catalog view", () => {
     }
   });
 
-  it.each(["empty"])("prepares %s provider overrides once for distinct view rows", (initial) => {
-    const providers: Record<string, ModelProviderConfig> =
-      initial === "empty" ? { fixture: { baseUrl: "", models: [] } } : {};
+  it("prepares empty provider overrides once for distinct view rows", () => {
+    const providers: Record<string, ModelProviderConfig> = { fixture: { baseUrl: "", models: [] } };
     const enumerate = vi.fn((target: Record<string, ModelProviderConfig>) =>
       Reflect.ownKeys(target),
     );
@@ -240,72 +239,79 @@ describe("prepared model catalog view", () => {
     },
   );
 
-  it.each(["nvidia"])(
-    "scopes %s acquisition and all returned facts to the canonical provider",
-    async (requested) => {
-      let refreshFailed = false;
-      const provider = requested === "kimi" ? "moonshot" : "nvidia";
-      mocks.metadata.mockReturnValue(
-        createPluginMetadataSnapshotFixture({
-          plugins: [
-            {
-              id: "moonshot",
-              providers: ["moonshot"],
-              modelCatalog: { aliases: { kimi: { provider: "moonshot" } } },
-            },
-          ],
-        }),
-      );
-      mocks.loadSnapshot.mockResolvedValue({
-        get refreshFailed() {
-          return refreshFailed;
-        },
-        authoritative: false,
-        entries: [row(provider, "chosen"), row("other", "hidden")],
-        routeVariants: [row(provider, "physical"), row("other", "hidden")],
-        staticEntries: [row(provider, "static"), row("other", "hidden")],
-        providerOutcomes: [
-          { provider, status: "unavailable" },
-          { provider: "other", status: "ready" },
+  it("scopes nvidia acquisition and all returned facts to the canonical provider", async () => {
+    let refreshFailed = false;
+    const provider = "nvidia";
+    mocks.metadata.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "moonshot",
+            providers: ["moonshot"],
+            modelCatalog: { aliases: { kimi: { provider: "moonshot" } } },
+          },
         ],
-      });
-      const result = await loadPreparedModelCatalogView({
-        kind: "picker",
-        config: {},
-        preferredProvider: requested.toUpperCase(),
-        preferLiveProviderCatalog: true,
-        providerScoped: true,
+      }),
+    );
+    mocks.loadSnapshot.mockResolvedValue({
+      get refreshFailed() {
+        return refreshFailed;
+      },
+      authoritative: false,
+      entries: [row(provider, "chosen"), row("other", "hidden")],
+      routeVariants: [row(provider, "physical"), row("other", "hidden")],
+      staticEntries: [row(provider, "static"), row("other", "hidden")],
+      providerOutcomes: [
+        { provider, status: "unavailable" },
+        { provider: "other", status: "ready" },
+      ],
+    });
+    const result = await loadPreparedModelCatalogView({
+      kind: "picker",
+      config: {},
+      preferredProvider: provider.toUpperCase(),
+      preferLiveProviderCatalog: true,
+      providerScoped: true,
+      agentDir: "/tmp/catalog-view-agent",
+      workspaceDir: "/tmp/catalog-view-workspace",
+      env: {},
+    });
+    expect(result.snapshot).toEqual({
+      refreshFailed: false,
+      authoritative: false,
+      entries: [row(provider, "chosen")],
+      routeVariants: [row(provider, "physical")],
+      staticEntries: [row(provider, "static")],
+      providerOutcomes: [{ provider, status: "unavailable" }],
+    });
+    expect(mocks.loadSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readOnly: true,
+        providerDiscoveryProviderIds: [provider],
+        scopedLiveProviderDiscovery: true,
         agentDir: "/tmp/catalog-view-agent",
         workspaceDir: "/tmp/catalog-view-workspace",
         env: {},
-      });
-      expect(result.snapshot).toEqual({
-        refreshFailed: false,
-        authoritative: false,
-        entries: [row(provider, "chosen")],
-        routeVariants: [row(provider, "physical")],
-        staticEntries: [row(provider, "static")],
-        providerOutcomes: [{ provider, status: "unavailable" }],
-      });
-      expect(mocks.loadSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          readOnly: true,
-          providerDiscoveryProviderIds: [provider],
-          scopedLiveProviderDiscovery: true,
-          agentDir: "/tmp/catalog-view-agent",
-          workspaceDir: "/tmp/catalog-view-workspace",
-          env: {},
-        }),
-      );
-      expect(mocks.loadOwner).not.toHaveBeenCalled();
-      refreshFailed = true;
-      expect(result.snapshot.refreshFailed).toBe(true);
-    },
-  );
+      }),
+    );
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
+    refreshFailed = true;
+    expect(result.snapshot.refreshFailed).toBe(true);
+  });
 });
 
 const nativeEntry = { ...row("custom", "native-model"), nativeRuntime: "native-test" };
 const host: ModelAuthAvailabilityEvaluation = { availability: false, routeResolution: null };
+const subscriptionReadiness = () => ({ accountType: "subscription", authMode: "oauth" });
+const apiEntry = { ...nativeEntry, nativeRuntime: undefined };
+type ViewOptions = Parameters<typeof prepareModelCatalogView>[0];
+const nativeView = ({ cfg = {}, ...overrides }: Partial<ViewOptions> = {}) =>
+  prepareModelCatalogView({
+    ...facts(cfg),
+    snapshot: { entries: [apiEntry], routeVariants: [apiEntry, nativeEntry] },
+    pluginRegistry: nativeRegistry(subscriptionReadiness),
+    ...overrides,
+  });
 function nativeRegistry(readiness: () => { accountType: string; authMode: string } | undefined) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
@@ -329,10 +335,8 @@ describe("prepared native catalog readiness", () => {
   it("does not let an uncredentialed API catalog twin hide a discovered native offering", () => {
     const logical = row("custom", "native-model");
     const api = { ...logical, api: "openai-responses" as const };
-    const view = prepareModelCatalogView({
-      ...facts({}),
+    const view = nativeView({
       snapshot: { entries: [api], routeVariants: [api, nativeEntry] },
-      pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
     });
     expect(view.evaluateNative(api, host)).toMatchObject({
       availability: true,
@@ -351,10 +355,8 @@ describe("prepared native catalog readiness", () => {
     "preserves runtime-materialized host %s credentials",
     (source) => {
       const api = { ...nativeEntry, nativeRuntime: undefined, api: "openai-responses" as const };
-      const view = prepareModelCatalogView({
-        ...facts({}),
+      const view = nativeView({
         snapshot: { entries: [api], routeVariants: [api, nativeEntry] },
-        pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
       });
       const credentialed: ModelAuthAvailabilityEvaluation = {
         ...host,
@@ -371,36 +373,27 @@ describe("prepared native catalog readiness", () => {
   );
 
   it("respects required worker runtime selection", () => {
-    const api = { ...nativeEntry, nativeRuntime: undefined };
-    const view = prepareModelCatalogView({
-      ...facts({ cloudWorkers: { requiredProfile: "worker" } }),
-      snapshot: { entries: [api], routeVariants: [api, nativeEntry] },
-      pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
-    });
-    expect(view.evaluateNative(api, host)).toBe(host);
+    const view = nativeView({ cfg: { cloudWorkers: { requiredProfile: "worker" } } });
+    expect(view.evaluateNative(apiEntry, host)).toBe(host);
   });
 
   it.each([false, true])(
     "does not infer between native owners, regardless of row order (%s)",
     (reverse) => {
-      const api = { ...nativeEntry, nativeRuntime: undefined };
-      const variants = [api, nativeEntry, { ...nativeEntry, nativeRuntime: "another-native" }];
+      const variants = [apiEntry, nativeEntry, { ...nativeEntry, nativeRuntime: "another-native" }];
       if (reverse) {
         variants.reverse();
       }
-      const view = prepareModelCatalogView({
-        ...facts({}),
-        snapshot: { entries: [api], routeVariants: variants },
-        pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
+      const view = nativeView({
+        snapshot: { entries: [apiEntry], routeVariants: variants },
       });
-      expect(view.evaluateNative(api, host)).toBe(host);
+      expect(view.evaluateNative(apiEntry, host)).toBe(host);
     },
   );
 
   it("keeps native readiness unknown before the first discovery", () => {
     const logical = row("custom", "native-model");
-    const view = prepareModelCatalogView({
-      ...facts({}),
+    const view = nativeView({
       snapshot: snapshot([logical]),
       pluginRegistry: nativeRegistry(() => undefined),
     });
@@ -410,13 +403,7 @@ describe("prepared native catalog readiness", () => {
     });
   });
 
-  it.each([
-    {
-      name: "another runtime",
-      variants: [{ ...nativeEntry, nativeRuntime: "other-native" }],
-      available: undefined,
-    },
-  ])("evaluates configured rows using $name", ({ variants, available }) => {
+  it("evaluates configured rows using another runtime", () => {
     const logical = row("custom", "native-model");
     const cfg: OpenClawConfig = {
       agents: {
@@ -430,19 +417,22 @@ describe("prepared native catalog readiness", () => {
     registry.agentHarnesses[0]!.harness.loadModelCatalog = () => {
       throw new Error("Projection must not discover native models");
     };
-    const view = prepareModelCatalogView({
-      ...facts(cfg),
-      snapshot: { entries: [logical], routeVariants: variants },
+    const view = nativeView({
+      cfg,
+      snapshot: {
+        entries: [logical],
+        routeVariants: [{ ...nativeEntry, nativeRuntime: "other-native" }],
+      },
       pluginRegistry: registry,
     });
     const decision = view.evaluateNative(logical, {
       ...host,
       unavailableReason: "missing-auth",
     });
-    expect(decision.availability).toBe(available);
+    expect(decision.availability).toBeUndefined();
     expect(decision.runtimeAuth).toEqual({ id: "native-test", source: "native" });
-    expect(decision.unavailableReason).toBeUndefined();
     expect(decision.availabilityAuthoritative).toBe(true);
+    expect(decision.unavailableReason).toBeUndefined();
   });
 
   it("reuses captured host configuration while observing native readiness and selection", () => {
@@ -459,8 +449,8 @@ describe("prepared native catalog readiness", () => {
         ),
       },
     };
-    const view = prepareModelCatalogView({
-      ...facts(cfg),
+    const view = nativeView({
+      cfg,
       snapshot: snapshot([nativeEntry]),
       observationConfig: cfg,
       pluginRegistry: nativeRegistry(() =>
@@ -518,8 +508,8 @@ describe("prepared native catalog readiness", () => {
     },
     { name: "request parameters", cfg: { agents: { defaults: { params: { temperature: 0.2 } } } } },
   ])("keeps $name under host authentication", ({ cfg, ...selection }) => {
-    const view = prepareModelCatalogView({
-      ...facts(cfg),
+    const view = nativeView({
+      cfg,
       ...selection,
       snapshot: snapshot([nativeEntry]),
       observationConfig: cfg,

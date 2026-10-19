@@ -38,16 +38,28 @@ const evaluation: ModelAuthAvailabilityEvaluation = {
     requirement: "subscription",
   },
 };
+const snapshot = (providerOutcomes: ProviderCatalogOutcome[] = [outcome]) => ({
+  entries: [],
+  routeVariants: [],
+  providerOutcomes,
+});
 function resolve(overrides: Partial<Parameters<typeof resolveModelCatalogServiceTiers>[0]> = {}) {
   return resolveModelCatalogServiceTiers({
     entry,
     evaluation,
     runtimeId: capability.runtimeId,
-    snapshot: { entries: [], routeVariants: [], providerOutcomes: [outcome] },
+    snapshot: snapshot(),
     isCurrent: () => true,
     ...overrides,
   });
 }
+const apiTiers = (selected: ModelAuthAvailabilityEvaluation) =>
+  resolve({
+    entry: { provider: "openai", id: "synthetic-api-model" },
+    evaluation: selected,
+    runtimeId: "openclaw",
+    snapshot: snapshot([]),
+  });
 describe("account-bound catalog service tiers", () => {
   it.each(["synthetic-provider-key", undefined])(
     "offers embedded API-key tiers for provider config %j without a profile",
@@ -61,14 +73,7 @@ describe("account-bound catalog service tiers", () => {
       });
       expect(selected.availability).toBe(true);
       expect(selected.selectedProfileId).toBeUndefined();
-      expect(
-        resolve({
-          entry: { provider: "openai", id: "synthetic-api-model" },
-          evaluation: selected,
-          runtimeId: "openclaw",
-          snapshot: { entries: [], routeVariants: [] },
-        }),
-      ).toEqual(["priority", "ultrafast"]);
+      expect(apiTiers(selected)).toEqual(["priority", "ultrafast"]);
     },
   );
   it.each(["literal", "ref"] as const)(
@@ -92,13 +97,7 @@ describe("account-bound catalog service tiers", () => {
       if (!credential || credential.source !== "direct") {
         throw new Error("Expected direct credential");
       }
-      const tiers = (selectedEvaluation = selected()) =>
-        resolve({
-          entry: { provider: "openai", id: "synthetic-api-model" },
-          evaluation: selectedEvaluation,
-          runtimeId: "openclaw",
-          snapshot: { entries: [], routeVariants: [] },
-        });
+      const tiers = (selectedEvaluation = selected()) => apiTiers(selectedEvaluation);
       const observation = {
         modelId: "synthetic-api-model",
         runtimeId: "openclaw",
@@ -107,25 +106,19 @@ describe("account-bound catalog service tiers", () => {
         responseTier: "priority",
       };
       const record = accountCatalog.prepareServiceTierObserver({ selectedCredential: credential });
+      const read = (overrides: Partial<typeof observation> = {}) =>
+        accountCatalog.readServiceTierObservation({
+          ...observation,
+          identityKey: credential.identityKey,
+          ...overrides,
+        });
       expect(record(observation)).toBe(true);
       expect(tiers()).toEqual(["priority", "ultrafast"]);
       const republished = evaluate({ cfg: { ...cfg, gateway: { port: 19001 } }, env });
       expect(republished.selectedCredential?.source).toBe("direct");
       expect(tiers(republished)).toEqual(["priority", "ultrafast"]);
-      expect(
-        accountCatalog.readServiceTierObservation({
-          ...observation,
-          identityKey: credential.identityKey,
-          modelId: "other-model",
-        }),
-      ).toBeUndefined();
-      expect(
-        accountCatalog.readServiceTierObservation({
-          ...observation,
-          identityKey: credential.identityKey,
-          baseUrl: "https://other.example/v1",
-        }),
-      ).toBeUndefined();
+      expect(read({ modelId: "other-model" })).toBeUndefined();
+      expect(read({ baseUrl: "https://other.example/v1" })).toBeUndefined();
       accountCatalog.reconcileAuth({ version: 1, profiles: {} }, () => true);
       expect(tiers()).toEqual(["priority", "ultrafast"]);
       const originalBinding = structuredClone(provider.apiKey);
@@ -140,12 +133,7 @@ describe("account-bound catalog service tiers", () => {
       provider.apiKey = originalBinding;
       expect(record(observation)).toBe(false);
       provider.apiKey = replacementBinding;
-      expect(
-        accountCatalog.readServiceTierObservation({
-          ...observation,
-          identityKey: credential.identityKey,
-        }),
-      ).toBeUndefined();
+      expect(read()).toBeUndefined();
       expect(record(observation)).toBe(false);
       const next = selected();
       expect(next.selectedCredential).toEqual(credential);
@@ -160,12 +148,7 @@ describe("account-bound catalog service tiers", () => {
       expect(replacement(observation)).toBe(true);
       retirement.abort();
       expect(replacement(observation)).toBe(false);
-      expect(
-        accountCatalog.readServiceTierObservation({
-          ...observation,
-          identityKey: credential.identityKey,
-        }),
-      ).toBeUndefined();
+      expect(read()).toBeUndefined();
     },
   );
   it("projects only the selected account/model/runtime/route and clears unknown observations", () => {
@@ -202,18 +185,13 @@ describe("account-bound catalog service tiers", () => {
     for (const status of ["auth-rejected", "unavailable"] as const) {
       expect(
         resolve({
-          snapshot: { entries: [], routeVariants: [], providerOutcomes: [{ ...outcome, status }] },
+          snapshot: snapshot([{ ...outcome, status }]),
         }),
       ).toBeUndefined();
     }
     expect(
       resolve({
-        snapshot: {
-          entries: [],
-          routeVariants: [],
-          providerOutcomes: [outcome],
-          refreshFailed: true,
-        },
+        snapshot: { ...snapshot(), refreshFailed: true },
       }),
     ).toBeUndefined();
   });

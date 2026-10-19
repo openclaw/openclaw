@@ -41,8 +41,8 @@ const platformEntry: ModelCatalogEntry = {
   provider: "openai",
   id: "gpt-5.5",
   name: "GPT-5.5",
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
+  api: platformRoute.api,
+  baseUrl: platformRoute.baseUrl,
   contextWindow: 1_000_000,
   contextTokens: 272_000,
   reasoning: true,
@@ -53,25 +53,29 @@ const platformEntry: ModelCatalogEntry = {
 };
 
 const chatGPTEntry: ModelCatalogEntry = {
-  provider: "openai",
-  id: "gpt-5.5",
-  name: "GPT-5.5",
-  api: "openai-chatgpt-responses",
-  baseUrl: "https://chatgpt.com/backend-api/codex",
+  ...platformEntry,
+  api: chatGPTRoute.api,
+  baseUrl: chatGPTRoute.baseUrl,
   contextWindow: 400_000,
   contextTokens: 300_000,
-  reasoning: true,
   thinkingLevelMap: { off: null, xhigh: null, max: "max" },
   input: ["text"],
   params: { chatGPTOnly: true },
   compat: { supportsTools: true },
 };
+const project = (params: Partial<Parameters<typeof projectModelCatalogEntryForRoute>[0]> = {}) =>
+  projectModelCatalogEntryForRoute({
+    entry: platformEntry,
+    projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+    ...params,
+  });
+const configured = (models: ModelDefinitionConfig[]): OpenClawConfig => ({
+  models: { providers: { openai: { baseUrl: platformRoute.baseUrl, models } } },
+});
 
 describe("projectModelCatalogEntryForRoute", () => {
   it("prefers the exact physical donor over the platform row", () => {
-    const { entry: publicEntry, runtimeEntry } = projectModelCatalogEntryForRoute({
-      entry: platformEntry,
-      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+    const { entry: publicEntry, runtimeEntry } = project({
       catalog: [
         platformEntry,
         {
@@ -84,12 +88,12 @@ describe("projectModelCatalogEntryForRoute", () => {
     expect(runtimeEntry.params).toEqual({ chatGPTOnly: true });
     expect(runtimeEntry.compat).toEqual({ supportsTools: true });
     expect(runtimeEntry.contextWindow).toBe(400_000);
+    expect(runtimeEntry.contextWindowDefault).toBe("native");
     expect(publicEntry).not.toHaveProperty("params");
     expect(publicEntry).not.toHaveProperty("compat");
     expect(publicEntry.contextWindows).toEqual([
       { id: "native", label: "Native", contextWindow: 400_000 },
     ]);
-    expect(runtimeEntry.contextWindowDefault).toBe("native");
   });
 
   it.each([
@@ -130,7 +134,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
     try {
-      const { entry: projected } = projectModelCatalogEntryForRoute({
+      const { entry: projected } = project({
         entry: expectDefined(catalog.entries[0], "prepared route test entry"),
         projection: route
           ? { kind: "selected", route, policy: routePolicy }
@@ -160,12 +164,7 @@ describe("projectModelCatalogEntryForRoute", () => {
   });
 
   it("returns the physical row unchanged for unmanaged models", () => {
-    expect(
-      projectModelCatalogEntryForRoute({
-        entry: platformEntry,
-        projection: { kind: "unmanaged" },
-      }).entry,
-    ).toBe(platformEntry);
+    expect(project({ projection: { kind: "unmanaged" } }).entry).toBe(platformEntry);
   });
 
   it("applies explicit logical context overrides after physical route selection", () => {
@@ -188,9 +187,7 @@ describe("projectModelCatalogEntryForRoute", () => {
     const overrides = createConfiguredModelCatalogOverridesResolver({ cfg })(platformEntry);
 
     expect(
-      projectModelCatalogEntryForRoute({
-        entry: platformEntry,
-        projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+      project({
         catalog: [platformEntry],
         ...(overrides ? { overrides } : {}),
       }).entry,
@@ -216,16 +213,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       maxTokens: 4096,
     };
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: platformRoute.baseUrl,
-            models: [legacy],
-          },
-        },
-      },
-    };
+    const cfg = configured([legacy]);
     const canonicalPolicy: ModelCatalogRoutePolicy = {
       ...routePolicy,
       resolveIdentity: (entry) => {

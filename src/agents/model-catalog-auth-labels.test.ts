@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -18,34 +18,47 @@ vi.mock("./model-auth-provider-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./model-auth-provider-config.js")>()),
   resolveUsableCustomProviderApiKey: () => null,
 }));
-const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {
-  const capturedStore = structuredClone(store);
-  const labels = prepareModelCatalogAuthLabels({
-    config: cfg,
+type LabelParams = Parameters<typeof prepareModelCatalogAuthLabels>[0];
+const prepare = (params: Pick<LabelParams, "store" | "providers"> & Partial<LabelParams>) =>
+  prepareModelCatalogAuthLabels({
+    config: {},
     agentDir: "/tmp/catalog-auth",
     authStorePath: "/tmp/catalog-auth/auth-profiles.json",
     env: {},
+    ...params,
+  });
+const capture = (
+  provider: string,
+  profiles: AuthProfileStore["profiles"],
+  cfg: OpenClawConfig = {},
+  usageStats?: AuthProfileStore["usageStats"],
+) => {
+  const capturedStore: AuthProfileStore = {
+    version: 1,
+    profiles: structuredClone(profiles),
+    usageStats,
+  };
+  const labels = prepare({
+    config: cfg,
     store: capturedStore,
     providers: [provider],
   });
   const context = { cfg, store: capturedStore, metadataSnapshot: { plugins: [] } };
   return { labels, read: () => formatModelCatalogAuthLabel(labels.get(provider)!.all, context) };
 };
+const ordered = { auth: { order: { openai: ["first", "second"] } } };
 
 describe("captured catalog auth labels", () => {
   beforeEach(() => envKey.mockReset().mockReturnValue(null));
+  afterEach(() => vi.restoreAllMocks());
 
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();
-    config.auth = {
-      ...config.auth,
-      profiles: {
-        ...config.auth?.profiles,
-        token: { provider: "openai", mode: "oauth" },
-        oauth: { provider: "openai", mode: "oauth", displayName: "Configured account" },
-        mismatch: { provider: "anthropic", mode: "api_key" },
-      },
-    };
+    Object.assign(config.auth!.profiles!, {
+      token: { provider: "openai", mode: "oauth" },
+      oauth: { provider: "openai", mode: "oauth", displayName: "Configured account" },
+      mismatch: { provider: "anthropic", mode: "api_key" },
+    });
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -68,12 +81,9 @@ describe("captured catalog auth labels", () => {
       order: { openai: ["missing"] },
     };
     const before = structuredClone({ config, store });
-    const labels = prepareModelCatalogAuthLabels({
+    const labels = prepare({
       config,
       store,
-      agentDir: "/tmp/catalog-auth",
-      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
-      env: {},
       providers: ["OPENAI", "amazon-bedrock", "anthropic", "openai"],
     });
     const expected = {
@@ -105,23 +115,16 @@ describe("captured catalog auth labels", () => {
     expect({ config, store }).toEqual(before);
     store.profiles.key = { type: "api_key", provider: "openai", key: "replacement" };
     expect(labels.get("openai")?.all).toMatchObject({ profiles: expected });
-    const refreshed = prepareModelCatalogAuthLabels({
+    const refreshed = prepare({
       config,
       store,
-      agentDir: "/tmp/catalog-auth",
-      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
-      env: {},
       providers: ["openai"],
     });
     expect(refreshed.get("openai")?.all).toMatchObject({ profiles: { key: "key=re...nt" } });
   });
 
   it("captures configured AWS SDK authentication without a stored credential", () => {
-    const captured = capture(
-      "amazon-bedrock",
-      { version: 1, profiles: {} },
-      createBedrockAwsSdkConfig(),
-    );
+    const captured = capture("amazon-bedrock", {}, createBedrockAwsSdkConfig());
     expect(captured.read()).toBe(
       "amazon-bedrock:default=aws-sdk (next) (auth profile store: /tmp/catalog-auth/auth-profiles.json)",
     );
@@ -129,49 +132,35 @@ describe("captured catalog auth labels", () => {
 
   it("updates expiry and next-profile selection using captured credential facts", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    try {
-      const captured = capture(
-        "openai",
-        {
-          version: 1,
-          profiles: {
-            first: { type: "token", provider: "openai", token: "first-key", expires: 3_610_000 },
-            second: { type: "token", provider: "openai", token: "second-key", expires: 7_210_000 },
-          },
-        },
-        { auth: { order: { openai: ["first", "second"] } } },
-      );
-      expect(captured.read()).toContain("first=token:fi...ey (next,  exp 1h)");
-      now.mockReturnValue(3_610_000);
-      expect(captured.read()).not.toContain("first=");
-      expect(captured.read()).toContain("second=token:se...ey (next,  exp 1h)");
-    } finally {
-      now.mockRestore();
-    }
+    const captured = capture(
+      "openai",
+      {
+        first: { type: "token", provider: "openai", token: "first-key", expires: 3_610_000 },
+        second: { type: "token", provider: "openai", token: "second-key", expires: 7_210_000 },
+      },
+      ordered,
+    );
+    expect(captured.read()).toContain("first=token:fi...ey (next,  exp 1h)");
+    now.mockReturnValue(3_610_000);
+    expect(captured.read()).not.toContain("first=");
+    expect(captured.read()).toContain("second=token:se...ey (next,  exp 1h)");
   });
 
   it("restores configured ordering when a captured cooldown expires", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    try {
-      const captured = capture(
-        "openai",
-        {
-          version: 1,
-          profiles: {
-            first: { type: "api_key", provider: "openai", key: "first-key" },
-            second: { type: "api_key", provider: "openai", key: "second-key" },
-          },
-          usageStats: { first: { cooldownUntil: 10_000 } },
-        },
-        { auth: { order: { openai: ["first", "second"] } } },
-      );
-      expect(captured.read()).toContain("second=se...ey (next)");
-      now.mockReturnValue(11_000);
-      expect(captured.read()).toContain("first=fi...ey (next)");
-      expect(captured.read()).not.toContain("cooldown");
-    } finally {
-      now.mockRestore();
-    }
+    const captured = capture(
+      "openai",
+      {
+        first: { type: "api_key", provider: "openai", key: "first-key" },
+        second: { type: "api_key", provider: "openai", key: "second-key" },
+      },
+      ordered,
+      { first: { cooldownUntil: 10_000 } },
+    );
+    expect(captured.read()).toContain("second=se...ey (next)");
+    now.mockReturnValue(11_000);
+    expect(captured.read()).toContain("first=fi...ey (next)");
+    expect(captured.read()).not.toContain("cooldown");
   });
 
   it.each([
@@ -182,34 +171,31 @@ describe("captured catalog auth labels", () => {
     "shows the enforced mixed-window deadline (managed=%s, %s, %s)",
     (managesOwnAvailability, cooldownReason, disabledReason, expected) => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-      try {
-        const snapshot = createPluginMetadataSnapshotFixture({
-          plugins: [{ id: "gateway", providers: ["my-gateway"], managesOwnAvailability }],
-        });
-        const captured = capture("my-gateway", {
-          version: 1,
-          profiles: { primary: { type: "api_key", provider: "my-gateway", key: "synthetic-key" } },
-          usageStats: {
-            primary: {
-              cooldownUntil: 1_700_003_600_000,
-              cooldownReason,
-              disabledUntil: 1_700_000_600_000,
-              disabledReason,
-            },
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "gateway", providers: ["my-gateway"], managesOwnAvailability }],
+      });
+      const captured = capture(
+        "my-gateway",
+        { primary: { type: "api_key", provider: "my-gateway", key: "synthetic-key" } },
+        {},
+        {
+          primary: {
+            cooldownUntil: 1_700_003_600_000,
+            cooldownReason,
+            disabledUntil: 1_700_000_600_000,
+            disabledReason,
           },
-        });
-        withPluginMetadataSnapshotScope(snapshot, () => {
-          expect(captured.read()).toContain(`(next, cooldown ${expected})`);
-          now.mockReturnValue(1_700_000_600_000);
-          if (managesOwnAvailability) {
-            expect(captured.read()).not.toContain("cooldown");
-          } else {
-            expect(captured.read()).toContain("(next, cooldown 50m)");
-          }
-        });
-      } finally {
-        now.mockRestore();
-      }
+        },
+      );
+      withPluginMetadataSnapshotScope(snapshot, () => {
+        expect(captured.read()).toContain(`(next, cooldown ${expected})`);
+        now.mockReturnValue(1_700_000_600_000);
+        if (managesOwnAvailability) {
+          expect(captured.read()).not.toContain("cooldown");
+        } else {
+          expect(captured.read()).toContain("(next, cooldown 50m)");
+        }
+      });
     },
   );
 
@@ -218,10 +204,8 @@ describe("captured catalog auth labels", () => {
     const env = { WORKSPACE_CREDENTIAL: "workspace-local-credentials" };
     envKey.mockReturnValue({ apiKey: env.WORKSPACE_CREDENTIAL, source: "workspace credentials" });
     const store: AuthProfileStore = { version: 1, profiles: {} };
-    const labels = prepareModelCatalogAuthLabels({
+    const labels = prepare({
       config,
-      agentDir: "/tmp/catalog-auth",
-      authStorePath: "/tmp/catalog-auth/auth-profiles.json",
       workspaceDir: "/tmp/workspace",
       env,
       store,
