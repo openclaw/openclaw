@@ -122,6 +122,7 @@ async function mount(options: { advanced?: boolean } = {}) {
       "plugins.credentials.inspect",
     ]),
     agents: ["main"],
+    waitForRefresh: true,
     runtime: async (gateway) => {
       const runtime = createRuntimeConfigCapability(gateway);
       await runtime.ensureLoaded();
