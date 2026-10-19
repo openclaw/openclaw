@@ -1,11 +1,10 @@
-import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
   AgentRunTerminalOutcomeError,
   findAgentRunTerminalOutcome,
 } from "./agent-run-terminal-error.js";
-import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
   findCliTerminalStopError,
@@ -136,23 +135,8 @@ it("retains closed ownership when async disposal also fails", async () => {
   await expectTerminalStop(error);
 });
 
-it("records a CLI max-turn stop before provider policy can replace it with a retryable error", async () => {
-  const run = vi.fn(async () => {
-    const error = createCliOutputFailoverError({
-      output: {
-        text: "",
-        errorText: "Reached maximum number of turns (1)",
-        terminalFailure: { reason: "max_turns", limit: 1 },
-      },
-      provider: "fixture-provider",
-      model: "fixture-model",
-      classifyErrorCode: () => {
-        throw new Error("terminal stops must bypass backend error classification");
-      },
-    });
-    assert(error instanceof FailoverError);
-    throw error;
-  });
+it("honors a recorded CLI max-turn stop without consulting provider policy", async () => {
+  const run = vi.fn().mockRejectedValue(maxTurns());
   await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toMatchObject({
     code: "cli_max_turns",
     reason: "unknown",

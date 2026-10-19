@@ -24,7 +24,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
     injected,
     "getIMessageRuntime().channel.inbound.buildContext",
   ],
-  ["irc/src/inbound", "channelIngress: access", coreBuilder],
+  ["irc/src/monitor", "channelIngress: access", coreBuilder],
   [
     "line/src/bot-message-context",
     "channelIngress: params.channelIngress",
@@ -87,7 +87,7 @@ const CONTEXT_BINDING_PRODUCERS = [
   "feishu/src/policy",
   "googlechat/src/monitor-access",
   "imessage/src/monitor/inbound-processing",
-  "irc/src/inbound",
+  "irc/src/monitor",
   "line/src/bot-handlers",
   "matrix/src/matrix/monitor/access-state",
   "msteams/src/monitor-handler/access",

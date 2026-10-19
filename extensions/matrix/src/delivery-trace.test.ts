@@ -47,7 +47,7 @@ const BOT_USER_ID = "@openclaw:example.org";
 const INBOUND_EVENT_ID = "$inbound-1";
 
 beforeAll(() => {
-  // send.ts/replies.ts read text helpers and the monitor's mention gating from
+  // The sender and reply dispatcher read text helpers and mention gating from
   // the module runtime slot; bind the real chunking/table implementations so
   // rendered wire content is part of the recorded lifecycle (mirrors the
   // feishu adoption's runtime stub). Media helpers stay absent: these

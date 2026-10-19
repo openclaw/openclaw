@@ -7144,7 +7144,6 @@
 ["src/media/media-probe.test.ts","./ffmpeg-exec.js","d672f9ee14503c83cbecf320874801e47e93fb7cc25d449e90a823a5526f6b8e",1]
 ["src/media/outbound-attachment.test.ts","./store.js","ce73809637f9c4a0e09f28602c3d710c4bdc647f0b95106ab66b7e79a7fb7bbf",1]
 ["src/media/outbound-attachment.test.ts","./web-media.js","b81852eacc26c80066cab7fc2fd344d5227d3ddecb692a62a129b961d8d16918",1]
-["src/media/pdf-extract.test.ts","./document-extractors.runtime.js","6454c7178156a004b82cc2670e4d06ba7e69f4b398beda7d4e3dac3ac97d93c6",1]
 ["src/media/playback-transcode.staging.test.ts","./ffmpeg-exec.js","3051b11e89e350523265e6704ec4d2aac02bd6eaccb6f2fc018e2e3b2a1ce53f",1]
 ["src/media/playback-transcode.test.ts","../logging/subsystem.js","71ae54d45d4f5a6cfec79564d7f1a255e5d2fb27ed82268a22757d15deb5a594",1]
 ["src/media/playback-transcode.test.ts","./ffmpeg-exec.js","c3c8439cab65f4c2fc706077e328f82fe6209f2ce74afe0ff8b979c46f20e0eb",1]

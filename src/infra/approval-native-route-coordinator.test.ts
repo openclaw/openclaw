@@ -100,6 +100,141 @@ function delivery(
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it.each([
+    ["plugin", "Control UI or terminal UI"],
+    ["system-agent", "Control UI"],
+  ] as const)(
+    "routes ambiguous %s ownership to a capable approval surface",
+    async (approvalKind, surface) => {
+      const coordinator = createApprovalNativeRouteCoordinator();
+      const requestGateway = createGatewayRequestMock();
+      const first = coordinatedReporter(coordinator, {
+        handledKinds: new Set([approvalKind]),
+        requestGateway,
+      });
+      const second = coordinatedReporter(coordinator, {
+        handledKinds: new Set([approvalKind]),
+        accountId: "ops",
+        requestGateway,
+      });
+      const request = {
+        ...createRequest(`ambiguous-${approvalKind}`, {
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        }),
+        request: {
+          command: "echo hi",
+          title: "Approve operation",
+          description: "Synthetic approval",
+          proposalHash: "synthetic-proposal",
+          sessionId: "synthetic-session",
+          allowedDecisions: ["allow-once", "deny"] as const,
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        },
+      };
+      try {
+        for (const reporter of [first, second]) {
+          expect(await reporter.selectRequest({ approvalKind, request })).toEqual({
+            kind: "ambiguous-owner",
+          });
+        }
+        for (const reporter of [first, second]) {
+          await reporter.reportSkipped({ approvalKind, request, reason: "ambiguous-owner" });
+        }
+        expect(requestGateway).toHaveBeenCalledTimes(1);
+        expect(requestGateway).toHaveBeenCalledWith(
+          "send",
+          expect.objectContaining({
+            message: `Approval required, but multiple channel accounts can handle this request. Open the ${surface} to approve it.`,
+          }),
+        );
+      } finally {
+        coordinator.close();
+      }
+    },
+  );
+
+  it.each([
+    [false, "Matrix DMs or Telegram DMs"],
+    [true, "Matrix or Telegram DMs"],
+  ] as const)(
+    "reports sorted unique cross-channel destinations with mixed surfaces=%s",
+    async (mixed, destinations) => {
+      const coordinator = createApprovalNativeRouteCoordinator();
+      const requestGateway = createGatewayRequestMock();
+      const request = createRequest("cross-channel-destinations", {
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:C123",
+      });
+      const reporters = [
+        coordinatedReporter(coordinator, {
+          channel: "telegram",
+          channelLabel: "Telegram",
+          requestGateway,
+          classifyRoute: () => "bound-or-explicit",
+        }),
+        coordinatedReporter(coordinator, {
+          channel: "matrix",
+          channelLabel: "Matrix",
+          requestGateway,
+        }),
+        coordinatedReporter(coordinator, {
+          channel: "telegram",
+          channelLabel: "Telegram",
+          accountId: "ops",
+          requestGateway,
+          classifyRoute: () => "bound-or-explicit",
+        }),
+      ];
+      try {
+        for (const reporter of reporters) {
+          await expectSelection(reporter, request, "selected");
+        }
+        for (const [index, reporter] of reporters.entries()) {
+          await reporter.reportDelivery(
+            delivery(request, [
+              approverDm("user:owner"),
+              ...(mixed && index === 1
+                ? [
+                    {
+                      surface: "origin" as const,
+                      target: { to: "room:other" },
+                      reason: "preferred" as const,
+                    },
+                  ]
+                : []),
+            ]),
+          );
+        }
+        expect(requestGateway).toHaveBeenCalledTimes(1);
+        expect(requestGateway).toHaveBeenCalledWith(
+          "send",
+          expect.objectContaining({
+            channel: "discord",
+            to: "channel:C123",
+            message: `Approval required. I sent the approval request to ${destinations}, not this chat.`,
+          }),
+        );
+      } finally {
+        coordinator.close();
+      }
+    },
+  );
+
+  it("does not send a route notice without delivered destinations", async () => {
+    const requestGateway = createGatewayRequestMock();
+    const reporter = createApprovalNativeRouteReporter({ requestGateway });
+    reporter.start();
+    const request = createRequest("no-destinations", {
+      turnSourceChannel: "telegram",
+      turnSourceTo: "chat:123",
+    });
+    await reporter.selectRequest(selection(request));
+    await reporter.reportDelivery(delivery(request, []));
+    expect(requestGateway).not.toHaveBeenCalled();
+  });
+
   it("keeps the local approval route visible when an unbound request has multiple runtimes", () => {
     const coordinator = createApprovalNativeRouteCoordinator();
     const first = coordinator.createReporter(reporterOptions());

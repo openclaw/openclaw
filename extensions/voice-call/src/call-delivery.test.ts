@@ -1,7 +1,9 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCallDelivery, type CallDeliveryMessage } from "./call-delivery.js";
+import { createCallDeliveryRuntime } from "./call-delivery-runtime.js";
 import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
@@ -12,6 +14,51 @@ import {
   writeCallsToStore,
 } from "./manager.test-harness.js";
 import type { CallRecord } from "./types.js";
+
+type CallDeliveryMessage = { sessionKey: string; text: string; idempotencyKey: string };
+
+function createDelivery(
+  manager: CallManager,
+  config: ReturnType<typeof normalizeVoiceCallConfig>,
+  messages: CallDeliveryMessage[],
+  summarize: PluginRuntime["subagent"]["complete"] = vi.fn().mockResolvedValue({
+    text: "Needs follow-up.",
+  }),
+  beforeDeliver?: () => Promise<void>,
+) {
+  const runtime = createPluginRuntimeMock();
+  vi.spyOn(runtime.gateway, "request").mockImplementation(async (method, params) => {
+    if (method === "sessions.describe") {
+      return {
+        session: {
+          key: params?.key,
+          sessionId: "requester-session",
+          deliveryContext: { channel: "telegram", to: "42" },
+        },
+      };
+    }
+    expect(method).toBe("send");
+    await beforeDeliver?.();
+    const { sessionKey, message: text, idempotencyKey } = params ?? {};
+    if (
+      typeof sessionKey !== "string" ||
+      typeof text !== "string" ||
+      typeof idempotencyKey !== "string"
+    ) {
+      throw new Error("Expected a requester channel message");
+    }
+    messages.push({ sessionKey, text, idempotencyKey });
+    return { ok: true };
+  });
+  return createCallDeliveryRuntime({
+    config,
+    coreConfig: { agents: { entries: { owner: {} } } },
+    runtime: { gateway: runtime.gateway, subagent: { complete: summarize } },
+    manager,
+    runInServiceContext: (run) => run(),
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  });
+}
 
 // These manager scenarios cover lifecycle races that a real carrier cannot reliably trigger.
 // Required outcomes: terminal redelivery never duplicates reports; pending final speech flushes
@@ -30,19 +77,10 @@ describe("requester call delivery", () => {
     });
     const { manager, storePath } = await createManagerHarness();
     const messages: CallDeliveryMessage[] = [];
-    const summarize = vi.fn(
-      async (_call: CallRecord) => "Achieved: plumber booked for Friday at 09:00.",
-    );
-    const delivery = createCallDelivery({
-      config,
-      deliver: async (message) => {
-        await beforeDeliver?.();
-        messages.push(message);
-      },
-      summarize,
-      persist: (call) => manager.persistDeliveryStatus(call),
+    const summarize = vi.fn<PluginRuntime["subagent"]["complete"]>().mockResolvedValue({
+      text: "Achieved: plumber booked for Friday at 09:00.",
     });
-    manager.onCallUpdated = delivery.observe;
+    const delivery = createDelivery(manager, config, messages, summarize, beforeDeliver);
     const result = await manager.initiateCall("+15550000001", "voice-session", {
       requesterSessionKey: "agent:owner:telegram:direct:42",
     });
@@ -115,8 +153,7 @@ describe("requester call delivery", () => {
       expect(messages).toHaveLength(1);
       expect(messages[0]).toMatchObject({
         sessionKey: "agent:owner:telegram:direct:42",
-        kind: "report",
-        callId: call.callId,
+        idempotencyKey: `voice-call:${call.callId}:report:0`,
       });
       expect(expectDefined(messages[0], "first delivery message").text).toContain("Achieved:");
       expect(expectDefined(messages[0], "first delivery message").text).toContain(
@@ -141,12 +178,9 @@ describe("requester call delivery", () => {
         expectDefined(messages[0], "first delivery message").text.includes("reference P123"),
       ).toBe(includeTranscript);
       expect(summarize).toHaveBeenCalledOnce();
-      expect(
-        expectDefined(summarize.mock.calls[0], "call summary request")[0].metadata?.brief,
-      ).toEqual({
-        task: "Book a plumber",
-        approvals: "No deposit",
-      });
+      expect(expectDefined(summarize.mock.calls[0], "call summary request")[0].message).toContain(
+        JSON.stringify({ task: "Book a plumber", approvals: "No deposit" }),
+      );
       expect(
         (await manager.getCallFromMemoryOrStore(call.callId))?.metadata?.callReport,
       ).toMatchObject({ status: "delivered" });
@@ -181,7 +215,11 @@ describe("requester call delivery", () => {
     await end(manager, call);
     await delivery.observe(call);
     await delivery.stop();
-    expect(messages.map((message) => message.kind)).toEqual(["live", "live", "report"]);
+    expect(messages.map((message) => message.idempotencyKey.includes(":live:"))).toEqual([
+      true,
+      true,
+      false,
+    ]);
     expect(expectDefined(messages[1], "terminal live transcript").text).toContain(
       "Friday at 09:00",
     );
@@ -195,21 +233,16 @@ describe("requester call delivery", () => {
     await speech(manager, call, "user", "Hello");
     await speech(manager, call, "bot", "Can you visit Friday?");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(messages.map((message) => message.kind)).toEqual(["live"]));
+    await vi.waitFor(() => {
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.idempotencyKey).toContain(":live:");
+    });
     await delivery.stop();
 
     // A new process restores the still-active call from the store with a fresh delivery owner.
     const restarted = registerTestManagerCleanup(new CallManager(config, storePath));
     const resumed: CallDeliveryMessage[] = [];
-    const nextDelivery = createCallDelivery({
-      config,
-      deliver: async (message) => {
-        resumed.push(message);
-      },
-      summarize: async () => "Needs follow-up.",
-      persist: (snapshot) => restarted.persistDeliveryStatus(snapshot),
-    });
-    restarted.onCallUpdated = nextDelivery.observe;
+    const nextDelivery = createDelivery(restarted, config, resumed);
     await restarted.initialize(new FakeProvider(), "https://example.com/voice/webhook");
     const restored = expectDefined(restarted.getCall(call.callId), "restored call");
     await speech(restarted, restored, "user", "Friday at 09:00");
@@ -273,15 +306,7 @@ describe("requester call delivery", () => {
         cursor: 1,
       });
       const resumed: CallDeliveryMessage[] = [];
-      const nextDelivery = createCallDelivery({
-        config,
-        deliver: async (message) => {
-          resumed.push(message);
-        },
-        summarize: async () => "unused",
-        persist: (record) => restarted.persistDeliveryStatus(record),
-      });
-      restarted.onCallUpdated = nextDelivery.observe;
+      const nextDelivery = createDelivery(restarted, config, resumed);
       try {
         await speech(restarted, restored, "user", "Second line");
         await end(restarted, restored);
@@ -313,15 +338,15 @@ describe("requester call delivery", () => {
 
   it("records a failed report and still settles call shutdown", async () => {
     const { manager, call } = await setup();
-    const delivery = createCallDelivery({
-      config: normalizeVoiceCallConfig({ reports: { enabled: true } }),
-      summarize: async () => "Needs follow-up.",
-      deliver: async () => {
+    const delivery = createDelivery(
+      manager,
+      normalizeVoiceCallConfig({ reports: { enabled: true } }),
+      [],
+      undefined,
+      async () => {
         throw new Error("session route unavailable");
       },
-      persist: (snapshot) => manager.persistDeliveryStatus(snapshot),
-    });
-    manager.onCallUpdated = delivery.observe;
+    );
     await end(manager, call);
     await delivery.observe(call);
     await delivery.stop();

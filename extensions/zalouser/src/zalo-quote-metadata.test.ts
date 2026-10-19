@@ -24,7 +24,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 // mock-isolation: Quote fixtures provide synthetic listeners and sends, never a live Zalo session.
 vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock, TextStyle: { Indent: 9 } }));
 
-import { zalouserMessageAdapter } from "./channel.adapters.js";
+import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { saveStoredZaloCredentials } from "./session-state.js";
 import {
@@ -92,7 +92,7 @@ it("applies the resolved account media cap before the native message send", asyn
   const directory = tempDirs.make("zalouser-media-cap-");
   const file = path.join(directory, "attachment.txt");
   await withStoredSession("media-cap", api, async () => {
-    const sendMedia = zalouserMessageAdapter.send?.media;
+    const sendMedia = zalouserPlugin.message?.send?.media;
     if (!sendMedia) {
       throw new Error("Zalo Personal media sender unavailable");
     }
