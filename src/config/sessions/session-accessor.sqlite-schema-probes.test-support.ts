@@ -94,49 +94,41 @@ export function measureSqliteSchemaProbes(database: DatabaseSync, read: () => bo
       observingTablePragmas = previous;
     }
   };
-  const instrument = <Method extends "get" | "all" | "iterate">(
-    method: Method,
-    wrap: (original: (typeof prototype)[Method]) => (typeof prototype)[Method],
-  ) => {
+  const instrument = <Method extends "get" | "all" | "iterate">(method: Method) => {
     const original = prototype[method];
-    prototype[method] = wrap(original);
+    prototype[method] = new Proxy(original, {
+      apply(invoke, statement: StatementSync, args) {
+        const execute = (sql: string) => {
+          recordStatement(sql);
+          return observeStep(sql, () => Reflect.apply(invoke, statement, args));
+        };
+        if (method !== "iterate") {
+          return execute(statement.sourceSQL);
+        }
+        return (function* () {
+          const sql = statement.sourceSQL;
+          const rows: ReturnType<StatementSync["iterate"]> = execute(sql);
+          try {
+            while (true) {
+              const next = observeStep(sql, () => rows.next());
+              if (next.done) {
+                return next.value;
+              }
+              yield next.value;
+            }
+          } finally {
+            observeStep(sql, () => rows.return?.());
+          }
+        })();
+      },
+    });
     restores.push(() => {
       prototype[method] = original;
     });
   };
-  for (const method of ["get", "all"] as const) {
-    instrument(
-      method,
-      (original) =>
-        function (this: StatementSync, ...args: unknown[]) {
-          const sql = this.sourceSQL;
-          recordStatement(sql);
-          return observeStep(sql, () => Reflect.apply(original, this, args));
-        },
-    );
+  for (const method of ["get", "all", "iterate"] as const) {
+    instrument(method);
   }
-  instrument(
-    "iterate",
-    (original) =>
-      function* (this: StatementSync, ...args: unknown[]) {
-        const sql = this.sourceSQL;
-        recordStatement(sql);
-        const rows: ReturnType<StatementSync["iterate"]> = observeStep(sql, () =>
-          Reflect.apply(original, this, args),
-        );
-        try {
-          while (true) {
-            const next = observeStep(sql, () => rows.next());
-            if (next.done) {
-              return next.value;
-            }
-            yield next.value;
-          }
-        } finally {
-          observeStep(sql, () => rows.return?.());
-        }
-      },
-  );
   const start = performance.now();
   try {
     for (let i = 0; i < 100; i++) {
