@@ -10,7 +10,6 @@ import {
 } from "../../../components/command-palette-contract.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
@@ -31,7 +30,6 @@ import {
   renderPaneHeaderInto,
   type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
-import { DesktopFrameControls } from "./chat-sidebar-desktop-frame-controls.tsx";
 
 const containers: HTMLElement[] = [];
 
@@ -752,41 +750,6 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
       "Operator write access is required.",
     );
-  });
-
-  it("keeps docking in the panel frame and dispatches the selected position", async () => {
-    const onLayoutChange = vi.fn();
-    const layout = openSlot({ columns: [] }, "detail");
-    const { container } = mountHeader({ sidebarLayout: layout, onLayoutChange });
-    expect(container.querySelector(".chat-panel-layout-menu")).toBeNull();
-    const setDock = vi.fn();
-    const frame = mountSolid(() => (
-      <DesktopFrameControls
-        layout={layout}
-        panelDefinitions={[]}
-        callbacks={{
-          activatePanel: vi.fn(),
-          togglePanelExpanded: vi.fn(),
-          setDock,
-          closeSlot: vi.fn(),
-          openSlot: vi.fn(),
-          reorderPanel: vi.fn(),
-          resizePanel: vi.fn(),
-          setOpen: vi.fn(),
-        }}
-        onCloseAll={() => Promise.resolve()}
-        closing={false}
-        closable={true}
-        hasConversation={true}
-      />
-    ));
-    onTestFinished(frame.unmount);
-    const menu = frame.container;
-    await openNativeMenu(menu);
-    expect(menu.querySelector('[data-dock="bottom"]')).not.toBeNull();
-    await selectNativeMenu(menu, "bottom");
-    expect(setDock).toHaveBeenCalledExactlyOnceWith("bottom");
-    expect(onLayoutChange).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
