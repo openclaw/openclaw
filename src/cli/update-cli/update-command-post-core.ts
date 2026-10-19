@@ -13,6 +13,7 @@ import {
 } from "../../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
@@ -481,12 +482,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       const result = await readPostCoreUpdateResultFile(resultPath);
       authority.assertCurrent();
       if (!result) {
-        const pending = await fs.lstat(`${resultPath}.pending`).catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return undefined;
-          }
-          throw error;
-        });
+        const pending = await fs.lstat(`${resultPath}.pending`).catch(ignoreMissingPath);
         if (pending) {
           throw new CommandProcessCleanupError();
         }

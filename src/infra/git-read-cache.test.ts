@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { captureSessionDiffBaseline, loadCheckoutDiff } from "../sessions/session-diff.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "./diagnostic-events.js";
 import { runGitReadOperation } from "./git-read-cache.js";
 import type { GitReadOperations } from "./git-read-operations.js";
 import { runGitWorkerOperation } from "./git-worker.js";
@@ -56,6 +61,44 @@ function contextRead(root: string) {
 }
 
 describe("typed Git read ownership", () => {
+  it("reports validation for cache hits and shared misses without replaying cached Git work", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    onTestFinished(stop);
+    vi.mocked(runGitWorkerOperation).mockImplementation(async (operation, options) => {
+      if (options?.diffTiming) {
+        options.diffTiming.durations["worker-queue"] =
+          operation.type === "checkout.revision" ? 2 : 5;
+        options.diffTiming.durations["git-wall"] = operation.type === "checkout.revision" ? 0 : 10;
+      }
+      return operation.type === "checkout.revision" ? "unchanged" : emptyDiff;
+    });
+    const operation = {
+      type: "checkout.diff" as const,
+      input: { cwd: "/timing-private", summaryOnly: true },
+    };
+    await Promise.all([runGitReadOperation(operation), runGitReadOperation(operation)]);
+    await runGitReadOperation(operation);
+    await waitForDiagnosticEventsDrained();
+    const phases = events
+      .filter((event) => event.type === "diagnostic.phase.completed")
+      .filter((event) => event.name === "checkout.diff");
+    expect(phases).toHaveLength(3);
+    expect(phases.map((event) => event.details?.outcome)).toEqual([
+      "cache-miss",
+      "cache-miss",
+      "cache-hit",
+    ]);
+    expect(phases.map((event) => event.details?.["worker-queue"])).toEqual([7, 7, 2]);
+    expect(phases.map((event) => event.details?.["git-wall"])).toEqual([10, 10, 0]);
+    expect(phases.every((event) => typeof event.details?.["cache-validate"] === "number")).toBe(
+      true,
+    );
+    expect(JSON.stringify(phases)).not.toContain("timing-private");
+  });
+
   it("serves identity snapshots while one background pass refreshes external metadata", async () => {
     vi.useFakeTimers();
     const cold = holdRead("repository.identities", []);

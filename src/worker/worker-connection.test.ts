@@ -330,10 +330,15 @@ describe("worker connection endpoint failures", () => {
     });
   });
 
-  it.each(["no hello", "redacted connect failure"] as const)(
-    "retains the last %s diagnosis at the admission deadline",
-    async (scenario) => {
-      vi.useFakeTimers();
+  it.each([
+    ["no hello", 0],
+    ["redacted connect failure", 0],
+    ["no hello", -60_000],
+    ["no hello", 60_000],
+  ] as const)(
+    "retains the last %s diagnosis at the admission deadline (wall-clock shift: %dms)",
+    async (scenario, wallClockShiftMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const sockets: EventEmitter[] = [];
       const diagnostics: Array<Error | undefined> = [];
       const endpointUrl =
@@ -377,7 +382,9 @@ describe("worker connection endpoint failures", () => {
           ? "connect failed: Opening handshake has timed out"
           : "no hello within deadline";
       const starting = connection.start().catch((error: unknown) => error);
+      vi.setSystemTime(Date.now() + wallClockShiftMs);
       await vi.advanceTimersByTimeAsync(1_000);
+      expect(connection.state.kind).toBe("failed");
       const error = await starting;
       expect(error).toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
       for (const part of [expected, "gateway.example:8443", `after ${sockets.length} attempts`]) {

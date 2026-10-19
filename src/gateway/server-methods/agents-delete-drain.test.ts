@@ -15,6 +15,7 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.entry.j
 import * as sessionPatches from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   beginSessionEffect,
@@ -184,7 +185,7 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
         await deletionResult;
         registration.cleanup();
         await subscriptions.agentUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
       }

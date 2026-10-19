@@ -9,6 +9,7 @@ type PaneProperty =
   | "sessionSnapshotStore"
   | "sessionKey"
   | "routeLoadingSkeleton"
+  | "routeResolutionPending"
   | "agentId"
   | "inputRegion"
   | "compact"
@@ -47,6 +48,7 @@ export const chatPaneProperties = {
   sessionSnapshotStore: { default: undefined },
   sessionKey: { default: "" },
   routeLoadingSkeleton: { default: false },
+  routeResolutionPending: { default: false },
   agentId: { default: undefined },
   inputRegion: { default: "page" as const },
   compact: { default: false },

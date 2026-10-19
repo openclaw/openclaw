@@ -80,16 +80,25 @@ describe("Git checkout execution", () => {
         inspectGitTarget: async () => {},
         runGitDoctor:
           runGitDoctor ??
-          (async (doctorRoot) => {
+          (async (doctorRoot, steps = []) => {
             expect(stopped).toBe(true);
             events.push("migrate");
-            return {
+            const doctor = {
               name: "openclaw doctor",
               command: "CLI activation doctor",
               cwd: doctorRoot,
               durationMs: 0,
               exitCode: 0,
             };
+            steps.push(
+              {
+                ...doctor,
+                name: "database migration writes",
+                warnings: ["Automatic database restoration unavailable: unknown writer."],
+              },
+              doctor,
+            );
+            return doctor;
           }),
         validateCandidate: async (candidateRoot) => {
           expect(stopped).toBe(false);
@@ -116,6 +125,13 @@ describe("Git checkout execution", () => {
     const config = await fs.readFile(path.join(root, ".git", "config"));
     const result = await update();
     expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+    expect(result.steps.filter((step) => step.name === "openclaw doctor")).toHaveLength(1);
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "database migration writes",
+        warnings: ["Automatic database restoration unavailable: unknown writer."],
+      }),
+    );
     expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(
       `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
     );

@@ -52,6 +52,7 @@ export type PageHost = SolidBridgeElement<
 
 export class NewSessionPageOwner {
   private readonly listeners = new Set<() => void>();
+  private contextSubscriptions: Array<() => void> = [];
   isConnected = false;
   private pendingChange = false;
   readonly changed = () => {
@@ -220,6 +221,19 @@ export class NewSessionPageOwner {
       return;
     }
     this.isConnected = true;
+    // These receipts reconcile the draft and prepared title before the view reads them.
+    const context = this.context;
+    if (context) {
+      this.contextSubscriptions = [
+        context.theme,
+        context.agents,
+        context.agentIdentity,
+        context.sessions,
+        context.placementStartup,
+        context.runtimeConfig,
+        context.config,
+      ].map((source) => source.subscribe(this.changed));
+    }
     this.draft.connect();
     this.submission.draftPersistence.connect();
     this.critterImport.schedule();
@@ -229,6 +243,9 @@ export class NewSessionPageOwner {
   disconnect() {
     if (!this.isConnected) {
       return;
+    }
+    for (const stop of this.contextSubscriptions.splice(0)) {
+      stop();
     }
     this.closeAttachmentPanel();
     this.attachmentPanelLoader.requestWhileActive(attachmentPanelElement, false);

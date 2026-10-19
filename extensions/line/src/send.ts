@@ -96,7 +96,6 @@ interface LineSendOpts {
   cfg: OpenClawConfig;
   channelAccessToken?: string;
   accountId?: string;
-  verbose?: boolean;
   mediaUrl?: string;
   mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
@@ -114,7 +113,6 @@ type LinePushOpts = Pick<
   | "cfg"
   | "channelAccessToken"
   | "accountId"
-  | "verbose"
   | "quoteToken"
   | "authorize"
   | "assertDirectAdapterHandoff"
@@ -377,7 +375,6 @@ async function pushLineMessages(
     messageId,
     chatId,
     receipt: createLineSendReceipt({
-      messageId,
       messageIds,
       chatId,
       kind: resolveLineReceiptKind(messages),
@@ -511,17 +508,14 @@ export function createQuickReplyItems(labels: string[]): QuickReply {
   return { items };
 }
 
-export async function showLoadingAnimation(
-  chatId: string,
-  opts: LineClientOpts & { loadingSeconds?: number },
-): Promise<void> {
+export async function showLoadingAnimation(chatId: string, opts: LineClientOpts): Promise<void> {
   const { token } = resolveLineMessagingAccount(opts);
   const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
 
   try {
     await client.showLoadingAnimation({
       chatId: normalizeTarget(chatId),
-      loadingSeconds: opts.loadingSeconds ?? 20,
+      loadingSeconds: 20,
     });
   } catch (err) {
     logVerbose(`line: loading animation failed (non-fatal): ${String(err)}`);
