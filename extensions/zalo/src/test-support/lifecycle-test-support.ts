@@ -1,4 +1,3 @@
-// Zalo plugin module implements lifecycle test support behavior.
 import { request as httpRequest } from "node:http";
 import {
   createPluginRuntimeMediaMock,
@@ -9,6 +8,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { expect, vi } from "vitest";
 import type { ResolvedZaloAccount } from "../types.js";
 
+type Channel = PluginRuntime["channel"];
+
 type LifecycleMonitorSetupParams = {
   accountId: string;
   dmPolicy: "open" | "pairing";
@@ -18,15 +19,8 @@ type LifecycleMonitorSetupParams = {
   mediaMaxMb?: number;
 };
 
-function resolveLifecycleAllowFrom(params: {
-  dmPolicy: "open" | "pairing";
-  allowFrom?: string[];
-}): string[] | undefined {
-  return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
-}
-
 function createLifecycleAccountConfig(params: LifecycleMonitorSetupParams) {
-  const allowFrom = resolveLifecycleAllowFrom(params);
+  const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
   return {
     webhookUrl: params.webhookUrl ?? "https://example.com/hooks/zalo",
     webhookSecret: params.webhookSecret ?? "supersecret", // pragma: allowlist secret
@@ -38,8 +32,15 @@ function createLifecycleAccountConfig(params: LifecycleMonitorSetupParams) {
   };
 }
 
-function createLifecycleConfig(params: LifecycleMonitorSetupParams): OpenClawConfig {
-  return {
+export function createLifecycleMonitorSetup(params: LifecycleMonitorSetupParams) {
+  const account: ResolvedZaloAccount = {
+    accountId: params.accountId,
+    enabled: true,
+    token: "zalo-token",
+    tokenSource: "config",
+    config: createLifecycleAccountConfig(params),
+  };
+  const config: OpenClawConfig = {
     channels: {
       zalo: {
         enabled: true,
@@ -48,23 +49,10 @@ function createLifecycleConfig(params: LifecycleMonitorSetupParams): OpenClawCon
         },
       },
     },
-  } as OpenClawConfig;
-}
-
-function createLifecycleAccount(params: LifecycleMonitorSetupParams): ResolvedZaloAccount {
+  };
   return {
-    accountId: params.accountId,
-    enabled: true,
-    token: "zalo-token",
-    tokenSource: "config",
-    config: createLifecycleAccountConfig(params),
-  } as ResolvedZaloAccount;
-}
-
-export function createLifecycleMonitorSetup(params: LifecycleMonitorSetupParams) {
-  return {
-    account: createLifecycleAccount(params),
-    config: createLifecycleConfig(params),
+    account,
+    config,
   };
 }
 
@@ -117,29 +105,7 @@ export function createImageUpdate(params?: {
 export function createImageLifecycleCore() {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
   const buildChannelInboundEventContextMock = vi.fn(
-    (params: {
-      channel: string;
-      accountId?: string;
-      messageId?: string;
-      timestamp?: number;
-      from: string;
-      sender: { id: string; name?: string };
-      conversation: { kind: string; label?: string };
-      route: {
-        accountId?: string;
-        routeSessionKey: string;
-        dispatchSessionKey?: string;
-      };
-      reply: { to: string; originatingTo: string };
-      message: { body?: string; rawBody: string; bodyForAgent?: string; commandBody?: string };
-      media?: Array<{
-        path?: string;
-        url?: string;
-        contentType?: string;
-        kind?: "audio" | "document" | "image" | "unknown" | "video";
-      }>;
-      extra?: Record<string, unknown>;
-    }) =>
+    (params: Parameters<Channel["inbound"]["buildContext"]>[0]) =>
       finalizeInboundContextMock({
         Body: params.message.body ?? params.message.rawBody,
         BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -170,14 +136,12 @@ export function createImageLifecycleCore() {
   }));
   // Keep the mock arity aligned with PluginRuntime.saveRemoteMedia so
   // mockImplementation callbacks that inspect timeout options typecheck.
-  const saveRemoteMediaMock = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
-    async (_params) => ({
-      id: "zalo-photo.jpg",
-      path: "/tmp/zalo-photo.jpg",
-      size: Buffer.byteLength("image-bytes"),
-      contentType: "image/jpeg",
-    }),
-  );
+  const saveRemoteMediaMock = vi.fn<Channel["media"]["saveRemoteMedia"]>(async (_params) => ({
+    id: "zalo-photo.jpg",
+    path: "/tmp/zalo-photo.jpg",
+    size: Buffer.byteLength("image-bytes"),
+    contentType: "image/jpeg",
+  }));
   const saveMediaBufferMock = vi.fn(async () => ({
     path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
@@ -187,58 +151,41 @@ export function createImageLifecycleCore() {
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn(async () => undefined);
   const core = createPluginRuntimeMock({
     logging: {
-      shouldLogVerbose: vi.fn(
-        () => false,
-      ) as unknown as PluginRuntime["logging"]["shouldLogVerbose"],
+      shouldLogVerbose: vi.fn(() => false),
     },
     channel: {
       pairing: {
-        readAllowFromStore:
-          readAllowFromStoreMock as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
-        upsertPairingRequest:
-          upsertPairingRequestMock as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
+        readAllowFromStore: readAllowFromStoreMock,
+        upsertPairingRequest: upsertPairingRequestMock,
       },
       session: {
-        resolveStorePath: vi.fn(
-          () => "/tmp/zalo-sessions.json",
-        ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+        resolveStorePath: vi.fn(() => "/tmp/zalo-sessions.json"),
         readSessionUpdatedAtAsync: vi.fn(async () => undefined),
-        recordInboundSession:
-          recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+        recordInboundSession: recordInboundSessionMock,
       },
       text: {
-        resolveMarkdownTableMode: vi.fn(
-          () => "code",
-        ) as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
+        resolveMarkdownTableMode: vi.fn(() => "code" as const),
       },
       media: createPluginRuntimeMediaMock({
         readRemoteMediaBuffer:
-          readRemoteMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["readRemoteMediaBuffer"],
-        saveRemoteMedia:
-          saveRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["saveRemoteMedia"],
-        saveMediaBuffer:
-          saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-      }) as unknown as PluginRuntime["channel"]["media"],
+          readRemoteMediaBufferMock as unknown as Channel["media"]["readRemoteMediaBuffer"],
+        saveRemoteMedia: saveRemoteMediaMock,
+        saveMediaBuffer: saveMediaBufferMock as unknown as Channel["media"]["saveMediaBuffer"],
+      }),
       reply: {
         finalizeInboundContext:
-          finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+          finalizeInboundContextMock as unknown as Channel["reply"]["finalizeInboundContext"],
         dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+          dispatchReplyWithBufferedBlockDispatcherMock as unknown as Channel["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
       inbound: {
         buildContext:
-          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
+          buildChannelInboundEventContextMock as unknown as Channel["inbound"]["buildContext"],
       },
       commands: {
-        shouldComputeCommandAuthorized: vi.fn(
-          () => false,
-        ) as unknown as PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"],
-        resolveCommandAuthorizedFromAuthorizers: vi.fn(
-          () => false,
-        ) as unknown as PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"],
-        isControlCommandMessage: vi.fn(
-          () => false,
-        ) as unknown as PluginRuntime["channel"]["commands"]["isControlCommandMessage"],
+        shouldComputeCommandAuthorized: vi.fn(() => false),
+        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        isControlCommandMessage: vi.fn(() => false),
       },
     },
   });
@@ -269,6 +216,10 @@ export function expectImageLifecycleDelivery(params: {
   const senderName = params.senderName ?? "Test User";
   const mediaPath = params.mediaPath ?? "/tmp/zalo-photo.jpg";
   const mediaType = params.mediaType ?? "image/jpeg";
+  const context = expect.objectContaining({
+    SenderName: senderName,
+    media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
+  });
   const saveRemoteMediaMock = params.saveRemoteMediaMock ?? params.readRemoteMediaBufferMock;
   expect(saveRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
@@ -277,19 +228,9 @@ export function expectImageLifecycleDelivery(params: {
     readIdleTimeoutMs: 30_000,
   });
   expect(params.saveMediaBufferMock).not.toHaveBeenCalled();
-  expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      SenderName: senderName,
-      media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
-    }),
-  );
+  expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(context);
   expect(params.recordInboundSessionMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      ctx: expect.objectContaining({
-        SenderName: senderName,
-        media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
-      }),
-    }),
+    expect.objectContaining({ ctx: context }),
   );
 }
 
