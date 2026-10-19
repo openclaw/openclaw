@@ -30,36 +30,29 @@ describe("startBrowserBridgeServer auth", () => {
     return bridge;
   }
 
-  async function expectAuthFlow(
-    authConfig: { authToken?: string; authPassword?: string },
-    headers: Record<string, string>,
-    host?: string,
-  ) {
-    const bridge = await startBridge({ ...authConfig, host });
-    const url = `${bridge.baseUrl}/?profile=__auth_probe_missing__`;
-    expect((await fetch(url)).status).toBe(401);
-    expect((await fetch(url, { headers })).status).toBe(404);
-  }
-
   afterEach(async () => {
     for (const bridge of servers.splice(0).toReversed()) {
       await stopBrowserBridgeServer(bridge.server);
     }
   });
 
-  it.each(["127.0.0.1", "::1"])(
-    "authenticates through the returned bridge URL on %s",
-    async (host) => {
-      await expectAuthFlow(tokenAuth, tokenHeaders, host);
-    },
-  );
-
-  it("accepts x-openclaw-password when authPassword is set", async () => {
-    await expectAuthFlow(
+  it.each([
+    ["127.0.0.1", tokenAuth, tokenHeaders],
+    ["::1", tokenAuth, tokenHeaders],
+    [
+      "127.0.0.1",
       { authPassword: "secret-password" },
       { "x-openclaw-password": "secret-password" },
-    );
-  });
+    ],
+  ] as const)(
+    "authenticates through the returned bridge URL on %s with %j",
+    async (host, authConfig, headers) => {
+      const bridge = await startBridge({ ...authConfig, host });
+      const url = `${bridge.baseUrl}/?profile=__auth_probe_missing__`;
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(url, { headers })).status).toBe(404);
+    },
+  );
 
   it("requires auth params", async () => {
     await expect(startBridge()).rejects.toThrow(/requires auth/i);
@@ -143,27 +136,24 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("serves noVNC bootstrap html without leaking password in Location header", async () => {
-    let resolveCalls = 0;
+    const resolveToken = vi.fn(
+      (token: string) =>
+        token === "valid-token" ? { noVncPort: 45678, password: "Abc123xy" } : null, // pragma: allowlist secret
+    );
     const bridge = await startBridge({
       ...tokenAuth,
-      resolveSandboxNoVncToken: (token) => {
-        resolveCalls += 1;
-        if (token !== "valid-token") {
-          return null;
-        }
-        return { noVncPort: 45678, password: "Abc123xy" }; // pragma: allowlist secret
-      },
+      resolveSandboxNoVncToken: resolveToken,
     });
 
     const unauth = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`);
     expect(unauth.status).toBe(401);
-    expect(resolveCalls).toBe(0);
+    expect(resolveToken).not.toHaveBeenCalled();
 
     const res = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`, {
       headers: tokenHeaders,
     });
     expect(res.status).toBe(200);
-    expect(resolveCalls).toBe(1);
+    expect(resolveToken).toHaveBeenCalledOnce();
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
