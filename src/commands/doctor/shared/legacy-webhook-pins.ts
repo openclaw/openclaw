@@ -17,6 +17,7 @@ import type { PluginDoctorHistoricalWebhookListener } from "../../../plugins/doc
 import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
 import type { PluginOrigin } from "../../../plugins/plugin-origin.types.js";
 import { normalizeOptionalAccountId } from "../../../routing/account-id.js";
+import { readConfigMachineStateAsync } from "../../../state/config-machine-state-async.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../../../state/config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly.js";
@@ -29,17 +30,27 @@ function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
   return `webhookListeners:${resolveConfigPath(env)}`;
 }
 
+export function readUnwrittenWebhookCompletion(env: NodeJS.ProcessEnv) {
+  return readConfigMachineStateAsync<true | Record<string, string[][]>>(webhookCompletionKey(env), {
+    env,
+  });
+}
+
 /** No config bytes changed, so this completion does not depend on config rollback. */
 export function prepareUnwrittenWebhookCompletion(
   snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
   mutation: ChannelDoctorConfigMutation,
   env: NodeJS.ProcessEnv,
 ) {
+  const completion = mutation.config.meta?.migrations?.webhookListeners;
+  if (completion === undefined) {
+    return undefined;
+  }
   const readOnly = resolveIsConfigReadOnly(env);
   const markerOnly = cloneConfigWithResolutionFacts(snapshot.sourceConfig);
   markerOnly.meta ??= {};
   markerOnly.meta.migrations ??= {};
-  markerOnly.meta.migrations.webhookListeners = mutation.config.meta?.migrations?.webhookListeners;
+  markerOnly.meta.migrations.webhookListeners = completion;
   if (!isDeepStrictEqual(markerOnly, mutation.config)) {
     if (!readOnly) {
       return undefined;

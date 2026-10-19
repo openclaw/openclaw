@@ -1,6 +1,58 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 
 type TabsActivation = "auto" | "manual";
+
+export function activeElementFor(element: Element): Element | null {
+  const root = element.getRootNode();
+  return root instanceof ShadowRoot
+    ? (root.activeElement ?? document.activeElement)
+    : document.activeElement;
+}
+
+function focusNeedsRecovery(element: Element): boolean {
+  const current = activeElementFor(element);
+  const root = element.getRootNode();
+  return (
+    current === document.body ||
+    current === document.documentElement ||
+    (root instanceof ShadowRoot && current === root.host)
+  );
+}
+
+type TabFocusTarget = {
+  root: HTMLElement;
+  element: (value: string | null) => HTMLElement | undefined;
+  active: () => string | null | undefined;
+};
+
+/** The panel keeps this handle when its tab strip is replaced during an async close. */
+export function createTabFocus() {
+  let current: TabFocusTarget | undefined;
+  return {
+    attach(target: TabFocusTarget) {
+      current = target;
+      return () => {
+        if (current === target) {
+          current = undefined;
+        }
+      };
+    },
+    focusActive(this: void, options?: FocusOptions) {
+      current?.element(current.active() ?? null)?.focus(options);
+    },
+    restoreAfterClose(closedId: string) {
+      if (!current?.root.isConnected || current.element(closedId)) {
+        return;
+      }
+      const selected = current.element(current.active() ?? null);
+      if (selected && focusNeedsRecovery(selected)) {
+        selected.focus({ preventScroll: true });
+      }
+    },
+  };
+}
+
+export type TabFocus = ReturnType<typeof createTabFocus>;
 
 export type TabsOptions = {
   /** Null deliberately leaves every tab unselected. */
@@ -19,6 +71,7 @@ export function createTabList(
   read: () => TabsOptions,
   items: () => readonly { value: string; disabled?: boolean }[],
   root: () => HTMLElement,
+  options: { revealActive?: boolean } = {},
 ) {
   const nodes = new Map<string, HTMLElement>();
   const active = createMemo(() => read().active);
@@ -44,6 +97,35 @@ export function createTabList(
             : values[0],
     };
   });
+
+  if (options.revealActive) {
+    const layoutKey = createMemo(() =>
+      JSON.stringify([active(), items().map((item) => item.value)]),
+    );
+    createEffect(
+      () => {
+        const key = layoutKey();
+        let focused = document.activeElement;
+        while (focused instanceof HTMLElement && focused.shadowRoot?.activeElement) {
+          focused = focused.shadowRoot.activeElement;
+        }
+        return { key, focused };
+      },
+      ({ focused }) => {
+        queueMicrotask(() => {
+          const selected = nodes.get(active() ?? "");
+          if (!root().isConnected || !selected) {
+            return;
+          }
+          selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+          // Keyed movement may blur a retained node; newer user focus always wins.
+          if (focused === selected && focusNeedsRecovery(selected)) {
+            selected.focus({ preventScroll: true });
+          }
+        });
+      },
+    );
+  }
 
   function select(tab: HTMLElement, event: MouseEvent | KeyboardEvent, direct: boolean) {
     const next = tab.dataset.tabValue;

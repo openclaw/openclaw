@@ -7,6 +7,7 @@ import type { ModelProviderLogin } from "./login-controller.ts";
 import { renderProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
+  let searchInput: HTMLInputElement | undefined;
   const picker = createMemo(() => props.controller.pickerView());
   const wizard = createMemo(() => props.controller.wizardViewProps);
   return (
@@ -20,6 +21,7 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
     >
       {(current) => (
         <openclaw-modal-dialog
+          prop:initialFocus={() => (searchInput?.isConnected ? searchInput : null)}
           label={current().provider?.label ?? t("modelProviders.login.title")}
           onModal-cancel={() => current().onClose()}
         >
@@ -56,7 +58,12 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                           data-models-login-search
                           autofocus
                           autocomplete="off"
-                          ref={(element) => props.controller.setSearchInput(element)}
+                          ref={[
+                            (element) => {
+                              searchInput = element;
+                            },
+                            props.controller.setSearchInput.bind(props.controller),
+                          ]}
                           value={current().query}
                           onInput={(event) => current().onQuery(event.currentTarget.value)}
                         />
@@ -117,7 +124,7 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                         <h3>{t("modelProviders.login.connectAccount")}</h3>
                         <div
                           data-models-login-choice
-                          ref={(element) => props.controller.setMethodChoices(element)}
+                          ref={props.controller.setMethodChoices.bind(props.controller)}
                         >
                           <For each={provider().choices} keyed={(choice) => choice.id}>
                             {(selected) => (
@@ -132,7 +139,7 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                         </div>
                         <Show when={provider().apiKeyProvider}>
                           <LoginOption
-                            buttonRef={(element) => props.controller.setApiKeyChoice(element)}
+                            buttonRef={props.controller.setApiKeyChoice.bind(props.controller)}
                             label={t("modelProviders.status.apiKey")}
                             hint={t("modelProviders.login.apiKeyHint")}
                             apiKey
@@ -200,7 +207,7 @@ function LoginOption(props: {
 }) {
   return (
     <button
-      ref={(element) => props.buttonRef?.(element)}
+      ref={props.buttonRef}
       type="button"
       class="btn model-provider-login__option"
       data-models-login-provider={props.provider}

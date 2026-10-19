@@ -28,11 +28,12 @@ type ReadEntry<T> = {
 
 function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal) => Promise<Output>,
-  freshness: number | { milliseconds: number; joinPending: true },
+  freshness: number | { milliseconds: number; joinPending?: true; versionedMilliseconds?: number },
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
   retain: (value: Output) => boolean = () => true,
+  maxEntries = MAX_CACHED_CHECKOUTS,
 ) {
   const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
   const joinPending = typeof freshness !== "number" && freshness.joinPending;
@@ -66,6 +67,10 @@ function createReadCache<Input, Output>(
           revisions.delete(controller);
         }
       }
+      const retainedFreshnessMs =
+        typeof freshness !== "number" && typeof currentRevision === "string"
+          ? (freshness.versionedMilliseconds ?? freshnessMs)
+          : freshnessMs;
       const revisionKey = JSON.stringify([input, currentRevision]);
       options.signal?.throwIfAborted();
       if (closed) {
@@ -86,10 +91,12 @@ function createReadCache<Input, Output>(
         const next: ReadEntry<Output> = {
           revision: revisionKey,
           expiresAt:
-            freshnessMs === 0
+            retainedFreshnessMs === 0
               ? Number.POSITIVE_INFINITY
               : Date.now() +
-                (currentRevision === null ? Math.min(freshnessMs, 75_000) : freshnessMs),
+                (currentRevision === null
+                  ? Math.min(retainedFreshnessMs, 75_000)
+                  : retainedFreshnessMs),
           controller,
           pending: true,
           value: entry?.value,
@@ -114,7 +121,7 @@ function createReadCache<Input, Output>(
               next.value = value;
               next.expiresAt = Date.now() + freshnessMs;
             }
-            if (freshnessMs === 0 || !retain(value)) {
+            if (retainedFreshnessMs === 0 || !retain(value)) {
               remove(key, next);
             }
             return value;
@@ -145,7 +152,7 @@ function createReadCache<Input, Output>(
       }
       entries.delete(key);
       entries.set(key, entry);
-      pruneMapToMaxSize(entries, MAX_CACHED_CHECKOUTS);
+      pruneMapToMaxSize(entries, maxEntries);
       // Viewer cancellation stops waiting, not the shared bounded read.
       return snapshot
         ? (entry.value ?? snapshot.empty())
@@ -249,13 +256,35 @@ function createReadCaches() {
     diff: createReadCache(
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
-      0,
+      { milliseconds: 0, versionedMilliseconds: Number.POSITIVE_INFINITY },
+      (input, signal) =>
+        runGitWorkerOperation(
+          { type: "checkout.revision", input: { root: input.cwd, scope: "diff" } },
+          { signal },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
+      // Full results may retain 1.5 MB of patches each.
+      32,
     ),
     diffSummary: createReadCache(
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
       // Visible clients share this short-lived summary; never duplicate a slow scan.
-      { milliseconds: 10_000, joinPending: true },
+      {
+        milliseconds: 10_000,
+        joinPending: true,
+        versionedMilliseconds: Number.POSITIVE_INFINITY,
+      },
+      (input, signal) =>
+        runGitWorkerOperation(
+          { type: "checkout.revision", input: { root: input.cwd, scope: "diff" } },
+          { signal },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
     ),
     branches: createReadCache(
       (input: GitReadOperations["repository.branches"]["input"], signal) =>

@@ -122,14 +122,32 @@ it.each(["commit", "rollback", "later DDL", "revocation"])(
   },
 );
 
-it("reuses admission across handles while backfilling newly imported rows", () => {
+it("skips fresh-shadow data repair but backfills later imports across handles", () => {
   const filename = path.join(tempDirs.make("memory-admission-"), "memory.sqlite");
   using sibling = openNodeSqliteDatabase(filename);
   admitSqliteSchema(sibling);
-  using observed = observe();
+  const dataRepairSql: string[] = [];
+  using observed = observe((sql) => {
+    if (
+      /\bWITH missing AS MATERIALIZED\b|\bSELECT COUNT\(\*\) FROM memory_index_chunks\b|^\s*(?:DELETE FROM|INSERT INTO) memory_index_(?:chunks_fts|paths_fts)\b/iu.test(
+        sql,
+      )
+    ) {
+      dataRepairSql.push(sql);
+    }
+  });
+  expect(
+    ensureMemoryIndexSchema({
+      db: sibling,
+      cacheEnabled: true,
+      ftsEnabled: true,
+      fresh: true,
+    }),
+  ).toEqual({ ftsAvailable: true });
+  expect(dataRepairSql).toEqual([]);
   for (let opening = 0; opening < 2; opening++) {
     using db = openNodeSqliteDatabase(filename);
-    observed.expectAdmission(db, opening > 0);
+    observed.expectAdmission(db);
     insertChunk(db, `import-${opening}`);
     db.exec(`
           INSERT OR IGNORE INTO memory_index_sources (path, source, hash, mtime, size)

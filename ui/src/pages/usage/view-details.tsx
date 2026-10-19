@@ -301,7 +301,11 @@ function LoadedContextPanel(props: {
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">{t("usage.details.systemPromptBreakdown")}</div>
         <Show when={state().hasMore}>
-          <button class="btn btn--sm" onClick={() => props.onToggleExpanded()}>
+          <button
+            class="btn btn--sm"
+            aria-expanded={props.expanded ? "true" : "false"}
+            onClick={() => props.onToggleExpanded()}
+          >
             {props.expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
           </button>
         </Show>

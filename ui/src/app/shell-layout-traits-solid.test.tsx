@@ -129,7 +129,7 @@ it("reserves the Models page column before its body finishes loading", () => {
   expect(content.textContent).toContain("Models ready");
 });
 
-it("publishes settings layout before descendants render and measure updates", () => {
+it("publishes settings layout before mounted descendants measure updates", () => {
   const content = document.createElement("main");
   content.className = "content";
   const host = document.createElement("div");
@@ -140,7 +140,9 @@ it("publishes settings layout before descendants render and measure updates", ()
   const [wide, setWide] = createSignal(true);
   const observations: string[] = [];
   function Measure() {
-    observations.push(content.className);
+    onSettled(() => {
+      observations.push(content.className);
+    });
     createEffect(wide, () => {
       observations.push(content.className);
     });
@@ -178,7 +180,9 @@ it("keeps layout traits through shell class updates and retires them with their 
   let content!: HTMLElement;
   const measurements: string[] = [];
   function Measure() {
-    measurements.push(content.className);
+    onSettled(() => {
+      measurements.push(content.className);
+    });
     createEffect(chat, () => {
       measurements.push(content.className);
     });

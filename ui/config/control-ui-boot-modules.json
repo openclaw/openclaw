@@ -919,6 +919,7 @@
   "ui/src/lib/reactive/domain-capabilities.ts",
   "ui/src/lib/reactive/element-ref.ts",
   "ui/src/lib/reactive/i18n.ts",
+  "ui/src/lib/reactive/layout-measurement.ts",
   "ui/src/lib/reactive/listener.ts",
   "ui/src/lib/reactive/live-value.ts",
   "ui/src/lib/reactive/observers.ts",

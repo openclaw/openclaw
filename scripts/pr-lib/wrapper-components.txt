@@ -2615,3 +2615,6 @@ packages/gateway-client/src/request-error.ts
 packages/gateway-client/src/protocol-request.ts
 packages/gateway-protocol/src/connect-error-details.ts
 packages/gateway-protocol/src/startup-unavailable.ts
+src/agents/agent-bundle-mcp-manager-catalog.ts
+src/agents/agent-bundle-mcp-runtime-owner.ts
+src/agents/agent-bundle-mcp-runtime-shared.ts

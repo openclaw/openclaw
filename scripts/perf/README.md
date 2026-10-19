@@ -218,6 +218,39 @@ chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
 leave it off for paired timing. Use only synthetic requests:
 parameters and stacks are retained, while auth and response payloads are omitted.
 
+For active-session loads, add `--activity-session <synthetic-key>` and configure
+that isolated Gateway with two loopback mock-provider models:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/catalog-polling-measure.ts \
+  --url 'http://127.0.0.1:40967/#token=synthetic-token' \
+  --load-runs 1 --load-path /chat/main --expect-session agent:main:main \
+  --activity-session agent:main:main --duration 60 --interval-ms 2000 \
+  --request-stacks --output /path/to/active-chat.json
+```
+
+The driver cycles a model selection, the same selection with a changed label, a
+status/pinning/thinking patch, and a real chat turn. Models default to
+`openai/gpt-5.6-sol,openai/gpt-5.6-luna`; override with `--activity-models` to match
+synthetic configuration. Each turn must finish successfully through `agent.wait`.
+Add `--activity-cron --open-details` to include forced runs of a temporary disabled
+cron job while Details is visible; this requires an `agent:<agent-id>:main` session.
+Each cron run must finish within a bounded wait and reach the browser as a matching
+finished event before the driver records success.
+The driver binds the job to that agent and session and removes it afterward;
+cleanup failures remain in the report.
+Use `/dashboard/main` to exercise the same session's board surface.
+
+The activity window begins after readiness and five seconds of settling. Its
+fixed action count is `floor(duration * 1000 / interval-ms)`; startup time never
+reduces the workload. Reports retain activity start/end, action latency, warm
+Long Task blocking, and the event preceding each catalog request. Session event
+metadata includes catalog-change flags, model-selection revisions, and lifecycle
+phases; message and response bodies are excluded. Caller stacks are diagnostic
+only. With `--start-at`, the active window begins thirty seconds after the
+scheduled navigation and fails if readiness misses that deadline. Use one load
+per invocation for paired activity measurements.
+
 For paired activity measurements, use `--start-at <epoch-ms>` with the same future
 time on both sides; it gates the runtime window after browser readiness and
 rejects a missed deadline. Hold the host's shared measurement lock, use separate
@@ -487,6 +520,18 @@ latency alone can hide a burst. Existing completion, concurrency, event-order,
 and fanout checks still apply. This fixture uses synthetic model streams;
 provider latency and external tool execution are outside this comparison.
 
+Use `--stream-start-allocations` to sample main-isolate allocations, including
+collected objects, from before admission through release plus 500 ms. This writes
+`stream-start-<round>.heapprofile` and diagnostics sidecars. It cannot be combined
+with whole-round `--allocations`. Divide sampled bytes by `runCount` for bytes per
+started stream; `observedSessionPublications` counts `session.message` and
+`sessions.changed` received by the first viewer during capture. This is a received
+publication denominator, so events still in flight at the boundary are excluded.
+Sampling and stopping/serializing the profile add overhead; keep these attribution
+runs separate from unprofiled acceptance timing. `--trace-gc` adds V8 GC logging to
+the owned Gateway's log only. With `--active-work-diagnostics`, each successful
+held-stream scrape is retained as `held-streams-<cohort>.prom` for GC counter context.
+
 `eventBytes` measures the exact received, uncompressed JSON frame bytes,
 including the event envelope, before parsing. `sessionEventSizes` splits session
 frame counts and bytes by the existing bounded reason labels and the fixture's
@@ -743,6 +788,43 @@ does not count later work. `nativeTaskInputs`, `transcriptQueueMetrics`,
 submission counts include work before the diagnostics exporter starts; queue
 metrics do not. Record the kind breakdown and verify memory catch-up actually
 ran before attributing an improvement to it. Use a fresh fixture for each revision.
+
+## Checkout diff command fan-out
+
+`checkout-diff-measure.ts` exercises the production Git worker or its read-cache
+owner against a small synthetic checkout, without a Gateway or model:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-diff-fixture --seed
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-diff-fixture --boundary worker --summary --mutate \
+  --samples 40 --output /path/to/summary-result.json
+```
+
+The seed refuses an existing directory. It creates 100 untracked files,
+including binary, large, empty, and symlink cases, three tracked changes, and an
+ignored file. `--untracked` adjusts the count. Omit `--summary` to measure full
+patches. `--mutate` changes one tracked file before each request; omit it for
+unchanged polls. `--boundary read` uses `loadCheckoutDiff`, including revision
+validation and caching. Use `--poll-ms 10050` to cross the former summary cache's
+ten-second TTL; immediate repeated reads alone cannot demonstrate that change.
+
+Run identical separate fixtures concurrently with `--start-at <epoch-ms>` under
+the host's exclusive measurement lock, then swap CPU halves for the next pair.
+The report includes per-request latency, actual Git process counts from trace2,
+command families, payload size, and a SHA-256 of each response with the fixture's
+absolute root removed. Compare matching sample hashes across revisions before
+attributing speedups. Setup and worker warmup are separate from measured samples;
+trace2's small write overhead is included identically on both sides. These are
+Git owner timings, not end-to-end `sessions.diff` RPC or browser latency.
+
+Acceptance for untracked batching is a Git command bound independent of the
+untracked-file count, byte-identical returned file statistics and patches, and
+paired p50/p99 that improve or remain within noise for a simplification. An
+unchanged checkout eligible for revision caching should issue zero Git commands,
+including after the prior TTL. Compare B minus A within each concurrent pair;
+use at least two pairs with swapped CPU halves and record outside load for context.
 
 ## Sandbox measurements
 
