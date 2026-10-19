@@ -40,25 +40,19 @@ function createHarness() {
   });
   const runs = new Map([[entry.runId, entry]]);
   installLifecycleWorkerAckFixture(runs);
-  const resumed = new Set([getSubagentRunRuntimeKey(entry)]);
-  const retryTimers = new Set<ReturnType<typeof setTimeout>>();
   const resumeError = new Error("synthetic resume failure");
-  const completeSubagentRun = vi
-    .fn<(_: SubagentCompletionRequest) => Promise<void>>()
-    .mockRejectedValue(new Error("synthetic completion failure"));
-  const resumeRun = vi.fn<() => void>(() => {
-    throw resumeError;
-  });
-  const scheduleSweep = vi.fn();
-  const warn = vi.fn();
   const dependencies = {
     runs,
-    resumed,
-    retryTimers,
-    completeSubagentRun,
-    resumeRun,
-    scheduleSweep,
-    warn,
+    resumed: new Set([getSubagentRunRuntimeKey(entry)]),
+    retryTimers: new Set<ReturnType<typeof setTimeout>>(),
+    completeSubagentRun: vi
+      .fn<(_: SubagentCompletionRequest) => Promise<void>>()
+      .mockRejectedValue(new Error("synthetic completion failure")),
+    resumeRun: vi.fn<() => void>(() => {
+      throw resumeError;
+    }),
+    scheduleSweep: vi.fn(),
+    warn: vi.fn(),
   };
   const runtime = createSubagentRegistryCompletionRuntime(dependencies);
   const request: SubagentCompletionRequest = {
@@ -77,6 +71,8 @@ function createHarness() {
     request,
     complete: (source: string, overrides: Partial<SubagentCompletionRequest> = {}) =>
       runtime.completeSubagentRunWithRecovery({ ...request, ...overrides }, source),
+    finalize: () =>
+      runtime.finalizeInterruptedSubagentRun({ runId: entry.runId, error: "interrupted" }),
   };
 }
 
@@ -106,9 +102,11 @@ async function bindCompletionToLaunch(
 }
 
 describe("subagent completion rejection ownership", () => {
+  let h: ReturnType<typeof createHarness>;
   beforeEach(() => {
     resetGatewayWorkAdmission();
     vi.useFakeTimers();
+    h = createHarness();
   });
   afterEach(() => {
     vi.clearAllTimers();
@@ -119,7 +117,6 @@ describe("subagent completion rejection ownership", () => {
   it.each(["absent", "released"] as const)(
     "captures a collector result after its launch scope closes with %s parent",
     async (parentKind) => {
-      const h = createHarness();
       const launch = new AsyncWorkScope();
       const entered = createDeferredCore();
       const finishCapture = createDeferredCore();
@@ -147,16 +144,9 @@ describe("subagent completion rejection ownership", () => {
         }),
       );
       await launch.drain();
-      const completion = invoke().then(
-        () => {
-          settled = true;
-          return { status: "fulfilled" as const };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { status: "rejected" as const, error };
-        },
-      );
+      const completion = invoke().finally(() => {
+        settled = true;
+      });
       try {
         await Promise.race([entered.promise, completion]);
         expect(h.completeSubagentRun).toHaveBeenCalledOnce();
@@ -167,7 +157,7 @@ describe("subagent completion rejection ownership", () => {
         expect(h.entry.completion?.resultText).toBeUndefined();
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         finishCapture.resolve();
-        await expect(completion).resolves.toEqual({ status: "fulfilled" });
+        await expect(completion).resolves.toBeUndefined();
         expect(h.entry.completion?.resultText).toBe("result-1");
         expect(cleanupFinished).toBe(false);
         expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -189,7 +179,6 @@ describe("subagent completion rejection ownership", () => {
   it.each(["current", "replacement", "generation"] as const)(
     "defers retired-launch completion during restart and rechecks the %s owner",
     async (change) => {
-      const h = createHarness();
       const launch = new AsyncWorkScope();
       h.completeSubagentRun.mockResolvedValue(undefined);
       const invoke = await bindCompletionToLaunch("released", launch, () =>
@@ -231,7 +220,6 @@ describe("subagent completion rejection ownership", () => {
     { kind: "timeout", reason: SUBAGENT_ENDED_REASON_COMPLETE },
     { kind: "cancellation", reason: SUBAGENT_ENDED_REASON_KILLED },
   ] as const)("contains the $kind grace callback's escaped rejection", async ({ kind, reason }) => {
-    const h = createHarness();
     const schedule =
       kind === "timeout"
         ? h.runtime.pendingLifecycle.scheduleTimeout
@@ -253,11 +241,8 @@ describe("subagent completion rejection ownership", () => {
   });
 
   it("retains the interrupted-finalization restart diagnostic and retires the fired timer", async () => {
-    const h = createHarness();
     markGatewayRestartDraining();
-    await expect(
-      h.runtime.finalizeInterruptedSubagentRun({ runId: h.entry.runId, error: "interrupted" }),
-    ).resolves.toBe(1);
+    await expect(h.finalize()).resolves.toBe(1);
     expect(h.retryTimers.size).toBe(1);
     resetGatewayWorkAdmission();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -275,14 +260,11 @@ describe("subagent completion rejection ownership", () => {
   });
 
   it("propagates an unknown SQLite outcome from interrupted finalization during restart drain", async () => {
-    const h = createHarness();
     const error = new SqliteWorkerError("completion commit outcome is unknown", "outcome-unknown");
     h.completeSubagentRun.mockRejectedValueOnce(error);
     markGatewayRestartDraining();
 
-    await expect(
-      h.runtime.finalizeInterruptedSubagentRun({ runId: h.entry.runId, error: "interrupted" }),
-    ).rejects.toBe(error);
+    await expect(h.finalize()).rejects.toBe(error);
     expect(h.completeSubagentRun).toHaveBeenCalledOnce();
     expect(h.retryTimers.size).toBe(0);
     expectNoRecovery(h);
@@ -296,7 +278,6 @@ describe("subagent completion rejection ownership", () => {
   )(
     "retires recovery after $change during failed attempt $attempt",
     async ({ attempt, change }) => {
-      const h = createHarness();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       h.resumeRun.mockImplementation(() => {});
@@ -341,7 +322,6 @@ describe("subagent completion rejection ownership", () => {
   )(
     "rechecks a committed yielded settlement before retrying its effects ($retry, $change)",
     async ({ retry, change }) => {
-      const h = createHarness();
       h.entry.pauseReason = "sessions_yield";
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -421,7 +401,6 @@ describe("subagent completion rejection ownership", () => {
   it.each(["running", "yielded"] as const)(
     "preserves %s recovery after both attempts fail",
     async (state) => {
-      const h = createHarness();
       if (state === "running") {
         h.entry.execution = { status: "running", startedAt: 0 };
       }

@@ -32,18 +32,17 @@ export function registerSubagentRegistrationOwnershipTests({
   registration: (runId: string, overrides?: Partial<Registration>) => Registration;
   updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
 }) {
+  const paramsFor = (runId: string, overrides: Partial<Registration> = {}) =>
+    registration(runId, { childSessionKey: "global", ...overrides });
+  const register = (runId: string, overrides?: Partial<Registration>) =>
+    registerSubagentRun(paramsFor(runId, overrides));
   it("keeps same-key child registrations owned by different agents separate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
-      const first = registration("research-global", {
-        childSessionKey: "global",
-        childAgentId: "research",
-      });
+      const first = paramsFor("research-global", { childAgentId: "research" });
       await registerSubagentRun(first);
       const original = loadSubagentRegistryFromSqlite().get(first.runId);
-      await registerSubagentRun(
-        registration("main-global", { childSessionKey: "global", childAgentId: "main" }),
-      );
+      await register("main-global", { childAgentId: "main" });
       await expect(
         registerSubagentRun({ ...first, childAgentId: "main" }, { acceptedRunReplay: true }),
       ).rejects.toThrow("unresolved or different child owner");
@@ -60,10 +59,7 @@ export function registerSubagentRegistrationOwnershipTests({
         setRuntimeConfigSnapshot(originalConfig);
         vi.mocked(getRuntimeConfig).mockReturnValue(originalConfig);
         const runId = childAgentId ?? "legacy";
-        const params = registration(runId, {
-          childSessionKey: "global",
-          childAgentId: childAgentId ?? "main",
-        });
+        const params = paramsFor(runId, { childAgentId: childAgentId ?? "main" });
         if (childAgentId === undefined) {
           const historical = createSubagentRunRecord({
             runId,
@@ -168,8 +164,7 @@ export function registerSubagentRegistrationOwnershipTests({
           try {
             await expect(
               registerSubagentRun(
-                registration("refused-follow-up", {
-                  childSessionKey: session.sessionKey,
+                paramsFor("refused-follow-up", {
                   sessionEntry,
                   collect: true,
                   queued: phase !== "ordinary intent",
@@ -235,16 +230,14 @@ export function registerSubagentRegistrationOwnershipTests({
     async (source) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
-        await registerSubagentRun(registration("unknown-global", { childSessionKey: "global" }));
+        await register("unknown-global");
         await updateRun("unknown-global", (draft) => {
           delete draft.childAgentId;
           draft.generation = 7;
           draft.killReconciliation = { killedAt: 1 };
         });
         const unknown = loadSubagentRegistryFromSqlite().get("unknown-global");
-        await registerSubagentRun(
-          registration("other-global", { childSessionKey: "global", childAgentId: "research" }),
-        );
+        await register("other-global", { childAgentId: "research" });
         await updateRun("other-global", (draft) => {
           draft.generation = 50;
         });
@@ -253,7 +246,7 @@ export function registerSubagentRegistrationOwnershipTests({
           subagentRuns.delete("other-global");
         }
         let ownership: SubagentRegistrationScope | undefined;
-        await registerSubagentRun(registration("owned-global", { childSessionKey: "global" }), {
+        await registerSubagentRun(paramsFor("owned-global"), {
           retainOwnership: (scope) => {
             ownership = scope;
           },
@@ -269,13 +262,13 @@ export function registerSubagentRegistrationOwnershipTests({
   it("registers successive children from committed generation receipts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
-      await registerSubagentRun(registration("first-child", { childSessionKey: "global" }));
+      await register("first-child");
       await updateRun("first-child", (draft) => {
         draft.generation = 7;
         draft.label = "retained first child";
       });
-      await registerSubagentRun(registration("second-child", { childSessionKey: "global" }));
-      await registerSubagentRun(registration("third-child", { childSessionKey: "global" }));
+      await register("second-child");
+      await register("third-child");
       const retained = loadSubagentRegistryFromSqlite();
       expect(retained.get("first-child")).toMatchObject({
         generation: 7,
@@ -291,7 +284,7 @@ export function registerSubagentRegistrationOwnershipTests({
     async (childSessionKey) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
-        const params = registration("owned-registration", {
+        const params = paramsFor("owned-registration", {
           childSessionKey,
           childAgentId: "RESEARCH",
           sessionEntry: { sessionId: "original-child", lifecycleRevision: "original-revision" },
@@ -307,38 +300,26 @@ export function registerSubagentRegistrationOwnershipTests({
   );
 
   it.each([
-    { childSessionKey: "global", childAgentId: undefined },
-    { childSessionKey: "agent:main:subagent:unbound", childAgentId: undefined },
-    { childSessionKey: "global", childAgentId: "research!" },
-    { childSessionKey: "agent:main:subagent:conflicting", childAgentId: "research" },
-    { childSessionKey: "agent:research!:subagent:malformed", childAgentId: "research" },
-  ])(
-    "refuses invalid new registration ownership: $childSessionKey / $childAgentId",
-    async (owner) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const params = registration("invalid-owner", owner);
-        await expect(registerSubagentRun(params)).rejects.toThrow("child agent");
-        expect(subagentRuns.has(params.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().has(params.runId)).toBe(false);
-        expect(callGateway).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it.each([undefined, { sessionId: "" }, { sessionId: " \t\n " }])(
-    "refuses new registration without its original child incarnation %j",
-    async (sessionEntry) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const params = registration("missing-incarnation", { sessionEntry });
-        await expect(registerSubagentRun(params)).rejects.toThrow("original child sessionId");
-        expect(subagentRuns.has(params.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().has(params.runId)).toBe(false);
-        expect(callGateway).not.toHaveBeenCalled();
-      });
-    },
-  );
+    ...[
+      { childSessionKey: "global", childAgentId: undefined },
+      { childSessionKey: "agent:main:subagent:unbound", childAgentId: undefined },
+      { childSessionKey: "global", childAgentId: "research!" },
+      { childSessionKey: "agent:main:subagent:conflicting", childAgentId: "research" },
+      { childSessionKey: "agent:research!:subagent:malformed", childAgentId: "research" },
+    ].map((overrides) => [overrides, "child agent"] as const),
+    ...[undefined, { sessionId: "" }, { sessionId: " \t\n " }].map(
+      (sessionEntry) => [{ sessionEntry }, "original child sessionId"] as const,
+    ),
+  ])("refuses invalid new registration %j: %s", async (overrides, reason) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const params = registration("invalid-registration", overrides);
+      await expect(registerSubagentRun(params)).rejects.toThrow(reason);
+      expect(subagentRuns.has(params.runId)).toBe(false);
+      expect(loadSubagentRegistryFromSqlite().has(params.runId)).toBe(false);
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
 
   it.each([true, undefined] as const)(
     "preserves historical ownership on replay or replacement (replay=%s)",

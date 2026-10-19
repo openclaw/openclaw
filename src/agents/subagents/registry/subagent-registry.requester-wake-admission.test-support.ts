@@ -17,6 +17,7 @@ import {
 import { withAgentDatabaseStartupAdmission } from "../../../state/agent-database-startup.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type {
   GatewayRequest,
@@ -92,26 +93,20 @@ export function registerRequesterStartupAdmissionTests({
   async function restoreChild(runId: string, overrides: Partial<SubagentRunRecord>) {
     const childSessionKey = `agent:main:subagent:${runId}`;
     const { sessionId, lifecycleRevision } = await prepareChildSession(childSessionKey, runId, 1);
-    const recovered: SubagentRunRecord = {
+    const recovered = createSubagentRunRecord({
       runId,
       childSessionKey,
       childSessionIdentity: { sessionId, lifecycleRevision },
       requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
       requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "Finish the retained request",
-      cleanup: "keep",
       createdAt: 1_000,
-      execution: {
-        status: "terminal",
-        startedAt: 2_000,
-        endedAt: 3_000,
-        outcome: { status: "ok" },
-      },
+      startedAt: 2_000,
+      endedAt: 3_000,
+      outcome: { status: "ok" },
       expectsCompletionMessage: true,
       delivery: { status: "delivered" },
       ...overrides,
-    };
+    });
     const { sessionStore, sessionStorePath } = getFixture();
     await prepareSubagentRecoveryFixture(recovered, {
       entries: sessionStore,
@@ -119,7 +114,10 @@ export function registerRequesterStartupAdmissionTests({
     });
     await registry.addSubagentRunForTests(recovered);
   }
-  function pendingWake(runId: string, batchRunIds = [runId]) {
+  function pendingWake(
+    runId: string,
+    batchRunIds = [runId],
+  ): NonNullable<SubagentRunRecord["requesterSettleWake"]> {
     return {
       status: "pending" as const,
       attemptCount: 0,
@@ -226,14 +224,15 @@ export function registerRequesterStartupAdmissionTests({
     const { testState } = getFixture();
     vi.setSystemTime(100_000);
     const runIds = ["restored-alpha", "restored-beta"];
-    for (const runId of runIds) {
+    const expectedWakes = runIds.map((runId, index) => ({
+      ...pendingWake(runId, runIds),
+      ...(index === 0 ? { retireAfterSettle: true } : {}),
+    }));
+    for (const [index, runId] of runIds.entries()) {
       await restoreChild(runId, {
         completion: { required: true, resultText: `${runId} findings`, capturedAt: 3_000 },
         cleanupCompletedAt: 3_000,
-        requesterSettleWake: {
-          ...pendingWake(runId, runIds),
-          ...(runId === runIds[0] ? { retireAfterSettle: true } : {}),
-        },
+        requesterSettleWake: structuredClone(expectedWakes[index]),
       });
     }
     await registry.resetSubagentRegistryForTests({ persist: false });
@@ -269,23 +268,12 @@ export function registerRequesterStartupAdmissionTests({
         await activate();
         await flushOwnedWork();
         expect(getRequesterWakeCalls()).toHaveLength(0);
-        const retained = runIds.map(readWake);
-        for (const [index, runId] of runIds.entries()) {
-          expect(retained[index]).toEqual({
-            status: "pending",
-            attemptCount: 0,
-            batchRunIds: runIds,
-            requesterYieldBatch: true,
-            rearmGeneration: 1,
-            progressOperationId: runId,
-            ...(index === 0 ? { retireAfterSettle: true } : {}),
-          });
-        }
+        expect(runIds.map(readWake)).toEqual(expectedWakes);
         // A restart preserves the cohort without admitting work or consuming a timed retry.
         await registry.resetSubagentRegistryForTests({ persist: false });
         await activate();
         await advance(30_000, 0);
-        expect(runIds.map(readWake)).toEqual(retained);
+        expect(runIds.map(readWake)).toEqual(expectedWakes);
         const prepared = admission.waitForAgentPreparation("main", { env: testState.env });
         expect(prepared).toBeDefined();
         inspection.resolve({ incompatible: [], indeterminate: [] });

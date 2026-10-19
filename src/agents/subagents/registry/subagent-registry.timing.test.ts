@@ -1,4 +1,3 @@
-// Exercise overlapping completion callbacks against real registry and SQLite state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,8 +90,7 @@ describe("subagent timing completion", () => {
     });
 
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    // Seed through the real accessor, suppressing only setup maintenance so
-    // pending FIFO work below belongs to terminal timing publication.
+    // Exclude setup maintenance from the FIFO interleaving below.
     for (const [sessionKey, sessionId] of [
       [childSessionKey, "session-overlap"],
       [requesterSessionKey, "requester-overlap"],
@@ -128,7 +126,6 @@ describe("subagent timing completion", () => {
     const endedAt = startedAt + 500;
     const terminal = { status: "ok", startedAt, endedAt, terminalReply };
 
-    // Deliver through the callbacks installed by the production event listener.
     const emitTerminal = () => {
       const event = {
         runId,
@@ -144,8 +141,7 @@ describe("subagent timing completion", () => {
     };
     const entered = createDeferred();
     const released = createDeferred();
-    // Hold the real FIFO with a no-op patch. There is no open SQLite
-    // transaction during this await and no production function is replaced.
+    // Hold the real FIFO without keeping a SQLite transaction open.
     const blocker = patchSessionEntryCore(
       { storePath, sessionKey: childSessionKey },
       async () => {
@@ -163,7 +159,6 @@ describe("subagent timing completion", () => {
       }
       const lifecycleQueued = createDeferred();
       const push = queue.pending.push.bind(queue.pending);
-      // Task finalization awaits a worker before these writes reach the FIFO.
       const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
         const depth = push(...tasks);
         if (depth === 1) {
@@ -176,8 +171,7 @@ describe("subagent timing completion", () => {
         emitTerminal();
         await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
         expect(queue.pending.length).toBe(1);
-        // The wait result overlaps the blocked lifecycle callback. The owner may
-        // coalesce equivalent terminal writes without changing this contract.
+        // Overlap the wait result with the blocked lifecycle callback.
         waiting.resolve(terminal);
         await waitReturned.promise;
       } finally {
@@ -189,32 +183,27 @@ describe("subagent timing completion", () => {
       await blocker;
     }
     await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
-    expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
-
-    // Read the durable projection, not a mock return or the registry's memory.
     const session = (await readSubagentSessionStore(storePath))[childSessionKey];
-    const registry = readRun();
     expect(session).toMatchObject({ status: "done", startedAt, endedAt, runtimeMs: 500 });
-    expect(registry?.execution).toMatchObject({
-      status: "terminal",
-      outcome: { status: "ok" },
-      endedAt,
+    expect(readRun()).toMatchObject({
+      cleanupCompletedAt: expect.any(Number),
+      execution: { status: "terminal", outcome: { status: "ok" }, endedAt },
+      delivery: { status: "delivered" },
     });
-    expect(registry?.delivery?.status).toBe("delivered");
     expect(announce).toHaveBeenCalledTimes(1);
     await flushLogger();
     const text = await fs.readFile(logFile, "utf8").catch(() => "");
-    const records = text
+    const failures = text
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
-    const warnings = records.filter((record) =>
-      Object.values(record).includes("failed to persist subagent session timing"),
-    );
-    const errors = records.filter((record) =>
-      Object.values(record).includes("SQLite session write failed"),
-    );
-    expect(warnings).toEqual([]);
-    expect(errors).toEqual([]);
+      .map((line) => JSON.parse(line))
+      .filter((record) =>
+        Object.values(record).some(
+          (value) =>
+            value === "failed to persist subagent session timing" ||
+            value === "SQLite session write failed",
+        ),
+      );
+    expect(failures).toEqual([]);
   });
 });

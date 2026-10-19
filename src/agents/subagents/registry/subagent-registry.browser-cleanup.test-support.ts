@@ -1,6 +1,7 @@
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import type { closeTrackedBrowserTabsForSessions as CloseTabs } from "../../../plugin-sdk/browser-maintenance.js";
 import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
 import { observeAsyncWorkScopeRuns } from "../../../shared/async-work-scope.test-support.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
@@ -42,7 +43,6 @@ let rootAdmissionObservation: ReturnType<typeof createRootAdmissionObservation> 
 export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
   const rootWork = (rootAdmissionObservation ??= createRootAdmissionObservation());
   rootWork.subscribers += 1;
-  const { admissions } = rootWork;
   // Detached completion resolves its result before this scope drains and releases its root.
   const scopeRuns = observeAsyncWorkScopeRuns();
   let disposed = false;
@@ -52,38 +52,33 @@ export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
     }
     disposed = true;
     if (--rootWork.subscribers === 0) {
-      for (const admission of admissions) {
-        admission.mockRestore();
-      }
+      rootWork.admissions.forEach((admission) => admission.mockRestore());
       rootAdmissionObservation = undefined;
     }
     scopeRuns[Symbol.dispose]();
   };
   onTestFinished(dispose);
-  const observations = [...admissions, scopeRuns];
+  const observations = [...rootWork.admissions, scopeRuns];
   const positions = observations.map((observation) => observation.mock.results.length);
   return async (keepObserving = false) => {
     const failures: unknown[] = [];
     try {
       // A settled task writer can admit cleanup roots while another scope drains.
       while (
-        observations.some(
-          (observation, index) => observation.mock.results.length > positions[index]!,
-        )
+        observations.some((observation, i) => observation.mock.results.length > positions[i]!)
       ) {
-        for (const [index, observation] of observations.entries()) {
-          while (positions[index]! < observation.mock.results.length) {
-            const result = observation.mock.results[positions[index]!]!;
-            positions[index]! += 1;
+        for (const [i, observation] of observations.entries()) {
+          while (positions[i]! < observation.mock.results.length) {
+            const result = observation.mock.results[positions[i]!]!;
+            positions[i]! += 1;
             try {
               if (result.type === "throw") {
                 throw result.value;
               }
               await result.value;
             } catch (error) {
-              // A refused admission never owned cleanup; its caller handles that rejection.
-              const admission = rootWork.admitted.get(result.value);
-              if (admission?.entered !== false) {
+              // Refused admission never owned cleanup; its caller handles rejection.
+              if (rootWork.admitted.get(result.value)?.entered !== false) {
                 failures.push(error);
               }
             }
@@ -121,18 +116,18 @@ export function registerBrowserCleanupBoundaryTests({
     "rechecks the %s after browser activation in registered run completion",
     async (owner) => {
       const mod = getRegistry();
-      const browser = await vi.importActual<typeof import("../../../browser-lifecycle-cleanup.js")>(
-        "../../../browser-lifecycle-cleanup.js",
-      );
       vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockImplementation(
-        browser.cleanupBrowserSessionsForLifecycleEnd,
+        (
+          await vi.importActual<typeof import("../../../browser-lifecycle-cleanup.js")>(
+            "../../../browser-lifecycle-cleanup.js",
+          )
+        ).cleanupBrowserSessionsForLifecycleEnd,
       );
-      const closeTrackedBrowserTabsForSessions = vi
-        .fn<
-          typeof import("../../../plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions
-        >()
-        .mockResolvedValue(1);
-      const surface = { supportsSessionEntryCurrent: true, closeTrackedBrowserTabsForSessions };
+      const closeTabs = vi.fn<typeof CloseTabs>().mockResolvedValue(1);
+      const surface = {
+        supportsSessionEntryCurrent: true,
+        closeTrackedBrowserTabsForSessions: closeTabs,
+      };
       const activation = createDeferred<typeof surface>();
       const activationEntered = createDeferred();
       loadBrowserMaintenanceSurface.mockImplementationOnce(() => {
@@ -166,11 +161,9 @@ export function registerBrowserCleanupBoundaryTests({
       }
 
       expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-      expect(closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(
-        owner === "current owner" ? 1 : 0,
-      );
+      expect(closeTabs).toHaveBeenCalledTimes(owner === "current owner" ? 1 : 0);
       if (owner === "current owner") {
-        expect(closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith(
+        expect(closeTabs).toHaveBeenCalledWith(
           expect.objectContaining({ sessionKeys: [childSessionKey] }),
         );
         expect(findRequesterRun(runId)?.cleanupCompletedAt).toBeTypeOf("number");
