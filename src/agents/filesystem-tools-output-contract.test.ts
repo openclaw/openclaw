@@ -284,7 +284,7 @@ it("validates edit changed and no-op results", async () => {
 
 it("validates write created, overwrite, unknown-state, and no-op results", async () => {
   const tool = createWriteTool(tmpDir) as unknown as AnyAgentTool;
-  const check = (file: string, content: string, details: unknown, exact = false) =>
+  const check = (file: string, content: string, details: Record<string, unknown>, exact = false) =>
     expectResult(tool, { path: file, content }, details, exact);
   await check("write.txt", "one\n", { changed: true, created: true });
   await check("write.txt", "two\n", { changed: true, created: false });
