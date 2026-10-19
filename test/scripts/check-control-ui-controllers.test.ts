@@ -28,13 +28,13 @@ function fixture(source = "export {};\n") {
   return root;
 }
 
-function runLint(root: string, args: string[], checkoutBase = "HEAD") {
+function runLint(root: string, args: string[]) {
   return spawnSync(
     process.execPath,
     ["--import", path.resolve("scripts/tsx.mjs"), path.resolve("scripts/run-lint.mts"), ...args],
     {
       cwd: root,
-      env: { ...createNestedGitEnv(), CHECKOUT_BASE_SHA: checkoutBase },
+      env: createNestedGitEnv(),
       encoding: "utf8",
     },
   );
@@ -44,11 +44,11 @@ describe("Control UI controller guard", () => {
   it.each(["./lib/reactive/solid-controller-host.ts", "./lib/subscriptions-controller.ts"])(
     "rejects existing and new production or test consumers of retired %s",
     (module) => {
-      const root = fixture(`import "${module}";\nclass OldController {}\n`);
+      const root = fixture(`import "${module}";\n`);
       vi.spyOn(console, "log").mockImplementation(() => {});
       vi.spyOn(console, "error").mockImplementation(() => {});
-      expect(main(root, ["--base", "HEAD"])).toBe(1);
-      fs.writeFileSync(path.join(root, "ui/src/view.ts"), "class OldController {}\n");
+      expect(main(root, [])).toBe(1);
+      fs.writeFileSync(path.join(root, "ui/src/view.ts"), "export {};\n");
       for (const name of ["new.ts", "new.test.ts"]) {
         const target = path.join(root, "ui/src", name);
         for (const source of [
@@ -59,11 +59,11 @@ describe("Control UI controller guard", () => {
           `type Host = import("${module}").LegacyHost;`,
         ]) {
           fs.writeFileSync(target, source);
-          expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+          expect(main(root, []), source).toBe(1);
         }
         fs.writeFileSync(target, `// import "${module}";\nconst example = "${module}";\n`);
       }
-      expect(main(root, ["--base", "HEAD"])).toBe(0);
+      expect(main(root, [])).toBe(0);
     },
   );
 
@@ -71,18 +71,18 @@ describe("Control UI controller guard", () => {
     "ui/src/lib/reactive/solid-controller-host.ts",
     "ui/src/lib/subscriptions-controller.ts",
   ])("rejects restoring retired %s without an importer", (file) => {
-    const root = fixture("class OldController {}\n");
+    const root = fixture("export {};\n");
     vi.spyOn(console, "log").mockImplementation(() => {});
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const target = path.join(root, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, "export {};\n");
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain(file);
   });
 
   it("rejects retired host contracts under other production or test paths", () => {
-    const root = fixture("class OldController {}\n");
+    const root = fixture("export {};\n");
     vi.spyOn(console, "log").mockImplementation(() => {});
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     for (const name of ["replacement.ts", "replacement.test.ts"]) {
@@ -99,7 +99,7 @@ describe("Control UI controller guard", () => {
       ]) {
         errors.mockClear();
         fs.writeFileSync(target, source);
-        expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+        expect(main(root, []), source).toBe(1);
         expect(errors.mock.calls.flat().join("\n")).toContain(file);
       }
       fs.writeFileSync(
@@ -107,35 +107,36 @@ describe("Control UI controller guard", () => {
         '// interface SolidController {}\nconst example = "SolidControllerHost";\ninterface SolidControllerOptions {}\n',
       );
     }
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, [])).toBe(0);
   });
 
-  it("allows controller growth until all production controllers are retired", () => {
-    const root = fixture("class OldController { hostConnected() {} }\n");
+  it.each([
+    "class NewController {}",
+    "const Controller = class NewController {};",
+    "const host = { hostConnected() {} };",
+    "const host = { hostDisconnected() {} };",
+  ])("rejects existing controller patterns without a migration baseline: %s", (source) => {
+    const root = fixture(source);
     vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const target = path.join(root, "ui/src/new.ts");
-    fs.writeFileSync(target, "class NewController { hostDisconnected() {} }\n");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, []), source).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/view.ts");
+    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "export {};\n");
+    expect(main(root, [])).toBe(0);
+  });
 
-    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "// class OldController {}\n");
-    fs.writeFileSync(target, 'const text = "hostConnected requestUpdate";\n');
-    fs.writeFileSync(path.join(root, "ui/src/view.test.ts"), "class TestController {}\n");
-    git(root, ["add", "."]);
-    git(root, ["commit", "-m", "retire production controllers"]);
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
-    for (const source of [
-      "class NewController {}",
-      "const host = { hostConnected() {}, hostDisconnected() {}, requestUpdate() {} };",
-      "host.requestUpdate();",
-    ]) {
-      fs.writeFileSync(target, source);
-      expect(main(root, ["--base", "HEAD"]), source).toBe(1);
-    }
+  it("ignores examples and test-only lifecycle/class patterns", () => {
+    const root = fixture('// class OldController {}\nconst text = "hostConnected";\n');
+    fs.writeFileSync(
+      path.join(root, "ui/src/view.test.ts"),
+      "class TestController { hostDisconnected() {} }\n",
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
   });
 
   it("rejects redraw contracts in production and tests independently of controller retirement", () => {
-    const root = fixture("class OldController { hostConnected() {} }\n");
+    const root = fixture();
     vi.spyOn(console, "log").mockImplementation(() => {});
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     for (const name of ["new.tsx", "new.test.tsx"]) {
@@ -148,7 +149,7 @@ describe("Control UI controller guard", () => {
       ]) {
         errors.mockClear();
         fs.writeFileSync(target, source);
-        expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+        expect(main(root, []), source).toBe(1);
         expect(errors.mock.calls.flat().join("\n")).toContain(`ui/src/${name}`);
       }
       fs.writeFileSync(
@@ -156,12 +157,11 @@ describe("Control UI controller guard", () => {
         '// requestUpdate() is retired.\nconst text = "Use signals instead of requestUpdate.";\n',
       );
     }
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, [])).toBe(0);
   });
 
-  it("preserves staged and explicit base scope through the full lint entry point", () => {
+  it("preserves staged scope through the full lint entry point", () => {
     const root = fixture();
-    git(root, ["tag", "baseline"]);
     const source = path.join(root, "ui/src/new.ts");
     fs.writeFileSync(source, "class NewController {}\n");
     git(root, ["add", "."]);
@@ -170,43 +170,17 @@ describe("Control UI controller guard", () => {
     expect(staged.error).toBeUndefined();
     expect(staged.status, staged.stderr).toBe(1);
     expect(staged.stderr).toContain("ui/src/new.ts");
-    git(root, ["commit", "-m", "new controller"]);
-    fs.writeFileSync(source, "class NewController {}\n");
-    const based = runLint(root, ["--base", "baseline", "--only=extensions"]);
-    expect(based.error).toBeUndefined();
-    expect(based.status, based.stderr).toBe(1);
-    expect(based.stderr).toContain("ui/src/new.ts");
   });
 
-  it("uses the prepared base in a shallow candidate and rejects retired controllers", () => {
+  it("checks current source in a shallow checkout without base history", () => {
     const source = fixture();
-    const fork = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: source,
-      encoding: "utf8",
-    }).trim();
-    git(source, ["checkout", "-b", "candidate"]);
-    git(source, ["commit", "--allow-empty", "-m", "candidate"]);
-    git(source, ["checkout", "-b", "moving-main", fork]);
-    git(source, ["rm", "ui/src/view.ts"]);
-    git(source, ["commit", "-m", "upstream view removal"]);
     const root = tempDirs.make("openclaw-controller-shallow-");
-    git(root, ["clone", "--depth=1", "--branch=candidate", pathToFileURL(source).href, "."]);
-    git(root, ["fetch", "--depth=1", "origin", "moving-main:refs/remotes/origin/main", fork]);
-    expect(spawnSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: root }).status).not.toBe(
-      0,
-    );
+    git(root, ["clone", "--depth=1", pathToFileURL(source).href, "."]);
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(main(root, ["--base", "origin/main"])).toBe(1);
-    expect(errors.mock.calls.flat().join("\n")).toContain("Could not resolve ratchet merge base");
-    expect(main(root, ["--base", fork, "--no-merge-base"])).toBe(0);
-    const inferred = runLint(root, ["--only=extensions"], fork);
-    expect(inferred.stdout).toContain("Control UI controller guard OK");
-    const explicit = runLint(root, ["--base", "origin/main", "--only=extensions"], fork);
-    expect(explicit.status).not.toBe(0);
-    expect(explicit.stderr).toContain("Could not resolve ratchet merge base");
+    expect(main(root, [])).toBe(0);
     fs.writeFileSync(path.join(root, "ui/src/new.ts"), "class NewController {}\n");
-    expect(main(root, ["--base", fork, "--no-merge-base"])).toBe(1);
+    expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/new.ts");
   });
 });

@@ -609,13 +609,6 @@ async function withDownloadFixture(
                 createMessageTool({
                   ...run.options,
                   config: cfg,
-                  getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-                  resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-                    resolvedConfig: config,
-                    diagnostics: [],
-                    targetStatesByPath: {},
-                    hadUnresolvedTargets: false,
-                  }),
                 }),
               );
               const actionParams = (): Record<string, unknown> => ({

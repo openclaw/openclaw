@@ -45,10 +45,15 @@ new directory taxonomy.
 
 ## Formatting and lint selection
 
-`lib/dev-tool.mts` selects oxfmt for formatting and oxlint for linting. See the
+`lib/dev-tool.mts` selects the pinned Bun fork for local formatting, with an
+oxfmt fallback, and oxlint for linting. CI formatting still gates on oxfmt and
+checks Bun parity. See the
 [local development tools reference](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork)
-for pinned Bun opt-in, overrides, and staging. `DEFAULT_FORMAT_TOOL` waits for
-faster write and check timings; `DEFAULT_LINT_TOOL` waits for upstream commit
+for overrides, staging, and benchmark details. On a clean AWS `c7a.8xlarge`,
+three interleaved runs measured `pnpm format` at 0.62 s with Bun versus 1.41 s
+with oxfmt, and `pnpm format:check` at 0.62 s versus 1.38 s. The loaded Mac
+sanity run measured 15.65 s versus 14.74 s for writes and 14.31 s versus 16.40 s
+for checks; the write gain is not universal. `DEFAULT_LINT_TOOL` waits for upstream commit
 `b39aa848` and diagnostic parity. Bun receives the repository's existing
 configuration; no separate formatter configuration is maintained.
 

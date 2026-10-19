@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { prepareGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
@@ -285,13 +286,15 @@ export async function prepareEmbeddedSessionState(params: {
   }
 
   const runContext = resolveAgentRunContext(params.opts);
+  const opts = await prepareCommandConversationContext({ ...params, sessionEntry, runContext });
+  prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {
     sessionEntry,
     requestedThinkLevel,
     resolvedVerboseLevel,
     skillsSnapshot,
     runContext,
-    opts: await prepareCommandConversationContext({ ...params, sessionEntry, runContext }),
+    opts,
   };
 }
 

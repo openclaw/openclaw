@@ -99,6 +99,8 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   senderUsername?: string;
   senderE164?: string;
   senderIsOwner: boolean;
+  /** Attribution carried by the originating request; grants no operator permission. */
+  gitContributorProfileId?: string;
   inputProvenance?: InputProvenance;
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   scheduledToolPolicy?: ScheduledToolPolicyContext;

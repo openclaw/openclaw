@@ -282,3 +282,86 @@ it.for(
     });
   },
 );
+
+it.for([
+  { key: "agent:main:main", incoming: "requester-c", steered: true },
+  { key: "agent:main:main", incoming: "requester-d", steered: false },
+  { key: "agent:main:dashboard:collaboration", incoming: "requester-d", steered: true },
+])(
+  "keeps request credit with its tools during steering: $key / $incoming",
+  async ({ key, incoming, steered }, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(config);
+      const original = createQueueTestRun({
+        prompt: "original task",
+        messageId: "original-request",
+        originatingChannel: "discord",
+      });
+      Object.assign(original.run, {
+        agentId: "main",
+        sessionKey: key,
+        senderIsOwner: false,
+        gitContributorProfileId: "requester-c",
+        config,
+      });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { sessionId: original.run.sessionId, updatedAt: 1 },
+      );
+      const { operation, fingerprint } = await prepareOperation(original);
+      const delivered: string[] = [];
+      attachSteerBackend(operation, fingerprint, {
+        async queueMessage() {
+          throw new Error("Expected awaited steering");
+        },
+        async queueMessageAsync(text, options, preparation) {
+          await preparation.prepareCurrent();
+          preparation.assertCurrent();
+          delivered.push(text);
+          options?.onQueueAccepted?.(true);
+        },
+      });
+      const run = createQueueTestRun({
+        prompt: "make the requested PR",
+        messageId: "incoming-request",
+        originatingChannel: "discord",
+      });
+      run.run = { ...original.run, gitContributorProfileId: incoming };
+      const resultState: ReplyOperationRunState = {};
+      const followupDelivered = createDeferred<FollowupRun>();
+      const followup = vi.fn(async (value: FollowupRun) => {
+        followupDelivered.resolve(value);
+      });
+      try {
+        await expect(
+          runActiveReplySteer(
+            createSteerParams(key, run, operation, {
+              opts: { runId: "incoming-request" },
+              replyOperationRunState: resultState,
+              runFollowup: followup,
+            }),
+          ),
+        ).resolves.toBe("handled");
+        expect(delivered).toEqual(steered ? [run.prompt] : []);
+        expect(resultState.admission).toEqual({
+          status: "accepted",
+          mode: steered ? "steer" : "followup",
+        });
+        expect(original.run.gitContributorProfileId).toBe("requester-c");
+        if (!steered) {
+          const queue = getExistingFollowupQueue(key);
+          expect(new Set([...(queue?.items ?? []), ...(queue?.inFlight ?? [])])).toContain(run);
+          operation.complete();
+          expect(
+            (await withinTest(followupDelivered.promise, signal)).run.gitContributorProfileId,
+          ).toBe("requester-d");
+          expect(followup).toHaveBeenCalledOnce();
+        }
+      } finally {
+        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
+        operation.complete();
+      }
+    });
+  },
+);

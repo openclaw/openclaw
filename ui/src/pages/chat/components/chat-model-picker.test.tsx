@@ -116,6 +116,7 @@ it("mounts model choices on first open and retains them across dismissal", async
   );
   flush();
   expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+  expect(container.querySelector(".chat-controls__model-menu")).toBeNull();
   const details = container.querySelector("details")!;
   details.querySelector("summary")!.click();
   flush();

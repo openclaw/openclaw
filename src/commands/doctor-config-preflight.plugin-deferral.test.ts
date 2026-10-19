@@ -10,6 +10,7 @@ import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
@@ -286,9 +287,14 @@ describe("configured plugin migration deferral", () => {
           OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
         },
         async () => {
-          const result = await doctor();
-          expect(result.deferredPluginMigrations).toBeUndefined();
-          expect(readDeferredPluginMigrations()).toEqual([]);
+          try {
+            const result = await doctor();
+            expect(result.deferredPluginMigrations).toBeUndefined();
+            expect(readDeferredPluginMigrations()).toEqual([]);
+          } finally {
+            // The retained broker's socket lives inside the rehearsal temp root.
+            await closeDefaultRetainedNativeWorkerSource();
+          }
         },
       );
     });

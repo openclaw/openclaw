@@ -150,7 +150,6 @@ describe("native completion settlement", () => {
       const releasePin = vi.fn();
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
         recoveryPollDelaysMs: [],
-        completionDeliveryRetryDelaysMs: [10],
         retainParentThread: () => releasePin,
       });
       const parent = await registerParent(monitor);
@@ -190,7 +189,7 @@ describe("native completion settlement", () => {
           expect(releasePin).not.toHaveBeenCalled();
           expect(vi.getTimerCount()).toBe(1);
           await observer?.unregister();
-          await vi.advanceTimersByTimeAsync(10);
+          await vi.advanceTimersByTimeAsync(5_000);
           expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
         }
         expect(releasePin).toHaveBeenCalledOnce();
