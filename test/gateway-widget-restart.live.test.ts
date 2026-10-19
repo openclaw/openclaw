@@ -128,7 +128,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           path: instance.state.path("proof-device", "client", "credentials.sqlite"),
         });
         const observerDeviceIdentity = loadOrCreateDeviceIdentity({
-          path: instance.state.path("observer-device.sqlite"),
+          path: instance.state.path("observer-device", "client", "credentials.sqlite"),
         });
         const connect = (controlUi: boolean) =>
           acquireGatewayTestClient(
