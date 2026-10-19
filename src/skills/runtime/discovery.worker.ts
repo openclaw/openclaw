@@ -127,11 +127,9 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
         mergeSkillRecords(sources.executionEntries, key, []),
         () => {},
       );
+      // Generated plugin links are shared outputs; watch their canonical sources instead.
       const watchDirectories = new Set([
         ...sourceRequest.sourcePlan.roots.map((root) => root.dir),
-        ...(sourceRequest.sourcePlan.pluginSkillsDir
-          ? [sourceRequest.sourcePlan.pluginSkillsDir]
-          : []),
         ...(sourceRequest.executionWorkspaceDir
           ? resolveWorkspaceSkillDirectories(sourceRequest.executionWorkspaceDir).map(
               (root) => root.dir,
