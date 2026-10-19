@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
 
@@ -133,7 +133,9 @@ describe("model catalog refresh presentation", () => {
     );
     flush();
     update(pending);
-    await Promise.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     const pickerDetails = container.querySelector("details")!;
     pickerDetails.open = true;
     pickerDetails.dispatchEvent(new Event("toggle"));
@@ -186,7 +188,7 @@ describe("model catalog refresh presentation", () => {
     ["openai", undefined, "No models available"],
   ] as const)(
     "explains an empty picker of missing-auth %s rows (runtime %s)",
-    (provider, agentRuntimeId, label) => {
+    async (provider, agentRuntimeId, label) => {
       const { container } = mountSolid(() => (
         <ChatModelPicker
           {...{
@@ -216,6 +218,9 @@ describe("model catalog refresh presentation", () => {
         />
       ));
       flush();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
       expect(
         container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),
       ).toBe(label);
