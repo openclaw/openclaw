@@ -57,7 +57,6 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await rm(workspace, { recursive: true, force: true });
-  vi.unstubAllEnvs();
 });
 
 const harnesses = new Set<ReturnType<typeof createMuseAgentHarnessImpl>>();
@@ -92,9 +91,7 @@ function setup(logRequests = false) {
     register: async (key: string, value: MuseSessionBinding) => {
       bindings.set(key, value);
     },
-    delete: async (key: string) => {
-      return bindings.delete(key);
-    },
+    delete: async (key: string) => bindings.delete(key),
   };
   const harness = createMuseAgentHarness({ binaryPath: fixture, sessionStore });
   const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
@@ -131,9 +128,7 @@ function setup(logRequests = false) {
       storePath: join(workspace, "sessions.json"),
     },
     authProfileStore: { version: 1, profiles: {} },
-    onAgentEvent: async (event: { stream: string; data: Record<string, unknown> }) => {
-      events.push(event);
-    },
+    onAgentEvent: async (event) => void events.push(event),
     hostCapabilities: {
       kind: "agent-harness-host-capability",
       version: 1,
@@ -225,20 +220,16 @@ describe("Muse native MSP harness", () => {
     "launches a read-only host for %s",
     async (_name, policy) => {
       const { run, log } = setup(true);
-      await run({ ...policy });
+      await run(policy);
       const requests = await readRequests(log);
-      expect(requests).toContainEqual(
-        expect.objectContaining({
-          event: "spawn",
-          args: ["serve", "--disable-shell", "--disable-write"],
-        }),
-      );
-      expect(requests).toContainEqual(
-        expect.objectContaining({
-          method: "session/start",
-          params: expect.objectContaining({ approvalMode: "denyUnmatched" }),
-        }),
-      );
+      expect(requests.find((request) => request.event === "spawn")?.args).toEqual([
+        "serve",
+        "--disable-shell",
+        "--disable-write",
+      ]);
+      expect(requests.find((request) => request.method === "session/start")?.params).toMatchObject({
+        approvalMode: "denyUnmatched",
+      });
     },
   );
 
@@ -282,18 +273,11 @@ describe("Muse native MSP harness", () => {
       const retained = SessionManager.inMemory();
       readHistory.mockResolvedValue(retained);
 
-      await run({ prompt: "My project codename is Cedar." });
-      await retained.appendMessageAsync({
-        role: "user",
-        content: "My project codename is Cedar.",
-        timestamp: 1,
-      });
-      await run({ prompt: "Remember that for later." });
-      await retained.appendMessageAsync({
-        role: "user",
-        content: "Remember that for later.",
-        timestamp: 2,
-      });
+      const prompts = ["My project codename is Cedar.", "Remember that for later."];
+      for (const [index, content] of prompts.entries()) {
+        await run({ prompt: content });
+        await retained.appendMessageAsync({ role: "user", content, timestamp: index + 1 });
+      }
       if (replacement === "missing binding") {
         bindings.delete(params.sessionId);
       } else if (replacement === "refused resume") {
@@ -339,13 +323,7 @@ describe("Muse native MSP harness", () => {
     const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     const recorder = createRecorder({
       input: { text: params.prompt, idempotencyKey: `${params.runId}:user` },
-      target: {
-        agentId: "main",
-        sessionId: "transcript-id",
-        sessionKey: "agent:main:muse-test",
-        storePath: join(workspace, "sessions.json"),
-        sessionEntry: undefined,
-      },
+      target: { ...params.sessionTarget!, agentId: "main", sessionEntry: undefined },
     });
     const aborted = await run({
       workspaceDir: bootstrapWorkspace,
@@ -370,8 +348,7 @@ describe("Muse native MSP harness", () => {
     const { params, bindings, run, log } = setup(true);
     readHistory.mockRejectedValueOnce(new Error("Session context limit exceeded"));
 
-    const result = await run();
-    expectFailure(result, "could not restore OpenClaw session context");
+    expectFailure(await run(), "could not restore OpenClaw session context");
     expect(await readFile(log, "utf8")).not.toContain('"method":"turn/start"');
     expect(bindings.has(params.sessionId)).toBe(false);
   });
@@ -380,17 +357,10 @@ describe("Muse native MSP harness", () => {
     const { run, log } = setup(true);
     await run({ images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }] });
     const requests = await readRequests(log);
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "turn/start",
-        params: expect.objectContaining({
-          input: [
-            { type: "text", text: "hello" },
-            { type: "image", mediaType: "image/png", base64Data: "aW1hZ2U=" },
-          ],
-        }),
-      }),
-    );
+    expect(requests.find((request) => request.method === "turn/start")?.params.input).toEqual([
+      { type: "text", text: "hello" },
+      { type: "image", mediaType: "image/png", base64Data: "aW1hZ2U=" },
+    ]);
   });
 
   it("runs a consented turn whose conversation tool policy is restricted", async () => {
@@ -504,16 +474,11 @@ describe("Muse native MSP harness", () => {
     const state = setup();
     const firstController = new AbortController();
     const secondController = new AbortController();
-    const secondId = crypto.randomUUID();
-    let started!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const first = state.harness.runAttempt({
-      ...state.params,
+    const { promise: firstStarted, resolve: started } = Promise.withResolvers<void>();
+    const first = state.run({
       prompt: "wait",
       abortSignal: firstController.signal,
-      onExecutionStarted: started,
+      onExecutionStarted: () => started(),
     });
     try {
       await firstStarted;
@@ -522,9 +487,8 @@ describe("Muse native MSP harness", () => {
         secondController.abort();
         return SessionManager.inMemory();
       });
-      const second = await state.harness.runAttempt({
-        ...state.params,
-        sessionId: secondId,
+      const second = await state.run({
+        sessionId: crypto.randomUUID(),
         sessionKey: "agent:main:second-muse",
         abortSignal: secondController.signal,
       });
@@ -536,7 +500,6 @@ describe("Muse native MSP harness", () => {
     } finally {
       firstController.abort();
       await first;
-      await state.harness.dispose?.();
     }
   });
 
@@ -572,77 +535,58 @@ describe("Muse native MSP harness", () => {
     expect(result.replayMetadata?.replaySafe).toBe(false);
   });
 
-  it.each([
-    ["missing", "missing-session"],
-    ["refused", "refused-session"],
-  ])(
-    "starts a new native session when Muse definitively refuses a %s resume",
-    async (_name, id) => {
+  it.each(["missing-session", "refused-session", "busy-session"])(
+    "handles a refused resume for %s without replacing a busy session",
+    async (id) => {
       const state = setup();
-      try {
-        await state.harness.runAttempt(state.params);
-      } finally {
-        await state.harness.dispose?.();
-      }
+      await state.run();
+      await state.harness.dispose();
       const binding = state.bindings.get(state.params.sessionId)!;
       state.bindings.set(state.params.sessionId, { ...binding, sessionId: id });
       const warn = vi.fn();
       const next = createMuseAgentHarness({
         binaryPath: fixture,
         sessionStore: state.sessionStore,
-        logger: { warn },
+        logger: id === "busy-session" ? undefined : { warn },
       });
       const result = await next.runAttempt(state.params);
-      expect(terminal(result).kind).toBe("ok");
-      expect(result.assistantTexts).toEqual(["started: hello"]);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("started a new Muse session"));
+      if (id === "busy-session") {
+        expectFailure(result, "sessionInUse");
+        expect(state.bindings.get(state.params.sessionId)?.sessionId).toBe(id);
+      } else {
+        expect(terminal(result).kind).toBe("ok");
+        expect(result.assistantTexts).toEqual(["started: hello"]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("started a new Muse session"));
+      }
     },
   );
 
-  it("does not replace a session that is in use elsewhere", async () => {
-    const state = setup();
-    try {
-      await state.harness.runAttempt(state.params);
-    } finally {
-      await state.harness.dispose?.();
-    }
-    const binding = state.bindings.get(state.params.sessionId)!;
-    state.bindings.set(state.params.sessionId, { ...binding, sessionId: "busy-session" });
-    const next = createMuseAgentHarness({ binaryPath: fixture, sessionStore: state.sessionStore });
-    const result = await next.runAttempt(state.params);
-    expectFailure(result, "sessionInUse");
-    expect(state.bindings.get(state.params.sessionId)?.sessionId).toBe("busy-session");
-  });
-
-  it("denies native approval when the host denies it", async () => {
-    const { params, run } = setup();
-    params.hostCapabilities = {
-      ...params.hostCapabilities,
-      requestApproval: async () => ({ decision: "deny" }),
-    };
-    const result = await run({ prompt: "approval" });
-    expectFailure(result, "denied");
-    expect(result.assistantTexts).toEqual([]);
-  });
-
-  it("reports an approval transport failure as the turn error, not an abort", async () => {
-    const { params, run } = setup();
-    params.hostCapabilities = {
-      ...params.hostCapabilities,
-      requestApproval: async () => {
-        throw new Error("approval gateway unavailable");
-      },
-    };
-    const result = await run({ prompt: "approval" });
-    expectFailure(result, "approval gateway unavailable");
-  });
+  it.each(["denied", "approval gateway unavailable"])(
+    "reports approval failure: %s",
+    async (error) => {
+      const { params, run } = setup();
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        requestApproval: async () => {
+          if (error === "denied") {
+            return { decision: "deny" };
+          }
+          throw new Error(error);
+        },
+      };
+      const result = await run({ prompt: "approval" });
+      expectFailure(result, error);
+      if (error === "denied") {
+        expect(result.assistantTexts).toEqual([]);
+      }
+    },
+  );
 
   it("explains a missing Muse sign-in and logs it for operators", async () => {
     const { params, sessionStore } = setup();
     const warn = vi.fn();
     const harness = createMuseAgentHarness({ binaryPath: fixture, sessionStore, logger: { warn } });
-    const result = await harness.runAttempt({ ...params, prompt: "loggedout" });
-    expectFailure(result, "muse login");
+    expectFailure(await harness.runAttempt({ ...params, prompt: "loggedout" }), "muse login");
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("Muse Code is not signed in on the Gateway host"),
     );
@@ -662,24 +606,21 @@ describe("Muse native MSP harness", () => {
     vi.stubEnv("META_API_KEY", "ambient-meta");
     vi.stubEnv("MUSE_NO_AUTO_UPDATE", "0");
 
-    try {
-      const prepared = await run({
-        prompt: "credential",
-        resolvedApiKey: "prepared-key",
-        authProfileId: "meta:test",
-      });
-      expect(prepared.assistantTexts).toEqual(["credential:prepared-key"]);
-      const profile = await run({ prompt: "credential", authProfileId: "meta:test" });
-      expect(profile.assistantTexts).toEqual(["credential:profile-key"]);
-      const ambient = await run({ prompt: "credential" });
-      expect(ambient.assistantTexts).toEqual(["credential:ambient-meta"]);
-      const spawns = (await readRequests(log)).filter((request) => request.event === "spawn");
-      expect(spawns).not.toHaveLength(0);
-      expect(spawns.every((request) => request.noAutoUpdate === "1")).toBe(true);
-    } finally {
-      await harness.dispose?.();
-      vi.unstubAllEnvs();
-    }
+    const prepared = await run({
+      prompt: "credential",
+      resolvedApiKey: "prepared-key",
+      authProfileId: "meta:test",
+    });
+    expect(prepared.assistantTexts).toEqual(["credential:prepared-key"]);
+    const profile = await run({ prompt: "credential", authProfileId: "meta:test" });
+    expect(profile.assistantTexts).toEqual(["credential:profile-key"]);
+    const ambient = await run({ prompt: "credential" });
+    expect(ambient.assistantTexts).toEqual(["credential:ambient-meta"]);
+    const spawns = (await readRequests(log)).filter((request) => request.event === "spawn");
+    expect(spawns).not.toHaveLength(0);
+    expect(spawns.every((request) => request.noAutoUpdate === "1")).toBe(true);
+    await harness.dispose();
+    vi.unstubAllEnvs();
     const login = setup();
     vi.stubEnv("META_API_KEY", undefined);
     const result = await login.harness.runAttempt({ ...login.params, prompt: "credential" });
@@ -760,22 +701,17 @@ describe("Muse native MSP harness", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("META_API_KEY", undefined);
     vi.stubEnv("MUSE_REQUEST_LOG", log);
-    const native = await run();
-    expect(terminal(native).kind).toBe("ok");
-    const identities = [bindings.get(params.sessionId)];
-    await mkdir(authDir, { recursive: true });
-    await writeFile(authFile, '{"account":"managed"}');
-    const managed = await run();
-    expect(terminal(managed).kind).toBe("ok");
-    identities.push(bindings.get(params.sessionId));
-    await writeFile(authFile, '{"account":"replacement-account"}');
-    const changed = await run();
-    expect(terminal(changed).kind).toBe("ok");
-    identities.push(bindings.get(params.sessionId));
-    await rm(authFile);
-    const restored = await run();
-    expect(terminal(restored).kind).toBe("ok");
-    identities.push(bindings.get(params.sessionId));
+    const identities: Array<MuseSessionBinding | undefined> = [];
+    for (const account of [undefined, "managed", "replacement-account", null]) {
+      if (account === null) {
+        await rm(authFile);
+      } else if (account) {
+        await mkdir(authDir, { recursive: true });
+        await writeFile(authFile, JSON.stringify({ account }));
+      }
+      expect(terminal(await run()).kind).toBe("ok");
+      identities.push(bindings.get(params.sessionId));
+    }
     expect(identities.every((binding) => binding !== undefined)).toBe(true);
     expect(new Set(identities.map((binding) => binding?.sessionId)).size).toBe(4);
     expect(identities[1]?.compatibility).not.toBe(identities[0]?.compatibility);
