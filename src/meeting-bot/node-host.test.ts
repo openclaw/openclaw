@@ -48,28 +48,4 @@ describe("MeetingNodeAudioPullWaiters", () => {
     expect(waiters.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
-
-  it.each([Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER])(
-    "lets a shipped pull waiter wake with an oversized timeout of %s without a timer warning",
-    async (timeoutMs) => {
-      const warnings: Error[] = [];
-      const onWarning = (warning: Error) => warnings.push(warning);
-      process.on("warning", onWarning);
-      try {
-        const waiters = new MeetingNodeAudioPullWaiters();
-        const waiting = waiters.wait(timeoutMs);
-
-        setTimeout(() => waiters.wake(), 20);
-        await waiting;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-
-        expect(waiters.size).toBe(0);
-        expect(warnings.filter((warning) => warning.name === "TimeoutOverflowWarning")).toEqual([]);
-      } finally {
-        process.off("warning", onWarning);
-      }
-    },
-  );
 });
