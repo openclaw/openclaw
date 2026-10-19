@@ -27,6 +27,7 @@ import {
 } from "./chat-engine.test-support.js";
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
@@ -292,12 +293,20 @@ describe("SystemAgentChatEngine operations", () => {
     const changedConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     } satisfies OpenClawConfig;
-    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
-    const readConfigFileSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(configSnapshot(baseConfig))
-      .mockResolvedValueOnce(configSnapshot(baseConfig))
-      .mockResolvedValue(configSnapshot(changedConfig));
+    const configFixture = await createInferenceConfigFixture(baseConfig);
+    const snapshot = configFixture.snapshot;
+    const verifiedInference = await createAmbientVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
+    );
+    let reads = 0;
+    mocks.readConfigFileSnapshot.mockImplementation(async () => {
+      reads += 1;
+      if (reads === 3) {
+        await configFixture.write(changedConfig);
+      }
+      return configFixture.read();
+    });
     const runChannelSetupWizard = vi.fn(async () => {});
     const engine = new SystemAgentChatEngine({
       verifiedInference,
@@ -306,7 +315,6 @@ describe("SystemAgentChatEngine operations", () => {
         directive: { kind: "channel-setup" as const, channel: "telegram" },
       }),
       deps: {
-        readConfigFileSnapshot: readConfigFileSnapshot as never,
         loadOverview: fakeOverviewLoader(),
       },
       runChannelSetupWizard,
@@ -330,7 +338,14 @@ describe("SystemAgentChatEngine operations", () => {
       refresh: "refresh-a",
       expires: 1,
     };
-    const verifiedInference = await createOAuthVerifiedBinding(config, credential);
+    const configFixture = await createInferenceConfigFixture(config);
+    const snapshot = configFixture.snapshot;
+    const verifiedInference = await createOAuthVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      credential,
+      snapshot,
+    );
+    mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     let authReads = 0;
     vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => {
@@ -351,7 +366,6 @@ describe("SystemAgentChatEngine operations", () => {
         },
       }),
       deps: {
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -376,7 +390,14 @@ describe("SystemAgentChatEngine operations", () => {
       expires: 1,
       accountId: "account-1",
     };
-    const verifiedInference = await createOAuthVerifiedBinding(config, credential);
+    const configFixture = await createInferenceConfigFixture(config);
+    const snapshot = configFixture.snapshot;
+    const verifiedInference = await createOAuthVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      credential,
+      snapshot,
+    );
+    mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => ({
       version: 1,
@@ -395,7 +416,6 @@ describe("SystemAgentChatEngine operations", () => {
         };
       },
       deps: {
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -499,11 +519,22 @@ describe("SystemAgentChatEngine operations", () => {
         ),
       },
     } satisfies OpenClawConfig;
-    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
-    const reboundInference = await createAmbientVerifiedBinding(changedConfig);
+    const configFixture = await createInferenceConfigFixture(baseConfig);
+    const snapshot = configFixture.snapshot;
+    const verifiedInference = await createAmbientVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
+    );
+    const reboundSnapshot = await configFixture.preview(changedConfig);
+    const reboundInference = await createAmbientVerifiedBinding(
+      reboundSnapshot.runtimeConfig ?? reboundSnapshot.config,
+      reboundSnapshot,
+    );
+    mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
     let currentConfig: OpenClawConfig = baseConfig;
     const executeOperation = vi.fn(async (_operation, runtime, options) => {
       currentConfig = changedConfig;
+      await configFixture.write(currentConfig);
       options.onVerifiedInferenceChanged?.(reboundInference);
       runtime.log("Default model: openai/gpt-5.6-sol");
       return { applied: true };
@@ -517,7 +548,6 @@ describe("SystemAgentChatEngine operations", () => {
       runAgentTurn,
       classifyApproval: async () => "approve",
       deps: {
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
         loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
       },
     });

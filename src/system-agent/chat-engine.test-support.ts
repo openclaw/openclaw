@@ -20,6 +20,7 @@ import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig as resolveRouteImpl,
   type SystemAgentConfiguredRoute,
+  type SystemAgentConfigSnapshot,
 } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
@@ -199,8 +200,12 @@ function testHarnessBinding(route: SystemAgentConfiguredRoute) {
 
 type ProfileCredential = Parameters<typeof fingerprintAuthProfileCredential>[0]["credential"];
 
-async function createVerifiedBinding(config: OpenClawConfig, credential?: ProfileCredential) {
-  const route = await resolveRoute(config);
+async function createVerifiedBinding(
+  config: OpenClawConfig,
+  credential?: ProfileCredential,
+  snapshot?: SystemAgentConfigSnapshot,
+) {
+  const route = await resolveRoute(config, undefined, {}, snapshot);
   if (!route) {
     throw new Error("missing test route");
   }
@@ -228,11 +233,16 @@ async function createVerifiedBinding(config: OpenClawConfig, credential?: Profil
   return makeBinding({ configuredRoute: route, executionRoute: route, auth });
 }
 
-export const createAmbientVerifiedBinding = (config: OpenClawConfig) =>
-  createVerifiedBinding(config);
+export const createAmbientVerifiedBinding = (
+  config: OpenClawConfig,
+  snapshot?: SystemAgentConfigSnapshot,
+) => createVerifiedBinding(config, undefined, snapshot);
 
-export const createOAuthVerifiedBinding = (config: OpenClawConfig, credential: ProfileCredential) =>
-  createVerifiedBinding(config, credential);
+export const createOAuthVerifiedBinding = (
+  config: OpenClawConfig,
+  credential: ProfileCredential,
+  snapshot?: SystemAgentConfigSnapshot,
+) => createVerifiedBinding(config, credential, snapshot);
 
 export async function createCliVerifiedBinding(config: OpenClawConfig) {
   const route = await resolveRoute(config);

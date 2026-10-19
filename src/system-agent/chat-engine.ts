@@ -261,13 +261,11 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    return await requireSystemAgentPersistentApplyInference(
-      { binding, runtime, deps: this.options.deps },
-      (failures) =>
-        this.throwInferenceUnavailable(
-          isSystemAgentInferenceUnavailableError(failures[0]) ? failures[0].failures : failures,
-          false,
-        ),
+    return await requireSystemAgentPersistentApplyInference({ binding, runtime }, (failures) =>
+      this.throwInferenceUnavailable(
+        isSystemAgentInferenceUnavailableError(failures[0]) ? failures[0].failures : failures,
+        false,
+      ),
     );
   }
 

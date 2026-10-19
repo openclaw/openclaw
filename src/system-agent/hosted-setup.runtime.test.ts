@@ -34,7 +34,6 @@ import {
   sharedVerifiedInferenceConfig,
   mocks,
   useTempStateDir,
-  configSnapshot,
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
   advanceGatewayWizardToSecretStorage,
@@ -42,6 +41,7 @@ import {
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
 function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
   return new SystemAgentChatEngine({
@@ -298,7 +298,6 @@ describe("SystemAgentChatEngine runtime", () => {
   it("rechecks inference authority immediately before a hosted Gateway write", async () => {
     useTempStateDir();
     const baseConfig = useGatewayConfig();
-    const currentConfig = structuredClone(baseConfig);
     const changedConfig: OpenClawConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
       models: {
@@ -312,20 +311,25 @@ describe("SystemAgentChatEngine runtime", () => {
         },
       },
     };
-    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    const configFixture = await createInferenceConfigFixture(baseConfig);
+    const snapshot = configFixture.snapshot;
+    const verifiedInference = await createAmbientVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
+    );
     // The route flips between the final turn's entry gate and the
     // persistent-apply recheck; only the apply boundary can catch it.
     let baseReadsRemaining = Number.POSITIVE_INFINITY;
+    mocks.readConfigFileSnapshot.mockImplementation(async () => {
+      if (baseReadsRemaining === 0) {
+        await configFixture.write(changedConfig);
+      }
+      baseReadsRemaining -= 1;
+      return configFixture.read();
+    });
     const engine = createEngine({
       surface: "gateway",
       verifiedInference,
-      deps: {
-        readConfigFileSnapshot: vi.fn(async () => {
-          const config = baseReadsRemaining > 0 ? currentConfig : changedConfig;
-          baseReadsRemaining -= 1;
-          return configSnapshot(config);
-        }) as never,
-      },
     });
 
     const { storageStep } = await advanceGatewayWizardToSecretStorage(engine);
@@ -457,6 +461,16 @@ describe("SystemAgentChatEngine runtime", () => {
       }
       let currentConfig = structuredClone(baseConfig);
       let currentHash = "base-hash";
+      const configFixture = revisionConflict
+        ? undefined
+        : await createInferenceConfigFixture(baseConfig);
+      const snapshot = configFixture?.snapshot;
+      const verifiedInference = snapshot
+        ? await createAmbientVerifiedBinding(snapshot.runtimeConfig ?? snapshot.config, snapshot)
+        : undefined;
+      if (configFixture) {
+        mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
+      }
       const hook = { channel: "telegram", accountId: "default", run: vi.fn() };
       mocks.readSetupConfigFileSnapshot.mockImplementation(async () => {
         const config = revisionConflict ? currentConfig : baseConfig;
@@ -471,6 +485,7 @@ describe("SystemAgentChatEngine runtime", () => {
         const token = await prompter.text({ message: "Bot token" });
         if (phase === "write") {
           currentConfig = structuredClone(changedConfig);
+          await configFixture?.write(currentConfig);
         } else if (phase === "post-write hooks") {
           options.onPostWriteHook?.(hook);
         }
@@ -485,6 +500,7 @@ describe("SystemAgentChatEngine runtime", () => {
             throw new Error("configuration changed during channel setup");
           }
           currentConfig = structuredClone(phase === "post-write hooks" ? changedConfig : config);
+          await configFixture?.write(currentConfig);
           if (revisionConflict) {
             currentHash = "committed-hash";
           }
@@ -494,10 +510,7 @@ describe("SystemAgentChatEngine runtime", () => {
       const engine = createEngine({
         surface: "gateway",
         ...(!revisionConflict && {
-          verifiedInference: await createAmbientVerifiedBinding(baseConfig),
-          deps: {
-            readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-          },
+          verifiedInference,
         }),
       });
       const tokenStep = await engine.handle("connect telegram");

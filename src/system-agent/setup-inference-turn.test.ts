@@ -101,7 +101,6 @@ function revalidateOwner(
     route,
     auth,
     stagedOwnerPluginArtifacts: binding,
-    deps: {},
   });
 }
 
