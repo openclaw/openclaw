@@ -4,15 +4,23 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { chromium, type WebSocket } from "playwright";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { asOptionalRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { ControlUiReadiness } from "../../ui/src/app/control-ui-readiness.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpers/playwright-chromium.ts";
+import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
+import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
   options: {
     url: { type: "string" },
     duration: { type: "string", default: "60" },
     output: { type: "string" },
+    "cron-runs": { type: "string", default: "0" },
+    "cron-jobs": { type: "string", default: "20" },
+    "interval-ms": { type: "string", default: "2000" },
+    "start-at": { type: "string" },
+    screenshot: { type: "string" },
   },
 });
 if (!values.url || !values.output) {
@@ -22,6 +30,12 @@ if (!values.url || !values.output) {
 }
 const url = new URL(values.url);
 const durationMs = Number(values.duration) * 1_000;
+const integer = (raw: string, label: string, min = 1) =>
+  parseStrictIntegerOption({ raw, label, min, fallback: min });
+const cronRuns = integer(values["cron-runs"], "--cron-runs", 0);
+const cronJobs = integer(values["cron-jobs"], "--cron-jobs");
+const intervalMs = integer(values["interval-ms"], "--interval-ms");
+const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
 if (
   !["http:", "https:"].includes(url.protocol) ||
   !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
@@ -52,6 +66,7 @@ type Phase = {
   helloCount: number;
   snapshots: number;
   snapshotBytes: number;
+  cronEvents: Record<string, number>;
   methods: Record<Method, Counts>;
 };
 const methods: Method[] = ["models.list", "cron.list"];
@@ -64,6 +79,17 @@ let measuring = true;
 let reconnect: "observed" | "offline-did-not-close-socket" | "not-attempted" = "not-attempted";
 let failure: string | undefined;
 let unreadableFrames = 0;
+let completedRuns = 0;
+let controller: ReturnType<typeof createGatewayWsClient> | undefined;
+const jobIds: string[] = [];
+
+async function rpc(method: string, params: unknown) {
+  const response = await controller!.request(method, params, 60_000);
+  if (!response.ok) {
+    throw new Error(`${method} failed`);
+  }
+  return asOptionalRecord(response.payload);
+}
 
 function parseFrame(payload: string | Buffer) {
   try {
@@ -97,6 +123,7 @@ function beginPhase(name: string) {
     helloCount: 0,
     snapshots: 0,
     snapshotBytes: 0,
+    cronEvents: {},
     methods: {
       "models.list": { calls: 0, responses: 0, errors: 0, responseBytes: 0 },
       "cron.list": { calls: 0, responses: 0, errors: 0, responseBytes: 0 },
@@ -112,6 +139,42 @@ const browser = await chromium.launch({
   headless: true,
 });
 try {
+  if (cronRuns > 0) {
+    const endpoint = new URL(url);
+    endpoint.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    endpoint.hash = "";
+    controller = createGatewayWsClient({ url: endpoint.href });
+    await controller.waitOpen();
+    const token = new URLSearchParams(url.hash.slice(1)).get("token");
+    await rpc("connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      caps: [],
+      ...(token ? { auth: { token } } : {}),
+    });
+    for (let index = 0; index < cronJobs; index += 1) {
+      const job = await rpc("cron.add", {
+        name: `Synthetic cron ${String(index).padStart(3, "0")}`,
+        enabled: false,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "Synthetic activity measurement" },
+      });
+      if (typeof job?.id !== "string") {
+        throw new Error("cron.add did not return a job ID");
+      }
+      jobIds.push(job.id);
+    }
+  }
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
   page.on("websocket", (socket) => {
@@ -145,6 +208,12 @@ try {
       if (frame?.type === "event" && frame.event === "models.snapshot") {
         phase.snapshots += 1;
         phase.snapshotBytes += Buffer.byteLength(payload);
+      }
+      if (frame?.type === "event" && frame.event === "cron") {
+        const action = asOptionalRecord(frame.payload)?.action;
+        if (typeof action === "string") {
+          phase.cronEvents[action] = (phase.cronEvents[action] ?? 0) + 1;
+        }
       }
       const id = frame?.type === "res" && typeof frame.id === "string" ? frame.id : undefined;
       const request = id ? pending.get(id) : undefined;
@@ -233,6 +302,44 @@ try {
   await page.evaluate(() => window.openclawControlUi!.navigate("cron"));
   await ready("cron");
   await idle("cron-visible-idle");
+  if (cronRuns > 0) {
+    await page.getByText("Synthetic cron 000", { exact: true }).first().waitFor();
+    if (startAt !== undefined) {
+      if (Date.now() > startAt) {
+        throw new Error("--start-at elapsed before browser readiness");
+      }
+      await delay(startAt - Date.now());
+    }
+    phase = beginPhase("cron-runtime-events");
+    const runtimeStartedAt = performance.now();
+    for (let index = 0; index < cronRuns; index += 1) {
+      await delay(Math.max(0, runtimeStartedAt + index * intervalMs - performance.now()));
+      const result = await rpc("cron.run", {
+        id: jobIds[index % jobIds.length],
+        mode: "force",
+        waitTimeoutMs: 30_000,
+      });
+      if (!result?.finished && !result?.run) {
+        throw new Error("Cron run did not finish within the bounded wait");
+      }
+      completedRuns += 1;
+    }
+    await delay(Math.max(0, runtimeStartedAt + cronRuns * intervalMs - performance.now()) + 2_000);
+    if (phase.cronEvents.finished !== cronRuns || connected.size !== 1) {
+      throw new Error("Browser did not receive every completed cron run on its single socket");
+    }
+    await page.waitForFunction(
+      (count) => document.querySelectorAll(".cron-table__last-run").length === count,
+      Math.min(cronRuns, cronJobs),
+    );
+    if (values.screenshot) {
+      await page.screenshot({ path: values.screenshot, fullPage: true });
+    }
+    phase = beginPhase("cron-configuration-edit");
+    await rpc("cron.update", { id: jobIds[0], patch: { name: "Synthetic cron edited" } });
+    await page.getByText("Synthetic cron edited", { exact: true }).first().waitFor();
+    await delay(2_000);
+  }
   phase = beginPhase("retained-navigation");
   await page.evaluate(
     (route) => window.openclawControlUi!.navigate(route === "cron" ? "chat" : route),
@@ -249,6 +356,15 @@ try {
   accountSockets();
   measuring = false;
   await browser.close();
+  if (controller) {
+    for (const id of jobIds) {
+      await rpc("cron.remove", { id }).catch(() => {
+        failure ??= "cleanup: cron.remove failed";
+        process.exitCode = 1;
+      });
+    }
+    controller.close();
+  }
   for (const entry of phases) {
     for (const method of methods) {
       entry.methods[method].callsPerMinutePerSocket = entry.socketMs
@@ -258,6 +374,8 @@ try {
   }
   const report = {
     durationSecondsPerIdlePhase: durationMs / 1_000,
+    cronWorkload:
+      cronRuns > 0 ? { jobs: cronJobs, runs: cronRuns, completedRuns, intervalMs } : null,
     reconnect,
     failure,
     unreadableFrames,
