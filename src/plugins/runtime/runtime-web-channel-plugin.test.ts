@@ -67,35 +67,32 @@ afterEach(async () => {
   }
 });
 
+function writeFiles(directory: string, files: Record<string, string>) {
+  for (const [name, source] of Object.entries(files)) {
+    fs.writeFileSync(path.join(directory, name), source);
+  }
+}
+
+function coldOwner(rootDir: string, id: string, source = path.join(rootDir, "index.ts")) {
+  cold.records = [{ id, rootDir, source, origin: "global" }];
+}
+
 function writeSource(root: string, version: string, surfaceDirectory = root) {
   fs.mkdirSync(surfaceDirectory, { recursive: true });
-  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-  fs.writeFileSync(
-    path.join(surfaceDirectory, "state.ts"),
-    `let value = ${JSON.stringify(version)};
+  writeFiles(root, { "package.json": '{"type":"module"}' });
+  writeFiles(surfaceDirectory, {
+    "state.ts": `let value = ${JSON.stringify(version)};
     export const read = () => value;
     export const set = (next: string) => { value = next; };`,
-  );
-  fs.writeFileSync(
-    path.join(surfaceDirectory, "index.ts"),
-    'import { set } from "./state.js"; export default { register: set };',
-  );
-  fs.writeFileSync(
-    path.join(surfaceDirectory, "light-runtime-api.ts"),
-    'export { read } from "./state.js";',
-  );
-  fs.writeFileSync(
-    path.join(surfaceDirectory, "runtime-api.ts"),
-    `import { read } from "./state.js";
+    "index.ts": 'import { set } from "./state.js"; export default { register: set };',
+    "light-runtime-api.ts": 'export { read } from "./state.js";',
+    "runtime-api.ts": `import { read } from "./state.js";
     export async function monitorWebChannel(...args: unknown[]) {
       const { suffix } = await import("./lazy.js");
       return [read(), suffix, ...args];
     }`,
-  );
-  fs.writeFileSync(
-    path.join(surfaceDirectory, "lazy.ts"),
-    `export const suffix = ${JSON.stringify(`lazy-${version}`)};`,
-  );
+    "lazy.ts": `export const suffix = ${JSON.stringify(`lazy-${version}`)};`,
+  });
 }
 
 function prepare(rootDir: string, pluginId = "web-fixture") {
@@ -132,21 +129,18 @@ describe("web channel package-root monitor", () => {
   it("forwards library monitor calls lazily with exact arguments and runtime receiver", async () => {
     const root = fs.realpathSync(temp.make("openclaw-web-library-"));
     const initialized = path.join(root, "initialized");
-    fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}');
-    fs.writeFileSync(path.join(root, "light-runtime-api.js"), "module.exports = {};");
-    fs.writeFileSync(
-      path.join(root, "runtime-api.js"),
-      `require("node:fs").writeFileSync(${JSON.stringify(initialized)}, "loaded");
+    writeFiles(root, {
+      "package.json": '{"type":"commonjs"}',
+      "light-runtime-api.js": "module.exports = {};",
+      "runtime-api.js": `require("node:fs").writeFileSync(${JSON.stringify(initialized)}, "loaded");
       const runtime = {
         async monitorWebChannel(...args) {
           return Reflect.apply(args[1], this, args);
         }
       };
       module.exports = runtime;`,
-    );
-    cold.records = [
-      { id: "library-owner", rootDir: root, source: path.join(root, "index.js"), origin: "global" },
-    ];
+    });
+    coldOwner(root, "library-owner", path.join(root, "index.js"));
     const library = await import("../../library.js");
     expect(fs.existsSync(initialized)).toBe(false);
     const result = { marker: "complete" };
@@ -234,9 +228,7 @@ describe("web channel package-root monitor", () => {
       stageActivePluginRegistry(registry, state, "gateway-bindable");
       await active.instance.dispose();
       writeSource(root, "must-not-load");
-      cold.records = [
-        { id: active.record.id, rootDir: root, source: active.record.source, origin: "global" },
-      ];
+      coldOwner(root, active.record.id, active.record.source);
       await expect(monitorWebChannel()).rejects.toThrow(/runtime is unavailable/);
       expect(resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
     },
@@ -271,19 +263,11 @@ describe("web channel package-root monitor", () => {
       fs.mkdirSync(entryDirectory);
       writeSource(root, "cold", location === "entry" ? entryDirectory : root);
       if (location === "entry") {
-        fs.writeFileSync(
-          path.join(root, "runtime-api.js"),
-          'export const monitorWebChannel = async () => "wrong root";',
-        );
+        writeFiles(root, {
+          "runtime-api.js": 'export const monitorWebChannel = async () => "wrong root";',
+        });
       }
-      cold.records = [
-        {
-          id: "cold-owner",
-          rootDir: root,
-          source: path.join(entryDirectory, "index.ts"),
-          origin: "global",
-        },
-      ];
+      coldOwner(root, "cold-owner", path.join(entryDirectory, "index.ts"));
       await expect(monitorWebChannel("argument")).resolves.toEqual([
         "cold",
         "lazy-cold",
@@ -296,13 +280,8 @@ describe("web channel package-root monitor", () => {
     expect(getPluginRegistryForContext()).toBeNull();
     const root = fs.realpathSync(temp.make("openclaw-web-runtime-failure-"));
     writeSource(root, "failure");
-    fs.writeFileSync(
-      path.join(root, "runtime-api.ts"),
-      'throw new Error("web runtime initialization failed");',
-    );
-    cold.records = [
-      { id: "failure", rootDir: root, source: path.join(root, "index.ts"), origin: "global" },
-    ];
+    writeFiles(root, { "runtime-api.ts": 'throw new Error("web runtime initialization failed");' });
+    coldOwner(root, "failure");
     await expect(monitorWebChannel()).rejects.toThrow("web runtime initialization failed");
   });
 });
