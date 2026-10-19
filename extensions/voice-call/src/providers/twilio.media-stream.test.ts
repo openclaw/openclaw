@@ -13,6 +13,7 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
 }));
 
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import type { MediaStreamHandler } from "../media-stream.js";
 import { createHandler } from "../media-stream.test-support.js";
 import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "../telephony-tts.js";
 import { connectWs, startUpgradeWsServer, withTimeout } from "../websocket-test-support.js";
