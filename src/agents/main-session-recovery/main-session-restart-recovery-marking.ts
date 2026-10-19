@@ -7,6 +7,7 @@ import type {
 } from "../../config/sessions.js";
 import {
   hasMainSessionRecoveryClaim,
+  hasOrphanedMainSessionWork,
   hasRestartRecoveryTerminalRun,
   isMainRestartRecoveryCandidate,
   isRetryableUnadoptedChatClaim,
@@ -373,22 +374,6 @@ type OrphanMarkParams = {
   lifecycleGeneration: string;
 };
 
-function hasOrphanedMainSessionWork(entry: SessionEntry, sessionKey: string): boolean {
-  const settledInterruption =
-    entry.abortedLastRun === false &&
-    !entry.lifecycleRunId &&
-    !entry.activeWriterRunId &&
-    entry.lastRunId !== undefined &&
-    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
-  return (
-    entry.archivedAt === undefined &&
-    isMainRestartRecoveryCandidate(entry, sessionKey) &&
-    (hasMainSessionRecoveryClaim(entry) ||
-      entry.abortedLastRun === true ||
-      (entry.status === "interrupted" && !settledInterruption))
-  );
-}
-
 async function markOrphanedMainSessionStore(
   params: OrphanMarkParams & {
     target: RestartRecoveryStoreTarget & { sessionKey?: string };
@@ -404,9 +389,9 @@ async function markOrphanedMainSessionStore(
     const entry = await readSessionEntryReadOnlyInWorker({ ...params.target, sessionKey: key });
     sessionKeys = entry && hasOrphanedMainSessionWork(entry, key) ? [key] : [];
   } else {
-    sessionKeys = (await readSessionEntrySummariesInWorker(params.target))
-      .filter(({ entry, sessionKey }) => hasOrphanedMainSessionWork(entry, sessionKey))
-      .map(({ sessionKey }) => sessionKey);
+    sessionKeys = (
+      await readSessionEntrySummariesInWorker({ ...params.target, mainSessionRecovery: "orphans" })
+    ).map(({ sessionKey }) => sessionKey);
   }
   if (sessionKeys.length === 0) {
     return { marked: 0, skipped: 0 };
