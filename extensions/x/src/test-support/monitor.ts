@@ -130,6 +130,9 @@ export function createKeyedState(
   beforeWrite?: () => Promise<void>,
 ) {
   const namespaces = new Map<string, Map<string, string>>();
+  const unsupported = async () => {
+    throw new Error("Unexpected keyed-state operation in X fixture");
+  };
   return <T>({ namespace }: { namespace: string }): PluginStateKeyedStore<T> => {
     const rows = namespaces.get(namespace) ?? new Map<string, string>();
     namespaces.set(namespace, rows);
@@ -191,17 +194,10 @@ export function createKeyedState(
             return true;
           }),
         lookup: (key) => inspect(() => read(key)),
-        lookupMany: (keys) =>
-          inspect(() => keys.map((key) => ({ ok: true as const, value: read(key) }))),
-        consume: async (key) =>
-          mutate(() => {
-            const value = read(key);
-            rows.delete(key);
-            return value;
-          }),
+        lookupMany: unsupported,
+        consume: unsupported,
         delete: async (key, options) => mutate(() => rows.delete(key), options?.assertCurrent),
-        deleteIfEqual: async (key, expected) =>
-          mutate(() => read(key) === expected && rows.delete(key)),
+        deleteIfEqual: unsupported,
         entries: () => inspect(entries),
         entriesInKeyRange: (range) =>
           inspect(() =>
@@ -216,13 +212,9 @@ export function createKeyedState(
               })
               .slice(0, range.limit),
           ),
-        count: () => inspect(() => rows.size),
-        async moveEntriesFrom() {
-          throw new Error("Unexpected keyed-state move in X fixture");
-        },
-        async clear() {
-          await mutate(() => rows.clear());
-        },
+        count: unsupported,
+        moveEntriesFrom: unsupported,
+        clear: unsupported,
       };
     };
     return { ...bind(), withCurrent: ({ assertCurrent }) => bind(assertCurrent) };
