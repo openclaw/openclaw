@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import path from "node:path";
 import { build } from "tsdown";
 import { runBenchmarkEntrypoint } from "./lib/benchmark-harness.mts";
+import { createSqliteSchemaAssetsPlugin } from "./lib/sqlite-schema-assets.mts";
+import { createStateSchemaInlinePlugin } from "./lib/state-schema-inline-plugin.mts";
 
 await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
   const root = process.cwd();
@@ -46,6 +48,8 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
     clean: false,
     outExtensions: () => ({ js: ".mjs" }),
     outputOptions: { codeSplitting: true },
+    // Match native builds so imports retain canonical schemas and lazy catalogs.
+    plugins: [createStateSchemaInlinePlugin(root), createSqliteSchemaAssetsPlugin(root)],
     deps: {
       // Match native runtime builds: workspace source is bundled; native package
       // bindings stay with the frozen installation for this exact revision.
@@ -68,7 +72,7 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
   const outputs = readdirSync(outDir, { recursive: true, withFileTypes: true })
     .filter((file) => file.isFile())
     .map((file) => path.relative(outDir, path.join(file.parentPath, file.name)))
-    .sort()
+    .toSorted()
     .map((file) => ({ file, sha256: sha256(path.join(outDir, file)) }));
   const manifest = path.join(outDir, "manifest.json");
   writeFileSync(

@@ -4,7 +4,11 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import plugin from "../extensions/typesafe/index.js";
 import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
-import type { DecisionBatch, DecisionProviderV1 } from "../src/decisions/types.js";
+import type {
+  DecisionBatch,
+  DecisionProviderV1,
+  ProviderDecisionOutcome,
+} from "../src/decisions/types.js";
 import type { OpenClawPluginApi } from "../src/plugins/types.js";
 import { parseBenchmarkInteger, runBenchmarkEntrypoint } from "./lib/benchmark-harness.mts";
 
@@ -16,6 +20,7 @@ export async function benchmarkDecisionTransport(requests: number) {
   let connections = 0;
   let received = 0;
   let responseBytes = 0;
+  let fixtureError: unknown;
   const answer = JSON.stringify({
     model: "kev-latest",
     answers: {
@@ -36,26 +41,31 @@ export async function benchmarkDecisionTransport(requests: number) {
     },
     usage: { input_tokens: 32, output_tokens: 0 },
   });
-  const server = createServer(async (request, response) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (
-      request.method !== "POST" ||
-      request.url !== "/v1/systemone" ||
-      request.headers.authorization !== undefined ||
-      body.model !== "kev-latest" ||
-      body.questions?.escalate?.type !== "noul"
-    ) {
-      response.writeHead(400).end();
-      return;
-    }
-    received++;
-    responseBytes += Buffer.byteLength(answer);
-    response.setHeader("Content-Type", "application/json");
-    response.end(answer);
+  const server = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (
+        request.method !== "POST" ||
+        request.url !== "/v1/systemone" ||
+        request.headers.authorization !== undefined ||
+        body.model !== "kev-latest" ||
+        body.questions?.escalate?.type !== "noul"
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      received++;
+      responseBytes += Buffer.byteLength(answer);
+      response.setHeader("Content-Type", "application/json");
+      response.end(answer);
+    })().catch((error: unknown) => {
+      fixtureError = error;
+      response.writeHead(500).end();
+    });
   });
   // Idle expiry must not make a broken pool close look like lifecycle cleanup.
   server.keepAliveTimeout = 30_000;
@@ -73,7 +83,7 @@ export async function benchmarkDecisionTransport(requests: number) {
     const address = server.address();
     assert(address && typeof address === "object");
     let provider: DecisionProviderV1 | undefined;
-    plugin.register({
+    const fixtureApi = {
       runtime: {
         config: {
           current: () => ({
@@ -89,7 +99,12 @@ export async function benchmarkDecisionTransport(requests: number) {
         assert.equal(registered.contractVersion, 1);
         provider = registered as DecisionProviderV1;
       },
-    } as OpenClawPluginApi);
+    } satisfies {
+      runtime: { config: Pick<OpenClawPluginApi["runtime"]["config"], "current"> };
+      registerDecisionProvider: OpenClawPluginApi["registerDecisionProvider"];
+    };
+    // This fixture supplies only the host surfaces used by TypeSafe registration.
+    plugin.register(fixtureApi as unknown as OpenClawPluginApi);
     assert(provider);
     assert.equal(provider.isReady?.(), true);
     const batch = {
@@ -106,11 +121,14 @@ export async function benchmarkDecisionTransport(requests: number) {
     let peakRssBytes = memoryBefore.rss;
     for (let index = 0; index < requests; index++) {
       const started = performance.now();
-      const outcome = await provider.evaluate(batch, {
+      const outcome: ProviderDecisionOutcome = await provider.evaluate(batch, {
         model: "kev-latest",
         signal: AbortSignal.timeout(5000),
         deadlineMonotonicMs: started + 5000,
       });
+      if (fixtureError) {
+        throw fixtureError;
+      }
       timingsMs.push(performance.now() - started);
       assert.equal(outcome.status, "ok");
       if (outcome.status !== "ok") {

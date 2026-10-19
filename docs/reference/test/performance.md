@@ -204,7 +204,7 @@ answers, completed request counts, accepted TCP connections, and explicit
 transport-pool teardown. No credentials or billed inference are used.
 
 Prepare separate, clean source checkouts with their own frozen dependencies for
-the baseline and candidate. Overlay the same benchmark worker and
+the baseline and candidate. Overlay the same benchmark builder, worker, and
 `scripts/lib/{benchmark-harness,arg-utils}.mts` on both checkouts. Build once in
 each checkout, outside the measured interval:
 

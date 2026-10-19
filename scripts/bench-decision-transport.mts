@@ -71,9 +71,9 @@ function artifact(manifestPath: string) {
     assert(isRecord(output));
     assert(typeof output.file === "string" && !path.isAbsolute(output.file));
     assert(!output.file.split(/[\\/]/u).includes(".."));
-    const bytes = readFileSync(path.join(path.dirname(manifestPath), output.file));
+    const outputBytes = readFileSync(path.join(path.dirname(manifestPath), output.file));
     const sha256 = hash(output.sha256);
-    assert.equal(createHash("sha256").update(bytes).digest("hex"), sha256);
+    assert.equal(createHash("sha256").update(outputBytes).digest("hex"), sha256);
     return { file: output.file, sha256 };
   });
   assert(outputs.some((output) => output.file === value.entry));
