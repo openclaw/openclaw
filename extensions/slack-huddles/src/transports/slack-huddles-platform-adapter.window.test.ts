@@ -327,3 +327,28 @@ it.each([
     }
   },
 );
+
+it("stops acting on the huddle window when another session takes over mid-status", async () => {
+  const mute = muteControl(false);
+  const opened = huddleWindow(
+    mute,
+    new PageNode("div", { id: "microphone-info" }, "OpenClaw Meeting Audio"),
+    captionRow("Morgan:", "Not for the replaced session."),
+  );
+  const browser = fixture({
+    document: page(channelHeader(true), qaNode("huddle_toolbar__leave_button", "Leave")),
+    currentUrl: CLIENT_URL,
+    window: slackWindow(opened, { ...MARKER, joinRequested: true }),
+    // Runs inside the status script's awaited permission query, before any control is clicked.
+    onPermissionQuery: () => {
+      Object.assign(browser.window, {
+        __openclawSlackHuddle: { ...MARKER, sessionId: "session-2" },
+      });
+    },
+  });
+  await browser.status({ readOnly: true });
+  (browser.window.open as (url: string) => unknown)("about:blank");
+  const result = await browser.status({ mode: "agent", captureCaptions: true });
+  expect(mute.clicks).toBe(0);
+  expect(result).toMatchObject({ captioning: false, transcriptLines: 0 });
+});
