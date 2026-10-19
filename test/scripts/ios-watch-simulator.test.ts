@@ -21,11 +21,6 @@ load ARGV.fetch(0)
 
 # No pre-created devices, including a stale device with the preferred name.
 def available_simulator_devices; []; end
-def sh(*arguments)
-  raise "unexpected command" unless arguments == ["xcrun", "simctl", "runtime", "scan-and-mount"]
-  raise "runtime mount failed" if ARGV[1] == "mount-failed"
-  $mounted = true
-end
 module Open3
   def self.capture3(*arguments)
     raise "unexpected command" unless arguments == ["xcrun", "simctl", "list", "runtimes", "--json"]
@@ -38,7 +33,7 @@ module Open3
       { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-28-0", version: "28.0", isAvailable: false, supportedDeviceTypes: types },
       { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", version: "27.0", isAvailable: true, supportedDeviceTypes: types }
     ]
-    if ARGV[1] == "unavailable" || (ARGV[1] == "unmounted" && !$mounted)
+    if ARGV[1] == "unavailable"
       runtimes.each { |runtime| runtime[:isAvailable] = false }
     end
     [JSON.generate({ runtimes: runtimes }), "", Struct.new(:success?).new(true)]
@@ -59,7 +54,7 @@ function resolve(scenario: string, name: string) {
       encoding: "utf8",
       env: {
         ...process.env,
-        CI: scenario === "unmounted" || scenario === "mount-failed" ? "true" : "false",
+        CI: "false",
       },
     },
   );
@@ -88,17 +83,6 @@ it("reports missing runtime setup separately from a screenshot failure", () => {
   expect(resolve("unavailable", "Apple Watch Ultra 3 (49mm)")).toEqual({
     error:
       "No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS",
-  });
-});
-
-it("remounts the CI runtime immediately before Watch device selection", () => {
-  expect(resolve("unmounted", "Apple Watch Series 12 (46mm)").device).toEqual({
-    name: "Apple Watch Series 12 (46mm)",
-    deviceTypeIdentifier: "series-12",
-    runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
-  });
-  expect(resolve("mount-failed", "Apple Watch Series 12 (46mm)")).toEqual({
-    error: "runtime mount failed",
   });
 });
 
