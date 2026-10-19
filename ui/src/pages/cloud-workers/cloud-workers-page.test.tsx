@@ -29,7 +29,6 @@ import {
   change,
   click,
   configSnapshot,
-  field,
   machineProfile,
   waitText,
 } from "./cloud-workers.test-support.ts";
@@ -68,7 +67,10 @@ function mountProfiles(client: GatewayBrowserClient) {
     gatewayHarness,
     runtimeConfig,
     view,
-    page: field(view.container, "openclaw-cloud-workers-page"),
+    page: expectDefined(
+      view.container.querySelector("openclaw-cloud-workers-page"),
+      "Cloud workers page",
+    ),
   };
 }
 
@@ -255,14 +257,17 @@ it.each([
           }
           change(select, expectDefined(target, "Selected OS"));
         }
-        change(field<HTMLTextAreaElement>(page, "textarea"), "");
+        change(
+          expectDefined(page.querySelector<HTMLTextAreaElement>("textarea"), "Setup command"),
+          "",
+        );
         await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
         click(page, "Save");
         await waitText(() => page, "Enter a setup command or clear the setup environment names.");
         expect(patches).toHaveLength(0);
-        const setupEnv = field<HTMLInputElement>(
-          page,
-          'input[aria-label="Setup environment names"]',
+        const setupEnv = expectDefined(
+          page.querySelector<HTMLInputElement>('input[aria-label="Setup environment names"]'),
+          "Setup environment names",
         );
         expect(setupEnv.value).toBe("QA_WORKER_FLAG");
         change(setupEnv, "");

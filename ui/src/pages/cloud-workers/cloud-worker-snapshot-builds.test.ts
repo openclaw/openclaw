@@ -23,7 +23,6 @@ import {
   preparedInventory,
   machineProfile,
   change,
-  field,
 } from "./cloud-workers.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -102,7 +101,13 @@ it("refreshes rebuild eligibility after a machine configuration save", async () 
   await waitText(() => sheet(page), "01234567");
   expect(button(sheet(page), "Rebuild").disabled).toBe(true);
   click(page, "Edit");
-  change(field<HTMLSelectElement>(page, 'select[aria-label="Warm images"]'), "on");
+  change(
+    expectDefined(
+      page.querySelector<HTMLSelectElement>('select[aria-label="Warm images"]'),
+      "Warm images",
+    ),
+    "on",
+  );
   button(page, "Save").click();
   await waitForSolid(() =>
     expect(page.querySelector('select[aria-label="Warm images"]')).toBeNull(),
