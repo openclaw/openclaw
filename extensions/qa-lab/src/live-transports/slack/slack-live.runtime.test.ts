@@ -103,6 +103,17 @@ const fallbackContext = {
   timeoutMs: 0,
 };
 
+function runFallback(
+  postMessage: (payload: Record<string, unknown>) => Promise<unknown>,
+  history: () => Promise<unknown>,
+) {
+  return runSlackTableInvalidBlocksFallbackScenario({
+    ...fallbackContext,
+    sutWriteClient: { chat: { postMessage } } as never,
+    sutReadClient: { conversations: { history } } as never,
+  });
+}
+
 describe("Slack live QA runtime helpers", () => {
   beforeAll(async () => {
     // Warm the real action graph outside the scenario deadlines.
@@ -157,15 +168,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("surfaces MPIM cleanup failures and retains ownership for a retry", async () => {
-    const run = findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
-    if (
-      !run ||
-      run.kind === "approval" ||
-      run.kind === "codex-approval" ||
-      run.kind === "direct-transport"
-    ) {
-      throw new Error("expected Slack MPIM message scenario");
-    }
+    const run = buildSlackMessageRun("slack-mpim-app-mention-dedupe", "U_SUT");
     const close = vi
       .fn()
       .mockRejectedValueOnce(new Error("close failed"))
@@ -192,10 +195,7 @@ describe("Slack live QA runtime helpers", () => {
     await expect(run.cleanup?.(context)).rejects.toThrow("close failed again");
     await expect(run.cleanup?.(context)).resolves.toBeUndefined();
 
-    expect(close).toHaveBeenCalledTimes(3);
-    expect(close).toHaveBeenNthCalledWith(1, { channel: "C_MPIM" });
-    expect(close).toHaveBeenNthCalledWith(2, { channel: "C_MPIM" });
-    expect(close).toHaveBeenNthCalledWith(3, { channel: "C_MPIM" });
+    expect(close.mock.calls).toEqual(Array.from({ length: 3 }, () => [{ channel: "C_MPIM" }]));
   });
 
   it("sends an MPIM recall only for a valid threaded seed, without leaking its nonce", async () => {
@@ -608,12 +608,7 @@ describe("Slack live QA runtime helpers", () => {
         user: "U999999999",
       })),
     }));
-    const client = { chat: { postMessage } };
-    const result = await runSlackTableInvalidBlocksFallbackScenario({
-      ...fallbackContext,
-      sutReadClient: { conversations: { history } } as never,
-      sutWriteClient: client as never,
-    });
+    const result = await runFallback(postMessage, history);
     expect(postMessage).toHaveBeenCalledTimes(3);
     expect(
       stored.every((payload) => !Object.hasOwn(payload, "blocks") && payload.mrkdwn === false),
@@ -626,7 +621,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(result.message).toMatchObject({ ts: "2.000003", user: "U999999999" });
     expect(result.details).toContain("API attempts=4");
     expect(result.details).toContain("complete delivery=true");
-    expect(client.chat.postMessage).toBe(postMessage);
   });
 
   it("bounds invalid_blocks readback diagnostics", async () => {
@@ -637,21 +631,13 @@ describe("Slack live QA runtime helpers", () => {
       ok: true,
       ts: `2.00000${++count}`,
     }));
-    const error = await runSlackTableInvalidBlocksFallbackScenario({
-      ...fallbackContext,
-      sutWriteClient: { chat: { postMessage } } as never,
-      sutReadClient: {
-        conversations: {
-          history: async () => ({
-            messages: [3, 2, 1].map((index) => ({
-              text: index === 1 ? malformed : "",
-              ts: `2.00000${index}`,
-              user: "U999999999",
-            })),
-          }),
-        },
-      } as never,
-    }).catch((caught: unknown) => caught);
+    const error = await runFallback(postMessage, async () => ({
+      messages: [3, 2, 1].map((index) => ({
+        text: index === 1 ? malformed : "",
+        ts: `2.00000${index}`,
+        user: "U999999999",
+      })),
+    })).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     if (!(error instanceof Error)) {
       throw new Error("expected readback failure");
@@ -668,41 +654,28 @@ describe("Slack live QA runtime helpers", () => {
         data: { error: "unsafe private detail", ok: false },
       }),
     );
-    const client = { chat: { postMessage } };
-    await expect(
-      runSlackTableInvalidBlocksFallbackScenario({
-        ...fallbackContext,
-        sutReadClient: { conversations: { history: vi.fn() } } as never,
-        sutWriteClient: client as never,
-      }),
-    ).rejects.toThrow(
+    await expect(runFallback(postMessage, vi.fn())).rejects.toThrow(
       "Slack fallback part 1 failed after invalid_blocks; observed no fallback API failure code",
     );
     expect(postMessage).toHaveBeenCalledTimes(1);
-    expect(client.chat.postMessage).toBe(postMessage);
   });
 
-  it("adds the message tool to an explicit allowlist without mixing tool policies", () => {
-    const scenario = findScenario(["slack-reaction-glyph-native"])[0];
-    const cfg = buildSlackConfigFixture(
-      { tools: { allow: ["read"] } },
-      { overrides: scenario?.configOverrides },
-    );
-
-    expect(cfg.tools?.allow).toEqual(["read", "message"]);
-    expect(cfg.tools?.alsoAllow).toBeUndefined();
-  });
-
-  it("preserves an empty allowlist as allow-all when enabling the message tool", () => {
-    const scenario = findScenario(["slack-reaction-glyph-native"])[0];
-    const cfg = buildSlackConfigFixture(
-      { tools: { allow: [] } },
-      { overrides: scenario?.configOverrides },
-    );
-
-    expect(cfg.tools?.allow).toEqual([]);
-    expect(cfg.tools?.alsoAllow).toEqual(["message"]);
-  });
+  it.each([
+    { allow: ["read"], expected: ["read", "message"], alsoAllow: undefined },
+    { allow: [], expected: [], alsoAllow: ["message"] },
+  ])(
+    "enables the message tool without changing allowlist semantics ($allow)",
+    ({ allow, expected, alsoAllow }) => {
+      const cfg = buildSlackConfigFixture(
+        { tools: { allow } },
+        {
+          overrides: findScenario(["slack-reaction-glyph-native"])[0]?.configOverrides,
+        },
+      );
+      expect(cfg.tools?.allow).toEqual(expected);
+      expect(cfg.tools?.alsoAllow).toEqual(alsoAllow);
+    },
+  );
 
   it("verifies the reaction scenario using the SUT-owned normalized glyph", async () => {
     const run = buildSlackReplyRun("slack-reaction-glyph-native");
@@ -732,18 +705,10 @@ describe("Slack live QA runtime helpers", () => {
       sessionKey: "agent:qa:approval",
       stopGateway,
     });
-    expect(call).toHaveBeenNthCalledWith(
-      1,
-      "chat.abort",
-      { runId: "run-123", sessionKey: "agent:qa:approval" },
-      { timeoutMs: 10_000 },
-    );
-    expect(call).toHaveBeenNthCalledWith(
-      2,
-      "agent.wait",
-      { runId: "run-123", timeoutMs: 10_000 },
-      { timeoutMs: 15_000 },
-    );
+    expect(call.mock.calls).toEqual([
+      ["chat.abort", { runId: "run-123", sessionKey: "agent:qa:approval" }, { timeoutMs: 10_000 }],
+      ["agent.wait", { runId: "run-123", timeoutMs: 10_000 }, { timeoutMs: 15_000 }],
+    ]);
     expect(stopGateway).toHaveBeenCalledWith(true);
     expect(stopGateway.mock.invocationCallOrder[0]).toBeGreaterThan(
       call.mock.invocationCallOrder[1]!,
@@ -819,25 +784,11 @@ function buildNativeDataRun(kind: "chart" | "table") {
   if (!summary) {
     throw new Error("missing Slack native summary marker");
   }
-  const accessibleText = [
-    summary,
-    "",
-    ...(kind === "chart"
-      ? [
-          "QA latency trend (line chart)",
-          "X axis: Percentile",
-          "Y axis: Milliseconds",
-          "- Latency: P50: 120; P95: 240",
-        ]
-      : [
-          "QA pipeline report (table)",
-          "Account\tStage\tARR",
-          "Acme\tWon\t125000",
-          "Globex\tReview\t82000",
-        ]),
-  ]
-    .join("\n")
-    .replace(/\s+/gu, " ");
+  const accessibleText = `${summary} ${
+    kind === "chart"
+      ? "QA latency trend (line chart) X axis: Percentile Y axis: Milliseconds - Latency: P50: 120; P95: 240"
+      : "QA pipeline report (table) Account Stage ARR Acme Won 125000 Globex Review 82000"
+  }`;
   return {
     ...run,
     afterReply: run.afterReply,

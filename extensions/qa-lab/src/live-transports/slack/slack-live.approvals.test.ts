@@ -187,12 +187,9 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
       );
     }
     expect(phases).toEqual([
-      "agent",
-      "observe-pending",
-      "plugin.approval.list",
-      "checkpoint-pending",
-      "plugin.approval.resolve",
-      "agent.wait",
+      ..."agent observe-pending plugin.approval.list checkpoint-pending plugin.approval.resolve agent.wait".split(
+        " ",
+      ),
       ...(outcome === "failed" ? [] : ["chat.history"]),
       ...(outcome === "ok" ? ["observe-resolved", "checkpoint-resolved"] : []),
       "chat.abort",
@@ -284,14 +281,10 @@ it("allows live approval decision RPCs to take longer than the generic gateway p
     scenario: { id: "slack-approval", title: "Slack approval", timeoutMs: 1_000 },
     sutAccountId: "sut",
   });
-  expect(call).toHaveBeenCalledWith(
-    "plugin.approval.resolve",
-    { decision: "allow-once", id: "plugin:owned" },
-    { expectFinal: false, timeoutMs: 35_000 },
-  );
-  expect(call).toHaveBeenCalledWith(
-    "plugin.approval.waitDecision",
-    { id: "plugin:owned" },
-    { expectFinal: true, timeoutMs: 35_000 },
-  );
+  for (const [method, input, expectFinal] of [
+    ["plugin.approval.resolve", { decision: "allow-once", id: "plugin:owned" }, false],
+    ["plugin.approval.waitDecision", { id: "plugin:owned" }, true],
+  ] as const) {
+    expect(call).toHaveBeenCalledWith(method, input, { expectFinal, timeoutMs: 35_000 });
+  }
 });

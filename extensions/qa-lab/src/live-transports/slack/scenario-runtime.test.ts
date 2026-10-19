@@ -1,10 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runSlackScenario } from "./scenario-runtime.js";
-import type {
-  SlackMessage,
-  SlackQaMessageScenarioRun,
-  SlackQaScenarioImplementation,
-} from "./slack-live.contracts.js";
+import type { SlackMessage, SlackQaScenarioRun } from "./slack-live.contracts.js";
 import {
   slackQaChartPresentationNativeScenario,
   slackQaMpimAppMentionDedupeScenario,
@@ -19,43 +15,51 @@ const { runSlackApprovalScenario, runSlackCodexApprovalScenario } = vi.hoisted((
 vi.mock("./slack-live.approvals.js", () => ({ runSlackApprovalScenario }));
 vi.mock("./slack-live.codex-approval-runner.js", () => ({ runSlackCodexApprovalScenario }));
 
-function createMessageRuntime(
-  run: SlackQaMessageScenarioRun,
-  channelId: string,
-  reply: SlackMessage,
-) {
+function fixture(run: SlackQaScenarioRun, channelId = "C_QA", reply?: SlackMessage) {
   const postMessage = vi.fn().mockResolvedValue({ channel: channelId, ts: "1.000000" });
   const history = vi.fn().mockResolvedValue({ messages: [reply] });
   const writes = vi.fn().mockResolvedValue([]);
   const environment = {
     channelId,
-    configureScenario: vi
-      .fn()
-      .mockResolvedValue({ cfg: {}, primaryModel: "mock-openai/gpt-5.6-luna", run }),
-    context: {
-      driverClient: { chat: { postMessage } },
-      sutReadClient: { conversations: { history } },
-    },
+    configureScenario: vi.fn().mockResolvedValue({
+      cfg: {},
+      primaryModel: `${reply ? "mock-openai" : "openai"}/gpt-5.6-luna`,
+      run,
+    }),
+    context: reply
+      ? {
+          driverClient: { chat: { postMessage } },
+          sutReadClient: { conversations: { history } },
+        }
+      : {},
     getMessageWriteCursor: () => 0,
     observedMessages: [],
     readMessageWrites: writes,
-    scenario: {
-      id: "slack-mpim-app-mention-dedupe",
-      timeoutMs: 1_000,
-      title: "Slack MPIM app mention dispatches once with thread context",
-    },
-    sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+    scenario: { id: "slack-runtime", title: "Slack runtime", timeoutMs: reply ? 1_000 : 30_000 },
+    stopGateway: vi.fn(),
+    sutAccountId: "sut",
+    sutIdentity: { userId: "U_SUT", ...(reply ? { botId: "B_SUT" } : {}) },
   };
-  return { env: environment as never, environment, postMessage, history, writes };
+  return {
+    env: environment as never,
+    implementation: { buildRun: () => run },
+    postMessage,
+    history,
+    writes,
+  };
 }
+
+const sutMessage = (text: string, ts: string, thread_ts?: string): SlackMessage => ({
+  bot_id: "B_SUT",
+  user: "U_SUT",
+  text,
+  ts,
+  thread_ts,
+});
 
 function createMpimRuntime() {
   const builtRun = slackQaMpimAppMentionDedupeScenario.buildRun("U_SUT");
-  if (
-    builtRun.kind === "approval" ||
-    builtRun.kind === "codex-approval" ||
-    builtRun.kind === "direct-transport"
-  ) {
+  if (!("input" in builtRun)) {
     throw new Error("expected Slack MPIM message scenario");
   }
   const markerText = `${builtRun.matchText}_BOT_TESTNONCE`;
@@ -67,40 +71,9 @@ function createMpimRuntime() {
     settleObservedMs: undefined,
   };
   return {
-    ...createMessageRuntime(run, "C_MPIM", {
-      bot_id: "B_SUT",
-      text: markerText,
-      thread_ts: "1.000000",
-      ts: "2.000000",
-      user: "U_SUT",
-    }),
+    ...fixture(run, "C_MPIM", sutMessage(markerText, "2.000000", "1.000000")),
     marker: markerText,
   };
-}
-
-function createScenarioRuntime(run: ReturnType<SlackQaScenarioImplementation["buildRun"]>) {
-  const implementation = {
-    buildRun: () => run,
-  } satisfies SlackQaScenarioImplementation;
-  const environment = {
-    channelId: "C_QA",
-    configureScenario: vi.fn().mockResolvedValue({
-      cfg: {},
-      primaryModel: "openai/gpt-5.6-luna",
-      run,
-    }),
-    context: {},
-    observedMessages: [],
-    scenario: {
-      id: "slack-rtt",
-      timeoutMs: 30_000,
-      title: "Slack RTT",
-    },
-    stopGateway: vi.fn(),
-    sutAccountId: "sut",
-    sutIdentity: { userId: "U_SUT" },
-  };
-  return { environment: environment as never, implementation };
 }
 
 const requestStartedAt = "2026-09-03T12:00:00.000Z";
@@ -110,161 +83,136 @@ function expectRttEvidence(
   rttMs: number,
   source: "approval-request-to-resolution" | "request-to-observed-message",
 ) {
-  expect(result).toEqual(
-    expect.objectContaining({
+  expect(result).toMatchObject({
+    requestStartedAt,
+    responseObservedAt,
+    rttMs,
+    rttMeasurement: {
+      finalMatchedReplyRttMs: rttMs,
       requestStartedAt,
       responseObservedAt,
-      rttMs,
-      rttMeasurement: {
-        finalMatchedReplyRttMs: rttMs,
-        requestStartedAt,
-        responseObservedAt,
-        source,
-      },
-    }),
-  );
+      source,
+    },
+  });
 }
 
-describe("Slack scenario runtime capture merge", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.clearAllMocks();
-  });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.clearAllMocks();
+});
 
-  it.each([
-    { kind: "chart", implementation: slackQaChartPresentationNativeScenario },
-    { kind: "table", implementation: slackQaTablePresentationNativeScenario },
-  ])(
-    "captures the native $kind write before waiting for its final reply",
-    async ({ kind, implementation }) => {
-      const builtRun = implementation.buildRun("U_SUT");
-      if (
-        builtRun.kind === "approval" ||
-        builtRun.kind === "codex-approval" ||
-        builtRun.kind === "direct-transport"
-      ) {
-        throw new Error(`expected Slack native ${kind} message scenario`);
-      }
-      const summaryText = builtRun.input.match(
-        new RegExp(`SLACK_QA_${kind.toUpperCase()}_SUMMARY_[A-Z0-9]+`, "u"),
-      )?.[0];
-      const finalMarker = builtRun.matchText;
-      if (!summaryText) {
-        throw new Error(`missing Slack native ${kind} summary marker`);
-      }
-      const runtime = createMessageRuntime({ ...builtRun, afterReply: undefined }, "C_NATIVE", {
-        bot_id: "B_SUT",
-        text: finalMarker,
-        ts: "3.000000",
-        user: "U_SUT",
-      });
-      runtime.writes.mockResolvedValue([
-        { channelId: "C_NATIVE", text: summaryText, ts: "2.000000" },
-      ]);
-      runtime.environment.scenario = {
-        id: `slack-${kind}-presentation-native`,
-        timeoutMs: 1_000,
-        title: kind,
-      };
-
-      await expect(runSlackScenario(runtime.env, implementation)).resolves.toEqual(
-        expect.objectContaining({ details: expect.stringContaining("reply matched") }),
-      );
-      expect(runtime.writes.mock.invocationCallOrder[0]).toBeLessThan(
-        runtime.history.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-    },
-  );
-
-  it("returns structured RTT evidence for a matched reply", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime("2026-09-03T12:00:00.000Z");
-    const runtime = createMpimRuntime();
-    runtime.postMessage.mockImplementationOnce(async () => {
-      vi.advanceTimersByTime(1_750);
-      return { channel: "C_MPIM", ts: "1.000000" };
-    });
-
-    expectRttEvidence(
-      await runSlackScenario(runtime.env, slackQaMpimAppMentionDedupeScenario),
-      "2026-09-03T12:00:01.750Z",
-      1_750,
-      "request-to-observed-message",
-    );
-  });
-
-  it("returns structured RTT evidence for a native approval", async () => {
-    const runtime = createScenarioRuntime({
-      approvalKind: "exec",
-      decision: "allow-once",
-      kind: "approval",
-      token: "SLACK_QA_APPROVAL",
-    });
-    runSlackApprovalScenario.mockResolvedValueOnce({
-      artifact: { approvalId: "approval-1" },
-      requestStartedAt: new Date("2026-09-03T12:00:00.000Z"),
-      responseObservedAt: new Date("2026-09-03T12:00:01.250Z"),
-      rttMs: 1_250,
-    });
-
-    expectRttEvidence(
-      await runSlackScenario(runtime.environment, runtime.implementation),
-      "2026-09-03T12:00:01.250Z",
-      1_250,
-      "approval-request-to-resolution",
-    );
-  });
-
-  it("returns structured RTT evidence for a Codex approval", async () => {
-    const runtime = createScenarioRuntime({
-      approvalKind: "plugin",
-      appServerMethod: "item/commandExecution/requestApproval",
-      decision: "allow-once",
-      kind: "codex-approval",
-      token: "SLACK_QA_CODEX_APPROVAL",
-    });
-    runSlackCodexApprovalScenario.mockResolvedValueOnce({
-      artifact: { approvalId: "approval-2" },
-      requestStartedAt: new Date("2026-09-03T12:00:00.000Z"),
-      responseObservedAt: new Date("2026-09-03T12:00:02.500Z"),
-      rttMs: 2_500,
-    });
-
-    expectRttEvidence(
-      await runSlackScenario(runtime.environment, runtime.implementation),
-      "2026-09-03T12:00:02.500Z",
-      2_500,
-      "approval-request-to-resolution",
-    );
-  });
-
-  it.each([
-    ["ignores off-channel captured commentary", "C_OTHER", "commentary", "1.500000", undefined],
-    [
-      "rejects a second same-channel non-marker response",
-      "C_MPIM",
-      "commentary",
-      "2.500000",
-      "1 marker match(es)",
-    ],
-    ["rejects two marker responses", "C_MPIM", "MARKER", "2.500000", "2 marker match(es)"],
-    ["deduplicates the same Slack timestamp", "C_MPIM", "MARKER", "2.000000", undefined],
-  ])("%s", async (_label, channelId, capturedText, ts, expectedMarkerCount) => {
-    const runtime = createMpimRuntime();
-    runtime.writes.mockResolvedValue([
-      {
-        channelId,
-        text: capturedText === "MARKER" ? runtime.marker : capturedText,
-        ts,
-      },
-    ]);
-    const result = runSlackScenario(runtime.env, slackQaMpimAppMentionDedupeScenario);
-    if (expectedMarkerCount) {
-      await expect(result).rejects.toThrow(`got 2 response(s) and ${expectedMarkerCount}`);
-      return;
+it.each([
+  { kind: "chart", implementation: slackQaChartPresentationNativeScenario },
+  { kind: "table", implementation: slackQaTablePresentationNativeScenario },
+])(
+  "captures the native $kind write before waiting for its final reply",
+  async ({ kind, implementation }) => {
+    const builtRun = implementation.buildRun("U_SUT");
+    if (!("input" in builtRun)) {
+      throw new Error(`expected Slack native ${kind} message scenario`);
     }
-    await expect(result).resolves.toEqual(
-      expect.objectContaining({ details: expect.stringContaining("one MPIM reply observed") }),
+    const summaryText = builtRun.input.match(
+      new RegExp(`SLACK_QA_${kind.toUpperCase()}_SUMMARY_[A-Z0-9]+`, "u"),
+    )?.[0];
+    const finalMarker = builtRun.matchText;
+    if (!summaryText) {
+      throw new Error(`missing Slack native ${kind} summary marker`);
+    }
+    const runtime = fixture(
+      { ...builtRun, afterReply: undefined },
+      "C_NATIVE",
+      sutMessage(finalMarker, "3.000000"),
     );
+    runtime.writes.mockResolvedValue([
+      { channelId: "C_NATIVE", text: summaryText, ts: "2.000000" },
+    ]);
+
+    await expect(runSlackScenario(runtime.env, implementation)).resolves.toEqual(
+      expect.objectContaining({ details: expect.stringContaining("reply matched") }),
+    );
+    expect(runtime.writes.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.history.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  },
+);
+
+it("returns structured RTT evidence for a matched reply", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime("2026-09-03T12:00:00.000Z");
+  const runtime = createMpimRuntime();
+  runtime.postMessage.mockImplementationOnce(async () => {
+    vi.advanceTimersByTime(1_750);
+    return { channel: "C_MPIM", ts: "1.000000" };
   });
+
+  expectRttEvidence(
+    await runSlackScenario(runtime.env, slackQaMpimAppMentionDedupeScenario),
+    "2026-09-03T12:00:01.750Z",
+    1_750,
+    "request-to-observed-message",
+  );
+});
+
+it.each([
+  ["native", "exec", "approval", "SLACK_QA_APPROVAL", "approval-1", "01.250", 1_250],
+  ["Codex", "plugin", "codex-approval", "SLACK_QA_CODEX_APPROVAL", "approval-2", "02.500", 2_500],
+] as const)(
+  "returns structured RTT evidence for a %s approval",
+  async (_label, approvalKind, kind, token, approvalId, time, rttMs) => {
+    const base = { approvalKind, decision: "allow-once" as const, token };
+    const runtime = fixture(
+      kind === "codex-approval"
+        ? {
+            ...base,
+            approvalKind: "plugin",
+            kind,
+            appServerMethod: "item/commandExecution/requestApproval",
+          }
+        : { ...base, kind },
+    );
+    const responseObservedAt = `2026-09-03T12:00:${time}Z`;
+    const runner = kind === "approval" ? runSlackApprovalScenario : runSlackCodexApprovalScenario;
+    runner.mockResolvedValueOnce({
+      artifact: { approvalId },
+      requestStartedAt: new Date(requestStartedAt),
+      responseObservedAt: new Date(responseObservedAt),
+      rttMs,
+    });
+    expectRttEvidence(
+      await runSlackScenario(runtime.env, runtime.implementation),
+      responseObservedAt,
+      rttMs,
+      "approval-request-to-resolution",
+    );
+  },
+);
+
+it.each([
+  ["ignores off-channel captured commentary", "C_OTHER", "commentary", "1.500000", undefined],
+  [
+    "rejects a second same-channel non-marker response",
+    "C_MPIM",
+    "commentary",
+    "2.500000",
+    "1 marker match(es)",
+  ],
+  ["rejects two marker responses", "C_MPIM", "MARKER", "2.500000", "2 marker match(es)"],
+  ["deduplicates the same Slack timestamp", "C_MPIM", "MARKER", "2.000000", undefined],
+])("%s", async (_label, channelId, capturedText, ts, expectedMarkerCount) => {
+  const runtime = createMpimRuntime();
+  runtime.writes.mockResolvedValue([
+    {
+      channelId,
+      text: capturedText === "MARKER" ? runtime.marker : capturedText,
+      ts,
+    },
+  ]);
+  const result = runSlackScenario(runtime.env, slackQaMpimAppMentionDedupeScenario);
+  if (expectedMarkerCount) {
+    await expect(result).rejects.toThrow(`got 2 response(s) and ${expectedMarkerCount}`);
+    return;
+  }
+  await expect(result).resolves.toEqual(
+    expect.objectContaining({ details: expect.stringContaining("one MPIM reply observed") }),
+  );
 });

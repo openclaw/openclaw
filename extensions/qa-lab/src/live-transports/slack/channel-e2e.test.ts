@@ -10,7 +10,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const nativeWrite = (
   requestEventId: number,
   messageId: string,
-  threadId: string,
+  threadId?: string,
   channelId = "C_QA",
 ): SlackNativeWrite => ({
   evidence: "api-accepted",
@@ -27,6 +27,13 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
   const writes: SlackNativeWrite[] = [];
   let leaseAlive = true;
   let nextId = 1;
+  const deleteMessage = async ({ ts }: { ts: string }) => {
+    const index = messages.findIndex((message) => message.ts === ts);
+    if (index >= 0) {
+      messages.splice(index, 1);
+    }
+    return { ok: true };
+  };
   const driverClient = {
     auth: { test: vi.fn(async () => ({ user_id: "U_DRIVER", team_id: "T_QA" })) },
     conversations: { history: vi.fn(async () => ({ messages: [] })) },
@@ -37,13 +44,7 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
         return { channel: "C_QA", ts };
       }),
       update: vi.fn(async () => ({ ok: true })),
-      delete: vi.fn(async ({ ts }: { ts: string }) => {
-        const index = messages.findIndex((message) => message.ts === ts);
-        if (index >= 0) {
-          messages.splice(index, 1);
-        }
-        return { ok: true };
-      }),
+      delete: vi.fn(deleteMessage),
     },
     reactions: {
       add: vi.fn(async () => ({ ok: true })),
@@ -95,7 +96,7 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
   });
   return {
     session,
-    controller,
+    deleteMessage,
     driverClient,
     sutClient,
     messages,
@@ -148,22 +149,16 @@ describe("Slack agent E2E ownership", () => {
     ];
     f.messages.push(...outputs.map((message) => ({ ...message, user: "U_SUT" })), ...unrelated);
     for (const message of [...outputs, ...unrelated.slice(1)]) {
-      f.writes.push({
-        evidence: "api-accepted",
-        requestEventId: Number(message.ts),
-        method: "chat.postMessage",
-        channelId: message.ts === "7.000000" ? "C_OTHER" : "C_QA",
-        messageId: message.ts,
-        threadId: message.ts === "8.000000" ? "foreign" : undefined,
-      });
+      f.writes.push(
+        nativeWrite(
+          Number(message.ts),
+          message.ts,
+          message.ts === "8.000000" ? "foreign" : undefined,
+          message.ts === "7.000000" ? "C_OTHER" : "C_QA",
+        ),
+      );
     }
-    f.sutClient.chat.delete.mockImplementation(async ({ ts }) => {
-      const index = f.messages.findIndex((message) => message.ts === ts);
-      if (index >= 0) {
-        f.messages.splice(index, 1);
-      }
-      return { ok: true };
-    });
+    f.sutClient.chat.delete.mockImplementation(f.deleteMessage);
     const run = {
       expectReply: true,
       input: "owned scenario",
@@ -196,9 +191,8 @@ describe("Slack agent E2E ownership", () => {
     }
     expect(f.messages).toEqual(unrelated);
     const artifact = JSON.parse(await f.artifact());
-    expect(artifact.ownedMessages).toHaveLength(5);
-    expect(artifact.ownedMessages.every((receipt: { deleted: boolean }) => receipt.deleted)).toBe(
-      true,
+    expect(artifact.ownedMessages).toMatchObject(
+      Array.from({ length: 5 }, () => ({ deleted: true })),
     );
     expect(f.sutClient.chat.delete.mock.calls.map(([input]) => input.ts).toSorted()).toEqual(
       outputs.map((message) => message.ts),
