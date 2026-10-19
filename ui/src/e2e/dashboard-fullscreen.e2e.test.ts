@@ -561,7 +561,7 @@ suite.define(() => {
         true,
       );
       expect(await note.inputValue()).toBe("Keep this draft");
-      await focusChatSidePanel(page);
+      await selectChatLayoutAction(page, "Focus");
       await frame.waitFor({ state: "visible" });
       await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       await gateway.setMethodResponse("board.get", {

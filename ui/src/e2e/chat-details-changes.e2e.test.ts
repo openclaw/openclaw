@@ -72,12 +72,13 @@ suite.define(() => {
       .filter({ visible: true })
       .first()
       .waitFor();
-    await pauseVirtualClock(page);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
     const details = await openChatDetails(page);
     const environment = details.locator('[data-details-group="environment"]');
     const disclosure = environment.locator(":scope > summary");
     const action = environment.getByRole("button", { name: /^Changes/ });
+    await action.waitFor();
+    await pauseVirtualClock(page);
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
     await page.clock.runFor(1);
     await expect.poll(() => action.textContent()).toContain("+248");
@@ -104,7 +105,9 @@ suite.define(() => {
     expect(await action.textContent()).toContain("+248");
     expect(await action.textContent()).toContain("−61");
 
+    await page.clock.resume();
     await closeChatDetails(page);
+    await pauseVirtualClock(page);
     await page.clock.fastForward(60_000);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(2);
     await gateway.setMethodResponse("sessions.diff", {
@@ -117,7 +120,9 @@ suite.define(() => {
       truncated: true,
     });
     await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+    await page.clock.resume();
     await openChatDetails(page);
+    await pauseVirtualClock(page);
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(3);
     expect(await action.textContent()).toContain("+248");
 
