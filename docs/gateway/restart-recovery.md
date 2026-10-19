@@ -1220,8 +1220,9 @@ continuing them; recovery does not rewrite ambiguous history.
 A completed child may still owe its requester a final follow-up. If that
 follow-up is waiting for admission or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection and
-transient preparation failures leave that obligation owed. The requester mailbox
-orders the input under fresh admission; a waiting input has no separate
+transient preparation failures leave that obligation owed. A new completion wave
+waits for interrupted requester work to recover before reserving its mailbox input.
+The requester mailbox orders the input under fresh admission; a waiting input has no separate
 announcement expiry. An observed terminal delivery outcome settles once. If its
 bookkeeping fails, the registry retains that receipt and retries persistence
 without resending the result. The outbound durable delivery queue keeps its own
@@ -1241,6 +1242,9 @@ the gateway, or an explicit restart request), a restart sentinel is written to
 SQLite before the process exits. After boot the gateway posts the outcome back
 to the originating chat and dispatches any requested one-shot continuation turn
 so the agent picks up exactly where it left off, on the same channel and thread.
+If interrupted work defers that continuation before execution, it stays in the
+durable delivery queue and retries through fresh session admission. A deferred
+attempt does not consume the continuation or reuse its retired mailbox input.
 
 For updates, the sentinel carries `stats.runId`, linking the detached updater to
 its durable `update_runs` record. The new Gateway records its observed running

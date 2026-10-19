@@ -509,6 +509,9 @@ export function createDispatchReplyOperationCoordinator(
       }
       if (
         admission.reason === "active-run" &&
+        // Releasing a refused claim retires its source. Its producer must retry
+        // admission instead of resolving queue policy on that consumed input.
+        !mailboxClaim &&
         (allowActiveResolution ||
           shouldLetSlackRoutedThreadBypassBusyReplyOperation({
             activeOperation: admission.activeOperation,
