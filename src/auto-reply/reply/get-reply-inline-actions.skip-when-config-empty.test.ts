@@ -7,7 +7,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
@@ -87,6 +87,8 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
   getLoadedChannelPluginById: (id: string) =>
     id === "slack"
       ? {
+          id: "slack",
+          config: {},
           mentions: {
             stripPatterns: () => [renderedSlackMentionPattern, "<@[^>\\s]+>"],
           },
@@ -104,19 +106,7 @@ async function routeSender(ctx: ReturnType<typeof buildTestCtx>, isGroup: boolea
     shouldContinue: true,
     ...(command.commandBodyNormalized === "/help" ? { reply: { text: "Sender help output" } } : {}),
   }));
-  const routing = resolveReplyDirectiveRouting({
-    commandText: ctx.commandText,
-    agentText: ctx.agentText,
-    modelAliases: [],
-    canInterpretTextDirectives: true,
-    isAuthorizedSender: true,
-    isGroup,
-    wasMentioned: isGroup,
-    ctx,
-    cfg: { commands: { text: true } },
-    agentId: "main",
-    resetTriggered: false,
-  });
+  const routing = await routeReplyDirectivesForTest({ ...ctx, WasMentioned: isGroup }, { isGroup });
   const result = await runTestInlineActions({
     ctx,
     cleanedBody: routing.cleanedBody,

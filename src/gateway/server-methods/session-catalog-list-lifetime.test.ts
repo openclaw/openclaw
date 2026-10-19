@@ -13,7 +13,9 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
-import { SessionCatalogListLifetime } from "./session-catalog-list-lifetime.js";
+import { catalogLog } from "./session-catalog-log.test-support.js";
+
+const { SessionCatalogListLifetime } = await import("./session-catalog-list-lifetime.js");
 
 const host: SessionCatalogHost = {
   hostId: "node:late",
@@ -61,6 +63,69 @@ function preparationGate() {
 }
 
 describe("catalog list completion ownership", () => {
+  it.each([
+    { stage: "preparation", retirement: "none" },
+    { stage: "publication", retirement: "none" },
+    { stage: "preparation", retirement: "lifetime" },
+    { stage: "preparation", retirement: "subscriber" },
+  ])(
+    "reports late $stage failure without losing settlement (retirement=$retirement)",
+    async ({ stage, retirement }) => {
+      const { before, root, lifetime, finish } = admit("catalog-late-delivery-failure");
+      const owner = new GatewayConnectionWork();
+      const preparation = createDeferredCore();
+      const failure = new Error("private fixture session details");
+      let subscriberCurrent = true;
+      const delivered = vi.fn(() => {
+        if (stage === "publication") {
+          throw failure;
+        }
+      });
+      catalogLog.warn.mockClear();
+      try {
+        await owner.track(() =>
+          root.run(async () => {
+            lifetime.subscribe(
+              "active",
+              delivered,
+              () => subscriberCurrent,
+              undefined,
+              () => preparation.promise,
+            );
+            await lifetime.runProvider(
+              () => lifetime.publish(catalog, new Map()),
+              async (params) => params.onHost(host),
+            );
+          }),
+        );
+        finish();
+        expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
+        if (retirement === "lifetime") {
+          lifetime.retire();
+        } else if (retirement === "subscriber") {
+          subscriberCurrent = false;
+        }
+        if (stage === "preparation") {
+          preparation.reject(failure);
+        } else {
+          preparation.resolve();
+        }
+        await owner.drain();
+        expect(delivered).toHaveBeenCalledTimes(stage === "publication" ? 1 : 0);
+        expect(catalogLog.warn.mock.calls).toEqual(
+          retirement !== "none"
+            ? []
+            : [["Session catalog progress update failed; refresh the catalog to retry."]],
+        );
+        expect(getActiveGatewayRootWorkHolders()).toEqual(before);
+      } finally {
+        preparation.resolve();
+        finish();
+        await owner.drain();
+      }
+    },
+  );
+
   it.each([false, true])(
     "owns deferred subscriber delivery and rechecks retirement (retired=%s)",
     async (retired) => {

@@ -235,7 +235,6 @@ it("fences exec while an Allow Always MCP grant commits and publishes the new po
 it("publishes exact native postimages only after the outer commit and retention tombstones", () => {
   const databaseOptions = options();
   const facts = new Map<string, OperatorApprovalRow>();
-  const snapshots: string[][] = [];
   const releaseFacts = operatorApprovalPublication.subscribeFacts((change) => {
     if (change.kind !== "committed") {
       return;
@@ -248,9 +247,6 @@ it("publishes exact native postimages only after the outer commit and retention 
         facts.delete(key);
       }
     }
-  });
-  const releaseObserver = operatorApprovalPublication.subscribe(() => {
-    snapshots.push([...facts.values()].map((row) => `${row.approval_id}:${row.status}`));
   });
   try {
     runOpenClawStateWriteTransaction(() => {
@@ -271,9 +267,9 @@ it("publishes exact native postimages only after the outer commit and retention 
       native.insertOperatorApprovalInDatabase({ approval: approval("second"), databaseOptions });
       expect(facts.size).toBe(0);
     }, databaseOptions);
-    expect(snapshots).toEqual([
-      ["first:pending", "second:pending"],
-      ["first:pending", "second:pending"],
+    expect([...facts.values()].map((row) => `${row.approval_id}:${row.status}`)).toEqual([
+      "first:pending",
+      "second:pending",
     ]);
     native.getOperatorApprovalDetailedInDatabase({ id: "first", nowMs: 10_000, databaseOptions });
     expect(facts.get("first")?.status).toBe("expired");
@@ -301,7 +297,6 @@ it("publishes exact native postimages only after the outer commit and retention 
     expect(facts.size).toBe(0);
   } finally {
     releaseFacts();
-    releaseObserver();
   }
 });
 

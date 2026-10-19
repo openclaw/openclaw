@@ -17,7 +17,7 @@ import {
   resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   formatMemoryCoreSidecarNotice,
   loadMemoryCommandConfig,
@@ -107,8 +107,7 @@ export function emitMemoryCoreSidecarNotice(owner: string, params?: { json?: boo
   emitMemoryCommandWarning(formatMemoryCoreSidecarNotice(owner), Boolean(params?.json));
 }
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asNullableRecord(entry?.config) ?? {};
+  return resolvePluginConfigObject(cfg, "memory-core") ?? {};
 }
 export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const coverage = audit.conceptTagScripts;

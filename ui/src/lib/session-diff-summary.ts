@@ -1,4 +1,5 @@
 import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/index.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
@@ -17,7 +18,6 @@ type Input = {
 };
 const empty = (): Entry => ({ summary: null, stale: false, unavailable: false });
 
-/** Details owns a small metadata cache; the full Review diff has a separate lifetime. */
 export function createSessionDiffSummary(document: Document, isConnected = () => true) {
   let input: Input | undefined;
   let gateway: ApplicationGateway | undefined;
@@ -167,12 +167,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
     get snapshot(): Snapshot {
       return current;
     },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     update(next: Input) {
       if (disposed) {
         return;
@@ -184,6 +179,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
         entries.clear();
         gateway = next.gateway;
         lifecycle = gateway ? createGatewayConnectionLifecycle(gateway.snapshot) : undefined;
+        // Gateway receipts invalidate this Details metadata cache; the full Review diff has a separate lifetime.
         unsubscribe = gateway?.subscribe(connectionChanged);
       }
       select();

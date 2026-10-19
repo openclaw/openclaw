@@ -13,6 +13,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withFileLock } from "./file-lock.js";
 import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
@@ -44,12 +45,7 @@ function nativeFailureDiagnostics(steps: UpdateRunRecord["steps"]): string {
 }
 
 async function readSavedUpdateReport(filePath: string): Promise<string | undefined> {
-  return fs.readFile(filePath, "utf8").catch((error: unknown) => {
-    if (hasErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  return fs.readFile(filePath, "utf8").catch(ignoreMissingPath);
 }
 
 async function writeReportText(
@@ -339,12 +335,9 @@ export async function listRetiredUpdateFailureReportArtifacts(
   prepared: PreparedUpdateFailureReport,
 ): Promise<string[]> {
   const base = path.parse(prepared.savedReportPath);
-  const entries = await fs.readdir(base.dir).catch((error: unknown) => {
-    if (hasErrorCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
-  });
+  const entries = await fs
+    .readdir(base.dir)
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   return entries
     .filter((entry) => isAttemptArtifactName(base, entry))
     .map((entry) => path.join(base.dir, entry));

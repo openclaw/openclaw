@@ -88,6 +88,7 @@ export function createSessionAttention(
         );
       }
     };
+    // Retire the old question client before replacement-connection events arrive.
     const stopGateway = context.gateway.subscribe(synchronize);
     const stopEvents = context.gateway.subscribeEvents((event) => {
       if (host.isConnected) {

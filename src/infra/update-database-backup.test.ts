@@ -17,6 +17,7 @@ import { retireExpiredStandaloneDoctorCaptures } from "./doctor-capture-retentio
 import * as fileDescriptor from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
+import * as sqliteSource from "./sqlite-snapshot-source.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
@@ -230,7 +231,7 @@ it("preserves stopped source WAL bookkeeping during the final inventory check", 
   ]);
 });
 
-it.each(["original-custody", "rollback"] as const)(
+it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
   "preserves committed WAL during %s capture without unused generation scans",
   async (mode) => {
     const f = await fixture();
@@ -241,59 +242,66 @@ it.each(["original-custody", "rollback"] as const)(
       database.exec("PRAGMA journal_mode=WAL; INSERT INTO payload VALUES ('checkpoint pending');");
       family = await Promise.all(files.map((file) => fs.readFile(file)));
     }
-    for (const [index, file] of files.entries()) {
-      await fs.writeFile(file, family[index]!);
-    }
+    await Promise.all(files.map((file, index) => fs.writeFile(file, family[index]!)));
     const generations = vi.spyOn(databaseGenerations, "readUpdatePhysicalDatabaseGenerations");
-    const backup = await createUpdateDatabaseBackupInProcess({
-      ...f.input,
-      inspectionPlan: f.inspectionPlan,
-      preserveSourceArtifacts: true,
-      originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
-    });
-    expect(generations).toHaveBeenCalledTimes(mode === "rollback" ? 2 : 0);
-    expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(family);
-    using retained = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
-    expect(retained.prepare("SELECT value FROM payload ORDER BY rowid").all()).toEqual([
-      { value: "retained" },
-      { value: "checkpoint pending" },
-    ]);
-    if (mode === "rollback") {
-      expect(backup.sourceGenerations[f.shared]).toBe(
-        (await databaseGenerations.readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
-      );
-    } else {
-      expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+    // Observe real parent acquisitions; public discovery and backup still use real workers.
+    const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
+    const scope =
+      mode === "ordinary" || mode === "maintenance"
+        ? createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => {},
+            assertDatabaseAccess: () => {},
+          })
+        : undefined;
+    const input = { ...f.input, preserveSourceArtifacts: true };
+    try {
+      const backup = scope
+        ? await scope.run(() =>
+            createUpdateDatabaseBackup({
+              ...input,
+              backupRoot: path.join(f.root, "maintenance-rollback"),
+              acquisition: mode === "maintenance" ? { mode: "maintenance-owner" } : undefined,
+            }),
+          )
+        : await createUpdateDatabaseBackupInProcess({
+            ...input,
+            inspectionPlan: f.inspectionPlan,
+            originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
+          });
+      if (scope) {
+        const parentPaths = parentImages.mock.calls.map(([file]) => file);
+        expect(parentPaths).toEqual(mode === "maintenance" ? [f.shared] : []);
+        expect(backup.originalCaptureSourcePaths).toBeUndefined();
+      } else {
+        expect(generations).toHaveBeenCalledTimes(mode === "rollback" ? 2 : 0);
+      }
+      expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(family);
+      expect(backup.databases).toHaveLength(1);
+      const snapshot = backup.databases[0]!;
+      const bytes = await fs.readFile(snapshot.snapshotPath);
+      expect(snapshot).toMatchObject({
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sizeBytes: bytes.length,
+      });
+      using retained = new DatabaseSync(snapshot.snapshotPath, { readOnly: true });
+      expect(retained.prepare("SELECT rowid,value FROM payload ORDER BY rowid").all()).toEqual([
+        { rowid: 42, value: "retained" },
+        { rowid: 43, value: "checkpoint pending" },
+      ]);
+      if (mode === "original-custody") {
+        expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+      } else {
+        expect(backup.sourceGenerations[f.shared]).toBe(
+          (await databaseGenerations.readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
+        );
+        expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
+      }
+    } finally {
+      await scope?.close();
     }
   },
 );
-
-it("retains source generations for a generic backup under maintenance custody", async () => {
-  const f = await fixture();
-  const before = await fs.readFile(f.shared);
-  const scope = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: () => {},
-    assertDatabaseAccess: () => {},
-  });
-  try {
-    const backup = await scope.run(() =>
-      createUpdateDatabaseBackup({
-        ...f.input,
-        backupRoot: path.join(f.root, "maintenance-rollback"),
-        acquisition: { mode: "maintenance-owner" },
-      }),
-    );
-    expect(backup.originalCaptureSourcePaths).toBeUndefined();
-    expect(backup.sourceGenerations[f.shared]).toBe(
-      (await databaseGenerations.readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
-    );
-    expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
-    expect(await fs.readFile(f.shared)).toEqual(before);
-  } finally {
-    await scope.close();
-  }
-});
 
 it("keeps the verified digest when a snapshot is replaced before backup metadata is recorded", async () => {
   const f = await fixture();

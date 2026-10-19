@@ -16,18 +16,16 @@ type Props = { details: ChatDetailsProps; presented: boolean };
 
 export function ChatDetailsEnvironment(props: Props) {
   const workspace = () => props.details.detailsWorkspace;
-  const workspaceLabel = createMemo(
-    () =>
-      workspace()?.label ||
-      workspace()
-        ?.root?.replace(/[\\/]+$/, "")
-        .split(/[\\/]/)
-        .pop() ||
-      t("chat.sessionDetails.workspaceUnavailable"),
-  );
+  const workspaceLabel = () =>
+    workspace()?.label ||
+    workspace()
+      ?.root?.replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ||
+    t("chat.sessionDetails.workspaceUnavailable");
   const session = () => props.details.selectedSession;
-  const host = createMemo(() => session()?.execNode ?? session()?.deviceFolder?.deviceId);
-  const model = createMemo(() => session()?.activeModel || session()?.model);
+  const host = () => session()?.execNode ?? session()?.deviceFolder?.deviceId;
+  const model = () => session()?.activeModel || session()?.model;
   return (
     <details class="chat-details__group chat-details__environment" open>
       <summary class="chat-details__caption">

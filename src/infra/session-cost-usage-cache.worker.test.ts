@@ -21,7 +21,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
-import { onSessionCostUsageUpdated } from "./session-cost-usage-events.js";
+import { sessionCostUsageNotifications } from "./session-cost-usage-events.js";
 import { USAGE_COST_PARTITION_SCOPE } from "./session-cost-usage-partitions.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
@@ -507,7 +507,7 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       });
     });
     const published = vi.fn();
-    const unsubscribeUsage = onSessionCostUsageUpdated(published);
+    sessionCostUsageNotifications.onUpdated = published;
     const refresh = refreshCostUsageCacheForAgent({ config, agentId }).then((result) => {
       refreshFinished = true;
       return result;
@@ -583,7 +583,7 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       releaseWrite.resolve();
       await Promise.allSettled([refresh, ...reads]);
       observer.mockRestore();
-      unsubscribeUsage();
+      sessionCostUsageNotifications.onUpdated = () => {};
     }
     expect(await refresh).toBe("refreshed");
     expect(published).toHaveBeenCalledExactlyOnceWith({
@@ -607,7 +607,7 @@ it("prunes a cached transcript after its queued selection disappears", async () 
     await fs.rm(sessionFile);
     const work = new AsyncWorkScope();
     const published = vi.fn();
-    const unsubscribe = onSessionCostUsageUpdated(published);
+    sessionCostUsageNotifications.onUpdated = published;
     try {
       expect(
         await work.track(() => loadSessionCostSummariesFromCache({ config, agentId, sessions })),
@@ -630,7 +630,7 @@ it("prunes a cached transcript after its queued selection disappears", async () 
       expect(published).toHaveBeenCalledTimes(3);
     } finally {
       await work.drain();
-      unsubscribe();
+      sessionCostUsageNotifications.onUpdated = () => {};
     }
   });
 });
@@ -690,7 +690,10 @@ it("records failed rollups and clears health after retry", async ({ onTestFinish
     await Promise.all(sessionFiles.map((file) => fs.writeFile(file, usageLine("failed-refresh"))));
     let failedFiles: string[] = [];
     const published = vi.fn();
-    onTestFinished(onSessionCostUsageUpdated(published));
+    sessionCostUsageNotifications.onUpdated = published;
+    onTestFinished(() => {
+      sessionCostUsageNotifications.onUpdated = () => {};
+    });
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
     const observer = vi
       .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")

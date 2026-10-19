@@ -15,7 +15,7 @@ import { formatTimeMs } from "../../../lib/format.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../../lib/gateway-page-binding.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
-import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,
@@ -515,16 +515,8 @@ export function createAgentMemory(
       }
     }
   }
-  const projection = projectSource(context, {
-    read,
-    subscribe: (_source, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, read);
+  publish = projection.publish;
   onSettled(() => {
     const agentTarget = getInitialAgentTarget();
     const syncAgent = () => setAgentId(agentTarget.read() ?? "");
