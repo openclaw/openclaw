@@ -2,6 +2,7 @@ import {
   implicitMentionKindWhen,
   resolveBotThreadMentionPolicy,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
@@ -69,4 +70,29 @@ export async function resolveSlackThreadMentionPolicy(params: {
     requireMention: isRoom ? (channelConfig?.requireMention ?? ctx.defaultRequireMention) : false,
     implicitMentionKinds,
   });
+}
+
+export function resolveSlackMentionSource(params: {
+  explicitBotMention: boolean;
+  explicitSubteamMention: boolean;
+  matchedImplicitMentionKinds: readonly string[];
+  shouldBypassMention: boolean;
+  wasMentioned: boolean;
+}): NonNullable<FinalizedMsgContext["MentionSource"]> {
+  if (params.explicitBotMention) {
+    return "explicit_bot";
+  }
+  if (params.explicitSubteamMention) {
+    return "subteam";
+  }
+  if (params.shouldBypassMention) {
+    return "command_bypass";
+  }
+  if (params.wasMentioned) {
+    return "mention_pattern";
+  }
+  if (params.matchedImplicitMentionKinds.length > 0) {
+    return "implicit_thread";
+  }
+  return "none";
 }

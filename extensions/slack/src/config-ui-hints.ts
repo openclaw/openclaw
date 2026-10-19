@@ -12,7 +12,16 @@ const botThreadMentionHint = {
   help: "Override mention gating in threads whose root message was sent by this bot. False allows unmentioned replies; true requires a mention even when implicit reply or participation signals are enabled. Omit to preserve the existing mention policy. Channel settings override account settings; access restrictions still apply.",
 };
 
+const explicitBotMentionHint = {
+  label: "Require Explicit Bot Mention",
+  help: 'With allowBots="mentions", require an explicit mention from bot senders instead of accepting implicit thread mentions. Human thread follow-ups, direct messages, and authorized text commands are unchanged. Omit or set false to preserve existing bot handoffs.',
+};
+
 export const slackChannelConfigUiHints = {
+  requireExplicitBotMention: explicitBotMentionHint,
+  "accounts.*.requireExplicitBotMention": explicitBotMentionHint,
+  "channels.*.requireExplicitBotMention": explicitBotMentionHint,
+  "accounts.*.channels.*.requireExplicitBotMention": explicitBotMentionHint,
   historyLimit: observedGroupHistoryHint,
   "accounts.*.historyLimit": observedGroupHistoryHint,
   dmHistoryLimit: observedDmHistoryHint,

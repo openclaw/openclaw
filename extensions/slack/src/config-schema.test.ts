@@ -16,6 +16,19 @@ function expectSlackConfigIssue(config: unknown, path: string) {
 }
 
 describe("slack config schema", () => {
+  it("accepts scoped strict bot-mention opt-ins without changing defaults", () => {
+    expectSlackConfigValid({
+      requireExplicitBotMention: true,
+      channels: {
+        "*": { requireExplicitBotMention: true },
+        C123: { requireExplicitBotMention: false },
+      },
+      accounts: { work: { requireExplicitBotMention: false } },
+    });
+    expect(SlackConfigSchema.parse({}).requireExplicitBotMention).toBeUndefined();
+    expectSlackConfigIssue({ requireExplicitBotMention: "true" }, "requireExplicitBotMention");
+  });
+
   it("defaults groupPolicy to allowlist", () => {
     const res = SlackConfigSchema.safeParse({});
 
