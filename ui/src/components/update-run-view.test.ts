@@ -31,7 +31,7 @@ function mount(initial: Partial<Run>) {
   );
   flush();
   const element = container.querySelector<HTMLElement>("openclaw-update-run-view")!;
-  const find = <T extends Element = HTMLElement>(css: string) => element.querySelector<T>(css);
+  const find = (css: string) => element.querySelector<HTMLElement>(css);
   const text = (selector: string) => find(selector)?.textContent;
   const output = () => text(".update-run-view__details");
   const summary = () => text(".update-run-view__diagnostics summary");
@@ -133,7 +133,7 @@ it("presents diagnostic receipts as readable details without inventing installat
   const staged = "Revision verified.";
   const backup = "Backup needs 18 GiB.";
   const temporary = "Using the temporary disk.";
-  const { element, find, text, output, summary, setRecord } = mount({
+  const { element, text, output, summary, setRecord } = mount({
     steps: [
       makeStep("staging", "completed", staged),
       makeStep("snapshot-space-preflight"),
@@ -163,7 +163,9 @@ it("presents diagnostic receipts as readable details without inventing installat
     ["warning:snapshot-space-preflight:2", [temporary]],
     ["staging", [staged]],
   ] as const) {
-    const previousStep = find<HTMLDetailsElement>(`[data-step="${step}"] details`)!;
+    const previousStep = element.querySelector<HTMLDetailsElement>(
+      `[data-step="${step}"] details`,
+    )!;
     expect(previousStep).not.toBeNull();
     previousStep.querySelector("summary")!.click();
     expect(previousStep.open).toBe(true);
@@ -179,8 +181,8 @@ it("presents diagnostic receipts as readable details without inventing installat
 it("follows run output on opening and updates, preserving scrollback until a new run", async () => {
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
   const record = run({ steps: [makeStep("build", "in_progress")] });
-  const { find, setRecord } = mount(record);
-  const disclosure = find<HTMLDetailsElement>(".update-run-view__step-list")!;
+  const { element, find, setRecord } = mount(record);
+  const disclosure = element.querySelector<HTMLDetailsElement>(".update-run-view__step-list")!;
   const list = find(".update-run-view__step-scroll")!;
   const streams = [list, find(".update-run-view__details")!];
   const scrollTo = (expected: number, next: number) => {

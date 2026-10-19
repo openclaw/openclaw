@@ -23,7 +23,7 @@ const tool = (name: string, parameters: JsonObject = { type: "object" }) => ({
   parameters,
 });
 const restartCheckpointTools = [
-  tool("exec", guestCodeModeExecTool.parameters),
+  { type: "function", name: "exec", parameters: guestCodeModeExecTool.parameters },
   tool("wait", {
     type: "object",
     properties: { runId: { type: "string" } },

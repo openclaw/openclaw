@@ -67,8 +67,7 @@ function setup(handler: (method: string, params?: unknown) => unknown = async ()
     disposers.push(dispose);
     return {
       container,
-      query: <E extends Element = HTMLElement>(selector: string) =>
-        container.querySelector<E>(selector),
+      query: (selector: string) => container.querySelector<HTMLElement>(selector),
       get select() {
         return container.querySelector("select");
       },
@@ -153,7 +152,7 @@ it("discloses incomplete widget data and loads an absent card on demand for read
     expect(card.text).toContain("This card is not loaded yet");
     expect(card.text).not.toContain("no longer available");
   });
-  card.query<HTMLButtonElement>("button")!.click();
+  card.query("button")!.click();
   await settle(() => {
     expect(card.text).toContain("Running card");
     expectText(widgets, "Load more cards", false);
@@ -295,7 +294,7 @@ it.each([
       reconciled.resolve(snapshot(persistedCards));
       await settle(() => expect(getWorkboardState(runtime.owner).mutationReadiness).toBe("ready"));
       expectOutcome();
-      mini.query<HTMLButtonElement>("button")!.click();
+      mini.query("button")!.click();
       await settle(() => expectReady(widgets, "alert"));
       expect(card.select?.value).toBe("running");
       expect(listCount).toBe(3);
@@ -400,9 +399,10 @@ it.each([
   move();
   expect(hidden.scopedRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", moveParams);
   await settle(() =>
-    expect(hidden.query<HTMLSelectElement>('select[aria-label="Status: Ready card"]')?.value).toBe(
-      "running",
-    ),
+    expect(
+      hidden.container.querySelector<HTMLSelectElement>('select[aria-label="Status: Ready card"]')
+        ?.value,
+    ).toBe("running"),
   );
   hidden.dispose();
   expect(fixture.events.get("plugin.workboard.changed")?.size).toBe(1);
