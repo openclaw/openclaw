@@ -407,10 +407,11 @@ suite.define(() => {
     await page.locator(".chat-pr__checks-pill").click();
     await expandLinuxJob(page);
     const menu = page.locator(".chat-pr__checks-menu");
+    const surface = page.locator(".chat-pr__checks-overlay");
     // Step text can appear before Floating UI finishes positioning the expanded popup.
     await expect
       .poll(() =>
-        menu.evaluate((element) => {
+        surface.evaluate((element) => {
           const bounds = element.getBoundingClientRect();
           return (
             bounds.width > 0 &&
