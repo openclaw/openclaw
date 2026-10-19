@@ -1,4 +1,3 @@
-// File Transfer tests cover file fetch plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,33 +7,29 @@ import { handleFileFetch } from "./file-fetch.js";
 let tmpRoot: string;
 
 type FileFetchResult = Awaited<ReturnType<typeof handleFileFetch>>;
-type FileFetchSuccess = Extract<FileFetchResult, { ok: true }>;
-type FileFetchFailure = Extract<FileFetchResult, { ok: false }>;
-
 function expectFailureCode(
   result: FileFetchResult,
   code: string,
-): asserts result is FileFetchFailure {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error(`expected failure ${code}`);
-  }
-  expect(result.code).toBe(code);
+): asserts result is Extract<FileFetchResult, { ok: false }> {
+  expect(result).toMatchObject({ ok: false, code });
 }
 
-function expectSuccess(result: FileFetchResult): asserts result is FileFetchSuccess {
+function expectSuccess(
+  result: FileFetchResult,
+): asserts result is Extract<FileFetchResult, { ok: true }> {
   expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(`expected ok, got ${result.code}: ${result.message}`);
-  }
+}
+
+async function fetchFile(name: string, content: string | Buffer) {
+  const target = path.join(tmpRoot, name);
+  await fs.writeFile(target, content);
+  const result = await handleFileFetch({ path: target });
+  expectSuccess(result);
+  return result;
 }
 
 beforeEach(async () => {
-  // realpath the mkdtemp result — on macOS /tmp/foo and /var/folders/... are
-  // symlinks to /private/{tmp,var/folders}, and the new SYMLINK_REDIRECT
-  // default would otherwise refuse every test path. Tests want to exercise
-  // the happy path with canonical paths; symlink-specific assertions create
-  // explicit symlinks inside tmpRoot.
+  // Canonicalize macOS temp aliases; symlink cases create their own links.
   tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "file-fetch-test-")));
 });
 
@@ -43,50 +38,31 @@ afterEach(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
-describe("handleFileFetch — input validation", () => {
+describe("handleFileFetch", () => {
   it("rejects relative paths", async () => {
     const r = await handleFileFetch({ path: "relative/file.txt" });
     expectFailureCode(r, "INVALID_PATH");
-    expect(r.ok ? "" : r.message).toMatch(/absolute/);
+    expect(r.message).toMatch(/absolute/);
   });
 
   it("rejects paths with NUL bytes", async () => {
     const r = await handleFileFetch({ path: "/tmp/foo\0bar" });
     expectFailureCode(r, "INVALID_PATH");
-    expect(r.ok ? "" : r.message).toMatch(/NUL/);
+    expect(r.message).toMatch(/NUL/);
   });
-});
-
-describe("handleFileFetch — fs errors", () => {
   it("returns IS_DIRECTORY when the path resolves to a directory", async () => {
     const r = await handleFileFetch({ path: tmpRoot });
     expectFailureCode(r, "IS_DIRECTORY");
-    // canonical path is reported back so the caller can re-check policy
-    if (r.ok) {
-      throw new Error("expected directory fetch to fail");
-    }
     expect(r.canonicalPath).toBe(tmpRoot);
   });
-});
-
-describe("handleFileFetch — zero-byte round-trip", () => {
   it("fetches an empty image-named file with extension-derived MIME", async () => {
-    const target = path.join(tmpRoot, "empty.png");
-    await fs.writeFile(target, "");
-
-    const r = await handleFileFetch({ path: target });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-    }
-    expect(r.size).toBe(0);
-    expect(r.mimeType).toBe("image/png");
-    expect(r.base64).toBe("");
-    // SHA-256 of empty input.
-    expect(r.sha256).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    expect(await fetchFile("empty.png", "")).toMatchObject({
+      size: 0,
+      mimeType: "image/png",
+      base64: "",
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    });
   });
-});
-
-describe("handleFileFetch — happy path", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a retargeted path before reading file bytes",
     async () => {
@@ -140,33 +116,16 @@ describe("handleFileFetch — happy path", () => {
   });
 
   it("detects extensionless plain text as text/plain", async () => {
-    const target = path.join(tmpRoot, "LICENSE");
     const contents = "Permission is hereby granted\n";
-    await fs.writeFile(target, contents);
-
-    const r = await handleFileFetch({ path: target });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-
+    const r = await fetchFile("LICENSE", contents);
     expect(r.mimeType).toBe("text/plain");
     expect(Buffer.from(r.base64, "base64").toString("utf-8")).toBe(contents);
   });
 
   it("does not classify extensionless binary content as text/plain", async () => {
-    const target = path.join(tmpRoot, "opaque");
-    await fs.writeFile(target, Buffer.from([0x00, 0x01, 0x02, 0xff]));
-
-    const r = await handleFileFetch({ path: target });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-
+    const r = await fetchFile("opaque", Buffer.from([0x00, 0x01, 0x02, 0xff]));
     expect(r.mimeType).toBe("application/octet-stream");
   });
-});
-
-describe("handleFileFetch — size enforcement", () => {
   it("bounds bytes consumed when a file grows after the size check", async () => {
     const target = path.join(tmpRoot, "growing.txt");
     await fs.writeFile(target, "small");
@@ -233,9 +192,6 @@ describe("handleFileFetch — size enforcement", () => {
       expect(r.message).toContain("limit 8388608");
     }
   });
-});
-
-describe("handleFileFetch — symlink handling", () => {
   it("refuses to follow a symlink by default (SYMLINK_REDIRECT)", async () => {
     const real = path.join(tmpRoot, "real.txt");
     const link = path.join(tmpRoot, "link.txt");
@@ -244,8 +200,6 @@ describe("handleFileFetch — symlink handling", () => {
 
     const r = await handleFileFetch({ path: link });
     expectFailureCode(r, "SYMLINK_REDIRECT");
-    // Caller learns the canonical target so the operator can update the
-    // allowlist or set followSymlinks=true.
-    expect(r.ok ? null : r.canonicalPath).toBe(real);
+    expect(r.canonicalPath).toBe(real);
   });
 });

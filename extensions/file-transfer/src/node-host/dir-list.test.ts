@@ -1,4 +1,3 @@
-// File Transfer tests cover dir list plugin behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -24,21 +23,53 @@ async function expectDirListError(
   input: Parameters<typeof handleDirList>[0],
   code: "INVALID_PATH" | "IS_FILE" | "NOT_FOUND",
 ) {
-  const result = await handleDirList(input);
-  expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.code).toBe(code);
-  }
+  expect(await handleDirList(input)).toMatchObject({ ok: false, code });
 }
 
-describe("handleDirList — input validation", () => {
+async function listingCommand(directoryPath: string, canonical = directoryPath) {
+  const stats = await fs.stat(canonical, { bigint: true });
+  return createCanonicalDirListCommand({
+    directoryPath,
+    expectedCanonicalPath: canonical,
+    expectedDevice: String(stats.dev),
+    expectedInode: String(stats.ino),
+    maxEntries: 10,
+    offset: 0,
+  });
+}
+
+function spawnCommand(command: string[], prefix: string, event: "close" | "exit") {
+  const child = spawn(command[0]!, [command[1]!, prefix + command[2]!, ...command.slice(3)], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stdout: Buffer[] = [],
+    stderr: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  const exit = new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once(event, resolve);
+  });
+  return { child, stdout, stderr, exit };
+}
+
+async function list(input: Parameters<typeof handleDirList>[0]) {
+  const result = await handleDirList(input);
+  if (!result.ok) {
+    throw new Error("expected ok");
+  }
+  return result;
+}
+
+function failure(code: string, message: string, canonicalPath?: string) {
+  return { ok: false, code, message, ...(canonicalPath === undefined ? {} : { canonicalPath }) };
+}
+
+describe("handleDirList", () => {
   it("rejects empty / non-string path", async () => {
     await expectDirListError({ path: "" }, "INVALID_PATH");
     await expectDirListError({ path: undefined }, "INVALID_PATH");
   });
-});
-
-describe("handleDirList — invalid directory bindings", () => {
   it.each(["malformed", "write", "device", "inode"] as const)(
     "rejects a %s binding before reading the directory",
     async (kind) => {
@@ -59,41 +90,31 @@ describe("handleDirList — invalid directory bindings", () => {
 
       await expect(
         handleDirList({ path: tmpRoot, preflightOnly: true, expectedBinding }),
-      ).resolves.toEqual({
-        ok: false,
-        code: "CANONICAL_PATH_CHANGED",
-        message: "filesystem identity differs from the authorized target",
-        canonicalPath: tmpRoot,
-      });
+      ).resolves.toEqual(
+        failure(
+          "CANONICAL_PATH_CHANGED",
+          "filesystem identity differs from the authorized target",
+          tmpRoot,
+        ),
+      );
       expect(readdir).not.toHaveBeenCalled();
     },
   );
-});
-
-describe("directory binding", () => {
   it("preserves path and directory errors before validating the binding", async () => {
     const missing = path.join(tmpRoot, "missing");
-    await expect(handleDirList({ path: missing, expectedBinding: null })).resolves.toEqual({
-      ok: false,
-      code: "NOT_FOUND",
-      message: "path not found",
-    });
+    await expect(handleDirList({ path: missing, expectedBinding: null })).resolves.toEqual(
+      failure("NOT_FOUND", "path not found"),
+    );
     const file = path.join(tmpRoot, "file.txt");
     await fs.writeFile(file, "keep");
-    await expect(handleDirList({ path: file, expectedBinding: null })).resolves.toEqual({
-      ok: false,
-      code: "IS_FILE",
-      message: "path is not a directory",
-      canonicalPath: file,
-    });
+    await expect(handleDirList({ path: file, expectedBinding: null })).resolves.toEqual(
+      failure("IS_FILE", "path is not a directory", file),
+    );
     await expect(
       handleDirList({ path: file, expectedCanonicalPath: tmpRoot, expectedBinding: null }),
-    ).resolves.toEqual({
-      ok: false,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "resolved path differs from the authorized target",
-      canonicalPath: file,
-    });
+    ).resolves.toEqual(
+      failure("CANONICAL_PATH_CHANGED", "resolved path differs from the authorized target", file),
+    );
   });
 
   it.each([
@@ -106,43 +127,26 @@ describe("directory binding", () => {
         Object.assign(new Error("denied"), { code: "EACCES" }),
       );
 
-      await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual({
-        ok: false,
-        code: permissionCode,
-        message: "stat failed: Error: denied",
-        canonicalPath: tmpRoot,
-      });
+      await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual(
+        failure(permissionCode, "stat failed: Error: denied", tmpRoot),
+      );
     },
   );
-});
-
-describe("handleDirList — happy path", () => {
-  it.runIf(process.platform === "linux")(
-    "keeps enumeration bound after the checked path is retargeted",
-    async () => {
-      const approved = path.join(tmpRoot, "approved");
-      const replacement = path.join(tmpRoot, "replacement");
-      const current = path.join(tmpRoot, "current");
-      await fs.mkdir(approved);
-      await fs.mkdir(replacement);
-      await fs.writeFile(path.join(approved, "approved.txt"), "approved");
-      await fs.writeFile(path.join(replacement, "secret.txt"), "secret");
-      await fs.symlink(approved, current);
-      const approvedStats = await fs.stat(approved, { bigint: true });
-
-      const command = createCanonicalDirListCommand({
-        directoryPath: current,
-        expectedCanonicalPath: approved,
-        expectedDevice: String(approvedStats.dev),
-        expectedInode: String(approvedStats.ino),
-        maxEntries: 10,
-        offset: 0,
-      });
-      const drained = path.join(tmpRoot, "worker-drained");
-      // Retarget after the real chdir, before the unchanged worker checks and
-      // enumerates its bound directory. Polling /proc can miss the entire child.
-      // beforeExit also distinguishes natural settlement from any forced-exit alias.
-      const retargetAfterBinding = `(() => {
+  it.runIf(process.platform === "linux")("keeps enumeration bound after retargeting", async () => {
+    const approved = path.join(tmpRoot, "approved");
+    const replacement = path.join(tmpRoot, "replacement");
+    const current = path.join(tmpRoot, "current");
+    await fs.mkdir(approved);
+    await fs.mkdir(replacement);
+    await fs.writeFile(path.join(approved, "approved.txt"), "approved");
+    await fs.writeFile(path.join(replacement, "secret.txt"), "secret");
+    await fs.symlink(approved, current);
+    const command = await listingCommand(current, approved);
+    const drained = path.join(tmpRoot, "worker-drained");
+    // Retarget after the real chdir, before the unchanged worker checks and
+    // enumerates its bound directory. Polling /proc can miss the entire child.
+    // beforeExit also distinguishes natural settlement from any forced-exit alias.
+    const retargetAfterBinding = `(() => {
         const fs = require("node:fs");
         process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "settled"));
         const chdir = process.chdir;
@@ -153,74 +157,40 @@ describe("handleDirList — happy path", () => {
           fs.symlinkSync(${JSON.stringify(replacement)}, ${JSON.stringify(current)});
         };
       })();`;
-      const child = spawn(
-        command[0]!,
-        [command[1]!, retargetAfterBinding + command[2]!, ...command.slice(3)],
-        {
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-      const exit = new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", resolve);
-      });
-      try {
-        expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
-        expect(await fs.readFile(drained, "utf8")).toBe("settled");
-        expect(await fs.readlink(current)).toBe(replacement);
-        const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
-          entries: Array<{ name: string }>;
-        };
-        expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
-        expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
-      } finally {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
-        await exit.catch(() => undefined);
+    const { child, stdout, stderr, exit } = spawnCommand(command, retargetAfterBinding, "close");
+    try {
+      expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
+      expect(await fs.readFile(drained, "utf8")).toBe("settled");
+      expect(await fs.readlink(current)).toBe(replacement);
+      const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
+        entries: Array<{ name: string }>;
+      };
+      expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
+      expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
       }
-    },
-  );
+      await exit.catch(() => undefined);
+    }
+  });
 
   it.runIf(process.platform === "linux")(
-    "rejects a replacement created at the same canonical pathname before binding",
+    "rejects a same-path replacement before binding",
     async () => {
       const approved = path.join(tmpRoot, "approved");
       const moved = path.join(tmpRoot, "moved");
       await fs.mkdir(approved);
       await fs.writeFile(path.join(approved, "approved.txt"), "approved");
-      const approvedStats = await fs.stat(approved, { bigint: true });
+      const command = await listingCommand(approved);
       await fs.rename(approved, moved);
       await fs.mkdir(approved);
       await fs.writeFile(path.join(approved, "secret.txt"), "secret");
 
-      const command = createCanonicalDirListCommand({
-        directoryPath: approved,
-        expectedCanonicalPath: approved,
-        expectedDevice: String(approvedStats.dev),
-        expectedInode: String(approvedStats.ino),
-        maxEntries: 10,
-        offset: 0,
-      });
       const drained = path.join(tmpRoot, "rejected-worker-drained");
       const observeNaturalExit = `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`;
-      const child = spawn(
-        command[0]!,
-        [command[1]!, observeNaturalExit + command[2]!, ...command.slice(3)],
-        { stdio: ["ignore", "pipe", "pipe"] },
-      );
-      const stdout: Buffer[] = [];
-      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-      const exit = await new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", resolve);
-      });
-
-      expect(exit).toBe(78);
+      const { stdout, exit } = spawnCommand(command, observeNaturalExit, "exit");
+      expect(await exit).toBe(78);
       expect(await fs.readFile(drained, "utf8")).toBe("settled");
       expect(Buffer.concat(stdout)).toHaveLength(0);
     },
@@ -249,12 +219,13 @@ describe("handleDirList — happy path", () => {
       path: tmpRoot,
       expectedCanonicalPath: path.join(tmpRoot, "other"),
     });
-    expect(changed).toEqual({
-      ok: false,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "resolved path differs from the authorized target",
-      canonicalPath: tmpRoot,
-    });
+    expect(changed).toEqual(
+      failure(
+        "CANONICAL_PATH_CHANGED",
+        "resolved path differs from the authorized target",
+        tmpRoot,
+      ),
+    );
   });
 
   it("lists files and subdirs with metadata, sorted by name", async () => {
@@ -262,49 +233,29 @@ describe("handleDirList — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, "a.png"), "PNG-bytes");
     await fs.mkdir(path.join(tmpRoot, "subdir"));
 
-    const r = await handleDirList({ path: tmpRoot });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
+    const r = await list({ path: tmpRoot });
     expect(r.entries.map((e) => e.name)).toEqual([".hidden", "a.png", "subdir"]);
 
     const a = r.entries.find((e) => e.name === "a.png")!;
-    expect(a.isDir).toBe(false);
     expect(a.size).toBeGreaterThan(0);
-    expect(a.mimeType).toBe("image/png");
-
+    expect(a).toMatchObject({ isDir: false, mimeType: "image/png" });
     const sub = r.entries.find((e) => e.name === "subdir")!;
-    expect(sub.isDir).toBe(true);
-    expect(sub.size).toBe(0);
-    expect(sub.mimeType).toBe("inode/directory");
+    expect(sub).toMatchObject({ isDir: true, size: 0, mimeType: "inode/directory" });
 
     expect(r.truncated).toBe(false);
     expect(r.nextPageToken).toBeUndefined();
   });
 
-  it("does not coerce partial page tokens", async () => {
+  it.each([
+    ["partial token", "1next", "f-0.txt", "1"],
+    ["plus-signed token", "+01", "f-1.txt", "2"],
+  ])("paginates a %s", async (_name, pageToken, entry, nextPageToken) => {
     for (let i = 0; i < 3; i++) {
       await fs.writeFile(path.join(tmpRoot, `f-${i}.txt`), "x");
     }
 
-    const r = await handleDirList({ path: tmpRoot, maxEntries: 1, pageToken: "1next" });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-    expect(r.entries.map((e) => e.name)).toEqual(["f-0.txt"]);
-    expect(r.nextPageToken).toBe("1");
-  });
-
-  it("accepts plus-signed page tokens", async () => {
-    for (let i = 0; i < 3; i++) {
-      await fs.writeFile(path.join(tmpRoot, `f-${i}.txt`), "x");
-    }
-
-    const r = await handleDirList({ path: tmpRoot, maxEntries: 1, pageToken: "+01" });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-    expect(r.entries.map((e) => e.name)).toEqual(["f-1.txt"]);
-    expect(r.nextPageToken).toBe("2");
+    const r = await list({ path: tmpRoot, maxEntries: 1, pageToken });
+    expect(r.entries.map((e) => e.name)).toEqual([entry]);
+    expect(r.nextPageToken).toBe(nextPageToken);
   });
 });

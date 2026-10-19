@@ -1,4 +1,3 @@
-// File Transfer tests cover dir fetch plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -18,25 +17,34 @@ afterEach(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
-// dir-fetch shells out to /usr/bin/tar. Skip the body of these tests on
-// platforms without it (Windows CI). They still register, just no-op.
+// dir-fetch needs /usr/bin/tar, unavailable on Windows CI.
 const HAS_TAR = process.platform !== "win32";
+
+async function seed(files: Record<string, string | Buffer>) {
+  for (const [name, content] of Object.entries(files)) {
+    const target = path.join(tmpRoot, name);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content);
+  }
+}
+
+async function fetchDirectory(input: Parameters<typeof handleDirFetch>[0]) {
+  const result = await handleDirFetch(input);
+  if (!result.ok) {
+    throw new Error(`expected ok, got ${result.code}: ${result.message}`);
+  }
+  return result;
+}
 
 async function expectDirFetchError(input: Parameters<typeof handleDirFetch>[0], code: string) {
   const result = await handleDirFetch(input);
-  if (result.ok) {
-    throw new Error("expected directory fetch error");
-  }
-  expect(result.code).toBe(code);
+  expect(result).toMatchObject({ ok: false, code });
 }
 
-describe("handleDirFetch — input validation", () => {
+describe("handleDirFetch", () => {
   it("rejects empty / non-string path", async () => {
     await expectDirFetchError({ path: "" }, "INVALID_PATH");
   });
-});
-
-describe("handleDirFetch — happy path", () => {
   it.runIf(process.platform !== "win32")(
     "binds tar to the canonical directory after changing its working directory",
     async () => {
@@ -75,39 +83,28 @@ describe("handleDirFetch — happy path", () => {
   });
 
   it.runIf(HAS_TAR)("preflights directory entries without returning a tarball", async () => {
-    await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
-    await fs.mkdir(path.join(tmpRoot, ".ssh"));
-    await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
-    await fs.mkdir(path.join(tmpRoot, "sub"));
-    await fs.writeFile(path.join(tmpRoot, "sub", "b.txt"), "beta\n");
-    await fs.mkdir(path.join(tmpRoot, "c"));
-    await fs.writeFile(path.join(tmpRoot, "c", "z.txt"), "first subtree\n");
-    await fs.mkdir(path.join(tmpRoot, "c\u200d"));
-    await fs.writeFile(path.join(tmpRoot, "c\u200d", "a.txt"), "second subtree\n");
+    await seed({
+      "a.txt": "alpha\n",
+      ".ssh/id_rsa": "secret\n",
+      "sub/b.txt": "beta\n",
+      "c/z.txt": "first subtree\n",
+      "c\u200d/a.txt": "second subtree\n",
+    });
     await fs.symlink("missing-target", path.join(tmpRoot, "dangling-link"));
 
-    const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-    }
-
-    expect(r.path).toBe(tmpRoot);
-    expect(r.tarBase64).toBe("");
-    expect(r.tarBytes).toBe(0);
-    expect(r.sha256).toBe("");
-    expect(r.preflightOnly).toBe(true);
-    expect(r.entries).toEqual([
-      ".ssh",
-      ".ssh/id_rsa",
-      "a.txt",
-      "c",
-      "c/z.txt",
-      "c\u200d",
-      "c\u200d/a.txt",
-      "dangling-link",
-      "sub",
-      "sub/b.txt",
-    ]);
+    const r = await fetchDirectory({ path: tmpRoot, preflightOnly: true });
+    expect(r).toMatchObject({
+      path: tmpRoot,
+      tarBase64: "",
+      tarBytes: 0,
+      sha256: "",
+      preflightOnly: true,
+    });
+    expect(r.entries).toEqual(
+      ".ssh .ssh/id_rsa a.txt c c/z.txt c\u200d c\u200d/a.txt dangling-link sub sub/b.txt".split(
+        " ",
+      ),
+    );
     expect(r.fileCount).toBe(r.entries?.length);
   });
 
@@ -117,20 +114,14 @@ describe("handleDirFetch — happy path", () => {
       const first = path.join(tmpRoot, "first");
       const second = path.join(tmpRoot, "second");
       const link = path.join(tmpRoot, "current");
-      await fs.mkdir(first);
-      await fs.mkdir(second);
-      await fs.writeFile(path.join(first, "approved.txt"), "approved");
-      await fs.writeFile(path.join(second, "not-approved.txt"), "not approved");
+      await seed({ "first/approved.txt": "approved", "second/not-approved.txt": "not approved" });
       await fs.symlink(first, link);
 
-      const preflight = await handleDirFetch({
+      const preflight = await fetchDirectory({
         path: link,
         followSymlinks: true,
         preflightOnly: true,
       });
-      if (!preflight.ok) {
-        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
-      }
       await fs.unlink(link);
       await fs.symlink(second, link);
 
@@ -178,10 +169,7 @@ describe("handleDirFetch — happy path", () => {
       const moved = path.join(tmpRoot, "moved");
       await fs.mkdir(target);
       await fs.writeFile(path.join(target, "approved.txt"), "approved");
-      const preflight = await handleDirFetch({ path: target, preflightOnly: true });
-      if (!preflight.ok) {
-        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
-      }
+      const preflight = await fetchDirectory({ path: target, preflightOnly: true });
       await fs.rename(target, moved);
       await fs.mkdir(target);
       await fs.writeFile(path.join(target, "secret.txt"), "secret");
@@ -197,18 +185,14 @@ describe("handleDirFetch — happy path", () => {
   );
 
   it.runIf(HAS_TAR)("returns a gzipped tar with byte count and sha256", async () => {
-    await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
-    await fs.writeFile(path.join(tmpRoot, "b.txt"), "beta\n");
-    await fs.mkdir(path.join(tmpRoot, "sub"));
-    await fs.writeFile(path.join(tmpRoot, "sub", "c.txt"), "gamma\n");
-    await fs.writeFile(path.join(tmpRoot, ".root-note"), "hidden root\n");
-    await fs.mkdir(path.join(tmpRoot, ".hidden"));
-    await fs.writeFile(path.join(tmpRoot, ".hidden", "note.txt"), "hidden member\n");
-
-    const r = await handleDirFetch({ path: tmpRoot });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-    }
+    await seed({
+      "a.txt": "alpha\n",
+      "b.txt": "beta\n",
+      "sub/c.txt": "gamma\n",
+      ".root-note": "hidden root\n",
+      ".hidden/note.txt": "hidden member\n",
+    });
+    const r = await fetchDirectory({ path: tmpRoot });
 
     expect(r.tarBytes).toBeGreaterThan(0);
     expect(r.tarBase64.length).toBeGreaterThan(0);
@@ -219,23 +203,16 @@ describe("handleDirFetch — happy path", () => {
     const expectedSha = crypto.createHash("sha256").update(buf).digest("hex");
     expect(r.sha256).toBe(expectedSha);
 
-    // gzip magic bytes
-    expect(buf[0]).toBe(0x1f);
-    expect(buf[1]).toBe(0x8b);
+    expect(buf.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
 
     // file count covers the regular files we created (5); BSD tar may also
     // list directory entries, so be generous.
     expect(r.fileCount).toBeGreaterThanOrEqual(5);
-    expect(r.entries).toContain("a.txt");
-    expect(r.entries).toContain("b.txt");
-    expect(r.entries).toContain("sub");
-    expect(r.entries).toContain("sub/c.txt");
-    expect(r.entries).toEqual(expect.arrayContaining([".root-note", ".hidden/note.txt"]));
+    expect(r.entries).toEqual(
+      expect.arrayContaining("a.txt b.txt sub sub/c.txt .root-note .hidden/note.txt".split(" ")),
+    );
     expect(r.fileCount).toBe(r.entries?.length);
   });
-});
-
-describe("handleDirFetch — size cap", () => {
   it.runIf(HAS_TAR)("returns TREE_TOO_LARGE for oversized preflight-only directories", async () => {
     const largePath = path.join(tmpRoot, "large.bin");
     await fs.writeFile(largePath, crypto.randomBytes(1024 * 1024));
@@ -252,9 +229,7 @@ describe("handleDirFetch — size cap", () => {
       // Write enough random content to exceed a small maxBytes. Random bytes
       // don't compress, so gzip output is roughly the same size as input.
       const big = crypto.randomBytes(512 * 1024);
-      await fs.writeFile(path.join(tmpRoot, "big1.bin"), big);
-      await fs.writeFile(path.join(tmpRoot, "big2.bin"), big);
-      await fs.writeFile(path.join(tmpRoot, "big3.bin"), big);
+      await seed({ "big1.bin": big, "big2.bin": big, "big3.bin": big });
 
       // 64KB cap should trip either the du preflight or the streaming SIGTERM.
       await expectDirFetchError({ path: tmpRoot, maxBytes: 64 * 1024 }, "TREE_TOO_LARGE");
