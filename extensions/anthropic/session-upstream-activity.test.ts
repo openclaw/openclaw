@@ -38,6 +38,17 @@ async function checkActivity(probe: SessionUpstreamProbe) {
   return (await checkClaudeUpstreamActivity([probe]))[0];
 }
 
+function continueLink(overrides: Partial<Parameters<typeof linkContinued>[0]>) {
+  return linkContinued({
+    sessionKey: "agent:main:adopted",
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    listLocalSessions: async () => [],
+    readRemote: async () => [],
+    ...overrides,
+  });
+}
+
 function row(type: "user" | "assistant", content: unknown, timestamp: string) {
   return JSON.stringify({ type, timestamp, message: { role: type, content } }) + "\n";
 }
@@ -122,14 +133,12 @@ describe("Claude upstream activity", () => {
 
   it("keeps continuation successful when baseline enumeration fails", async () => {
     await expect(
-      linkContinued({
+      continueLink({
         sessionKey: "session-key",
         hostId: "gateway:local",
-        threadId: "thread-1",
         listLocalSessions: async () => {
           throw new Error("catalog unavailable");
         },
-        readRemote: async () => [],
       }),
     ).resolves.toEqual({ sessionKey: "session-key" });
   });
@@ -202,22 +211,13 @@ describe("Claude upstream activity", () => {
   });
 
   it("declines a remote link when the newest history item lacks a UUID", async () => {
-    const readRemote = async () => [{ type: "userMessage", text: "hi" }] as never;
-    const declined = await linkContinued({
-      sessionKey: "agent:main:adopted",
-      hostId: "node:devbox",
-      threadId: "thread-1",
-      listLocalSessions: async () => [],
-      readRemote,
+    const declined = await continueLink({
+      readRemote: async () => [{ type: "userMessage", text: "hi" }] as never,
     });
     // UUID-less newest item cannot baseline safely; no upstream link is seeded.
     expect(declined).toEqual({ sessionKey: "agent:main:adopted" });
 
-    const linked = await linkContinued({
-      sessionKey: "agent:main:adopted",
-      hostId: "node:devbox",
-      threadId: "thread-1",
-      listLocalSessions: async () => [],
+    const linked = await continueLink({
       readRemote: async () => [{ type: "userMessage", text: "hi", uuid: "u-9" }] as never,
     });
     expect(linked.upstream?.marker).toEqual({ uuid: "u-9" });

@@ -91,19 +91,8 @@ describe("Anthropic provider usage", () => {
       costHistory: {
         unit: "USD",
         periodDays: 30,
-        daily: [
-          {
-            date: "2026-07-06",
-            amount: 12.34,
-            ...tokens,
-          },
-        ],
-        models: [
-          {
-            name: "claude-opus-4-8",
-            ...tokens,
-          },
-        ],
+        daily: [{ date: "2026-07-06", amount: 12.34, ...tokens }],
+        models: [{ name: "claude-opus-4-8", ...tokens }],
         categories: [{ name: "Claude API", amount: 12.34 }],
       },
       summary: "1,700 tokens",
@@ -118,15 +107,13 @@ describe("Anthropic provider usage", () => {
     }
   });
 
-  it.each([{ name: "setup tokens", key: `sk-ant-oat01-${"a".repeat(80)}`, accepted: true }])(
-    "classifies $name through the real usage auth owner",
-    async ({ key, accepted }) => {
-      const result = await resolveAuth({
-        resolveApiKeyCandidatesFromConfigAndStore: async () => [key],
-      });
-      expect(result).toEqual(accepted ? { token: key } : { handled: true });
-    },
-  );
+  it("classifies setup tokens through the real usage auth owner", async () => {
+    const key = `sk-ant-oat01-${"a".repeat(80)}`;
+    const result = await resolveAuth({
+      resolveApiKeyCandidatesFromConfigAndStore: async () => [key],
+    });
+    expect(result).toEqual({ token: key });
+  });
 
   it("auto-detects an Admin API key stored in the Anthropic provider profile", async () => {
     const result = await resolveAuth({

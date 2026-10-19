@@ -25,27 +25,9 @@ import {
   createModelRegistry,
   expectFields,
   levelIds,
+  makeModel,
 } from "./model-contract-cases.test-support.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
-
-function makeModel(
-  id: string,
-  overrides: Partial<ProviderRuntimeModel> = {},
-): ProviderRuntimeModel {
-  return {
-    id,
-    name: id,
-    provider: "anthropic",
-    api: "anthropic-messages",
-    baseUrl: "https://api.anthropic.com",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 64_000,
-    ...overrides,
-  };
-}
 
 const modernLimits = { contextWindow: 1_000_000, contextTokens: 1_000_000, maxTokens: 128_000 };
 let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
@@ -431,11 +413,13 @@ describe("anthropic provider replay hooks", () => {
       calculateCost(resolvedModel as Parameters<typeof calculateCost>[0], usage);
 
       expect(resolvedModel.cost).toEqual(configuredCost);
-      expect(usage.cost.input).toBeCloseTo(0.777);
-      expect(usage.cost.output).toBeCloseTo(0.888);
-      expect(usage.cost.cacheRead).toBeCloseTo(0.999);
-      expect(usage.cost.cacheWrite).toBeCloseTo(0.666);
-      expect(usage.cost.total).toBeCloseTo(3.33);
+      expect(usage.cost).toEqual({
+        input: expect.closeTo(0.777),
+        output: expect.closeTo(0.888),
+        cacheRead: expect.closeTo(0.999),
+        cacheWrite: expect.closeTo(0.666),
+        total: expect.closeTo(3.33),
+      });
     },
   );
 
@@ -551,22 +535,18 @@ describe("anthropic provider replay hooks", () => {
     expect(normalized).toBeUndefined();
   });
 
-  it.each([{ maxTokensSource: "configured" as const, expectedMaxTokens: 128 }])(
-    "normalizes modern output limits using $maxTokensSource provenance",
-    async ({ maxTokensSource, expectedMaxTokens }) => {
-      const model = makeModel("claude-sonnet-4-6", {
-        name: "Claude Sonnet 4.6",
-        baseUrl: "https://api.anthropic.com",
-        maxTokens: 128,
-        maxTokensSource,
-      });
+  it("preserves configured modern output limits", () => {
+    const model = makeModel("claude-sonnet-4-6", {
+      name: "Claude Sonnet 4.6",
+      baseUrl: "https://api.anthropic.com",
+      maxTokens: 128,
+      maxTokensSource: "configured",
+    });
 
-      const normalized = normalizeModel(model) ?? model;
+    const normalized = normalizeModel(model) ?? model;
 
-      expect(normalized.maxTokens).toBe(expectedMaxTokens);
-      expect(normalized.maxTokensSource).toBe(maxTokensSource);
-    },
-  );
+    expect(normalized).toMatchObject({ maxTokens: 128, maxTokensSource: "configured" });
+  });
 
   it("keeps bare Claude CLI context plan-safe and honors explicit 1M variants", async () => {
     const baseModel = makeModel("claude-opus-4-7", {
@@ -580,16 +560,7 @@ describe("anthropic provider replay hooks", () => {
       contextTokens: 200_000,
       maxTokens: 128_000,
     });
-    expectFields(
-      provider.normalizeResolvedModel?.({
-        provider: "claude-cli",
-        modelId: `${baseModel.id}[1m]`,
-        model: { ...baseModel, id: `${baseModel.id}[1m]` },
-      } as never),
-      {
-        ...modernLimits,
-      },
-    );
+    expectFields(normalizeModel({ ...baseModel, id: `${baseModel.id}[1m]` }), modernLimits);
   });
 
   it("stores setup-token expiry from a bounded duration", async () => {
