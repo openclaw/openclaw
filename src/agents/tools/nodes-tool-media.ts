@@ -327,9 +327,7 @@ async function createNodePhotoResult(params: {
     {
       content,
       details:
-        details.length > 0
-          ? { [params.kind]: details, media: { mediaUrls, outbound: false } }
-          : [],
+        details.length > 0 ? { [params.kind]: details, media: { mediaUrls, outbound: false } } : [],
     },
     params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
     params.imageSanitization,
