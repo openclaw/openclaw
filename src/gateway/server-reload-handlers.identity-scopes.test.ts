@@ -94,7 +94,7 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-const revocations = ["scopes", "allowUsers", "origin"];
+const revocations = ["scopes", "worker-scopes", "allowUsers", "origin"];
 it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -109,6 +109,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
       isLocalClient: false,
     };
     const identity = "retained@example.test";
+    const workerScopes = revocation === "worker-scopes" ? ["operator.workers" as const] : [];
     const profile = ensureProfileForEmail(identity);
     const initialConfig: OpenClawConfig = {
       agents: { entries: { main: {} } },
@@ -118,7 +119,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
           mode: "trusted-proxy",
           trustedProxy: { userHeader: "x-user", allowUsers: [identity, "other@example.test"] },
           identityScopes: {
-            [identity]: ["operator.write", "operator.read"],
+            [identity]: ["operator.write", "operator.read", ...workerScopes],
             "other@example.test": ["operator.read"],
           },
         },
@@ -135,7 +136,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
     const client = {
       ...createOperatorWsClient({
         socket: { close },
-        scopes: ["operator.write", "operator.read"],
+        scopes: ["operator.write", "operator.read", ...workerScopes],
       }),
       browserOrigin,
       usesSharedGatewayAuth: true,
@@ -366,6 +367,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
         "operator.read",
         "operator.write",
         "operator.read",
+        ...workerScopes,
       ];
       await write(reordered);
       expectLive(original);
@@ -396,6 +398,8 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
       const removed = structuredClone(headers);
       if (revocation === "scopes") {
         delete removed.gateway!.auth!.identityScopes![identity];
+      } else if (revocation === "worker-scopes") {
+        removed.gateway!.auth!.identityScopes![identity] = ["operator.read", "operator.write"];
       } else if (revocation === "allowUsers") {
         removed.gateway!.auth!.trustedProxy!.allowUsers = ["other@example.test"];
       } else {

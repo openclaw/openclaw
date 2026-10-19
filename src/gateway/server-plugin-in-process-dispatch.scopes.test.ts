@@ -261,10 +261,14 @@ describe("native tool scope provenance", () => {
     broad?: boolean;
     admin?: boolean;
     denied?: boolean;
+    workers?: boolean;
   }>([
     { name: "staff write minimum", source: write, broad: true },
     { name: "staff read minimum", source: readScopes, read: true, broad: true },
     { name: "admin minimum", source: admin, broad: true, admin: true },
+    { name: "admin worker request", source: admin, workers: true, broad: true, admin: true },
+    { name: "explicit worker grant", source: ["operator.workers"], workers: true },
+    { name: "writer without worker grant", source: write, workers: true, denied: true },
     { name: "original Guest ceiling", source: sessionWrite, scoped: admin },
     { name: "current caller ceiling", source: admin, scoped: sessionWrite },
     { name: "explicit session ceiling", source: admin, explicit: sessionWrite },
@@ -296,7 +300,11 @@ describe("native tool scope provenance", () => {
       continuation: true,
     },
   ])("preserves $name through the registered native request", async (testCase) => {
-    const requiredScope = testCase.read ? "operator.sessions.read" : "operator.sessions.write";
+    const requiredScope = testCase.workers
+      ? "operator.workers"
+      : testCase.read
+        ? "operator.sessions.read"
+        : "operator.sessions.write";
     const broadScope = testCase.read ? "operator.read" : "operator.write";
     const method = "scopeProof.native";
     const handler = vi.fn(async ({ client, params, respond }: GatewayRequestHandlerOptions) => {

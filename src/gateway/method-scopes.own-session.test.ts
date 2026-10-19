@@ -70,6 +70,28 @@ afterEach(() => {
 });
 
 describe("method scope resolution and authorization", () => {
+  it("requires explicit worker authority for attached machines without granting raw administration", () => {
+    for (const method of [
+      "environments.session.create",
+      "environments.session.exec",
+      "environments.session.destroy",
+    ]) {
+      expectScope("operator.workers", method);
+      allow(method, ["operator.workers"]);
+      allow(method, ["operator.admin"]);
+      for (const scope of ["operator.write", "operator.sessions.write", "operator.read"]) {
+        deny("operator.workers", method, [scope]);
+      }
+    }
+    for (const method of [
+      "environments.create",
+      "environments.destroy",
+      "environments.prepare",
+      "sessions.dispatch",
+    ]) {
+      deny("operator.admin", method, ["operator.workers"]);
+    }
+  });
   it("admits own PR preparation while retaining full-write admission for privileged actions", () => {
     for (const action of ["refresh_base", "edit", "request_review", "ready", "upload_evidence"]) {
       allow("sessions.github.action", ["operator.sessions.write"], { action });

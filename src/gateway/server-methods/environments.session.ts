@@ -11,7 +11,9 @@ import {
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { authorizeSessionAgentRun } from "../session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
   prepareProjectedSessionSharing,
@@ -29,6 +31,7 @@ import { defineValidatedGatewayMethod } from "./validation.js";
 export async function resolveSessionEnvironmentCaller(
   options: GatewayRequestHandlerOptions,
   requested: { sessionKey?: string; agentId?: string } = {},
+  mutation = false,
 ): Promise<{
   identity: WorkerEnvironmentSessionIdentity;
   assertCurrent: () => void;
@@ -145,6 +148,17 @@ export async function resolveSessionEnvironmentCaller(
         if (denied) {
           throw new Error(denied.message);
         }
+        // Delegated machine effects need live agent and sandbox ceilings in addition
+        // to participation. Preserve the existing administrator admission path.
+        if (mutation && !hasGatewayAdminScope(client)) {
+          const runDenied = authorizeSessionAgentRun(
+            { cfg, client, target: facts.target },
+            { policy: sharing.policy },
+          );
+          if (runDenied) {
+            throw new Error(runDenied.message);
+          }
+        }
       }
     };
     assertCurrent();
@@ -168,7 +182,7 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
     validateEnvironmentsSessionCreateParams,
     async (options) => {
       const { params, respond, context } = options;
-      const caller = await resolveSessionEnvironmentCaller(options, params);
+      const caller = await resolveSessionEnvironmentCaller(options, params, true);
       try {
         const { presentation, ...request } = params;
         if (presentation) {
@@ -217,6 +231,7 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
                 assertAllowed();
               }
             : undefined,
+          { dedicatedOnly: !hasGatewayAdminScope(options.client) },
         );
         assertAllowed();
         respond(true, { ...result, environment: summarizeWorkerEnvironment(result.environment) });
@@ -261,7 +276,7 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
     validateEnvironmentsSessionDestroyParams,
     async (options) => {
       const { params, respond, context } = options;
-      const caller = await resolveSessionEnvironmentCaller(options, params);
+      const caller = await resolveSessionEnvironmentCaller(options, params, true);
       try {
         const service = context.workerEnvironmentService;
         if (!service) {
@@ -270,6 +285,7 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
         const result = await service.destroySessionAttachment(
           { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
           caller.assertCurrent,
+          { dedicatedOnly: !hasGatewayAdminScope(options.client) },
         );
         caller.assertCurrent();
         respond(true, {

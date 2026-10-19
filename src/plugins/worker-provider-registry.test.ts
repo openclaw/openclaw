@@ -1,6 +1,7 @@
 /** Covers cloud-worker provider manifest ownership, uniqueness, and lookup ordering. */
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import type { WorkerProvider } from "./types.js";
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-manifest.js";
@@ -60,7 +61,7 @@ describe("worker provider registry", () => {
     );
   });
 
-  it.each(["renew", "runSetupCommand"] as const)(
+  it.each(["renew", "runSetupCommand", "supportsDelegatedSessionAccess"] as const)(
     "rejects a non-function optional %s hook",
     (method) => {
       const pluginRegistry = createTestRegistry();
@@ -79,6 +80,38 @@ describe("worker provider registry", () => {
       );
     },
   );
+
+  it("binds delegated access to the managed provider receiver and lifetime", async () => {
+    const owner = createTestRegistry();
+    const record = createOwner("owner", ["isolated"]);
+    owner.registry.plugins.push(record);
+    owner.createApi(record, { config: {} }).registerWorkerProvider({
+      ...createWorkerProvider("isolated"),
+      supportsDelegatedSessionAccess(profile, machineClass, os) {
+        return (
+          this.id === "isolated" &&
+          profile.backend === "vm" &&
+          machineClass === "small" &&
+          os === "linux"
+        );
+      },
+    });
+    const provider = owner.registry.workerProviders.get("isolated")!.provider;
+    const instance = getPluginInstance(record)!;
+    try {
+      expect(provider.supportsDelegatedSessionAccess?.({ backend: "vm" }, "small", "linux")).toBe(
+        true,
+      );
+      expect(
+        provider.supportsDelegatedSessionAccess?.({ backend: "shared" }, "small", "linux"),
+      ).toBe(false);
+    } finally {
+      await instance.dispose();
+    }
+    expect(() =>
+      provider.supportsDelegatedSessionAccess?.({ backend: "vm" }, "small", "linux"),
+    ).toThrow();
+  });
 
   it("rejects a non-boolean provision-before-installation declaration", () => {
     const pluginRegistry = createTestRegistry();

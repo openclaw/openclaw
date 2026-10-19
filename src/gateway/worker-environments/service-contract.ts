@@ -118,7 +118,10 @@ export type WorkerEnvironmentServiceContract = {
         environment: WorkerEnvironmentServiceRecord;
       }
     | undefined;
-  assertSessionAttachment(binding: WorkerEnvironmentAttachment): void;
+  assertSessionAttachment(
+    binding: WorkerEnvironmentAttachment,
+    access?: { dedicatedOnly: boolean },
+  ): void;
   touchSessionAttachment(binding: WorkerEnvironmentAttachment): Promise<void>;
   execSessionAttachment(
     binding: WorkerEnvironmentAttachment,
@@ -129,6 +132,7 @@ export type WorkerEnvironmentServiceContract = {
     authorize: () => void,
     signal?: AbortSignal,
     onReserved?: WorkerEnvironmentSessionReservationHandler,
+    access?: { dedicatedOnly: boolean },
   ): Promise<{
     attachment: WorkerEnvironmentAttachmentRecord & { ownerEpoch: number };
     environment: WorkerEnvironmentServiceRecord;
@@ -137,6 +141,7 @@ export type WorkerEnvironmentServiceContract = {
   destroySessionAttachment(
     request: { sessionId: string; environmentId?: string },
     authorize: () => void,
+    access?: { dedicatedOnly: boolean },
   ): Promise<WorkerEnvironmentServiceRecord | undefined>;
   prepareAttachedComputer?: (
     authority: import("./computer-transport.js").WorkerEnvironmentComputerAuthority,

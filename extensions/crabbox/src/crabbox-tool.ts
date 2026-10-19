@@ -155,7 +155,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
               ...(machineClass ? { machineClass } : {}),
               ...(presentation ? { presentation } : {}),
             },
-            { timeoutMs: 20 * 60_000, scopes: ["operator.admin"] },
+            { timeoutMs: 20 * 60_000, scopes: ["operator.workers"] },
           ),
         );
       }
@@ -166,7 +166,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             target,
             {
               timeoutMs: action === "stop" ? 10 * 60_000 : 30_000,
-              scopes: [action === "stop" ? "operator.admin" : "operator.read"],
+              scopes: [action === "stop" ? "operator.workers" : "operator.read"],
             },
           ),
         );
@@ -197,7 +197,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
               },
               {
                 timeoutMs: 30 * 60_000 + (timeoutMs ?? 120_000) + 15_000,
-                scopes: ["operator.admin"],
+                scopes: ["operator.workers"],
               },
             ),
           );
@@ -220,7 +220,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
               action: action === "process_status" ? "status" : "stop",
               processId: readStringParam(params, "processId", { required: true }),
             },
-            { timeoutMs: 60_000, scopes: ["operator.admin"] },
+            { timeoutMs: 60_000, scopes: ["operator.workers"] },
           ),
         );
       }

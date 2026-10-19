@@ -363,6 +363,16 @@ test("denies missing person access, retires grant or alias authority, and preser
 
 test.each([
   roleCase("unassigned default guest", undefined, READ_WRITE),
+  roleCase(
+    "worker maintainer with an old writer device",
+    "worker",
+    [...READ_WRITE, "operator.workers"],
+    READ_WRITE,
+    ["operator.workers"],
+  ),
+  roleCase("guest capped below an identity worker grant", undefined, READ_WRITE, READ_WRITE, [
+    "operator.workers",
+  ]),
   roleCase("admin-only without identity grants", "admin-only", NARROW_SCOPES, NARROW_SCOPES, []),
   roleCase("read-only from an admin-only identity grant", "read-only", ["operator.read"], []),
   roleCase("empty", "denied", [], NARROW_SCOPES),
@@ -371,6 +381,7 @@ test.each([
     default: "guest",
     definitions: {
       guest: role(READ_WRITE),
+      worker: role([...READ_WRITE, "operator.workers"]),
       "admin-only": role(["operator.admin"], "write"),
       "read-only": role(["operator.read"]),
       denied: role([], "none", []),
@@ -382,7 +393,10 @@ test.each([
   }
 
   await withIdentityServer(async ({ connect }) => {
-    const { ws, connected } = await connect({ scopes: scenario.deviceScopes });
+    const identityPath = deviceIdentityPath("role-ceiling");
+    const device = loadOrCreateDeviceIdentity({ path: identityPath });
+    const options = { scopes: scenario.deviceScopes, deviceIdentityPath: identityPath };
+    const { ws, connected } = await connect(options);
     try {
       expectScopes(connected, scenario.expectedScopes);
       expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
@@ -427,6 +441,14 @@ test.each([
         });
         expect(result.payload?.deviceToken).toBeTypeOf("string");
         expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+      }
+      if (scenario.identityScopes.includes("operator.workers")) {
+        ws.close();
+        expect(await waitForWsClose(ws, 1_000)).toBe(true);
+        const { connected: reconnected } = await connect({ ...options, prePairDevice: false });
+        expectScopes(reconnected, scenario.expectedScopes);
+        expect(responseAuth(reconnected)?.deviceToken).toBeUndefined();
+        await expectUnchangedPairing(device.deviceId, scenario.deviceScopes);
       }
     } finally {
       invalidateOperatorRolePolicy(profile.id);

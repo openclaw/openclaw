@@ -52,6 +52,12 @@ describe("gateway operator role config", () => {
     gateway: { roles: { default: "guest", definitions: { guest: role } } },
   });
 
+  test("accepts an explicit isolated worker scope without administrator access", () => {
+    expect(
+      OpenClawSchema.safeParse(withRole({ ...validRole, scopes: ["operator.workers"] })).success,
+    ).toBe(true);
+  });
+
   test.each([
     {
       name: "unknown assigned role",

@@ -12,6 +12,7 @@ import {
   SESSION_WRITE_SCOPE,
   TALK_SCOPE,
   TALK_SECRETS_SCOPE,
+  WORKERS_SCOPE,
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -31,6 +32,7 @@ const OperatorScopeSchema = z.enum([
   ADMIN_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
+  WORKERS_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,

@@ -99,6 +99,18 @@ Providers must not create or interpret location markers or expose credentials in
 
 Worker providers must also declare their id in `contracts.workerProviders`.
 
+The optional synchronous `supportsDelegatedSessionAccess(profile, machineClass?, os?)`
+hook permits non-admin session participants with `operator.workers` to create,
+reuse, execute on, and stop an attached worker. Return exactly `true` only when
+the selected target's isolation contract supports delegated use. Omission,
+`false`, or an exception denies it. Use the supplied frozen settings and placement
+overrides; do not perform I/O, read credentials, or change resources. Core calls
+the managed provider again at effect boundaries and after awaited preparation or
+approval. Active operations also require current dedicated-node lease ownership.
+This hook does not change `sharedHost`, administrator access, or sandbox policy.
+Stop checks it before closing the attachment; committed teardown and automatic
+cleanup retain their existing authority, including after eligibility is revoked.
+
 The optional synchronous `resolveDisplayId(profile)` hook supplies a nonsecret backend display ID for picker presentation. Return 1–64 lowercase ASCII letters, digits, or hyphens, starting with a letter (for example, `aws`). Derive it from locally validated settings; do not run commands, read credentials, or make network calls for branding. The existing profile catalog caches this cosmetic fact with its provider/settings snapshot. Missing, invalid, or throwing metadata is omitted without hiding the profile or its machine choices. `environments.list` projects it as optional `providerDisplayId`, never settings. The routing `providerId`, profile ID, permissions, and allocation behavior remain unchanged. Crabbox uses its validated backend provider, so a profile named `production` can display AWS without guessing from its name.
 Providers may implement `maintain({ profiles, signal, assertCurrent })` for bounded cleanup that must continue with no active leases. The Gateway invokes it for enabled, configured providers from its existing periodic worker sweep, separately from allocation and reconciliation waits. `profiles` contains cloned settings for the provider's current configured profiles. Call `assertCurrent()` immediately before external effects and after awaited work before durable mutations; authority ends when the invocation settles, its configuration or registration changes, or the Gateway stops. Honor `signal` and settle only after owned commands stop. A provider's plugin service must also cancel and drain maintenance during generation replacement. The hook must not allocate running capacity or treat maintenance as user demand; retention and cleanup policy remain provider-owned.
 

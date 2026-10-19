@@ -90,6 +90,7 @@ describe("Crabbox conversation tool", () => {
     await tool!.execute("call-one", params);
     await tool!.execute("call-one", params);
     expect(request.mock.calls[1]).toEqual(request.mock.calls[3]);
+    expect(request.mock.calls[1]?.[2]).toMatchObject({ scopes: ["operator.workers"] });
     expect(request.mock.calls[1]?.[1]).toEqual({
       profileId: "desktop",
       presentation: "desktop",
@@ -152,6 +153,7 @@ describe("Crabbox conversation tool", () => {
       background: true,
     });
     const first = request.mock.calls[0]?.[1];
+    expect(request.mock.calls[0]?.[2]).toMatchObject({ scopes: ["operator.workers"] });
     await tool!.execute("launch", {
       action: "exec",
       argv: ["node", "server.mjs"],
@@ -169,8 +171,16 @@ describe("Crabbox conversation tool", () => {
         action: "stop",
         processId: first.processId,
       },
-      expect.anything(),
+      expect.objectContaining({ scopes: ["operator.workers"] }),
     );
+  });
+
+  it("uses worker authority for stop while retaining read-only status", async () => {
+    const { tool, request } = fixture();
+    await tool!.execute("status", { action: "status" });
+    expect(request.mock.calls.at(-1)?.[2]).toMatchObject({ scopes: ["operator.read"] });
+    await tool!.execute("stop", { action: "stop" });
+    expect(request.mock.calls.at(-1)?.[2]).toMatchObject({ scopes: ["operator.workers"] });
   });
 
   it("retains the process identity for reconciliation after a lost launch acknowledgement", async () => {

@@ -95,7 +95,10 @@ const result = {
   termination: "exit",
 };
 
-function fixture(denied: string[] = [], runtimeAllow?: string[]) {
+function fixture(denied: string[] = [], runtimeAllow?: string[], admin = false) {
+  const lease = new AbortController();
+  const qualification = vi.fn((): AbortSignal | undefined => lease.signal);
+  const eligibility = vi.fn(() => {});
   const storePath = "/tmp/environment-session-policy/sessions.json";
   const config = { session: { store: storePath }, tools: { deny: denied } };
   const projection = createSessionRowProjectionFixture({
@@ -113,16 +116,22 @@ function fixture(denied: string[] = [], runtimeAllow?: string[]) {
   const sessionSpawnContext = {
     inheritedToolPolicy: { version: 1, allow: runtimeAllow, deny: [] },
   };
-  const client =
-    runtimeAllow === undefined
+  const client = admin
+    ? { connect: { scopes: ["operator.admin"] } }
+    : runtimeAllow === undefined
       ? null
       : { internal: { agentRuntimeIdentity: { sessionSpawnContext } } };
   const context = bindSessionRowProjection(
     {
       getRuntimeConfig: () => config,
       workerEnvironmentService: {
+        getDedicatedNodeLeaseSignal: qualification,
         getSessionAttachment: () => binding,
-        assertSessionAttachment: vi.fn(),
+        assertSessionAttachment: (_binding: unknown, access?: { dedicatedOnly: boolean }) => {
+          if (access?.dedicatedOnly) {
+            eligibility();
+          }
+        },
         execSessionAttachment: execute,
       },
     },
@@ -137,8 +146,15 @@ function fixture(denied: string[] = [], runtimeAllow?: string[]) {
     } as unknown as GatewayRequestHandlerOptions);
     return respond.mock.calls.at(-1);
   };
-  return { execute, call, respond, projection };
+  return { execute, call, respond, projection, lease, qualification, eligibility };
 }
+
+const actions = [
+  { action: "run", argv: ["pwd"] },
+  { action: "start", argv: ["pwd"], processId: "process-one" },
+  { action: "status", processId: "process-one" },
+  { action: "stop", processId: "process-one" },
+];
 
 beforeEach(() => {
   mocks.current = true;
@@ -150,6 +166,72 @@ beforeEach(() => {
 });
 
 describe("conversation environment execution RPC", () => {
+  it.each(actions)("refuses $action on an unqualified attached worker", async (params) => {
+    const { execute, call, qualification } = fixture();
+    qualification.mockReturnValue(undefined);
+    expect(await call(params)).toMatchObject([
+      false,
+      undefined,
+      { message: "A current dedicated cloud worker is required" },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(actions)("checks provider eligibility for $action with a live lease", async (params) => {
+    const { execute, call, eligibility } = fixture();
+    eligibility.mockImplementation(() => {
+      throw new Error("Delegated provider access denied");
+    });
+    expect(await call(params)).toMatchObject([
+      false,
+      undefined,
+      { message: "Delegated provider access denied" },
+    ]);
+    expect(eligibility).toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rechecks provider eligibility after approval", async () => {
+    const { execute, call, eligibility } = fixture();
+    mocks.policy.ask = "always";
+    mocks.approve.mockImplementation(async () => {
+      eligibility.mockImplementation(() => {
+        throw new Error("Delegated provider access retired");
+      });
+    });
+    expect(await call({ argv: ["pwd"] })).toMatchObject([
+      false,
+      undefined,
+      { message: "Delegated provider access retired" },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(actions)("preserves admin $action without delegated eligibility", async (params) => {
+    const { execute, call, eligibility, qualification } = fixture([], undefined, true);
+    eligibility.mockImplementation(() => {
+      throw new Error("Delegated provider access denied");
+    });
+    qualification.mockReturnValue(undefined);
+    expect((await call(params))?.[0]).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(eligibility).not.toHaveBeenCalled();
+    expect(qualification).not.toHaveBeenCalled();
+  });
+
+  it("withdraws command authority when dedicated ownership ends during approval", async () => {
+    const { execute, call, lease } = fixture();
+    mocks.policy.ask = "always";
+    mocks.approve.mockImplementation(async () => {
+      lease.abort(new Error("Dedicated lease retired"));
+    });
+    expect(await call({ argv: ["pwd"] })).toMatchObject([
+      false,
+      undefined,
+      { message: "Dedicated lease retired" },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
+  });
   it.each([
     { allow: [], allowed: false },
     { allow: ["read"], allowed: false },

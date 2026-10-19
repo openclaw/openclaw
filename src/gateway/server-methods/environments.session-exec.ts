@@ -11,6 +11,8 @@ import { prepareSessionSourceAuthority } from "../../config/sessions/session-sou
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { prepareExecApprovalsCurrentRead } from "../../infra/exec-approvals-store.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { captureDedicatedNodeLease } from "../worker-environments/dedicated-node-lease-attestations.js";
 import { approveSessionEnvironmentCommand } from "./environments.session-exec-approval.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
 import { resolveSessionEnvironmentCaller } from "./environments.session.js";
@@ -23,7 +25,7 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
     validateEnvironmentsSessionExecParams,
     async (options) => {
       const { params, respond, context } = options;
-      const caller = await resolveSessionEnvironmentCaller(options, params);
+      const caller = await resolveSessionEnvironmentCaller(options, params, true);
       let policyAuthority: Awaited<ReturnType<typeof prepareSessionSourceAuthority>> | undefined;
       try {
         const scope = {
@@ -61,6 +63,12 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
         ) {
           throw new Error("No matching environment is attached to this conversation");
         }
+        const lease = hasGatewayAdminScope(options.client)
+          ? undefined
+          : captureDedicatedNodeLease(service.getDedicatedNodeLeaseSignal, binding.environmentId);
+        const signal = lease
+          ? AbortSignal.any([lease.signal, ...(caller.signal ? [caller.signal] : [])])
+          : caller.signal;
         const action = params.action ?? "run";
         const command = {
           argv: params.argv ? [...params.argv] : ["openclaw-internal-workspace-process"],
@@ -100,7 +108,8 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           policy.security !== "full" || policy.ask === "always" || toolPolicy.cronExecAskAlways;
         const assertCurrent = () => {
           toolPolicy.assertAllowed();
-          service.assertSessionAttachment(binding);
+          service.assertSessionAttachment(binding, { dedicatedOnly: Boolean(lease) });
+          lease?.assertCurrent();
           const defaults = resolvePolicy();
           if (defaults.security === "deny") {
             throw new Error("Conversation policy denies environment command execution");
@@ -126,7 +135,7 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
             input: command.input,
             background: action === "start",
             assertCurrent,
-            signal: caller.signal,
+            signal,
           });
           approved = true;
         }
@@ -147,7 +156,7 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           ...(command.timeoutMs === undefined ? {} : { timeoutMs: command.timeoutMs }),
           ...(action === "run" ? {} : { process: { action, processId: command.processId! } }),
           transportRetry: "never",
-          signal: caller.signal,
+          signal,
           assertCurrent: assertDispatch,
         });
         assertCurrent();

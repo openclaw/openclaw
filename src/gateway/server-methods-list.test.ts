@@ -56,9 +56,9 @@ describe("listGatewayMethods", () => {
 
   const sessionEnvironmentMethods = [
     ["environments.session.status", "operator.read", undefined],
-    ["environments.session.create", "operator.admin", true],
-    ["environments.session.destroy", "operator.admin", true],
-    ["environments.session.exec", "operator.admin", undefined],
+    ["environments.session.create", "operator.workers", true],
+    ["environments.session.destroy", "operator.workers", true],
+    ["environments.session.exec", "operator.workers", undefined],
   ] as const;
 
   it("advertises plugin reload with admin mutation policy and generation invalidation", () => {

@@ -3,11 +3,13 @@ import type { SessionIdentityMutation } from "../../config/sessions/session-acce
 import type { OpenClawConfig } from "../../config/types.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { captureDedicatedNodeLease } from "./dedicated-node-lease-attestations.js";
 import type { createWorkerEnvironmentAccess } from "./environment-access.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import { requireWorkerProfile } from "./service-validation.js";
 import { prepareWorkerEnvironmentAttachmentSession } from "./session-attachment-session.js";
 import type {
   WorkerEnvironmentAttachment,
@@ -45,6 +47,22 @@ export function createWorkerEnvironmentSessionAttachments(
   },
 ) {
   const { store, providerLifecycle } = options;
+  const assertDelegatedAccess = (
+    intent: Pick<WorkerEnvironmentRecord, "providerId" | "profileSnapshot">,
+  ) => {
+    const provider = providerLifecycle.providerFor(intent.providerId);
+    if (
+      provider.supportsDelegatedSessionAccess?.(
+        requireWorkerProfile(intent.profileSnapshot.settings),
+        intent.profileSnapshot.machineClass,
+        intent.profileSnapshot.os,
+      ) !== true
+    ) {
+      throw new Error("This cloud worker profile requires administrator access");
+    }
+  };
+  const captureDedicatedLease = (environmentId: string) =>
+    captureDedicatedNodeLease(providerLifecycle.getDedicatedNodeLeaseSignal, environmentId);
   const operations = new KeyedAsyncQueue();
   const creations = new Map<string, Set<AbortController>>();
   const closingAttachments = new Map<string, number>();
@@ -333,7 +351,15 @@ export function createWorkerEnvironmentSessionAttachments(
           }
         : undefined;
     },
-    assertSessionAttachment,
+    assertSessionAttachment(
+      binding: WorkerEnvironmentAttachment,
+      access?: { dedicatedOnly: boolean },
+    ) {
+      assertSessionAttachment(binding);
+      if (access?.dedicatedOnly) {
+        assertDelegatedAccess(store.get(binding.environmentId)!);
+      }
+    },
     touchSessionAttachment: (binding: WorkerEnvironmentAttachment) =>
       touchSessionAttachment(binding),
     createSessionAttachment(
@@ -341,6 +367,7 @@ export function createWorkerEnvironmentSessionAttachments(
       authorize: () => void,
       callerSignal?: AbortSignal,
       onReserved?: WorkerEnvironmentSessionReservationHandler,
+      access?: { dedicatedOnly: boolean },
     ) {
       const sessionId = input.sessionId;
       const creation = new AbortController();
@@ -363,9 +390,13 @@ export function createWorkerEnvironmentSessionAttachments(
             sessionLifecycleRevision:
               input.sessionLifecycleRevision ?? session.entry?.lifecycleRevision,
           };
+          let dedicatedLease: ReturnType<typeof captureDedicatedLease> | undefined;
+          let assertProviderAccess = () => {};
           const assertCurrent = () => {
             signal?.throwIfAborted();
             authorize();
+            assertProviderAccess();
+            dedicatedLease?.assertCurrent();
             if (options.isStopping() || !matchesSession(selected, request)) {
               throw new Error("Conversation environment requester is no longer current");
             }
@@ -378,6 +409,11 @@ export function createWorkerEnvironmentSessionAttachments(
             attachment.closedAtMs === null &&
             !matchesSession(prepared, attachment)
           ) {
+            if (access?.dedicatedOnly) {
+              throw new Error(
+                "An administrator must clean up the previous conversation environment before creating a worker",
+              );
+            }
             await close(request.sessionId, assertCurrent, attachment.environmentId, creation);
             assertCurrent();
             attachment = store.getSessionAttachmentRecord(request.sessionId);
@@ -390,6 +426,14 @@ export function createWorkerEnvironmentSessionAttachments(
             !["destroyed", "failed", "orphaned"].includes(environment.state),
           );
           if (reused && attachment && environment) {
+            if (access?.dedicatedOnly) {
+              if (environment.sharedHost === true) {
+                throw new Error("Shared cloud workers require administrator access");
+              }
+              const existing = environment;
+              assertProviderAccess = () => assertDelegatedAccess(existing);
+              assertCurrent();
+            }
             if (
               environment.profileId !== request.profileId ||
               (request.machineClass !== undefined &&
@@ -403,6 +447,10 @@ export function createWorkerEnvironmentSessionAttachments(
             if (environment.destroyRequestedAtMs !== null) {
               throw new Error("Conversation environment is stopping");
             }
+            dedicatedLease =
+              access?.dedicatedOnly && ["ready", "idle"].includes(environment.state)
+                ? captureDedicatedLease(environment.environmentId)
+                : undefined;
             await store.touchSessionAttachment(attachment, assertCurrent);
             // Recovery needs the stored environment identity, not a newly supplied retry key.
             const environmentId = environment.environmentId;
@@ -413,6 +461,10 @@ export function createWorkerEnvironmentSessionAttachments(
               const current = store.get(environmentId);
               if (current) {
                 await providerLifecycle.reconcileRecord(current, signal, undefined, assertCurrent);
+              }
+              if (access?.dedicatedOnly) {
+                dedicatedLease = captureDedicatedLease(environmentId);
+                assertCurrent();
               }
             });
           } else {
@@ -430,6 +482,12 @@ export function createWorkerEnvironmentSessionAttachments(
             assertCurrent();
             providerLifecycle.assertPreparedIntentCurrent(request.profileId, intent);
             const environmentIntent = deriveEnvironmentIntent(allocationKey);
+            if (access?.dedicatedOnly) {
+              // Admission follows the frozen target and stays in the effect guard.
+              // It must not wait behind provisioning when Stop needs to close custody.
+              assertProviderAccess = () => assertDelegatedAccess(intent);
+              assertCurrent();
+            }
             let reservationCreated = false;
             const reserved = await options
               .withLock(environmentIntent.environmentId, async () => {
@@ -490,6 +548,10 @@ export function createWorkerEnvironmentSessionAttachments(
                     throw authorityFailure.error;
                   }
                   assertProvisionCurrent();
+                  if (access?.dedicatedOnly) {
+                    dedicatedLease = captureDedicatedLease(reservation.environment.environmentId);
+                    assertProvisionCurrent();
+                  }
                   return reservation;
                 } catch (error) {
                   await cancelReservation();
@@ -544,12 +606,69 @@ export function createWorkerEnvironmentSessionAttachments(
     destroySessionAttachment(
       request: { sessionId: string; environmentId?: string },
       authorize: () => void,
+      access?: { dedicatedOnly: boolean },
     ) {
-      // Close the durable relation before waiting for provisioning or transport cleanup.
+      if (!access?.dedicatedOnly) {
+        return options.trackOperation(
+          close(request.sessionId, authorize, request.environmentId, undefined, true).then(
+            (record) => (record ? options.environmentAccess.project(record) : undefined),
+          ),
+        );
+      }
       return options.trackOperation(
-        close(request.sessionId, authorize, request.environmentId, undefined, true).then(
-          (record) => (record ? options.environmentAccess.project(record) : undefined),
-        ),
+        (async () => {
+          await store.ready();
+          authorize();
+          const attachment = store.getSessionAttachmentRecord(request.sessionId);
+          const environment = attachment && store.get(attachment.environmentId);
+          let assertAllowed = () => {
+            authorize();
+            if (store.getSessionAttachmentRecord(request.sessionId) !== undefined) {
+              throw new Error("Conversation environment changed before cleanup");
+            }
+          };
+          if (attachment && !environment) {
+            throw new Error("Conversation environment ownership is unavailable");
+          }
+          if (attachment && environment) {
+            if (environment.sharedHost === true) {
+              throw new Error("Shared cloud workers require administrator access");
+            }
+            const lease =
+              attachment.closedAtMs === null && ["ready", "idle"].includes(environment.state)
+                ? captureDedicatedLease(environment.environmentId)
+                : undefined;
+            assertAllowed = () => {
+              authorize();
+              assertDelegatedAccess(environment);
+              lease?.assertCurrent();
+              const current = store.getSessionAttachmentRecord(request.sessionId);
+              const owner = store.get(environment.environmentId);
+              if (
+                current?.environmentId !== attachment.environmentId ||
+                current.generation !== attachment.generation ||
+                current.closedAtMs !== attachment.closedAtMs ||
+                owner?.ownerEpoch !== environment.ownerEpoch ||
+                owner.state !== environment.state ||
+                owner.leaseId !== environment.leaseId ||
+                owner.nodeDeviceId !== environment.nodeDeviceId ||
+                owner.sharedHost !== environment.sharedHost
+              ) {
+                throw new Error("Conversation environment changed before cleanup");
+              }
+            };
+          }
+          // Admission precedes the intentional close. Teardown keeps exact custody
+          // after its own revocation, including failed or interrupted provisioning.
+          const record = await close(
+            request.sessionId,
+            assertAllowed,
+            request.environmentId,
+            undefined,
+            true,
+          );
+          return record ? options.environmentAccess.project(record) : undefined;
+        })(),
       );
     },
     async reconcileSessionAttachments() {

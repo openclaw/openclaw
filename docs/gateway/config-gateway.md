@@ -232,6 +232,47 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 </Accordion>
 
+### Attached worker permission
+
+Add `operator.workers` to a role's `scopes` to permit dedicated conversation
+workers without `operator.admin`. This covers attached worker creation, command
+execution, process management, and stop. It does not grant raw environment
+administration, session dispatch, or access to shared or unclassified machines.
+The role's `agents`, `sandbox`, and session participation rules still apply.
+See the [cloud worker security model](/gateway/cloud-workers/security-model).
+
+Use the existing role definitions and verified GitHub-login assignments for a
+named maintainer role. Merge these entries into your current role configuration:
+
+```json5
+{
+  gateway: {
+    roles: {
+      definitions: {
+        maintainer: {
+          sessions: { others: "view" },
+          agents: ["main"],
+          sandbox: "inherit",
+          scopes: ["operator.write", "operator.workers"],
+        },
+      },
+      assignments: { byGithubLogin: { "example-maintainer": "maintainer" } },
+    },
+  },
+}
+```
+
+Explicit profile role assignments take precedence over these mappings. A login
+mapping has no expiry; preserve any temporary role's existing expiry policy.
+
+The connection must also carry this scope. Existing paired devices can retain
+their old scope set. For verified trusted-proxy or Tailscale identities, add the
+same scope to the exact identity's `gateway.auth.identityScopes` entry and
+reconnect; the role ceiling still limits the resulting connection. Any
+`x-openclaw-scopes` ingress cap must include it. For a temporary grant, expire
+both additions together. Otherwise use the normal device scope approval flow
+for the specific scope; do not grant administrator access merely to use workers.
+
 ### Disable file and image uploads
 
 Set `gateway.uploads.enabled` to `false` to disable client file and image uploads:

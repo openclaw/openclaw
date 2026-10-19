@@ -314,6 +314,16 @@ export type WorkerProvider = {
     machineClass?: string,
     os?: string,
   ) => boolean;
+  /**
+   * Explicitly permits non-admin session participants to manage this isolated target.
+   * Synchronous local policy only: no I/O or effects. Omission denies delegated access;
+   * this does not change allocation metadata, administrator access, or owned cleanup.
+   */
+  supportsDelegatedSessionAccess?: (
+    profile: WorkerProfile,
+    machineClass?: string,
+    os?: string,
+  ) => boolean;
   /** Immutable target resolved before project preparation or allocation. */
   resolvePreparationTarget?: (
     profile: WorkerProfile,

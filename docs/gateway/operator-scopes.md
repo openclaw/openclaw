@@ -35,6 +35,7 @@ require the `node` role.
 | `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                     |
 | `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                    |
 | `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
+| `operator.workers`        | Create, execute commands and manage processes on, and stop isolated workers attached to sessions the caller participates in. Requires an explicit grant.      |
 | `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
 | `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
 | `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                |
@@ -48,6 +49,14 @@ authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
+
+`environments.session.create`, `environments.session.exec`, and
+`environments.session.destroy` require `operator.workers`. `operator.write` does
+not include it. Non-admin callers also need current session participation, role
+agent and sandbox admission, and a dedicated allocation. Active commands require
+current dedicated-node ownership. Raw environment administration and session
+dispatch remain `operator.admin`; worker status and profile discovery remain read
+operations. See [cloud worker security](/gateway/cloud-workers/security-model).
 
 Session-scoped readers can read shared GitHub publication options and receipts
 for sessions they can view through `sessions.github.options` and

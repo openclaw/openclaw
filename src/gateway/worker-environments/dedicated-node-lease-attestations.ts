@@ -7,6 +7,25 @@ import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.
 import { requireWorkerLeaseStatus } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
+/** Bind narrow machine access to the provider owner's current lease/node/epoch proof. */
+export function captureDedicatedNodeLease(
+  getSignal: (environmentId: string) => AbortSignal | undefined,
+  environmentId: string,
+  unavailableMessage = "A current dedicated cloud worker is required",
+) {
+  const signal = getSignal(environmentId);
+  if (!signal || signal.aborted) {
+    throw new Error(unavailableMessage);
+  }
+  const assertCurrent = () => {
+    signal.throwIfAborted();
+    if (getSignal(environmentId) !== signal) {
+      throw new Error("Dedicated cloud worker ownership changed");
+    }
+  };
+  return { signal, assertCurrent };
+}
+
 export function createDedicatedNodeLeaseAttestations(
   options: Pick<
     WorkerProviderLifecycleOptions,

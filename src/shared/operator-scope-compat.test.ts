@@ -46,7 +46,7 @@ describe("roleScopesAllow", () => {
     expect(allows("operator", ["operator.talk"], ["operator.read"])).toBe(false);
   });
 
-  it.each(["operator.talk.secrets"])(
+  it.each(["operator.talk.secrets", "operator.workers"])(
     "requires an exact grant or admin for %s",
     (requestedScope) => {
       for (const allowedScopes of [[requestedScope], ["operator.admin"]]) {

@@ -77,6 +77,17 @@ import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
+// These backends allocate a dedicated VM or isolated sandbox per lease. Fixed IDs (including
+// external adapters) prove identity, not isolation from the underlying host.
+const DELEGATED_WORKER_BACKENDS = new Set([
+  "aws",
+  "azure",
+  "daytona",
+  "gcp",
+  "hetzner",
+  "machine0",
+]);
+
 type LeaseHeartbeatContext = LeaseCommandContext &
   Pick<CrabboxProfile, "heartbeatIntervalMs" | "heartbeatTimeoutMs" | "idleTimeout">;
 
@@ -596,6 +607,8 @@ export function createCrabboxWorkerProvider(
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
     supportsProjectPreparation: supportsCrabboxProjectPreparation,
+    supportsDelegatedSessionAccess: (profile) =>
+      DELEGATED_WORKER_BACKENDS.has(parseCrabboxCleanupProfile(profile).provider),
     resolvePreparedIdleTimeoutMs: resolveCrabboxPreparedIdleTimeoutMs,
     resolvePreparationTarget: resolveCrabboxPreparationTarget,
     runSetupCommand: createCrabboxSetupCommandRunner({
