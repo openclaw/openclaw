@@ -21,7 +21,8 @@ import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
   auth: vi.fn(),
 }));
 
