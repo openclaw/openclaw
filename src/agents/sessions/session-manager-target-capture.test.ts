@@ -14,20 +14,18 @@ import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import type { SessionEntry } from "./session-manager-types.js";
 import { SessionManager } from "./session-manager.js";
 
+function makeTarget(storePath: string, sessionId: string) {
+  return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
+}
+
 it("retains committed raw-write facts when target binding or authority changes before publication", async () => {
   await withOpenClawTestState({ label: "manager-raw-commit-publication" }, async (state) => {
     for (const change of ["binding", "authority"] as const) {
-      const original = {
-        agentId: "main",
-        sessionId: `raw-${change}`,
-        sessionKey: `agent:main:raw-${change}`,
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      const replacement = {
-        ...original,
-        sessionId: `other-${change}`,
-        sessionKey: `agent:main:other-${change}`,
-      };
+      const original = makeTarget(
+        path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        `raw-${change}`,
+      );
+      const replacement = makeTarget(original.storePath, `other-${change}`);
       for (const target of [original, replacement]) {
         await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       }
@@ -48,14 +46,8 @@ it("retains committed raw-write facts when target binding or authority changes b
       let active = true;
       const runExternalRetarget = AsyncLocalStorage.snapshot();
       const withWorker = metadataRuntime.withSessionMetadataWorker;
-      const delayPublication: typeof withWorker = async (
-        options,
-        database,
-        assertCurrent,
-        operation,
-        controls,
-      ) => {
-        const receipt = await withWorker(options, database, assertCurrent, operation, controls);
+      const delayPublication: typeof withWorker = async (...args) => {
+        const receipt = await withWorker(...args);
         if (change === "binding") {
           await runExternalRetarget(() => manager.setSessionTargetAsync(replacement));
         } else {
@@ -66,10 +58,9 @@ it("retains committed raw-write facts when target binding or authority changes b
       const delayed = vi
         .spyOn(metadataRuntime, "withSessionMetadataWorker")
         .mockImplementation(delayPublication);
-      let failure: unknown;
       try {
         const persist = () => manager.persistAsync(raw);
-        await (
+        const failure = await (
           change === "binding"
             ? persist()
             : withSessionTranscriptWriteAssertion(
@@ -81,9 +72,7 @@ it("retains committed raw-write facts when target binding or authority changes b
                 },
                 persist,
               )
-        ).catch((error: unknown) => {
-          failure = error;
-        });
+        ).catch((error: unknown) => error);
         expect(failure).toMatchObject({
           name: "SessionEntryCommittedError",
           committedEntryId: raw.id,
@@ -129,12 +118,7 @@ it.each([
           await symlink(physical, path.join(dir, "linked"), "junction");
         }
       }
-      const relative = {
-        agentId: "main",
-        sessionId: "capture",
-        sessionKey: "agent:main:capture",
-        storePath,
-      };
+      const relative = makeTarget(storePath, "capture");
       const first = { ...relative, storePath: path.join(firstDir, storePath) };
       const second = { ...relative, storePath: path.join(secondDir, storePath) };
       for (const [target, label] of [
@@ -153,33 +137,18 @@ it.each([
         const onTruncated = vi.fn(() => process.chdir(secondDir));
         let manager: SessionManager;
         if (entry === "openBounded" || entry === "openBoundedAsync") {
-          const open =
-            entry === "openBounded"
-              ? SessionManager.openBounded.bind(SessionManager)
-              : SessionManager.openBoundedAsync.bind(SessionManager);
-          manager = await open(relative, {
-            cwd: firstDir,
-            maxEvents: 1,
-            maxBytes: 4096,
-            onTruncated,
-          });
+          const limits = { cwd: firstDir, maxEvents: 1, maxBytes: 4096, onTruncated };
+          manager = await SessionManager[entry](relative, limits);
           expect(onTruncated).toHaveBeenCalledOnce();
-        } else if (entry === "setSessionTargetAsync") {
+        } else if (entry === "setSessionTargetAsync" || entry === "setSessionTarget") {
           manager = SessionManager.inMemory(firstDir);
-          const pending = manager.setSessionTargetAsync(relative);
+          const pending = manager[entry](relative);
           process.chdir(secondDir);
           await pending;
-        } else if (entry === "openAsync") {
-          const pending = SessionManager.openAsync(relative, firstDir);
+        } else {
+          const pending = SessionManager[entry](relative, firstDir);
           process.chdir(secondDir);
           manager = await pending;
-        } else if (entry === "setSessionTarget") {
-          manager = SessionManager.inMemory(firstDir);
-          manager.setSessionTarget(relative);
-          process.chdir(secondDir);
-        } else {
-          manager = SessionManager.open(relative, firstDir);
-          process.chdir(secondDir);
         }
         expect(process.cwd()).toBe(secondDir);
         const id = await manager.appendThinkingLevelChange("high");

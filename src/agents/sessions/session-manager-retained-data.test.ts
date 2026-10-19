@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -16,7 +15,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -27,7 +26,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-async function fixture(data: unknown, prefixEntries = 0) {
+async function fixture(data: unknown = { value: "x".repeat(3 * 1024 * 1024) }, prefixEntries = 0) {
   const dir = dirs.make("retained-transcript-data-");
   const scope = {
     agentId: "main",
@@ -35,39 +34,50 @@ async function fixture(data: unknown, prefixEntries = 0) {
     sessionKey: "agent:main:retained",
     storePath: path.join(dir, "sessions.json"),
   };
-  const entry = {
+  await upsertSessionEntryCore(scope, {
     sessionId: scope.sessionId,
     updatedAt: 1,
     activeWriterRunId: "writer",
     lifecycleRevision: "lifecycle",
-  };
-  await upsertSessionEntryCore(scope, entry);
-  const seed = SessionManager.open(scope, dir);
-  const userId = seed.appendMessage({ role: "user", content: "retained user", timestamp: 1 });
+  });
+  SessionManager.open(scope, dir).appendMessage({
+    role: "user",
+    content: "retained user",
+    timestamp: 1,
+  });
   const manager = SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 4096 });
   for (let index = 0; index < prefixEntries; index += 1) {
     manager.appendCustomEntry("prefix", { index });
   }
-  const assistantId = manager.appendMessage({
-    role: "assistant",
-    content: [],
-    api: "messages",
-    provider: "anthropic",
-    model: "test-model",
-    usage: createZeroUsageFixture(),
-    stopReason: "aborted",
-    timestamp: 2,
-  });
+  const assistantId = manager.appendMessage(
+    makeAgentAssistantMessage({
+      content: [],
+      api: "messages",
+      provider: "anthropic",
+      stopReason: "aborted",
+      timestamp: 2,
+    }),
+  );
   const metadataId = manager.appendCustomEntry("plugin-state", data);
-  const remove = () =>
-    manager.removeTrailingEntries((e) => e.id === assistantId, {
+  const remove = (selected = manager) =>
+    selected.removeTrailingEntries((e) => e.id === assistantId, {
       preserveTrailing: (e) => e.type === "custom",
     });
-  const database = openOpenClawAgentDatabase({
+  const options = {
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
+  };
+  const db = openOpenClawAgentDatabase(options).db;
+  const live = () => ({
+    ids: manager.getEntries().map((e) => e.id),
+    parent: manager.getAppendParentId(),
   });
-  return { scope, entry, dir, userId, manager, assistantId, metadataId, remove, database };
+  const durable = () => JSON.stringify(loadTranscriptEventsSync(scope));
+  const dataJson = () => {
+    const rows = loadTranscriptEventsSync(scope) as Array<{ id?: string; data?: unknown }>;
+    return JSON.stringify(rows.find((row) => row.id === metadataId)?.data);
+  };
+  return { scope, dir, manager, assistantId, remove, db, options, live, durable, dataJson };
 }
 
 describe("bounded cleanup retaining opaque custom data", () => {
@@ -105,12 +115,11 @@ describe("bounded cleanup retaining opaque custom data", () => {
   it.each(["sqlite", "identity", "writer", "lifecycle", "append"])(
     "keeps durable and live history intact after %s rejection",
     async (failure) => {
-      const f = await fixture({ value: "x".repeat(3 * 1024 * 1024) });
-      const liveIds = f.manager.getEntries().map((e) => e.id);
-      const parent = f.manager.getAppendParentId();
+      const f = await fixture();
+      const live = f.live();
       if (failure === "sqlite") {
         // The staging insert succeeds; fail the final compacted metadata insertion after deletion.
-        f.database.db.exec(
+        f.db.exec(
           "CREATE TRIGGER reject_final_suffix BEFORE INSERT ON transcript_events WHEN NEW.seq = 2 BEGIN SELECT RAISE(ABORT, 'reject final suffix'); END;",
         );
       } else if (failure === "append") {
@@ -128,59 +137,54 @@ describe("bounded cleanup retaining opaque custom data", () => {
               : { lifecycleRevision: "replacement" },
         );
       }
-      const before = JSON.stringify(loadTranscriptEventsSync(f.scope));
+      const before = f.durable();
+      const sessionTarget =
+        failure === "writer" || failure === "lifecycle"
+          ? {
+              ...f.scope,
+              expectedWriterRunId: "writer",
+              expectedLifecycleRevision: "lifecycle",
+            }
+          : undefined;
       await expect(
         withOwnedSessionTranscriptWrites(
           {
-            ...(failure === "writer" || failure === "lifecycle"
-              ? {
-                  sessionTarget: {
-                    ...f.scope,
-                    expectedWriterRunId: "writer",
-                    expectedLifecycleRevision: "lifecycle",
-                  },
-                }
-              : {}),
+            sessionTarget,
             withTranscriptWrite: async (run) => await run(),
           },
           async () => f.remove(),
         ),
       ).rejects.toThrow();
-      expect(JSON.stringify(loadTranscriptEventsSync(f.scope)) === before).toBe(true);
-      expect(f.manager.getEntries().map((e) => e.id)).toEqual(liveIds);
-      expect(f.manager.getAppendParentId()).toBe(parent);
+      expect(f.durable()).toBe(before);
+      expect(f.live()).toEqual(live);
       if (failure === "sqlite") {
-        f.database.db.exec("DROP TRIGGER reject_final_suffix");
+        f.db.exec("DROP TRIGGER reject_final_suffix");
         expect(f.remove()).toBe(1);
       }
     },
   );
   it("adopts retained data only when the outer transaction commits", async () => {
-    const f = await fixture({ value: "x".repeat(3 * 1024 * 1024) });
-    const options = {
-      agentId: f.scope.agentId,
-      path: resolveSessionTranscriptDatabasePath(f.scope),
-    };
-    const before = JSON.stringify(loadTranscriptEventsSync(f.scope));
-    const liveIds = f.manager.getEntries().map((entry) => entry.id);
+    const f = await fixture();
+    const before = f.durable();
+    const live = f.live();
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
         expect(f.remove()).toBe(1);
-        expect(f.manager.getEntries().map((entry) => entry.id)).toEqual(liveIds);
+        expect(f.live()).toEqual(live);
         throw new Error("outer rollback");
-      }, options),
+      }, f.options),
     ).toThrow("outer rollback");
-    expect(JSON.stringify(loadTranscriptEventsSync(f.scope)) === before).toBe(true);
-    expect(f.manager.getEntries().map((entry) => entry.id)).toEqual(liveIds);
+    expect(f.durable()).toBe(before);
+    expect(f.live()).toEqual(live);
     runOpenClawAgentWriteTransaction(() => {
       expect(f.remove()).toBe(1);
-    }, options);
+    }, f.options);
     expect(f.manager.getEntry(f.assistantId)).toBeUndefined();
-    expect(f.database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(f.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
   it("keeps unchanged-prefix IDs out of a tiny suffix query", async () => {
     const f = await fixture({ retained: true }, 40);
-    const db = requireNativeSqliteDatabase(f.database.db);
+    const db = requireNativeSqliteDatabase(f.db);
     const prepare = db.prepare.bind(db);
     let maxParameters = 0;
     const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
@@ -196,33 +200,21 @@ describe("bounded cleanup retaining opaque custom data", () => {
     }
   });
 
-  it("recovers retained metadata after reopening an existing bounded session", async () => {
-    const data = { value: "x".repeat(3 * 1024 * 1024) };
+  it.each(["reopened", "deep"])("preserves %s custom JSON during suffix removal", async (kind) => {
+    const data =
+      kind === "deep"
+        ? Array.from({ length: 1_100 }).reduce<unknown>((nested) => ({ nested }), "leaf")
+        : { value: "x".repeat(3 * 1024 * 1024) };
     const f = await fixture(data);
-    const reopened = SessionManager.openBounded(f.scope, {
-      cwd: f.dir,
-      maxEvents: 20,
-      maxBytes: 8 * 1024 * 1024,
-    });
-    expect(
-      reopened.removeTrailingEntries((entry) => entry.id === f.assistantId, {
-        preserveTrailing: (entry) => entry.type === "custom",
-      }),
-    ).toBe(1);
-    const rows = loadTranscriptEventsSync(f.scope) as Array<{ id?: string; data?: unknown }>;
-    expect(isDeepStrictEqual(rows.find((row) => row.id === f.metadataId)?.data, data)).toBe(true);
-  });
-
-  it("preserves deep custom JSON that SQLite cannot project", async () => {
-    let data: unknown = "leaf";
-    for (let index = 0; index < 1_100; index += 1) {
-      data = { nested: data };
-    }
-    const f = await fixture(data);
-    expect(f.remove()).toBe(1);
-    const rows = loadTranscriptEventsSync(f.scope) as Array<{ id?: string; data?: unknown }>;
-    expect(JSON.stringify(rows.find((row) => row.id === f.metadataId)?.data)).toBe(
-      JSON.stringify(data),
-    );
+    const manager =
+      kind === "deep"
+        ? f.manager
+        : SessionManager.openBounded(f.scope, {
+            cwd: f.dir,
+            maxEvents: 20,
+            maxBytes: 8 * 1024 * 1024,
+          });
+    expect(f.remove(manager)).toBe(1);
+    expect(f.dataJson()).toBe(JSON.stringify(data));
   });
 });

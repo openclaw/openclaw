@@ -27,11 +27,16 @@ const fixtures = createFixtureLifetime();
 const storageUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsStorage);
 const managerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsManager);
 
-function settingsFixture(label: string, scope: SettingsScope = "global") {
+function settingsFixture(label: string, scope: SettingsScope = "global", initial?: string) {
   const root = fixtures.createTempDir(`openclaw-settings-${label}-`);
   const agentDir = join(root, "agent");
   const settingsDir = scope === "global" ? agentDir : join(root, ".openclaw");
-  return { root, agentDir, settingsDir, settingsPath: join(settingsDir, "settings.json") };
+  const settingsPath = join(settingsDir, "settings.json");
+  if (initial !== undefined) {
+    mkdirSync(settingsDir);
+    fs.writeFileSync(settingsPath, initial);
+  }
+  return { root, agentDir, settingsDir, settingsPath };
 }
 
 async function expectCompleted(
@@ -130,6 +135,77 @@ function startSettingsProcess(source: string, args: string[], signal: AbortSigna
   };
 }
 
+const readerSource = String.raw`
+              import fs from "node:fs";
+              import { syncBuiltinESMExports } from "node:module";
+              const [moduleUrl, root, agentDir, settingsPath] = fixtureArgs;
+              const { SettingsManager } = await import(moduleUrl);
+              const originalExists = fs.existsSync;
+              const originalLstat = fs.lstatSync;
+              let committedDuringRead = false;
+              // Preserve the observation, then commit before the next probe. A file-first
+              // reader returns stale defaults; the lock-first reader sees the committed theme.
+              const commitDuringObservation = () => {
+                if (!committedDuringRead) {
+                  committedDuringRead = true;
+                  writeSync(1, "observed\n");
+                  waitForRelease();
+                }
+              };
+              fs.existsSync = (filePath) => {
+                const observed = originalExists(filePath);
+                if (filePath === settingsPath) commitDuringObservation();
+                return observed;
+              };
+              fs.lstatSync = (...args) => {
+                const observed = originalLstat(...args);
+                if (args[0] === settingsPath + ".lock") commitDuringObservation();
+                return observed;
+              };
+              syncBuiltinESMExports();
+              const manager = SettingsManager.create(root, agentDir);
+              console.log(JSON.stringify({
+                committedDuringRead,
+                errors: manager.drainErrors(),
+                theme: manager.getTheme(),
+              }));
+            `;
+const contenderSource = String.raw`
+              import fs from "node:fs";
+              const [moduleUrl, root, agentDir, scope, settingsPath] = fixtureArgs;
+              const { FileSettingsStorage } = await import(moduleUrl);
+              let released = false;
+                const openSync = fs.openSync;
+                let signaledContention = false;
+                fs.openSync = (...args) => {
+                  try {
+                    return openSync(...args);
+                  } catch (error) {
+                    if (
+                      !signaledContention &&
+                      args[0] === settingsPath + ".lock" &&
+                      error?.code === "EEXIST"
+                    ) {
+                      signaledContention = true;
+                      writeSync(1, "contended\n");
+                      // Keep parent scheduling outside the real lock's bounded retry loop.
+                      waitForRelease();
+                      released = true;
+                    }
+                    throw error;
+                  }
+                };
+              new FileSettingsStorage(root, agentDir).withLock(scope, (current) => {
+                if (!released) {
+                  throw new Error("contender entered settings before the first writer was released");
+                }
+                return JSON.stringify({
+                  ...(current ? JSON.parse(current) : {}),
+                  theme: "dark",
+                });
+              });
+            `;
+
 afterEach(async () => {
   vi.restoreAllMocks();
   syncBuiltinESMExports();
@@ -138,33 +214,28 @@ afterEach(async () => {
 
 describe("FileSettingsStorage", () => {
   it("preserves provider retry settings across an upgraded settings write", async () => {
-    const { root, agentDir, settingsPath } = settingsFixture("retry-migration");
-    mkdirSync(agentDir);
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({ retry: { provider: { maxRetries: 7, timeoutMs: 1_000 } } }),
+    const provider = { maxRetries: 7, timeoutMs: 1_000 };
+    const { root, agentDir, settingsPath } = settingsFixture(
+      "retry-migration",
+      "global",
+      JSON.stringify({ retry: { provider } }),
     );
 
     const manager = SettingsManager.create(root, agentDir);
     expect(manager.drainErrors()).toEqual([]);
-    expect(manager.getProviderRetrySettings()).toMatchObject({
-      timeoutMs: 1_000,
-      maxRetries: 7,
-    });
+    expect(manager.getProviderRetrySettings()).toMatchObject(provider);
 
     manager.setRetryEnabled(false);
     await manager.flush();
 
     const stored = JSON.parse(readFileSync(settingsPath, "utf8"));
-    expect(stored.retry.provider).toEqual({ maxRetries: 7, timeoutMs: 1_000 });
+    expect(stored.retry.provider).toEqual(provider);
   });
 
   it("keeps the original settings when a write fails partway", () => {
-    const { root, agentDir, settingsPath } = settingsFixture("partial-write");
     const original = JSON.stringify({ packages: ["npm:@openclaw/keep"] });
     const replacement = JSON.stringify({ packages: ["npm:@openclaw/replacement"] });
-    mkdirSync(agentDir);
-    fs.writeFileSync(settingsPath, original);
+    const { root, agentDir, settingsPath } = settingsFixture("partial-write", "global", original);
 
     const writeFileSync = fs.writeFileSync;
     vi.spyOn(fs, "writeFileSync").mockImplementation((target, data, options) => {
@@ -190,9 +261,7 @@ describe("FileSettingsStorage", () => {
       mkdirSync(agentDir, { mode: 0o751 });
       fs.writeFileSync(settingsPath, "{}", { mode: 0o640 });
 
-      new FileSettingsStorage(root, agentDir).withLock("global", () =>
-        JSON.stringify({ packages: ["npm:@openclaw/new"] }),
-      );
+      new FileSettingsStorage(root, agentDir).withLock("global", () => '{"updated":true}');
 
       expect(fs.statSync(settingsPath).mode & 0o777).toBe(0o640);
       expect(fs.statSync(agentDir).mode & 0o777).toBe(0o751);
@@ -261,107 +330,88 @@ describe("FileSettingsStorage", () => {
     mkdirSync(join(root, ".openclaw"));
     const fsync = vi.spyOn(fs, "fsyncSync");
     syncBuiltinESMExports();
-    try {
-      const manager = SettingsManager.create(root, agentDir);
-      expect(manager.drainErrors()).toEqual([]);
-      expect(manager.getGlobalSettings()).toEqual({});
-      expect(manager.getProjectSettings()).toEqual({});
-      expect(fsync).not.toHaveBeenCalled();
-    } finally {
-      fsync.mockRestore();
-      syncBuiltinESMExports();
-    }
+    const manager = SettingsManager.create(root, agentDir);
+    expect(manager.drainErrors()).toEqual([]);
+    expect(manager.getGlobalSettings()).toEqual({});
+    expect(manager.getProjectSettings()).toEqual({});
+    expect(fsync).not.toHaveBeenCalled();
   });
 
-  it.for(["global", "project"] as const)(
-    "reads committed %s settings from an already-owned first write",
+  it.for([
+    { scope: "global", mode: "reader" },
+    { scope: "project", mode: "reader" },
+    { scope: "global", mode: "writer" },
+    { scope: "project", mode: "writer" },
+  ] as const)(
+    "serializes a concurrent $mode with the first $scope write",
     { timeout: 20_000 },
-    (scope, { signal }) =>
+    ({ scope, mode }, { signal }) =>
       fixtures.run(async () => {
-        const { root, agentDir, settingsDir, settingsPath } = settingsFixture(
-          "first-writer",
-          scope,
-        );
-        mkdirSync(settingsDir);
+        const { root, agentDir, settingsDir, settingsPath } = settingsFixture("first-write", scope);
+        const reading = mode === "reader";
+        if (reading) {
+          mkdirSync(settingsDir);
+        } else {
+          expect(existsSync(settingsDir)).toBe(false);
+        }
         const abort = new AbortController();
         const childSignal = AbortSignal.any([signal, abort.signal]);
-        const writer = startSettingsProcess(
+        const children: ReturnType<typeof startSettingsProcess>[] = [];
+        const start = (source: string, args: string[]) => {
+          const child = startSettingsProcess(source, args, childSignal);
+          children.push(child);
+          return child;
+        };
+        const writer = start(
           String.raw`
-            const [moduleUrl, root, agentDir, scope] = fixtureArgs;
+            const [moduleUrl, root, agentDir, scope, field] = fixtureArgs;
             const { FileSettingsStorage } = await import(moduleUrl);
             new FileSettingsStorage(root, agentDir).withLock(scope, (current) => {
               if (current !== undefined) throw new Error("first-writer fixture already has settings");
               writeSync(1, "ready\n");
               waitForRelease();
-              return JSON.stringify({ theme: scope + "-committed" });
+              return JSON.stringify(field === "theme" ? { theme: scope + "-committed" } : { defaultModel: "mock-model" });
             });
           `,
-          [storageUrl.href, root, agentDir, scope],
-          childSignal,
+          [storageUrl.href, root, agentDir, scope, reading ? "theme" : "defaultModel"],
         );
-        let reader: ReturnType<typeof startSettingsProcess> | undefined;
         try {
-          await writer.waitFor("ready", "first writer exited before its reader");
+          await writer.waitFor("ready", "first writer exited before its peer");
           expect(existsSync(settingsPath)).toBe(false);
           expect(existsSync(`${settingsPath}.lock`)).toBe(true);
-          reader = startSettingsProcess(
-            String.raw`
-              import fs from "node:fs";
-              import { syncBuiltinESMExports } from "node:module";
-              const [moduleUrl, root, agentDir, settingsPath] = fixtureArgs;
-              const { SettingsManager } = await import(moduleUrl);
-              const originalExists = fs.existsSync;
-              const originalLstat = fs.lstatSync;
-              let committedDuringRead = false;
-              // Preserve the observation, then commit before the next probe. A file-first
-              // reader returns stale defaults; the lock-first reader sees the committed theme.
-              const commitDuringObservation = () => {
-                if (!committedDuringRead) {
-                  committedDuringRead = true;
-                  writeSync(1, "observed\n");
-                  waitForRelease();
-                }
-              };
-              fs.existsSync = (filePath) => {
-                const observed = originalExists(filePath);
-                if (filePath === settingsPath) commitDuringObservation();
-                return observed;
-              };
-              fs.lstatSync = (...args) => {
-                const observed = originalLstat(...args);
-                if (args[0] === settingsPath + ".lock") commitDuringObservation();
-                return observed;
-              };
-              syncBuiltinESMExports();
-              const manager = SettingsManager.create(root, agentDir);
-              console.log(JSON.stringify({
-                committedDuringRead,
-                errors: manager.drainErrors(),
-                theme: manager.getTheme(),
-              }));
-            `,
-            [managerUrl.href, root, agentDir, settingsPath],
-            childSignal,
+          const peer = start(
+            reading ? readerSource : contenderSource,
+            reading
+              ? [managerUrl.href, root, agentDir, settingsPath]
+              : [storageUrl.href, root, agentDir, scope, settingsPath],
           );
-          await reader.waitFor("observed", "reader exited before observing the first writer");
+          await peer.waitFor(reading ? "observed" : "contended", "peer exited before its gate");
+          expect(existsSync(settingsPath)).toBe(false);
+          expect(existsSync(`${settingsPath}.lock`)).toBe(true);
           await writer.release();
           await expectCompleted(writer, signal);
-          // withLock returned and the writer exited: rename, fsync, and lock release are complete.
-          await reader.release();
-          const readerResult = await expectCompleted(reader, signal);
-          expect(JSON.parse(readerResult.stdout.trim().split("\n").at(-1)!)).toEqual({
-            committedDuringRead: true,
-            errors: [],
-            theme: `${scope}-committed`,
-          });
+          // The first writer has completed rename/fsync and released the lock before its peer resumes.
+          await peer.release();
+          const result = await expectCompleted(peer, signal);
+          if (reading) {
+            expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({
+              committedDuringRead: true,
+              errors: [],
+              theme: `${scope}-committed`,
+            });
+          } else {
+            expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+              defaultModel: "mock-model",
+              theme: "dark",
+            });
+          }
           expect(existsSync(`${settingsPath}.lock`)).toBe(false);
         } finally {
           abort.abort();
-          await Promise.all([writer.completed, reader?.completed]);
+          await Promise.all(children.map((child) => child.completed));
         }
       }),
   );
-
   it.each([".lock", ".lock.reclaim"])(
     "does not skip an existing %s namespace when settings are absent",
     (suffix) => {
@@ -383,90 +433,4 @@ describe("FileSettingsStorage", () => {
       /unsupported legacy type/,
     );
   });
-
-  it.for(["global", "project"] as const)(
-    "preserves independent concurrent first writes to %s settings",
-    { timeout: 20_000 },
-    (scope, { signal }) =>
-      fixtures.run(async () => {
-        const { root, agentDir, settingsDir, settingsPath } = settingsFixture(
-          "concurrent-create",
-          scope,
-        );
-        const abort = new AbortController();
-        const writerSignal = AbortSignal.any([signal, abort.signal]);
-        const writers: ReturnType<typeof startSettingsProcess>[] = [];
-        const startWriter = (field: string) => {
-          const writer = startSettingsProcess(
-            String.raw`
-              import fs from "node:fs";
-              const [moduleUrl, root, agentDir, scope, settingsPath, field] = fixtureArgs;
-              const { FileSettingsStorage } = await import(moduleUrl);
-              let released = false;
-              if (field === "theme") {
-                const openSync = fs.openSync;
-                let signaledContention = false;
-                fs.openSync = (...args) => {
-                  try {
-                    return openSync(...args);
-                  } catch (error) {
-                    if (
-                      !signaledContention &&
-                      args[0] === settingsPath + ".lock" &&
-                      error?.code === "EEXIST"
-                    ) {
-                      signaledContention = true;
-                      writeSync(1, "contended\n");
-                      // Keep parent scheduling outside the real lock's bounded retry loop.
-                      waitForRelease();
-                      released = true;
-                    }
-                    throw error;
-                  }
-                };
-              }
-              new FileSettingsStorage(root, agentDir).withLock(scope, (current) => {
-                if (field === "defaultModel") {
-                  writeSync(1, "ready\n");
-                  waitForRelease();
-                } else if (!released) {
-                  throw new Error("contender entered settings before the first writer was released");
-                }
-                return JSON.stringify({
-                  ...(current ? JSON.parse(current) : {}),
-                  [field]: field === "theme" ? "dark" : "mock-model",
-                });
-              });
-            `,
-            [storageUrl.href, root, agentDir, scope, settingsPath, field],
-            writerSignal,
-          );
-          writers.push(writer);
-          return writer;
-        };
-        try {
-          expect(existsSync(settingsDir)).toBe(false);
-          const first = startWriter("defaultModel");
-          await first.waitFor("ready", "first writer exited before contention");
-          const contender = startWriter("theme");
-          await contender.waitFor("contended", "contender exited before reaching the lock");
-          expect(existsSync(`${settingsPath}.lock`)).toBe(true);
-          expect(existsSync(settingsPath)).toBe(false);
-          await first.release();
-          await expectCompleted(first, signal);
-          await contender.release();
-          for (const writer of writers) {
-            await expectCompleted(writer, signal);
-          }
-          expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
-            defaultModel: "mock-model",
-            theme: "dark",
-          });
-          expect(existsSync(`${settingsPath}.lock`)).toBe(false);
-        } finally {
-          abort.abort();
-          await Promise.all(writers.map((writer) => writer.completed));
-        }
-      }),
-  );
 });

@@ -20,7 +20,7 @@ import { waitForSessionTranscriptProjection } from "../../config/sessions/sessio
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
+import type { SqliteWorkerOperations } from "../../infra/sqlite-worker-store.js";
 import type { Message } from "../../llm/types.js";
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -45,7 +45,7 @@ async function createTarget(
   state: OpenClawTestState,
   sessionId: string,
   sessionKey = sessionId,
-  lifecycleRevision?: string,
+  revision = false,
 ) {
   const target = {
     agentId: "main",
@@ -57,7 +57,7 @@ async function createTarget(
   await upsertSessionEntryCore(target, {
     sessionId,
     updatedAt: 1,
-    ...(lifecycleRevision ? { lifecycleRevision } : {}),
+    ...(revision ? { lifecycleRevision: `${sessionId}-generation` } : {}),
   });
   return target;
 }
@@ -66,10 +66,16 @@ function makeNote(content: string, timestamp = 1): CustomMessage {
   return { role: "custom", customType: "openclaw.system-note", content, display: true, timestamp };
 }
 
-function settled<T>(pending: Promise<T>): Promise<PromiseSettledResult<T>> {
+function settled<T>(pending: Promise<T>, onSettled = () => {}): Promise<PromiseSettledResult<T>> {
   return pending.then(
-    (value) => ({ status: "fulfilled", value }),
-    (reason: unknown) => ({ status: "rejected", reason }),
+    (value) => {
+      onSettled();
+      return { status: "fulfilled", value };
+    },
+    (reason: unknown) => {
+      onSettled();
+      return { status: "rejected", reason };
+    },
   );
 }
 
@@ -98,37 +104,22 @@ async function beforeSettlement(
 }
 
 describe("released agent-sessions SDK static append", () => {
-  const cases: Array<{
-    name: string;
-    message: Message | CustomMessage | BashExecutionMessage;
-  }> = [
-    { name: "ordinary", message: makeUserMessage("SDK user message", 1) },
+  const cases: Array<Message | CustomMessage | BashExecutionMessage> = [
+    makeUserMessage("SDK user message", 1),
+    { ...makeNote("SDK custom message", 2), customType: "sdk-note" },
     {
-      name: "custom",
-      message: {
-        role: "custom",
-        customType: "sdk-note",
-        content: "SDK custom message",
-        display: true,
-        timestamp: 2,
-      },
-    },
-    {
-      name: "bash",
-      message: {
-        role: "bashExecution",
-        command: "echo synthetic",
-        output: "synthetic",
-        exitCode: 0,
-        cancelled: false,
-        truncated: false,
-        timestamp: 3,
-      },
+      role: "bashExecution",
+      command: "echo synthetic",
+      output: "synthetic",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 3,
     },
   ];
   it.each(cases)(
-    "returns a synchronous ID with immediately persisted $name content",
-    async ({ message }) => {
+    "returns a synchronous ID with immediately persisted $role content",
+    async (message) => {
       await withOpenClawTestState({ label: "sdk-static-append-contract" }, async (state) => {
         const target = await createTarget(state, "sdk-static");
         const id: string = SdkSessionManager.appendMessageToTranscript(target, message);
@@ -259,12 +250,7 @@ describe("appendSessionTranscriptNote", () => {
     "retains pre-import append custody through canonical %s close",
     async (owner) => {
       await withOpenClawTestState({ label: "static-note-pre-import-close" }, async (state) => {
-        const target = await createTarget(
-          state,
-          "closing-note",
-          "closing-note",
-          "closing-note-generation",
-        );
+        const target = await createTarget(state, "closing-note", "closing-note", true);
         SessionManager.open(target).appendMessage(makeUserMessage("Retained before close", 1));
         await waitForSessionTranscriptProjection(target);
         const before = await loadTranscriptEvents(target);
@@ -272,36 +258,26 @@ describe("appendSessionTranscriptNote", () => {
         const release = createDeferredCore();
         const revoked = createDeferredCore();
         let collectEarlyResources = true;
+        const watchRevoke = <R extends { path: string; revoke(): void }>(resource: R): R => {
+          const early = collectEarlyResources && path.resolve(resource.path) === target.storePath;
+          return {
+            ...resource,
+            revoke() {
+              resource.revoke();
+              if (early) {
+                revoked.resolve();
+              }
+            },
+          };
+        };
         const registerAgent = agentResources.registerOpenClawAgentDatabaseAsyncResource;
         const agentSpy = vi
           .spyOn(agentResources, "registerOpenClawAgentDatabaseAsyncResource")
-          .mockImplementation((resource) => {
-            const early = collectEarlyResources && path.resolve(resource.path) === target.storePath;
-            return registerAgent({
-              ...resource,
-              revoke() {
-                resource.revoke();
-                if (early) {
-                  revoked.resolve();
-                }
-              },
-            });
-          });
+          .mockImplementation((resource) => registerAgent(watchRevoke(resource)));
         const registerCandidate = agentResources.registerOpenClawAgentDatabaseReadCandidateResource;
         const candidateSpy = vi
           .spyOn(agentResources, "registerOpenClawAgentDatabaseReadCandidateResource")
-          .mockImplementation((resource) => {
-            const early = collectEarlyResources && path.resolve(resource.path) === target.storePath;
-            return registerCandidate({
-              ...resource,
-              revoke() {
-                resource.revoke();
-                if (early) {
-                  revoked.resolve();
-                }
-              },
-            });
-          });
+          .mockImplementation((resource) => registerCandidate(watchRevoke(resource)));
         const registerState = stateResources.registerOpenClawStateDatabaseAsyncResource;
         const stateSpy = vi
           .spyOn(stateResources, "registerOpenClawStateDatabaseAsyncResource")
@@ -334,27 +310,16 @@ describe("appendSessionTranscriptNote", () => {
         let closing: Promise<PromiseSettledResult<boolean>> | undefined;
         let closeCompleted = false;
         try {
-          await beforeSettlement(
-            entered.promise,
-            append,
-            "Static append settled before its pre-import gate",
-          );
+          await beforeSettlement(entered.promise, append, "Static append bypassed pre-import gate");
           const close =
             owner === "agent"
               ? closeOpenClawAgentDatabaseByPathAsync(target.storePath)
               : stateResources.closeOpenClawStateDatabaseByPathAsync(
                   resolveOpenClawStateSqlitePath(target.env),
                 );
-          closing = close.then(
-            (value) => {
-              closeCompleted = true;
-              return { status: "fulfilled" as const, value };
-            },
-            (reason: unknown) => {
-              closeCompleted = true;
-              return { status: "rejected" as const, reason };
-            },
-          );
+          closing = settled(close, () => {
+            closeCompleted = true;
+          });
           const firstBoundary = await Promise.race([
             revoked.promise.then(() => "revoked" as const),
             closing.then(() => "closed" as const),
@@ -453,11 +418,7 @@ describe("appendSessionTranscriptNote", () => {
         void first.catch(() => undefined);
         let second: ReturnType<typeof appendSessionTranscriptNote> | undefined;
         try {
-          await beforeSettlement(
-            entered.promise,
-            first,
-            "First note settled before target preparation was held",
-          );
+          await beforeSettlement(entered.promise, first, "First note bypassed preparation gate");
           second = appendSessionTranscriptNote(target, makeNote("second"));
           await Promise.race([queued.promise, second]);
           release.resolve();
@@ -531,14 +492,9 @@ describe("appendSessionTranscriptNote", () => {
 
   it("captures static note inputs before waiting and retains FIFO custody through idempotent replay", async () => {
     await withOpenClawTestState({ label: "static-note-capture" }, async (state) => {
-      const target = await createTarget(
-        state,
-        "original",
-        "static-original",
-        "original-generation",
-      );
+      const target = await createTarget(state, "original", "static-original", true);
       const originalTarget = structuredClone(target);
-      const replacement = await createTarget(state, "other", "static-other", "other-generation");
+      const replacement = await createTarget(state, "other", "static-other", true);
       const replacementBefore = await loadTranscriptEvents(replacement);
       const note = {
         role: "custom" as const,
@@ -567,13 +523,10 @@ describe("appendSessionTranscriptNote", () => {
         .spyOn(workerStore, "runSqliteWorkerStoreOperation")
         .mockImplementation(
           <Operations extends SqliteWorkerOperations, T>(
-            store: SqliteWorkerStore<Operations>,
-            operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-            stateContext?: Parameters<typeof runOperation>[2],
-            assertCurrent?: Parameters<typeof runOperation>[3],
-            admission?: Parameters<typeof runOperation>[4],
-          ) =>
-            runOperation(
+            ...args: Parameters<typeof runOperation<Operations, T>>
+          ) => {
+            const [store, operation, ...controls] = args;
+            return runOperation(
               store,
               (scope) =>
                 operation({
@@ -592,10 +545,9 @@ describe("appendSessionTranscriptNote", () => {
                     return result;
                   },
                 }),
-              stateContext,
-              assertCurrent,
-              admission,
-            ),
+              ...controls,
+            );
+          },
         );
       const first = appendSessionTranscriptNote(target, note, { config });
       void first.catch(() => undefined);
@@ -608,11 +560,7 @@ describe("appendSessionTranscriptNote", () => {
       let second: ReturnType<typeof appendSessionTranscriptNote> | undefined;
       let secondSettled = false;
       try {
-        await beforeSettlement(
-          committed.promise,
-          first,
-          "First note returned before the held commit result",
-        );
+        await beforeSettlement(committed.promise, first, "First note bypassed commit gate");
         const secondNote: typeof originalNote = {
           ...originalNote,
           content: "Second note",
@@ -628,11 +576,7 @@ describe("appendSessionTranscriptNote", () => {
             secondSettled = true;
           },
         );
-        await beforeSettlement(
-          queued.promise,
-          second,
-          "Second note returned before queued admission",
-        );
+        await beforeSettlement(queued.promise, second, "Second note bypassed admission queue");
         expect(secondSettled).toBe(false);
         expect(commands).toBe(1);
         release.resolve();
@@ -678,12 +622,7 @@ describe("appendSessionTranscriptNote", () => {
     "preserves a static note when %s logging redaction changes before commit",
     async (policy) => {
       await withOpenClawTestState({ label: "static-note-redaction" }, async (state) => {
-        const target = await createTarget(
-          state,
-          "redaction",
-          "static-redaction",
-          "redaction-generation",
-        );
+        const target = await createTarget(state, "redaction", "static-redaction", true);
         SessionManager.open(target).appendMessage(makeUserMessage("Retained prefix", 1));
         await waitForSessionTranscriptProjection(target);
         const before = await loadTranscriptEvents(target);
