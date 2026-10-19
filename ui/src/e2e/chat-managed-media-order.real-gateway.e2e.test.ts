@@ -408,6 +408,14 @@ suite.define(() => {
                 .getByRole("button", { name: "Stop generating", exact: true })
                 .waitFor({ state: "detached" });
               await bubble.getByText(closing, { exact: true }).waitFor();
+              // Stream retirement can precede the durable history receipt. Local MEDIA
+              // previews are replaced at that handoff; capture the managed images, not
+              // decoded nodes whose custody is still waiting to transfer.
+              await expect
+                .poll(() =>
+                  bubble.locator(".chat-image-frame--managed img.chat-message-image").count(),
+                )
+                .toBe(2);
               const assertDecoded = async () => {
                 // Run retirement starts a final history read that can replace live image nodes.
                 await page.waitForFunction((expectedSessionKey) => {

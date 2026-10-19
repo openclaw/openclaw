@@ -18,6 +18,7 @@ export function ChatBoardPanel(props: {
       }
     >
       <BoardSessionSurface
+        onViewRef={props.surface.onViewRef}
         active={props.surface.active}
         session={props.surface.session}
         snapshot={props.surface.snapshot}

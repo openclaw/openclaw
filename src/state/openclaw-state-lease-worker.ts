@@ -63,8 +63,6 @@ function stageLeaseExpiryObservation(
   const value = BigInt(expiresAt ?? 0);
   if (
     !stageSqliteTransactionState(db, {
-      stage() {},
-      rollback() {},
       commit() {
         publishLeaseExpiryObservation(shared, value);
       },

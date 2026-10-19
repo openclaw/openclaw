@@ -251,7 +251,7 @@ describe("chat account selection", () => {
 });
 
 describe("chat pane composer controls", () => {
-  it("renders the selected Gateway model while keeping its model picker locked", () => {
+  it("renders the selected Gateway model while keeping its model picker locked", async () => {
     const selectedSession: GatewaySessionRow = {
       key: "main",
       kind: "direct",
@@ -281,7 +281,9 @@ describe("chat pane composer controls", () => {
     expect(trigger?.dataset.chatModelLocked).toBe("true");
     expect(state.request).not.toHaveBeenCalled();
     trigger?.click();
-    flush();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
       "GPT-5.6 Sol",
     );
@@ -311,7 +313,7 @@ describe("chat pane composer controls", () => {
     },
   ])(
     "renders separate footer inputs with a $label catalog",
-    ({ cached, connected = true, error, message }) => {
+    async ({ cached, connected = true, error, message }) => {
       const container = document.body.appendChild(document.createElement("div"));
       onTestFinished(() => container.remove());
       const state = makeChatHost({
@@ -334,7 +336,9 @@ describe("chat pane composer controls", () => {
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
-      flush();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();

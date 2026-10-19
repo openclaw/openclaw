@@ -1,7 +1,11 @@
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import {
+  openChatModelPicker,
+  revealChatModelOption,
+  selectChatModelOption,
+} from "../test-helpers/select-picker-e2e.ts";
 import { polledAttribute, polledCount } from "./chat-presentation.test-support.ts";
 import {
   modelPicker,
@@ -65,8 +69,8 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("models.list");
-        const { trigger, option, runtime } = modelPicker(page);
-        await trigger.click();
+        const { picker, option, runtime } = modelPicker(page);
+        await openChatModelPicker(picker);
         const reset = option("fixture/automatic");
         expect({
           reset: await reset.count(),

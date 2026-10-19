@@ -161,6 +161,39 @@ it("retires requests and native refresh receipts when disposed", async () => {
   expect(view.textContent).not.toContain("12 credits");
 });
 
+it("replaces a cancelled read when same-turn receipts return to the original account", async () => {
+  const stale = createDeferredCore();
+  let calls = 0;
+  const request = createGatewayRequestMock(async () => {
+    if (++calls === 1) {
+      await stale.promise;
+      return {
+        ...snapshot,
+        providers: [
+          { ...snapshot.providers[0], billing: [{ type: "balance", amount: 99, unit: "credits" }] },
+        ],
+      };
+    }
+    return snapshot;
+  });
+  const view = await mount(request);
+  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  view.agentId = "other";
+  view.agentId = "main";
+  expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => expect(view.textContent).toContain("12 credits"));
+  stale.resolve();
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  flush();
+  await view.updateComplete;
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(view.textContent).toContain("12 credits");
+  expect(view.textContent).not.toContain("99 credits");
+});
+
 it("shows the empty state when Codex returns a snapshot without quota data", async () => {
   const request = createGatewayRequestMock(async () => ({
     updatedAt: 1,

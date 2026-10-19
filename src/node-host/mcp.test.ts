@@ -87,6 +87,34 @@ describe("node host MCP manager", () => {
     expect(events.healthy).toEqual(["terminateSession", "transport.close", "client.close"]);
   });
 
+  it.each([false, true])(
+    "reports a rejected session close without interrupting sibling cleanup (failure: %s)",
+    async (failed) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const client = createClient();
+      const sibling = createClient();
+      if (failed) {
+        client.close.mockRejectedValue(new Error("close refused"));
+      }
+      const warn = vi.fn();
+      const manager = await startManager(
+        { createClient: (name) => (name === "docs" ? client : sibling), warn },
+        { docs: { command: "docs" }, sibling: { command: "sibling" } },
+      );
+
+      await expect(manager.close()).resolves.toBeUndefined();
+      expect(sibling.close).toHaveBeenCalledOnce();
+      if (failed) {
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          'node host MCP server "docs" cleanup could not be confirmed; check the server process',
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("parses nodeHost.mcp config, isolates failures, filters tools, and shuts down", async () => {
     const parsed = OpenClawSchema.parse({
       nodeHost: {

@@ -2450,7 +2450,6 @@ src/tui/tui.ts	2
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
 src/utils/string-readers.ts	2
-src/utils/transcript-tools.ts	2
 src/utils/usage-format.ts	1
 src/version.ts	5
 src/video-generation/capability-overlays.ts	1
@@ -2542,7 +2541,7 @@ ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
 ui/src/pages/chat/chat-pane-lifecycle.ts	3
 ui/src/pages/chat/chat-queue.ts	1
-ui/src/pages/chat/chat-send-ack.ts	2
+ui/src/pages/chat/chat-send-ack.ts	1
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2

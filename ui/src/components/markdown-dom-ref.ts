@@ -1,5 +1,6 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
+import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
   | string
@@ -40,7 +41,7 @@ export function createMarkdownRef(
   return (element) => {
     current?.dispose();
     // Create the boundary synchronously so a fragment caller can return its markers.
-    current = new MarkdownDomReconciler(element);
+    current = new MarkdownDomReconciler(element, registerSessionTitleTarget);
     setOwner(current);
   };
 }

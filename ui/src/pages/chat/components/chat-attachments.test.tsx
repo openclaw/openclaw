@@ -239,6 +239,8 @@ describe("chat attachment read failures", () => {
   });
 
   async function expectOverflowToast(name: string) {
+    await toastHost.updateComplete;
+    await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
       expect(toastHost.querySelector(".app-toast__message")).toMatchObject({

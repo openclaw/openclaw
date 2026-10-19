@@ -544,7 +544,6 @@ export async function terminateInstalledStartupRuntime(
   if (runtime.pid) {
     if (beforeMutation) {
       await beforeMutation();
-      assertCurrent?.();
     }
     await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }

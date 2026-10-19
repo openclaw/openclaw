@@ -75,9 +75,11 @@ describe("chat pane keyboard focus", () => {
         <div onKeyDown={(event) => pane.handleTranscriptHistoryIntent(event)}>{content()}</div>
       ));
       const thread = container.querySelector("div")!;
-      thread.append(
-        Object.assign(document.createElement("div"), { className: "chat-history-sentinel" }),
-      );
+      const sentinel = Object.assign(document.createElement("div"), {
+        className: "chat-history-sentinel",
+      });
+      thread.append(sentinel);
+      pane.historySentinel = sentinel;
       vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
       const restorePlatform = configureNativeKeyTarget(thread.firstElementChild!, fixture);
       try {

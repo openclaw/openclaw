@@ -99,8 +99,7 @@ function renderSessionCatalog(params: {
 }) {
   const host = createMemo(() => params.host),
     snapshot = createMemo(() => params.snapshot),
-    catalog = createMemo(() => params.catalog),
-    renderer = createMemo(() => params.renderer);
+    catalog = createMemo(() => params.catalog);
   const newSessionAccess = createMemo(() => host().readNewSessionAccess());
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
@@ -109,7 +108,7 @@ function renderSessionCatalog(params: {
     }),
   );
   // One lazy module owns this catalog renderer for the mounted section's lifetime.
-  const InitialRenderer = untrack(renderer);
+  const InitialRenderer = params.renderer;
   return (
     <InitialRenderer
       catalogs={[catalog()]}

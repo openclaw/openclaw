@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -605,8 +605,13 @@ suite.define(() => {
   });
 
   it("keeps Clear authoritative after a delayed custom-theme replacement", async () => {
-    const existingTheme = await importCustomThemeFromUrl("existing", async () =>
-      Response.json({ ...createTweakcnThemePayload(), name: "Existing Test Theme" }),
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ ...createTweakcnThemePayload(), name: "Existing Test Theme" }),
+      );
+    const existingTheme = await importCustomThemeFromUrl("existing").finally(() =>
+      fetch.mockRestore(),
     );
     await suite.withPage(contextOptions, async ({ context, page }) => {
       await seedSettings(context, { customTheme: existingTheme, theme: "custom" });

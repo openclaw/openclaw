@@ -39,6 +39,7 @@ import { DEFAULT_AGENT_ID } from "../../lib/sessions/session-key.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "./components/chat-author-avatar-view.tsx";
 
 export type ChatAvatarProps = {
+  elementRef?: (element: HTMLElement) => void;
   role: string;
   assistant?: Pick<AssistantIdentity, "agentId" | "name" | "avatar"> & {
     textAvatar?: string | null;
@@ -56,9 +57,10 @@ export function ChatAvatar(props: ChatAvatarProps) {
       fallback={
         <Show
           when={role() === "assistant"}
-          fallback={<LocalAvatar role={role()} user={props.user} />}
+          fallback={<LocalAvatar role={role()} user={props.user} elementRef={props.elementRef} />}
         >
           <AgentAvatar
+            elementRef={props.elementRef}
             id={props.assistant?.agentId ?? DEFAULT_AGENT_ID}
             name={props.assistant?.name?.trim() || "Assistant"}
             avatar={props.assistant?.avatar}
@@ -76,6 +78,7 @@ export function ChatAvatar(props: ChatAvatarProps) {
             <IdentityAvatar identity={sender()}>
               {(view) => (
                 <ProfileChatAvatar
+                  elementRef={props.elementRef}
                   sender={sender()}
                   view={view()}
                   channelAvatar={props.channelAvatar}
@@ -84,7 +87,11 @@ export function ChatAvatar(props: ChatAvatarProps) {
             </IdentityAvatar>
           }
         >
-          <ChatAuthorAvatar sender={sender()} class="chat-avatar assistant" />
+          <ChatAuthorAvatar
+            sender={sender()}
+            class="chat-avatar assistant"
+            elementRef={props.elementRef}
+          />
         </Show>
       )}
     </Show>
@@ -92,6 +99,7 @@ export function ChatAvatar(props: ChatAvatarProps) {
 }
 
 function ProfileChatAvatar(props: {
+  elementRef?: (element: HTMLElement) => void;
   sender: SenderIdentity;
   view: IdentityAvatarView;
   channelAvatar?: ChannelSenderAvatarSource;
@@ -102,8 +110,12 @@ function ProfileChatAvatar(props: {
     resolveChannelSenderAvatarUrl(props.sender, props.channelAvatar, gateway().resourceBasePath),
   );
   return (
-    <Show when={photo()} fallback={<UserAvatarSlot view={props.view} label={label()} />}>
+    <Show
+      when={photo()}
+      fallback={<UserAvatarSlot view={props.view} label={label()} elementRef={props.elementRef} />}
+    >
       <div
+        ref={(element) => props.elementRef?.(element)}
         class="chat-avatar user chat-avatar--sender-initials"
         role="img"
         aria-label={label()}
@@ -121,7 +133,7 @@ function ProfileChatAvatar(props: {
   );
 }
 
-function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user">) {
+function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user" | "elementRef">) {
   const gateway = useAvatarGatewayContext();
   const name = createMemo(() => resolveLocalUserName(props.user));
   const url = createMemo(() => resolveLocalUserAvatarUrl(props.user));
@@ -141,6 +153,7 @@ function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user">) {
       when={props.role === "user" && url()}
       fallback={
         <div
+          ref={(element) => props.elementRef?.(element)}
           class={[
             "chat-avatar",
             props.role === "user" ? "user" : props.role === "tool" ? "tool" : "other",
@@ -157,7 +170,7 @@ function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user">) {
         </div>
       }
     >
-      <UserAvatarSlot view={view()} label={name()} />
+      <UserAvatarSlot view={view()} label={name()} elementRef={props.elementRef} />
     </Show>
   );
 }
@@ -198,6 +211,7 @@ function RoleAvatarIcon(props: { role: string }) {
 }
 
 function AgentAvatar(props: {
+  elementRef?: (element: HTMLElement) => void;
   id: string;
   name: string;
   avatar?: string | null;
@@ -224,12 +238,14 @@ function AgentAvatar(props: {
       }
       fallback={
         <AgentIdentityAvatar
+          elementRef={props.elementRef}
           agent={{ id: props.id, name: props.name, textAvatar: props.textAvatar }}
           class="chat-avatar assistant"
         />
       }
     >
       <span
+        ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
       >
@@ -260,7 +276,11 @@ export type ForwardedAvatarOptions = {
   assistantTextAvatar?: string | null;
 };
 
-export function ForwardedAvatar(props: { agentId?: string; options: ForwardedAvatarOptions }) {
+export function ForwardedAvatar(props: {
+  agentId?: string;
+  options: ForwardedAvatarOptions;
+  elementRef?: (element: HTMLElement) => void;
+}) {
   const agent = createMemo(() =>
     props.agentId
       ? props.options.agents?.find((candidate) => candidate.id === props.agentId)
@@ -279,6 +299,7 @@ export function ForwardedAvatar(props: { agentId?: string; options: ForwardedAva
         <Show when={agent()}>
           {(value) => (
             <AgentAvatar
+              elementRef={props.elementRef}
               id={value().id}
               name={value().identity?.name?.trim() || value().id}
               avatar={avatar()}
@@ -289,6 +310,7 @@ export function ForwardedAvatar(props: { agentId?: string; options: ForwardedAva
       }
     >
       <ChatAvatar
+        elementRef={props.elementRef}
         role="assistant"
         assistant={{
           agentId: props.agentId,

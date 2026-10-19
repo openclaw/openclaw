@@ -2,12 +2,14 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
+import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.tsx";
 import "../../../components/solid/mcp-app-context-strip.tsx";
 import "../../../components/mcp-app-resources.tsx";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -237,7 +239,10 @@ export function renderChatComposerView(
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
   return (
-    <div ref={footerControl} class="agent-chat__composer-shell">
+    <div
+      class="agent-chat__composer-shell"
+      ref={[footerControl, elementRef(props.onComposerShellRef)]}
+    >
       <div class="chat-footer__context">
         {props.footerContent}
         <div class="agent-chat__composer-notices">
@@ -327,7 +332,10 @@ export function renderChatComposerView(
             onPointerDown={(event: PointerEvent) =>
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
-            ref={context().state.composerInputRef ?? undefined}
+            ref={[
+              context().state.composerInputRef ?? undefined,
+              createBackgroundLayoutRef("composer"),
+            ]}
           >
             {context().menus.slashMenuVisible ? (
               <SlashMenu

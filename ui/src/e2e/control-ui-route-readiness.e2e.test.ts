@@ -1,7 +1,7 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,

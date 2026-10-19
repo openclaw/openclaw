@@ -527,6 +527,8 @@ function BubbleContents(props: ContentProps) {
 }
 
 function ToolMessageFallback(props: ContentProps) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   return (
     <div
       class={[
@@ -538,8 +540,8 @@ function ToolMessageFallback(props: ContentProps) {
         class="chat-inline-disclosure chat-tool-msg-summary"
         type="button"
         aria-expanded={props.state().toolMessageExpanded ? "true" : "false"}
-        onPointerEnter={syncToolDisclosureOverflow}
-        onFocus={syncToolDisclosureOverflow}
+        onPointerEnter={syncOverflow}
+        onFocus={syncOverflow}
         onClick={() =>
           props.options.onToggleToolMessageExpanded?.(
             props.state().toolMessageDisclosureId,
@@ -559,7 +561,10 @@ function ToolMessageFallback(props: ContentProps) {
             />
           </Show>
         </span>
-        <span class="chat-tool-disclosure__content">
+        <span
+          ref={(element) => (disclosureContent = element)}
+          class="chat-tool-disclosure__content"
+        >
           <span class="chat-tool-msg-summary__label">{props.state().toolMessageLabel}</span>
           <Show
             when={props.state().toolSummaryLabel}

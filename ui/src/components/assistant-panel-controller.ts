@@ -30,7 +30,7 @@ import {
   CHAT_ROUTE_READY_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import {
   consumePluginHelpAutoOpen,

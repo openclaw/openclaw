@@ -11,11 +11,13 @@ export function AttachmentRemove(props: {
   label: string;
   disabled?: boolean;
   onClick: () => void;
+  buttonRef?: (element: HTMLButtonElement) => void;
   class?: string;
 }) {
   return (
     <openclaw-tooltip prop:content={props.label}>
       <button
+        ref={[props.buttonRef]}
         class={props.class ?? "chat-attachment-remove"}
         type="button"
         aria-label={props.label}

@@ -1,4 +1,6 @@
 import type { Client, Prompt, Resource, Tool } from "@modelcontextprotocol/client";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 
 export const MCP_CATALOG_LIST_LIMITS = {
@@ -48,11 +50,13 @@ export function listMcpServerItems(
     client,
     timeoutMs,
     signal,
+    callerSignal,
     runRequest,
   }: {
     client: Client;
     timeoutMs: number;
     signal: AbortSignal;
+    callerSignal?: AbortSignal;
     runRequest: <T>(
       request: (signal: AbortSignal) => Promise<T>,
       signal: AbortSignal,
@@ -64,7 +68,7 @@ export function listMcpServerItems(
     itemLabel: kind,
     timeoutMs,
     ...MCP_CATALOG_LIST_LIMITS,
-    signal,
+    signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
     loadPage: ({ cursor, requestTimeoutMs: timeout, signal: pageSignal }) =>
       runRequest(async (requestSignal) => {
         const requestParams = cursor === undefined ? undefined : { cursor };
@@ -83,4 +87,16 @@ export function listMcpServerItems(
         return { items: page.prompts, nextCursor: page.nextCursor, serializedValue: page };
       }, pageSignal),
   });
+}
+
+// Tool materialization awaits catalog listing. Bound it for servers without an
+// explicit request timeout, with room for a cold remote (OAuth, HTTP) listing.
+const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 10_000;
+
+export function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): number {
+  const record = asOptionalObjectRecord(rawServer);
+  const configured = ["requestTimeoutMs", "timeout"].some(
+    (key) => asPositiveFiniteNumber(record?.[key]) !== undefined,
+  );
+  return configured ? requestTimeoutMs : BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS;
 }
