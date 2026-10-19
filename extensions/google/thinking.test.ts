@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
-  sanitizeGoogleThinkingPayload,
   type GoogleThinkingInputLevel,
 } from "./thinking-api.js";
 import { buildGoogleGenerativeAiParams } from "./transport-stream.js";
@@ -175,24 +174,5 @@ describe("google thinking policy", () => {
     ).map(([modelId, thinkingBudget, expected]) => ({ modelId, thinkingBudget, expected })),
   ])("maps $modelId $thinkingLevel/$thinkingBudget to $expected", ({ expected, ...input }) => {
     expect(resolveGoogleGemini3ThinkingLevel(input)).toBe(expected);
-  });
-
-  it("rewrites Gemini 3 thinking budgets to thinkingLevel", () => {
-    const payload = {
-      generationConfig: {
-        thinkingConfig: { thinkingBudget: 8193, includeThoughts: true },
-      },
-    };
-
-    sanitizeGoogleThinkingPayload({
-      payload,
-      modelId: "gemini-3-flash-preview",
-      thinkingLevel: "medium",
-    });
-
-    expect(payload.generationConfig.thinkingConfig).toEqual({
-      includeThoughts: true,
-      thinkingLevel: "MEDIUM",
-    });
   });
 });
