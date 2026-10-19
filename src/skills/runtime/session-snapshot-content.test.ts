@@ -35,6 +35,22 @@ beforeEach(() => {
   vi.setSystemTime(0);
 });
 const config = { plugins: { enabled: false } };
+type SnapshotParams = Parameters<typeof resolveReusableWorkspaceSkillSnapshot>[0];
+
+function workspaceFixture() {
+  const workspaceDir = tempDirs.make("skills-content-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
+  return { workspaceDir, skillDir: path.join(workspaceDir, "skills", "demo") };
+}
+
+const writeDemo = (dir: string, description: string, body?: string) =>
+  writeSkill({ dir, name: "demo", description, body });
+const readSnapshot = (
+  workspaceDir: string,
+  existingSnapshot?: SnapshotParams["existingSnapshot"],
+  overrides: Partial<SnapshotParams> = {},
+) =>
+  resolveReusableWorkspaceSkillSnapshot({ workspaceDir, config, existingSnapshot, ...overrides });
 
 async function completePassiveScan() {
   const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
@@ -52,20 +68,18 @@ describe("content-addressed skill refresh", () => {
   it("honors a per-call passive refresh opt-out without disabling another observer", async () => {
     const workspaceDir = tempDirs.make("skills-content-no-watch-");
     const skillDir = path.join(workspaceDir, "skills", "demo");
-    await writeSkill({ dir: skillDir, name: "demo", description: "Original" });
-    const params = { workspaceDir, config, watch: false };
-    const original = await resolveReusableWorkspaceSkillSnapshot(params);
-    await writeSkill({ dir: skillDir, name: "demo", description: "Passive change" });
+    const read = (existingSnapshot?: SnapshotParams["existingSnapshot"], watch = false) =>
+      readSnapshot(workspaceDir, existingSnapshot, { watch });
+    await writeDemo(skillDir, "Original");
+    const original = await read();
+    await writeDemo(skillDir, "Passive change");
     await completePassiveScan();
-    const unobserved = await resolveReusableWorkspaceSkillSnapshot({
-      ...params,
-      existingSnapshot: original.snapshot,
-    });
+    const unobserved = await read(original.snapshot);
     expect(unobserved.snapshot).toBe(original.snapshot);
 
     // A separate consumer owns observation; an opt-out read must not turn it off.
-    await resolveReusableWorkspaceSkillSnapshot({ ...params, watch: true });
-    await resolveReusableWorkspaceSkillSnapshot(params);
+    await read(undefined, true);
+    await read();
     const published = new Promise<void>((resolve) => {
       const unregister = registerSkillsChangeListener((event) => {
         if (event.workspaceDir === workspaceDir && event.reason === "watch") {
@@ -76,40 +90,28 @@ describe("content-addressed skill refresh", () => {
     });
     await completePassiveScan();
     await published;
-    const observed = await resolveReusableWorkspaceSkillSnapshot({
-      ...params,
-      existingSnapshot: original.snapshot,
-    });
+    const observed = await read(original.snapshot);
     expect(observed.shouldRefresh).toBe(true);
     expect(observed.snapshot.prompt).toContain("Passive change");
   });
 
   it("reuses session snapshots after unchanged rebuilds and refreshes instruction-only edits", async () => {
-    const workspaceDir = tempDirs.make("skills-content-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
-    const skillDir = path.join(workspaceDir, "skills", "demo");
-    await writeSkill({ dir: skillDir, name: "demo", description: "Demo", body: "Original body" });
-    const params = { workspaceDir, config };
-    const first = await resolveReusableWorkspaceSkillSnapshot(params);
+    const { workspaceDir, skillDir } = workspaceFixture();
+    await writeDemo(skillDir, "Demo", "Original body");
+    const first = await readSnapshot(workspaceDir);
     const version = getSkillsSnapshotVersion(workspaceDir);
     const changed = vi.fn();
     const unregister = registerSkillsChangeListener(changed);
     try {
       await completePassiveScan();
-      const next = await resolveReusableWorkspaceSkillSnapshot({
-        ...params,
-        existingSnapshot: first.snapshot,
-      });
+      const next = await readSnapshot(workspaceDir, first.snapshot);
       expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
       expect(next.snapshot).toBe(first.snapshot);
       expect(next.shouldRefresh).toBe(false);
       expect(changed).not.toHaveBeenCalled();
       await fs.appendFile(path.join(skillDir, "SKILL.md"), "\nNew instructions\n");
       await completePassiveScan();
-      const edited = await resolveReusableWorkspaceSkillSnapshot({
-        ...params,
-        existingSnapshot: first.snapshot,
-      });
+      const edited = await readSnapshot(workspaceDir, first.snapshot);
       expect(edited.shouldRefresh).toBe(true);
       expect(edited.snapshotVersion).toBeGreaterThan(version);
       expect(edited.snapshot.prompt).toBe(first.snapshot.prompt);
@@ -123,23 +125,17 @@ describe("content-addressed skill refresh", () => {
   });
 
   it("refreshes changed installed skill identities even when instructions are identical", async () => {
-    const workspaceDir = tempDirs.make("skills-content-identity-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
-    const skillDir = path.join(workspaceDir, "skills", "demo");
-    await writeSkill({ dir: skillDir, name: "demo", description: "Demo" });
+    const { workspaceDir, skillDir } = workspaceFixture();
+    await writeDemo(skillDir, "Demo");
     const originDir = path.join(skillDir, ".openclaw");
     const originFile = path.join(originDir, "source-origin.json");
     await fs.mkdir(originDir);
     await fs.writeFile(originFile, JSON.stringify({ slug: "demo-original" }));
-    const params = { workspaceDir, config };
-    const first = await resolveReusableWorkspaceSkillSnapshot(params);
+    const first = await readSnapshot(workspaceDir);
     expect(first.snapshot.skills[0]?.skillKey).toBe("demo-original");
     await fs.writeFile(originFile, JSON.stringify({ slug: "demo-renamed" }));
     await refreshSkillsDiscovery({ workspaceDir });
-    const next = await resolveReusableWorkspaceSkillSnapshot({
-      ...params,
-      existingSnapshot: first.snapshot,
-    });
+    const next = await readSnapshot(workspaceDir, first.snapshot);
     expect(next.shouldRefresh).toBe(true);
     expect(next.snapshot.skills[0]?.skillKey).toBe("demo-renamed");
     expect(next.snapshot.resolvedSkills?.[0]?.contentHash).toBe(
@@ -148,100 +144,59 @@ describe("content-addressed skill refresh", () => {
   });
 
   it("keeps execution workspace content isolated while refreshing active sessions", async () => {
-    const workspaceDir = tempDirs.make("skills-content-scopes-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
-    const firstScope = { executionWorkspaceDir: path.join(workspaceDir, "first") };
-    const secondScope = { executionWorkspaceDir: path.join(workspaceDir, "second") };
+    const { workspaceDir } = workspaceFixture();
+    const firstDir = path.join(workspaceDir, "first");
+    const secondDir = path.join(workspaceDir, "second");
+    const firstSkillDir = path.join(firstDir, "skills", "demo");
+    const secondSkillDir = path.join(secondDir, "skills", "demo");
     const firstParams = {
-      workspaceDir,
-      config,
-      executionWorkspaceDir: path.relative(process.cwd(), firstScope.executionWorkspaceDir),
+      executionWorkspaceDir: path.relative(process.cwd(), firstDir),
     };
-    const secondParams = { ...firstParams, ...secondScope };
-    for (const [scope, description] of [
-      [firstScope, "First scope"],
-      [secondScope, "Second scope"],
-    ] as const) {
-      await writeSkill({
-        dir: path.join(scope.executionWorkspaceDir, "skills", "demo"),
-        name: "demo",
-        description,
-      });
-    }
-    const first = await resolveReusableWorkspaceSkillSnapshot(firstParams);
-    const second = await resolveReusableWorkspaceSkillSnapshot(secondParams);
-    await writeSkill({
-      dir: path.join(firstScope.executionWorkspaceDir, "skills", "demo"),
-      name: "demo",
-      description: "Changed first scope",
-    });
+    const secondParams = { executionWorkspaceDir: secondDir };
+    await writeDemo(firstSkillDir, "First scope");
+    await writeDemo(secondSkillDir, "Second scope");
+    const first = await readSnapshot(workspaceDir, undefined, firstParams);
+    const second = await readSnapshot(workspaceDir, undefined, secondParams);
+    await writeDemo(firstSkillDir, "Changed first scope");
     await refreshSkillsDiscovery({ workspaceDir });
-    const refreshed = await resolveReusableWorkspaceSkillSnapshot({
-      ...firstParams,
-      existingSnapshot: first.snapshot,
-    });
-    const unrelated = await resolveReusableWorkspaceSkillSnapshot({
-      ...secondParams,
-      existingSnapshot: second.snapshot,
-    });
+    const refreshed = await readSnapshot(workspaceDir, first.snapshot, firstParams);
+    const unrelated = await readSnapshot(workspaceDir, second.snapshot, secondParams);
     expect(refreshed.snapshot.prompt).toContain("Changed first scope");
     expect(unrelated.snapshot.prompt).toContain("Second scope");
     expect(unrelated.snapshot.prompt).not.toContain("Changed first scope");
     expect(unrelated.snapshot.resolvedSkills?.[0]?.filePath).toBe(
-      path.join(secondScope.executionWorkspaceDir, "skills", "demo", "SKILL.md"),
+      path.join(secondSkillDir, "SKILL.md"),
     );
   });
 
   it("uses incoming roots before deciding whether a warm session can be reused", async () => {
-    const workspaceDir = tempDirs.make("skills-content-roots-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
+    const { workspaceDir } = workspaceFixture();
     const firstRoot = path.join(workspaceDir, "first");
     const secondRoot = path.join(workspaceDir, "second");
-    await writeSkill({ dir: path.join(firstRoot, "demo"), name: "demo", description: "Before" });
-    await writeSkill({ dir: path.join(secondRoot, "demo"), name: "demo", description: "After" });
-    const firstConfig = {
+    await writeDemo(path.join(firstRoot, "demo"), "Before");
+    await writeDemo(path.join(secondRoot, "demo"), "After");
+    const rootConfig = (root: string) => ({
       ...config,
       agents: { defaults: { workspace: workspaceDir } },
-      skills: { load: { extraDirs: [firstRoot] } },
-    };
-    const nextConfig = {
-      ...config,
-      agents: { defaults: { workspace: workspaceDir } },
-      skills: { load: { extraDirs: [secondRoot] } },
-    };
-    const first = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: firstConfig,
+      skills: { load: { extraDirs: [root] } },
     });
-    await refreshSkillsDiscovery({
-      workspaceDir,
-      reason: "config-change",
-      config: nextConfig,
-    });
-    const next = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: nextConfig,
-      existingSnapshot: first.snapshot,
-    });
+    const nextConfig = rootConfig(secondRoot);
+    const first = await readSnapshot(workspaceDir, undefined, { config: rootConfig(firstRoot) });
+    await refreshSkillsDiscovery({ workspaceDir, reason: "config-change", config: nextConfig });
+    const next = await readSnapshot(workspaceDir, first.snapshot, { config: nextConfig });
     expect(next.shouldRefresh).toBe(true);
     expect(next.snapshot.prompt).toContain("After");
     expect(next.snapshot.prompt).not.toContain("Before");
   });
 
   it("refreshes an existing session after its workspace is replaced", async () => {
-    const workspaceDir = tempDirs.make("skills-content-replaced-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
-    const skillDir = path.join(workspaceDir, "skills", "demo");
-    await writeSkill({ dir: skillDir, name: "demo", description: "Original workspace" });
-    const params = { workspaceDir, config };
-    const first = await resolveReusableWorkspaceSkillSnapshot(params);
+    const { workspaceDir, skillDir } = workspaceFixture();
+    await writeDemo(skillDir, "Original workspace");
+    const first = await readSnapshot(workspaceDir);
     await fs.rename(workspaceDir, path.join(tempDirs.make("skills-content-old-"), "workspace"));
-    await writeSkill({ dir: skillDir, name: "demo", description: "Replacement workspace" });
+    await writeDemo(skillDir, "Replacement workspace");
     await completePassiveScan();
-    const next = await resolveReusableWorkspaceSkillSnapshot({
-      ...params,
-      existingSnapshot: first.snapshot,
-    });
+    const next = await readSnapshot(workspaceDir, first.snapshot);
     expect(next.shouldRefresh).toBe(true);
     expect(next.snapshot.prompt).toContain("Replacement workspace");
     expect(next.snapshot.prompt).not.toContain("Original workspace");
@@ -249,36 +204,26 @@ describe("content-addressed skill refresh", () => {
   });
 
   it("ignores losing skill edits but refreshes when the precedence winner disappears", async () => {
-    const workspaceDir = tempDirs.make("skills-content-precedence-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
+    const { workspaceDir } = workspaceFixture();
     const executionWorkspaceDir = path.join(workspaceDir, "worktree");
     const winner = path.join(workspaceDir, "skills", "demo");
     const loser = path.join(executionWorkspaceDir, "skills", "demo");
-    await writeSkill({ dir: winner, name: "demo", description: "Winner" });
-    await writeSkill({ dir: loser, name: "demo", description: "Loser" });
-    const params = {
-      workspaceDir,
-      config,
-      executionWorkspaceDir,
-    };
-    const first = await resolveReusableWorkspaceSkillSnapshot(params);
+    await writeDemo(winner, "Winner");
+    await writeDemo(loser, "Loser");
+    const read = (existingSnapshot?: SnapshotParams["existingSnapshot"]) =>
+      readSnapshot(workspaceDir, existingSnapshot, { executionWorkspaceDir });
+    const first = await read();
     expect(first.snapshot.prompt).toContain("Winner");
     const version = getSkillsSnapshotVersion(workspaceDir);
     await fs.appendFile(path.join(loser, "SKILL.md"), "\nChanged loser\n");
     await completePassiveScan();
-    const unchanged = await resolveReusableWorkspaceSkillSnapshot({
-      ...params,
-      existingSnapshot: first.snapshot,
-    });
+    const unchanged = await read(first.snapshot);
     expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
     expect(unchanged.snapshot).toBe(first.snapshot);
     expect(unchanged.shouldRefresh).toBe(false);
     await fs.unlink(path.join(winner, "SKILL.md"));
     await completePassiveScan();
-    const fallback = await resolveReusableWorkspaceSkillSnapshot({
-      ...params,
-      existingSnapshot: first.snapshot,
-    });
+    const fallback = await read(first.snapshot);
     expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
     expect(fallback.shouldRefresh).toBe(true);
     expect(fallback.snapshot.prompt).toContain("Loser");

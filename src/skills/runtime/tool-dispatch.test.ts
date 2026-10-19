@@ -1,4 +1,3 @@
-// Skill tool dispatch tests cover policy-filtered tool surfaces.
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
@@ -26,12 +25,7 @@ function makeTool(name: string) {
 
 const createOpenClawToolsAsyncMock = vi.fn<
   SkillToolDispatchDependencies["createOpenClawToolsAsync"]
->(async () => [
-  makeTool("read"),
-  makeTool("cron"),
-  makeTool("exec"),
-  makeTool("conversations_send"),
-]);
+>(async () => ["read", "cron", "exec", "conversations_send"].map(makeTool));
 const dependencies: SkillToolDispatchDependencies = {
   createOpenClawToolsAsync: createOpenClawToolsAsyncMock,
 };
@@ -54,6 +48,14 @@ const dispatchDefaults = {
   model: "gpt-5.5",
   senderIsOwner: true,
 } satisfies Parameters<typeof resolveSkillDispatchTools>[0];
+const dispatch = (
+  params: Partial<Parameters<typeof resolveSkillDispatchTools>[0]> = {},
+  deps = dependencies,
+) => resolveSkillDispatchTools({ ...dispatchDefaults, ...params }, deps);
+const toolNames = (tools: Awaited<ReturnType<typeof dispatch>>) => tools.map((tool) => tool.name);
+const lastArgs = () => createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
+const liveDispatch = (params: Parameters<typeof dispatch>[0]) =>
+  dispatch(params, { createOpenClawToolsAsync });
 
 beforeEach(() => {
   // Exercise auth-source preparation even on hosts with configured search providers.
@@ -81,42 +83,28 @@ describe("resolveSkillDispatchTools", () => {
         tools: { allow: ["ask_user"], deny: deny ? ["ask_user"] : [] },
       };
       setRuntimeConfigSnapshot(cfg);
-      const tools = await resolveSkillDispatchTools(
-        { ...dispatchDefaults, message, cfg },
-        { createOpenClawToolsAsync },
-      );
+      const tools = await liveDispatch({ message, cfg });
       expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
     },
   );
 
   it.each([
-    { tools: { profile: "coding" }, actions: ["update.run"] },
-    {
-      tools: { profile: "full" },
-      actions: ["config.get", "config.schema.lookup", "update.run"],
-    },
-    {
-      tools: { profile: "messaging", alsoAllow: ["gateway"] },
-      actions: ["config.get", "config.schema.lookup", "update.run"],
-    },
-  ] satisfies Array<{ tools: OpenClawConfig["tools"]; actions: string[] }>)(
-    "limits gateway actions to the skill dispatch policy: $tools",
-    async ({ tools: toolPolicy, actions }) => {
+    [{ profile: "coding" }, ["update.run"]],
+    [{ profile: "full" }, ["config.get", "config.schema.lookup", "update.run"]],
+    [
+      { profile: "messaging", alsoAllow: ["gateway"] },
+      ["config.get", "config.schema.lookup", "update.run"],
+    ],
+  ] satisfies Array<[OpenClawConfig["tools"], string[]]>)(
+    "limits gateway actions to the skill dispatch policy: %j",
+    async (toolPolicy, actions) => {
       const config: OpenClawConfig = { plugins: { enabled: false }, tools: toolPolicy };
       setRuntimeConfigSnapshot(config);
-      const tools = await resolveSkillDispatchTools(
-        {
-          message: { surface: "webchat" },
-          cfg: config,
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
-          provider: "openai",
-          model: "gpt-5.5",
-          senderIsOwner: true,
-        },
-        { createOpenClawToolsAsync },
-      );
+      const tools = await liveDispatch({
+        message: { surface: "webchat" },
+        cfg: config,
+        sessionKey: "agent:main:main",
+      });
 
       expect(tools.find((tool) => tool.name === "gateway")?.parameters).toHaveProperty(
         "properties.action.enum",
@@ -131,81 +119,69 @@ describe("resolveSkillDispatchTools", () => {
   ])(
     "applies $agentId sandbox policy to global skill dispatch",
     async ({ agentId, expectedTools }) => {
-      const tools = await resolveSkillDispatchTools(
-        {
-          ...dispatchDefaults,
-          message: { surface: "webchat" },
-          cfg: {
-            session: { scope: "global" },
-            agents: {
-              entries: {
-                isolated: {
-                  sandbox: { mode: "all" },
-                  tools: { sandbox: { tools: { allow: ["read"] } } },
-                },
-                direct: { sandbox: { mode: "off" } },
+      const tools = await dispatch({
+        message: { surface: "webchat" },
+        cfg: {
+          session: { scope: "global" },
+          agents: {
+            entries: {
+              isolated: {
+                sandbox: { mode: "all" },
+                tools: { sandbox: { tools: { allow: ["read"] } } },
               },
+              direct: { sandbox: { mode: "off" } },
             },
           },
-          agentId,
-          sessionKey: "global",
-          model: "gpt-5.6-luna",
         },
-        dependencies,
-      );
+        agentId,
+        sessionKey: "global",
+        model: "gpt-5.6-luna",
+      });
 
-      expect(tools.map((tool) => tool.name)).toEqual(expectedTools);
+      expect(toolNames(tools)).toEqual(expectedTools);
     },
   );
 
   it("passes final filtered tool surface to cron jobs", async () => {
-    const tools = await resolveSkillDispatchTools(
-      {
-        ...dispatchDefaults,
-        message: {
-          surface: "telegram",
-          senderId: "user-1",
-          nativeChannelId: "native-room-1",
-        },
-        cfg: {
-          tools: { allow: ["read", "cron"] },
-        },
-        sessionKey: "agent:main:telegram:group:restricted-room",
+    const tools = await dispatch({
+      message: {
+        surface: "telegram",
+        senderId: "user-1",
+        nativeChannelId: "native-room-1",
       },
-      dependencies,
-    );
+      cfg: { tools: { allow: ["read", "cron"] } },
+      sessionKey: "agent:main:telegram:group:restricted-room",
+    });
 
-    const args = createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-    expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
-    expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
-    expect(args?.nativeChannelId).toBe("native-room-1");
-    expect(args?.sessionConfigSource).toBe("runtime");
+    expect(toolNames(tools)).toEqual(["read", "cron"]);
+    expect(lastArgs()?.cronCreatorToolAllowlist).toEqual([
+      { name: "read" },
+      { name: "automations" },
+    ]);
+    expect(lastArgs()).toMatchObject({
+      nativeChannelId: "native-room-1",
+      sessionConfigSource: "runtime",
+    });
   });
 
   it("carries command skill file identity into tool diagnostics", async () => {
-    await resolveSkillDispatchTools(
-      {
-        ...dispatchDefaults,
-        skillCommand: {
-          name: "daily-brief",
-          skillFile: "/workspace/skills/daily-brief/SKILL.md",
-          skillName: "Daily Brief",
-          skillSource: "workspace",
-          toolName: "read",
-        },
+    await dispatch({
+      skillCommand: {
+        name: "daily-brief",
+        skillFile: "/workspace/skills/daily-brief/SKILL.md",
+        skillName: "Daily Brief",
+        skillSource: "workspace",
+        toolName: "read",
       },
-      dependencies,
-    );
+    });
 
-    const args = createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-    expect(args?.beforeToolCallHookContext?.skillCommand?.skillFile).toBe(
+    expect(lastArgs()?.beforeToolCallHookContext?.skillCommand?.skillFile).toBe(
       "/workspace/skills/daily-brief/SKILL.md",
     );
   });
 
   it("uses persisted delegated policy instead of a sender wildcard", async () => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = "agent:main:subagent:skill-child";
     const config: OpenClawConfig = {
       session: { store: storePath },
@@ -227,49 +203,27 @@ describe("resolveSkillDispatchTools", () => {
       inheritedToolPolicyVersion: 1,
     } as SessionEntry);
 
-    const tools = await resolveSkillDispatchTools(
-      {
-        ...dispatchDefaults,
-        message: { surface: "telegram" },
-        cfg: config,
-        sessionKey,
-      },
-      dependencies,
-    );
+    const tools = await dispatch({ message: { surface: "telegram" }, cfg: config, sessionKey });
 
-    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "exec"]));
+    expect(toolNames(tools)).toEqual(expect.arrayContaining(["read", "exec"]));
   });
 
   it("removes owner-only core tools for authorized non-owner dispatch", async () => {
     const common = {
-      ...dispatchDefaults,
       message: { surface: "telegram", senderId: "allowed-user" },
       sessionKey: "agent:main:telegram:direct:allowed-user",
     };
 
-    const nonOwnerTools = await resolveSkillDispatchTools(
-      {
-        ...common,
-        senderIsOwner: false,
-      },
-      dependencies,
-    );
-    const nonOwnerArgs = createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-    expect(nonOwnerTools.map((tool) => tool.name)).not.toContain("conversations_send");
-    expect(nonOwnerArgs?.senderIsOwner).toBe(false);
-    expect(nonOwnerArgs?.pluginToolDenylist).toEqual(
-      expect.arrayContaining([...GATEWAY_OWNER_ONLY_CORE_TOOLS]),
-    );
+    const nonOwnerTools = await dispatch({ ...common, senderIsOwner: false });
+    expect(toolNames(nonOwnerTools)).not.toContain("conversations_send");
+    expect(lastArgs()).toMatchObject({
+      senderIsOwner: false,
+      pluginToolDenylist: expect.arrayContaining([...GATEWAY_OWNER_ONLY_CORE_TOOLS]),
+    });
 
-    const ownerTools = await resolveSkillDispatchTools(
-      {
-        ...common,
-        senderIsOwner: true,
-      },
-      dependencies,
-    );
-    const ownerArgs = createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-    expect(ownerTools.map((tool) => tool.name)).toContain("conversations_send");
+    const ownerTools = await dispatch({ ...common, senderIsOwner: true });
+    const ownerArgs = lastArgs();
+    expect(toolNames(ownerTools)).toContain("conversations_send");
     expect(ownerArgs?.senderIsOwner).toBe(true);
     expect(ownerArgs?.pluginToolDenylist).not.toContain("conversations_send");
   });
