@@ -9,6 +9,7 @@ import { getFreePort } from "../test-utils/ports.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { startGatewayServerCore as startGatewayServer } from "./server-start.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 describe("config security policy before persistence", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -41,16 +42,10 @@ describe("config security policy before persistence", () => {
     state = await createOpenClawTestState({
       label: "gateway-config-security-policy",
       env: {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        ...KERNEL_TEST_ENV,
+        VITEST: process.env.VITEST,
         // Minimal boot skips the managed writer subscription that owns pre-commit validation.
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         CONFIG_PROVENANCE_API_KEY: "synthetic-included-env-key",
       },
@@ -146,10 +141,7 @@ describe("config security policy before persistence", () => {
       const writer = await start(initialConfig, { scopes: ["operator.admin"] }, true);
       const before = await writer.request<{ hash: string }>("config.get", {});
       const beforeBytes = await fs.readFile(state.configPath, "utf8");
-      const controlUi = {
-        ...(disableUi ? { enabled: false } : {}),
-        allowedOrigins: [],
-      };
+      const controlUi = { ...(disableUi ? { enabled: false } : {}), allowedOrigins: [] };
       const nextConfig = structuredClone(initialConfig);
       nextConfig.gateway.controlUi = { ...nextConfig.gateway.controlUi, ...controlUi };
       const outcome = writer.request(method, {

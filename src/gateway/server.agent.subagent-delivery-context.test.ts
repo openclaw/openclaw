@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
@@ -59,9 +60,7 @@ async function prepareSessionStore(entries: StoreEntries = {}): Promise<void> {
 
 async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
   const entry = loadSessionEntry({ sessionKey: key, storePath: gatewaySuite.sessionStorePath });
-  if (!entry) {
-    throw new Error(`expected stored entry ${key}`);
-  }
+  assert(entry, `expected stored entry ${key}`);
   return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };
 }
 
@@ -156,9 +155,10 @@ test.for(["completed", "self-stopped"] as const)(
       const releaseCommand = createDeferred();
       agentCommandMock.mockImplementationOnce(async (options) => {
         const abortSignal = asOptionalRecord(options)?.abortSignal;
-        if (!(abortSignal instanceof AbortSignal)) {
-          throw new Error("Expected the admitted child command's cancellation signal");
-        }
+        assert(
+          abortSignal instanceof AbortSignal,
+          "Expected the admitted child cancellation signal",
+        );
         try {
           stopped.resolve(
             await killSubagentRunAdmin({

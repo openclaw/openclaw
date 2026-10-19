@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 
@@ -21,28 +23,19 @@ export function registerAgentConfigMutationTests({
   reloadBarrier: { hold: (() => Promise<void>) | undefined };
 }) {
   const patch = (baseHash: string, config: unknown) =>
-    rpc("config.patch", {
-      baseHash,
-      raw: JSON.stringify(config),
-    });
+    rpc("config.patch", { baseHash, raw: JSON.stringify(config) });
   it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
-    const skill = {
-      name: "revision-guide",
-      description: "Ready when the new agent is acknowledged",
-    };
+    const workspace = workspacePath("revision-workspace");
+    const skill = { name: "revision-guide", description: "Ready after acknowledgement" };
     await writeSkill({
-      dir: path.join(workspacePath("revision-workspace"), "skills", "revision-guide"),
+      dir: path.join(workspace, "skills", skill.name),
       ...skill,
     });
-    const operations = [
-      [
-        "agents.create",
-        { name: "revision-worker", workspace: workspacePath("revision-workspace") },
-      ],
+    for (const [method, params] of [
+      ["agents.create", { name: "revision-worker", workspace }],
       ["agents.update", { agentId: "revision-worker", name: "Ready" }],
       ["agents.delete", { agentId: "revision-worker", deleteFiles: false }],
-    ] as const;
-    for (const [method, params] of operations) {
+    ] as const) {
       const before = await getConfigHash();
       const entered = createDeferredCore();
       const gate = createDeferredCore();
@@ -53,12 +46,11 @@ export function registerAgentConfigMutationTests({
       try {
         // Observe the persisted revision while runtime publication is held.
         const changed = rpc(method, params);
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          changed.then((result) => {
-            throw new Error(`${method} settled before publication: ${result.error?.message}`);
-          }),
-        ]);
+          changed,
+          `${method} settled before publication`,
+        );
         const current = await getCurrentConfigObject();
         gate.resolve();
         const result = await changed;
@@ -66,9 +58,7 @@ export function registerAgentConfigMutationTests({
         if (method === "agents.create") {
           expect(await rpc("skills.status", { agentId: "revision-worker" })).toMatchObject({
             ok: true,
-            payload: {
-              skills: expect.arrayContaining([expect.objectContaining(skill)]),
-            },
+            payload: { skills: expect.arrayContaining([expect.objectContaining(skill)]) },
           });
         }
 
@@ -111,53 +101,45 @@ export function registerAgentConfigMutationTests({
       const newer = { ...JSON.parse(beforeRaw), ui: { prefs: { locale: "fr" } } };
       const createIO = configFactory.createConfigIO;
       let writeCalls = 0;
-      const observation = vi
-        .spyOn(configFactory, "createConfigIO")
-        .mockImplementation((options) => {
-          const io = createIO(options);
-          return {
-            ...io,
-            writeConfigFile: async (...args) => {
-              if (io.configPath === original.path && ++writeCalls === 1) {
-                // Land an external edit after draft capture, retaining the real writer and guard.
-                await fs.writeFile(original.path, `${JSON.stringify(newer, null, 2)}\n`);
-                if (revoke) {
-                  const journal = readAgentDeletionJournal("doomed");
-                  if (!journal) {
-                    throw new Error("Expected the live deletion journal");
-                  }
-                  expect(removeAgentDeletionJournal("doomed", journal.operationId)).toBe(true);
-                }
+      using _ = vi.spyOn(configFactory, "createConfigIO").mockImplementation((options) => {
+        const io = createIO(options);
+        return {
+          ...io,
+          writeConfigFile: async (...args) => {
+            if (io.configPath === original.path && ++writeCalls === 1) {
+              // Land an external edit after draft capture, retaining the real writer and guard.
+              await fs.writeFile(original.path, `${JSON.stringify(newer, null, 2)}\n`);
+              if (revoke) {
+                const journal = readAgentDeletionJournal("doomed");
+                assert(journal, "Expected the live deletion journal");
+                expect(removeAgentDeletionJournal("doomed", journal.operationId)).toBe(true);
               }
-              return await io.writeConfigFile(...args);
-            },
-          };
-        });
-      try {
-        const result = await rpc("agents.delete", { agentId: "doomed", deleteFiles: false });
-        const raw = await fs.readFile(original.path, "utf8");
-        const persisted = JSON.parse(raw);
-        if (revoke) {
-          expect(result.ok).toBe(false);
-          expect(result.error?.message).toContain("deletion no longer owns");
-          expect(writeCalls).toBe(1);
-          expect(persisted).toEqual(newer);
-          expect(readAgentDeletionJournal("doomed")).toBeUndefined();
-        } else {
-          expect(result.ok, result.error?.message).toBe(true);
-          expect(writeCalls).toBe(2);
-          expect(Buffer.byteLength(raw)).toBeLessThan(Buffer.byteLength(beforeRaw) / 2);
-          const expected = structuredClone(newer);
-          delete expected.agents.entries.doomed;
-          expect(Object.keys(persisted.agents.entries).toSorted()).toEqual(["main", "survivor"]);
-          expect(persisted).toEqual({ ...expected, meta: expect.any(Object) });
-          const stale = await patch(before.hash, { logging: { level: "debug" } });
-          expect(stale.ok).toBe(false);
-          expect(stale.error?.message).toContain("config changed since last load");
-          expect(await fs.readFile(original.path, "utf8")).toBe(raw);
-        }
-      } finally {
-        observation.mockRestore();
+            }
+            return await io.writeConfigFile(...args);
+          },
+        };
+      });
+      const result = await rpc("agents.delete", { agentId: "doomed", deleteFiles: false });
+      const raw = await fs.readFile(original.path, "utf8");
+      const persisted = JSON.parse(raw);
+      if (revoke) {
+        expect(result.ok).toBe(false);
+        expect(result.error?.message).toContain("deletion no longer owns");
+        expect(writeCalls).toBe(1);
+        expect(persisted).toEqual(newer);
+        expect(readAgentDeletionJournal("doomed")).toBeUndefined();
+      } else {
+        expect(result.ok, result.error?.message).toBe(true);
+        expect(writeCalls).toBe(2);
+        expect(Buffer.byteLength(raw)).toBeLessThan(Buffer.byteLength(beforeRaw) / 2);
+        const expected = structuredClone(newer);
+        delete expected.agents.entries.doomed;
+        expect(Object.keys(persisted.agents.entries).toSorted()).toEqual(["main", "survivor"]);
+        expect(persisted).toEqual({ ...expected, meta: expect.any(Object) });
+        const stale = await patch(before.hash, { logging: { level: "debug" } });
+        expect(stale.ok).toBe(false);
+        expect(stale.error?.message).toContain("config changed since last load");
+        expect(await fs.readFile(original.path, "utf8")).toBe(raw);
       }
     },
   );

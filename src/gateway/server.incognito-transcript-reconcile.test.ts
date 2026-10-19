@@ -12,6 +12,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 const transcriptMessage = (eventId: string, parentId: string | null, role = "assistant") => ({
   eventId,
@@ -19,21 +20,16 @@ const transcriptMessage = (eventId: string, parentId: string | null, role = "ass
   message: { role, content: eventId },
 });
 type SessionIdentity = { key: string; sessionId: string; incognito: boolean };
+const eventNames = ["sessions.changed", "session.message"];
 
 it("serves authorized incognito descriptions, events, and active-branch history", async () => {
   const state = await createOpenClawTestState({
     label: "incognito-reconcile-gateway",
     env: {
+      ...KERNEL_TEST_ENV,
+      VITEST: process.env.VITEST,
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
     },
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
@@ -59,7 +55,7 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         token: "incognito-reconcile-test",
         scopes: ["operator.admin", "operator.read", "operator.write"],
         onEvent: (event) => {
-          if (event.event === "sessions.changed" || event.event === "session.message") {
+          if (event.event && eventNames.includes(event.event)) {
             events.push(event);
           }
         },
@@ -82,8 +78,7 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         key,
       });
       expect.soft(described.session).toMatchObject(identity);
-      // Incognito state belongs to this process. Seed the branch through its
-      // canonical writer, then exercise the authenticated public history route.
+      // Write through the memory owner, then query authenticated history.
       const append = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
         persistSessionTranscriptTurn(
           { agentId: "main", sessionKey: key, sessionId },
@@ -104,15 +99,8 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         sessionKey: key,
         session: expect.objectContaining({ sessionId, incognito: true }),
       });
-      await expect
-        .poll(() => events)
-        .toEqual(
-          expect.arrayContaining(
-            ["sessions.changed", "session.message"].map((event) =>
-              expect.objectContaining({ event, payload }),
-            ),
-          ),
-        );
+      const expectedEvents = eventNames.map((event) => expect.objectContaining({ event, payload }));
+      await expect.poll(() => events).toEqual(expect.arrayContaining(expectedEvents));
       const roster = await client.request<{ sessions: Array<{ key: string }> }>(
         "sessions.list",
         {},

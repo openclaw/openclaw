@@ -13,22 +13,17 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const providerRuntimeMocks = vi.hoisted(() => ({ cleanupSessionResources: vi.fn() }));
-
-vi.mock("@openclaw/ai/internal/runtime", async () => {
-  const actual = await vi.importActual<typeof import("@openclaw/ai/internal/runtime")>(
-    "@openclaw/ai/internal/runtime",
-  );
-  return { ...actual, cleanupSessionResources: providerRuntimeMocks.cleanupSessionResources };
-});
+const cleanupSessionResources = vi.hoisted(() => vi.fn());
+vi.mock(import("@openclaw/ai/internal/runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  cleanupSessionResources,
+}));
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 async function seedParent(sessionId: string) {
   const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: { main: { sessionId, updatedAt: Date.now() } },
-  });
+  await writeSessionStore({ entries: { main: { sessionId, updatedAt: Date.now() } } });
   await seedSessionTranscript({
     agentId: "main",
     sessionId,
@@ -52,27 +47,20 @@ async function holdControllerTurn(
       incarnation: sessionId,
       agentId: "main",
     });
-  const release = createDeferredCore();
-  const started = createDeferredCore();
-  const interrupted = createDeferredCore();
+  const { promise: released, resolve: release } = createDeferredCore();
+  const { promise: started, resolve: begin } = createDeferredCore();
+  const { promise: interrupted, resolve: interrupt } = createDeferredCore();
   let running = false;
   const work = withSessionTurn(
     { sessionKey: target.sessionKey, sessionId, target },
     async (_operation, signal) => {
-      signal.addEventListener("abort", () => interrupted.resolve(), { once: true });
+      signal.addEventListener("abort", () => interrupt(), { once: true });
       running = true;
-      started.resolve();
-      await release.promise;
+      begin();
+      await released;
     },
   );
-  return {
-    started: started.promise,
-    interrupted: interrupted.promise,
-    release: release.resolve,
-    target,
-    work,
-    isRunning: () => running,
-  };
+  return { started, interrupted, release, target, work, isRunning: () => running };
 }
 
 test("sessions.create keeps the parent active for an explicit parallel child", async () => {
@@ -116,60 +104,52 @@ test.each([
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
 });
 
-test("sessions.reset waits for captured turn settlement before same-id cleanup", async () => {
-  const sessionId = "sess-provider-cleanup";
-  const active = await holdControllerTurn(sessionId);
-  await active.started;
-  let resetSettled = false;
-  const resetPromise = directSessionReq("sessions.reset", { key: "main", reason: "new" }).finally(
-    () => {
-      resetSettled = true;
-    },
-  );
-  await active.interrupted;
-  await Promise.resolve();
-
-  expect(resetSettled).toBe(false);
-  expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
-
-  active.release();
-  await active.work;
-  const reset = await resetPromise;
-  expect(reset.ok).toBe(true);
-  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledWith(sessionId);
-  const cleanupCount = providerRuntimeMocks.cleanupSessionResources.mock.calls.length;
-  await Promise.resolve();
-  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledTimes(cleanupCount);
-});
-
-test("sessions.reset blocks same-id replacement until retirement completes", async () => {
-  const sessionId = "sess-provider-ended-replacement";
-  providerRuntimeMocks.cleanupSessionResources.mockClear();
+test.for([false, true])("sessions.reset settlement (replacement=%s)", async (replace) => {
+  const sessionId = `sess-provider-${replace ? "replacement" : "cleanup"}`;
+  if (replace) {
+    cleanupSessionResources.mockClear();
+  }
   const active = await holdControllerTurn(sessionId);
   await active.started;
   const retirement = createDeferredCore();
   const retirementStarted = createDeferredCore();
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
-    retirementStarted.resolve();
-    await retirement.promise;
-    return true;
+  if (replace) {
+    bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+      retirementStarted.resolve();
+      await retirement.promise;
+      return true;
+    });
+  }
+  let resetSettled = false;
+  const reset = directSessionReq("sessions.reset", { key: "main", reason: "new" }).finally(() => {
+    resetSettled = true;
   });
-
-  const reset = directSessionReq("sessions.reset", { key: "main", reason: "new" });
   await active.interrupted;
+  await Promise.resolve();
+  expect(resetSettled).toBe(false);
+  expect(cleanupSessionResources).not.toHaveBeenCalled();
   active.release();
   await active.work;
-  await retirementStarted.promise;
 
-  const replacement = await holdControllerTurn(sessionId, active.target);
-  await Promise.resolve();
-  expect(replacement.isRunning()).toBe(false);
-  expect(providerRuntimeMocks.cleanupSessionResources).not.toHaveBeenCalled();
-
-  retirement.resolve();
+  let replacement: Awaited<ReturnType<typeof holdControllerTurn>> | undefined;
+  if (replace) {
+    await retirementStarted.promise;
+    replacement = await holdControllerTurn(sessionId, active.target);
+    await Promise.resolve();
+    expect(replacement.isRunning()).toBe(false);
+    expect(cleanupSessionResources).not.toHaveBeenCalled();
+    retirement.resolve();
+  }
   expect((await reset).ok).toBe(true);
-  expect(providerRuntimeMocks.cleanupSessionResources).toHaveBeenCalledOnce();
-  await replacement.started;
-  replacement.release();
-  await replacement.work;
+  expect(cleanupSessionResources).toHaveBeenCalledWith(sessionId);
+  if (replacement) {
+    expect(cleanupSessionResources).toHaveBeenCalledOnce();
+    await replacement.started;
+    replacement.release();
+    await replacement.work;
+  } else {
+    const count = cleanupSessionResources.mock.calls.length;
+    await Promise.resolve();
+    expect(cleanupSessionResources).toHaveBeenCalledTimes(count);
+  }
 });
