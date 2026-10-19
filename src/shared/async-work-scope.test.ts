@@ -33,9 +33,10 @@ function keep<T>(collection: T[], value: T): T {
 const makeScope = () => keep(scopes, new AsyncWorkScope());
 const makeGate = () => keep(gates, createDeferredCore());
 const makeHeldScope = () => ({ scope: makeScope(), gate: makeGate() });
-function own<T>(promise: Promise<T>) {
+function own<T>(promise: Promise<T>): Promise<T> {
   void promise.catch(() => {});
-  return keep(background, promise);
+  background.push(promise);
+  return promise;
 }
 function expectContext(signal: AbortSignal | undefined, ...active: [AsyncWorkScope, boolean][]) {
   expect(getAsyncWorkSignal()).toBe(signal);

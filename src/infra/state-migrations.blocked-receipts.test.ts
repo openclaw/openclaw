@@ -78,7 +78,7 @@ function blockedBy(stepId: string, message: unknown, code = "step-refused") {
 function refused(code = "step-refused") {
   return { outcome: "refused", changes: [], refusal: { code } };
 }
-function receiptById(receipts: LegacyStateMigrationStepReceipt[], id: string | undefined) {
+function receiptById(receipts: readonly LegacyStateMigrationStepReceipt[], id: string | undefined) {
   return receipts.find((receipt) => receipt.id === id);
 }
 

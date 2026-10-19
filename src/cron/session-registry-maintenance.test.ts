@@ -153,7 +153,8 @@ describe("runSessionRegistryMaintenance", () => {
         cronStorePath: state.statePath("cron/jobs.json"),
       });
 
-      expect(summary).toMatchObject({ skippedReason: undefined, pruned: 2 });
+      expect(summary.pruned).toBe(2);
+      expect(summary.skippedReason).toBeUndefined();
       for (const scope of scopes) {
         expect(loadSessionEntry(scope)).toBeUndefined();
       }

@@ -238,11 +238,12 @@ it("admits disjoint keys without bypassing an earlier overlapping waiter", async
   const first = held("first", ["a"]);
   const joined = held("joined", ["a", "b"]);
   const follower = record("follower", ["b"]);
-  record("independent", ["c"]);
+  const independent = record("independent", ["c"]);
   await vi.advanceTimersByTimeAsync(0);
   expect(order).toEqual(["first", "independent"]);
   first.release();
   await joined.entered;
+  await independent;
   expect(order).toEqual(["first", "independent", "joined"]);
   joined.release();
   await Promise.all([first.pending, joined.pending, follower]);

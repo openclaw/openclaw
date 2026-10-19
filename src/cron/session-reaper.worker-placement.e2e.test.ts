@@ -175,7 +175,8 @@ describe("scheduled cron session retirement through the Gateway", () => {
       closeOpenClawStateDatabaseForTest();
       resetGatewayTestState();
       if (setup) {
-        await removeGatewayTempHome(setup.tempHome).finally(setup.envSnapshot.restore);
+        const { tempHome, envSnapshot } = setup;
+        await removeGatewayTempHome(tempHome).finally(() => envSnapshot.restore());
       }
     }
   }, 120_000);

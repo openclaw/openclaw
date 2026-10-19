@@ -55,7 +55,7 @@ function mountCheckout(initial: CheckoutChipOptions) {
   );
   return {
     container: mounted.container,
-    query: <T extends Element = HTMLElement>(selector: string) =>
+    query: <T extends Element = HTMLElement>(selector: string): T | null =>
       mounted.container.querySelector<T>(selector),
     update: (next: CheckoutChipOptions) => {
       setParams(next);

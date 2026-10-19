@@ -35,7 +35,7 @@ function mountComposer(initial: Partial<ChatComposerProps>) {
   let props = createComposerProps(initial);
   const paint = () => renderComposerInto(container, props);
   paint();
-  const query = <T extends Element = HTMLElement>(selector: string) =>
+  const query = <T extends Element = HTMLElement>(selector: string): T | null =>
     container.querySelector<T>(selector);
   return {
     container,

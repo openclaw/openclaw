@@ -66,7 +66,10 @@ function job(id: string, overrides: Partial<CronJob>): CronJob {
 }
 
 function withinWorker<T>(run: () => T): T {
-  return runWithSqliteWorkerStateContext({ environment: fixture.env }, run);
+  return runWithSqliteWorkerStateContext(
+    { environment: { ...fixture.env, OPENCLAW_STATE_DIR: fixture.stateDir } },
+    run,
+  );
 }
 
 function createScheduler(jobs: CronJob[]) {
@@ -139,7 +142,12 @@ it("does not recheck natural-next slots during a 1000-job timer tick", () => {
   expect(scheduler.read()).toEqual(before);
   expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(changes);
   expect(sqliteTransactionLabels).toEqual([]);
-  expect(result).toMatchObject({ accepted: [], notifications: [], ownerless: [], nextWakeAtMs });
+  expect(result).toMatchObject({
+    accepted: [],
+    notifications: [],
+    ownerless: [],
+    nextWakeAtMs: nextRunAtMs,
+  });
   expect(previousRuns).toHaveBeenCalledTimes(0);
 });
 

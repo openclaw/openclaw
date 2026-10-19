@@ -71,7 +71,7 @@ function generateMusic(overrides: Partial<GenerateMusicRequest> = {}) {
   });
 }
 
-function googleConfig(google: { apiKey?: string; baseUrl?: string }): GenerateMusicRequest["cfg"] {
+function googleConfig(google: { apiKey?: string; baseUrl: string }): GenerateMusicRequest["cfg"] {
   return { models: { providers: { google: { models: [], ...google } } } };
 }
 
@@ -208,7 +208,7 @@ describe("google music generation provider", () => {
     [undefined, undefined],
   ])("normalizes only a terminal /v1beta in %s", async (baseUrl, expectedBaseUrl) => {
     generateContentMock.mockResolvedValue(googleMusicAudioResponse());
-    await generateMusic({ cfg: googleConfig({ baseUrl }), instrumental: true });
+    await generateMusic({ cfg: baseUrl ? googleConfig({ baseUrl }) : {}, instrumental: true });
     expect(createGoogleGenAIMock.mock.calls.at(-1)?.[0].httpOptions?.baseUrl).toBe(expectedBaseUrl);
   });
 

@@ -131,7 +131,7 @@ function mountControl(control: NewSessionDictationControl, showStatus = false) {
   ));
   return {
     ...mounted,
-    update(owner = view().owner) {
+    update: (owner = view().owner) => {
       setView({ owner });
       flush();
     },

@@ -12,8 +12,10 @@ type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
 const queues = new WeakMap<HTMLElement, (props: QueueProps) => void>();
 const keydown = (key: string, extra: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key, bubbles: true, ...extra });
-const find = <T extends Element = HTMLElement>(root: ParentNode | null | undefined, part: string) =>
-  root?.querySelector<T>(`.chat-queue__${part}`);
+const find = <T extends Element = HTMLElement>(
+  root: ParentNode | null | undefined,
+  part: string,
+): T | null | undefined => root?.querySelector<T>(`.chat-queue__${part}`);
 const text = (root: ParentNode | null | undefined, part: string) =>
   find(root, part)?.textContent?.trim();
 const all = <T extends Element = HTMLElement>(root: ParentNode, part: string) =>
@@ -158,12 +160,12 @@ const waiting = (
 const items = (
   ids: string,
   sendState: QueueProps["queue"][number]["sendState"] = "waiting-reconnect",
-) => [...ids].map((id, index) => waiting(id, index + 1, { sendState }));
+) => ids.split("").map((id, index) => waiting(id, index + 1, { sendState }));
 
 describe("chat composer queue reordering", () => {
   it("caps long queues and records both scroll boundaries", () => {
     const container = renderQueue({ queue: items("abcd") });
-    const scroll = find<HTMLElement>(container, "scroll")!;
+    const scroll = find(container, "scroll")!;
     Object.defineProperties(scroll, {
       clientHeight: { configurable: true, value: 149 },
       scrollHeight: { configurable: true, value: 220 },
@@ -188,7 +190,7 @@ describe("chat composer queue reordering", () => {
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
     const container = renderQueue({ queue: items("abcd"), onQueueMove: vi.fn() });
-    const scroll = find<HTMLElement>(container, "scroll")!;
+    const scroll = find(container, "scroll")!;
     vi.spyOn(scroll, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
     scroll.scrollTop = 10;
     drag(scroll, "dragover", {

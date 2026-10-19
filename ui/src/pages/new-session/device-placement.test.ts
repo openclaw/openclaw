@@ -64,7 +64,7 @@ describe("device placement projection", () => {
     ],
   ] satisfies [string, Partial<DraftEnvironment>, string | undefined][])(
     "projects %s with one canonical eligibility decision",
-    (_, overrides, reason) => {
+    (_: string, overrides: Partial<DraftEnvironment>, reason: string | undefined) => {
       expect(projectDevicePlacements([node(overrides)])).toMatchObject([
         {
           deviceId: "runner",
