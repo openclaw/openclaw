@@ -57,10 +57,7 @@ function duringWorker(run: (work: Promise<void>) => Promise<void>) {
 }
 
 function afterWorker(checkpoint: () => void) {
-  return duringWorker(async (work) => {
-    await work;
-    checkpoint();
-  });
+  return duringWorker((work) => work.then(checkpoint));
 }
 
 afterEach(async () => {

@@ -40,13 +40,11 @@ const trigger = (name: string, table: string, event = "UPDATE", body = "SELECT 1
   `CREATE TRIGGER ${name} AFTER ${event} ON ${table} BEGIN ${body}; END`;
 const driftTrigger = trigger("unexpected_node_validation", "session_nodes");
 
-function readVersion(db: DatabaseSync) {
-  return {
-    user: db.prepare("PRAGMA user_version").get()?.user_version,
-    schema: db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
-      ?.schema_version,
-  };
-}
+const readVersion = (db: DatabaseSync) => ({
+  user: db.prepare("PRAGMA user_version").get()?.user_version,
+  schema: db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
+    ?.schema_version,
+});
 
 function denyVersionPublication(db: DatabaseSync) {
   db.setAuthorizer((action, name, value) =>
@@ -58,15 +56,16 @@ function denyVersionPublication(db: DatabaseSync) {
   );
 }
 
+type MigrationFixture = {
+  db: DatabaseSync;
+  migrate: () => void;
+  env: NodeJS.ProcessEnv;
+  pathname: string;
+};
+
 function withMigrationDatabase(
-  version: number,
-  schema: string,
-  run: (
-    db: DatabaseSync,
-    migrate: () => void,
-    env: NodeJS.ProcessEnv,
-    pathname: string,
-  ) => Promise<void>,
+  version: 20 | 24,
+  run: (fixture: MigrationFixture) => Promise<void>,
 ) {
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const pathname = state.path("migration.sqlite");
@@ -75,21 +74,17 @@ function withMigrationDatabase(
       if (version === 24) {
         db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
       }
-      db.exec(schema);
+      db.exec(version === 20 ? schema20 : OPENCLAW_AGENT_SCHEMA_V24_SQL);
       db.exec(`PRAGMA user_version = ${version};
         INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
         VALUES ('primary', 'agent', ${version}, 'main', 1, 1)`);
-      await run(
+      const options = { agentId: "main", env: state.env, path: pathname };
+      await run({
         db,
-        () =>
-          ensureOpenClawAgentDatabaseSchema(db, {
-            agentId: "main",
-            env: state.env,
-            path: pathname,
-          }),
-        state.env,
+        env: state.env,
         pathname,
-      );
+        migrate: () => ensureOpenClawAgentDatabaseSchema(db, options),
+      });
     } finally {
       db.setAuthorizer(null);
       db.close();
@@ -338,7 +333,7 @@ describe("canonical validation schema admission", () => {
 it.each([false, true])(
   "migrates schema 20 without parsing rows (rollback first: %s)",
   async (rollback) => {
-    await withMigrationDatabase(20, schema20, async (db, migrate, env) => {
+    await withMigrationDatabase(20, async ({ db, migrate, env }) => {
       insertNode(db, key, "target");
       if (!rollback) {
         insertMalformedSibling(db);
@@ -386,22 +381,19 @@ it.each([false, true])(
 it.each(["commit", "missing-column", "rollback", "drift"] as const)(
   "retires writer bookkeeping with pending validation and source preservation (%s)",
   async (outcome) => {
-    await withMigrationDatabase(
-      24,
-      OPENCLAW_AGENT_SCHEMA_V24_SQL,
-      async (db, migrate, env, pathname) => {
-        insertNode(db, key, "target");
-        insertMalformedSibling(db);
-        db.exec(`UPDATE session_nodes SET entry_valid = 1;
+    await withMigrationDatabase(24, async ({ db, migrate, env, pathname }) => {
+      insertNode(db, key, "target");
+      insertMalformedSibling(db);
+      db.exec(`UPDATE session_nodes SET entry_valid = 1;
             DELETE FROM session_canonical_validation_pending;
             UPDATE session_key_contract SET canonical_ready = 'old-physical-receipt' WHERE id = 1`);
-        if (outcome === "missing-column") {
-          db.exec("ALTER TABLE session_key_contract DROP COLUMN canonical_ready");
-        }
-        if (outcome === "drift") {
-          db.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
-        }
-        db.exec(`
+      if (outcome === "missing-column") {
+        db.exec("ALTER TABLE session_key_contract DROP COLUMN canonical_ready");
+      }
+      if (outcome === "drift") {
+        db.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
+      }
+      db.exec(`
             INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
             VALUES ('target', '${key}', 1, 2), ('previous-target', '${key}', 1, 1);
             INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
@@ -415,97 +407,93 @@ it.each(["commit", "missing-column", "rollback", "drift"] as const)(
               ('previous-target', 1, '{"id":"previous-generation-history","type":"message"}', 1);
             DELETE FROM session_canonical_validation_pending;
           `);
-        expect(readFileSync(pathname).includes(Buffer.from("migration-wal-sentinel"))).toBe(false);
-        const original = (() => {
-          using reader = new DatabaseSync(pathname, { readOnly: true });
-          return outcome === "drift" ? undefined : captureWitness(reader, witnessOwner);
-        })();
-        if (outcome === "drift") {
-          expect(() => captureWitness(db, witnessOwner)).toThrow(/trigger/u);
+      expect(readFileSync(pathname).includes(Buffer.from("migration-wal-sentinel"))).toBe(false);
+      const original = (() => {
+        using reader = new DatabaseSync(pathname, { readOnly: true });
+        return outcome === "drift" ? undefined : captureWitness(reader, witnessOwner);
+      })();
+      if (outcome === "drift") {
+        expect(() => captureWitness(db, witnessOwner)).toThrow(/trigger/u);
+      }
+      const before = {
+        schema: db.prepare(schemaRows).all(),
+        nodes: db.prepare(nodeRows).all(),
+      };
+      if (outcome === "rollback") {
+        denyVersionPublication(db);
+      }
+      await withMaintenance({ env }, async () => {
+        if (outcome === "commit" || outcome === "missing-column") {
+          migrate();
+        } else {
+          expect(migrate).toThrow(outcome === "rollback" ? /authoriz/u : /trigger/u);
         }
-        const before = {
-          schema: db.prepare(schemaRows).all(),
-          nodes: db.prepare(nodeRows).all(),
-        };
-        if (outcome === "rollback") {
-          denyVersionPublication(db);
-        }
-        await withMaintenance({ env }, async () => {
-          if (outcome === "commit" || outcome === "missing-column") {
-            migrate();
-          } else {
-            expect(migrate).toThrow(outcome === "rollback" ? /authoriz/u : /trigger/u);
-          }
-        });
-        db.setAuthorizer(null);
-        expect(db.prepare(nodeRows).all()).toMatchObject(before.nodes);
-        if (original) {
-          const current = captureWitness(db, witnessOwner);
-          expect(assertPreserved(original, current).warnings).toEqual([
-            "Preexisting session history gap: missingWindows (1)",
-          ]);
-          expect(() => assertPreserved(original, { ...current, version: 2 })).toThrow();
-          if (outcome === "commit") {
-            for (const mutation of [
-              "DELETE FROM transcript_events WHERE session_id = 'previous-target'",
-              "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'target'",
-              "DELETE FROM session_entry_snapshots",
-              "UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = 'target'",
-              "UPDATE transcript_rewrite_watermarks SET generation = 'replacement-generation'",
-              "DROP VIEW retained_session_view",
-            ]) {
-              db.exec("SAVEPOINT lost_history");
-              db.exec(mutation);
-              expect(() => assertPreserved(original, captureWitness(db, witnessOwner))).toThrow(
-                /changed or lost/u,
-              );
-              db.exec("ROLLBACK TO lost_history; RELEASE lost_history");
-            }
-            db.exec(
-              `SAVEPOINT retired_trigger; ${trigger("session_nodes_entry_valid_after_insert", "session_nodes", "INSERT")}`,
+      });
+      db.setAuthorizer(null);
+      expect(db.prepare(nodeRows).all()).toMatchObject(before.nodes);
+      if (original) {
+        const current = captureWitness(db, witnessOwner);
+        expect(assertPreserved(original, current).warnings).toEqual([
+          "Preexisting session history gap: missingWindows (1)",
+        ]);
+        expect(() => assertPreserved(original, { ...current, version: 2 })).toThrow();
+        if (outcome === "commit") {
+          for (const mutation of [
+            "DELETE FROM transcript_events WHERE session_id = 'previous-target'",
+            "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'target'",
+            "DELETE FROM session_entry_snapshots",
+            "UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = 'target'",
+            "UPDATE transcript_rewrite_watermarks SET generation = 'replacement-generation'",
+            "DROP VIEW retained_session_view",
+          ]) {
+            db.exec("SAVEPOINT lost_history");
+            db.exec(mutation);
+            expect(() => assertPreserved(original, captureWitness(db, witnessOwner))).toThrow(
+              /changed or lost/u,
             );
-            expect(() => captureWitness(db, witnessOwner)).toThrow(/trigger/u);
-            db.exec("ROLLBACK TO retired_trigger; RELEASE retired_trigger");
+            db.exec("ROLLBACK TO lost_history; RELEASE lost_history");
           }
+          db.exec(
+            `SAVEPOINT retired_trigger; ${trigger("session_nodes_entry_valid_after_insert", "session_nodes", "INSERT")}`,
+          );
+          expect(() => captureWitness(db, witnessOwner)).toThrow(/trigger/u);
+          db.exec("ROLLBACK TO retired_trigger; RELEASE retired_trigger");
         }
-        if (outcome === "rollback" || outcome === "drift") {
-          expect(db.prepare(schemaRows).all()).toEqual(before.schema);
-          expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(24);
-          expect(
-            db.prepare("SELECT canonical_ready FROM session_key_contract").get()?.canonical_ready,
-          ).toBe("old-physical-receipt");
-          expect(pendingKeys(db)).toEqual([]);
-          return;
-        }
-        expect(readVersion(db)).toEqual({
-          user: currentVersion,
-          schema: currentVersion,
-        });
+      }
+      if (outcome === "rollback" || outcome === "drift") {
+        expect(db.prepare(schemaRows).all()).toEqual(before.schema);
+        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(24);
         expect(
           db.prepare("SELECT canonical_ready FROM session_key_contract").get()?.canonical_ready,
-        ).toBeNull();
-        expect(pendingKeys(db)).toEqual([key, sibling].toSorted());
-        assertSchema(db);
-        const batch = readPendingCanonicalSessionValidationBatch(
-          { agentId: "main", db },
-          { maxRows: 10, maxBytes: 100_000 },
-        );
-        expect(() => validateCanonicalSessionValidationBatch(batch)).toThrow(
-          /invalid persisted session row/u,
-        );
-        db.exec("DELETE FROM session_canonical_validation_pending");
-        db.prepare(
-          "UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?",
-        ).run(
-          JSON.stringify({ sessionId: "target", updatedAt: 2, delivery: { kind: "none" } }),
-          key,
-        );
-        expect(
-          db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(key)
-            ?.entry_valid,
-        ).toBe(1);
+        ).toBe("old-physical-receipt");
         expect(pendingKeys(db)).toEqual([]);
-      },
-    );
+        return;
+      }
+      expect(readVersion(db)).toEqual({
+        user: currentVersion,
+        schema: currentVersion,
+      });
+      expect(
+        db.prepare("SELECT canonical_ready FROM session_key_contract").get()?.canonical_ready,
+      ).toBeNull();
+      expect(pendingKeys(db)).toEqual([key, sibling].toSorted());
+      assertSchema(db);
+      const batch = readPendingCanonicalSessionValidationBatch(
+        { agentId: "main", db },
+        { maxRows: 10, maxBytes: 100_000 },
+      );
+      expect(() => validateCanonicalSessionValidationBatch(batch)).toThrow(
+        /invalid persisted session row/u,
+      );
+      db.exec("DELETE FROM session_canonical_validation_pending");
+      db.prepare(
+        "UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?",
+      ).run(JSON.stringify({ sessionId: "target", updatedAt: 2, delivery: { kind: "none" } }), key);
+      expect(
+        db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(key)
+          ?.entry_valid,
+      ).toBe(1);
+      expect(pendingKeys(db)).toEqual([]);
+    });
   },
 );
