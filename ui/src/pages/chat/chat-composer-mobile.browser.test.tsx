@@ -67,7 +67,7 @@ it("keeps mobile editing, field and caret while the native composer menu owns fo
   await expect.element(page.getByRole("menu")).toBeVisible();
   await userEvent.keyboard("{ArrowDown}");
   const menu = document.querySelector<HTMLElement>('[role="menu"]:popover-open')!;
-  expect(menu.contains(document.activeElement)).toBe(true);
+  await expect.poll(() => menu.contains(document.activeElement)).toBe(true);
   renderComposerInto(view.container, { ...props, mobileKeyboardVisible: false });
   expect(shell.dataset.composerEditing).toBe("true");
   await userEvent.keyboard("{Escape}");
