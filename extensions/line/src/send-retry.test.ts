@@ -30,11 +30,9 @@ const LINE_TEST_CFG = {
 const LINE_TARGET = "line:user:U0123456789abcdef0123456789abcdef";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
+  return Response.json(body, { status });
 }
+const delivered = (id: string, status = 200) => jsonResponse({ sentMessages: [{ id }] }, status);
 function transportFailure(code: string): TypeError {
   return Object.assign(new TypeError("fetch failed"), {
     cause: Object.assign(new Error(`socket ${code}`), { code }),
@@ -113,44 +111,37 @@ describe("LINE push retries", () => {
     ).rejects.toThrow("LINE send authorization denied");
     expect(fetchMock).not.toHaveBeenCalled();
   });
-  it("retries a LINE server error under one retry key and delivers once", async () => {
-    fetchMock
-      .mockResolvedValueOnce(jsonResponse({ message: "Internal server error" }, 500))
-      .mockResolvedValueOnce(jsonResponse({ sentMessages: [{ id: "delivered-1" }] }));
-    const result = await pushText();
-    expect(result.messageId).toBe("delivered-1");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const retryKeys = retryKeysOf(fetchMock);
-    expect(retryKeys[0]).toMatch(UUID_PATTERN);
-    expect(retryKeys[1]).toBe(retryKeys[0]);
-    expect(activity).toHaveBeenCalledTimes(1);
-  });
+  it.each([
+    { failure: 500, acceptedStatus: 200, id: "delivered-1" },
+    { failure: "ETIMEDOUT", acceptedStatus: 409, id: "accepted-earlier" },
+  ])(
+    "retries $failure under one key and preserves accepted delivery ($acceptedStatus)",
+    async ({ failure, acceptedStatus, id }) => {
+      if (typeof failure === "number") {
+        fetchMock.mockResolvedValueOnce(
+          jsonResponse({ message: "Internal server error" }, failure),
+        );
+      } else {
+        fetchMock.mockRejectedValueOnce(transportFailure(failure));
+      }
+      fetchMock.mockResolvedValueOnce(delivered(id, acceptedStatus));
+      const result = await pushText();
+      expect(result.messageId).toBe(id);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const retryKeys = retryKeysOf(fetchMock);
+      expect(retryKeys[0]).toMatch(UUID_PATTERN);
+      expect(retryKeys[1]).toBe(retryKeys[0]);
+      expect(activity).toHaveBeenCalledTimes(1);
+    },
+  );
   it("keys each push separately so an unrelated send cannot be deduplicated away", async () => {
-    fetchMock.mockImplementation(async () =>
-      jsonResponse({ sentMessages: [{ id: "delivered-1" }] }),
-    );
+    fetchMock.mockImplementation(async () => delivered("delivered-1"));
     await pushText("first");
     await pushText("second");
     const [firstKey, secondKey] = retryKeysOf(fetchMock);
     expect(firstKey).toMatch(UUID_PATTERN);
     expect(secondKey).toMatch(UUID_PATTERN);
     expect(secondKey).not.toBe(firstKey);
-  });
-  it("retries a transport failure and keeps the accepted delivery when LINE reports a conflict", async () => {
-    fetchMock.mockRejectedValueOnce(transportFailure("ETIMEDOUT")).mockResolvedValueOnce(
-      jsonResponse(
-        {
-          message: "The retry key is already accepted",
-          sentMessages: [{ id: "accepted-earlier" }],
-        },
-        409,
-      ),
-    );
-    const result = await pushText();
-    // The retry-key conflict carries the first attempt's accepted delivery.
-    expect(result.messageId).toBe("accepted-earlier");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new Set(retryKeysOf(fetchMock)).size).toBe(1);
   });
   it.each([
     { label: "quota rejection", status: 429, message: "You have reached your monthly limit." },
@@ -173,29 +164,24 @@ describe("LINE push retries", () => {
     expect(retryKeysOf(fetchMock)).toEqual([null]);
   });
 });
-describe("resolveLineNonDispatchRetryable", () => {
-  const httpError = (status: number) =>
-    new HTTPFetchError(`${status} - provider answered`, {
-      status,
-      statusText: "provider answered",
-      headers: new Headers(),
-      body: "provider body",
-    });
-  it("keeps a push ambiguous when an earlier attempt never reached LINE", async () => {
-    const rejected = httpError(400);
-    let attempt = 0;
-    const failure = await runLinePushWithRetries(async () => {
-      attempt += 1;
-      // A reset connection may already have delivered the push, so the retry
-      // that follows cannot prove it was never sent.
-      throw attempt === 1
-        ? Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })
-        : rejected;
-    }, "line:push").catch((error: unknown) => error);
-    expect(attempt).toBeGreaterThan(1);
-    expect(resolveLineNonDispatchRetryable(failure)).toBeUndefined();
-    expect(
-      resolveLineNonDispatchRetryable(new Error("wrapped send failure", { cause: failure })),
-    ).toBeUndefined();
+it("keeps a push ambiguous when an earlier attempt never reached LINE", async () => {
+  const rejected = new HTTPFetchError("400 - provider answered", {
+    status: 400,
+    statusText: "provider answered",
+    headers: new Headers(),
+    body: "provider body",
   });
+  let attempt = 0;
+  const failure = await runLinePushWithRetries(async () => {
+    attempt += 1;
+    // A reset may follow delivery; the later refusal cannot prove nothing was sent.
+    throw attempt === 1
+      ? Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })
+      : rejected;
+  }, "line:push").catch((error: unknown) => error);
+  expect(attempt).toBeGreaterThan(1);
+  expect(resolveLineNonDispatchRetryable(failure)).toBeUndefined();
+  expect(
+    resolveLineNonDispatchRetryable(new Error("wrapped send failure", { cause: failure })),
+  ).toBeUndefined();
 });

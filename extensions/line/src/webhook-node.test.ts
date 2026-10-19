@@ -1,28 +1,15 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 const sign = (body: string, secret: string) =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
 function createRes() {
-  const headers: Record<string, string> = {};
-  const resObj = {
-    statusCode: 0,
-    headersSent: false,
-    setHeader: (k: string, v: string) => {
-      headers[k.toLowerCase()] = v;
-    },
-    end: vi.fn((data?: unknown) => {
-      resObj.headersSent = true;
-      // Keep payload available for assertions
-      resObj.body = data;
-    }),
-    body: undefined as unknown,
-  };
-  const res = resObj as unknown as ServerResponse & { body?: unknown };
-  return { res, headers };
+  const res = createMockServerResponse();
+  res.statusCode = 0;
+  return res;
 }
 const SECRET = "secret";
 function createPostWebhookTestHarness(
@@ -53,16 +40,6 @@ const runSignedPost = async (params: {
     } as unknown as IncomingMessage,
     params.res,
   );
-const parseResponseBody = (body: unknown) => {
-  if (typeof body !== "string") {
-    return body;
-  }
-  try {
-    return JSON.parse(body) as unknown;
-  } catch {
-    return body;
-  }
-};
 async function invokeNodePostContract(params: {
   failWith?: unknown;
   rawBody: string;
@@ -81,7 +58,7 @@ async function invokeNodePostContract(params: {
     getTargets: () => [{ channelSecret: SECRET, bot: { handleWebhook: dispatched } }],
     runtime,
   });
-  const { res, headers } = createRes();
+  const res = createRes();
   const req = Object.assign(createMockIncomingRequest([params.rawBody]), {
     method: "POST",
     headers: params.signed ? { "x-line-signature": sign(params.rawBody, SECRET) } : {},
@@ -89,8 +66,8 @@ async function invokeNodePostContract(params: {
   });
   await handler(req, res);
   return {
-    body: parseResponseBody(res.body),
-    contentType: headers["content-type"],
+    body: res.body === undefined ? undefined : (JSON.parse(res.body) as unknown),
+    contentType: res.getHeader("content-type"),
     dispatched,
     runtimeError: runtime.error,
     status: res.statusCode,
@@ -102,9 +79,11 @@ describe("LINE webhook POST contract", () => {
       rawBody: JSON.stringify({ events: [] }),
       signed: true,
     });
-    expect(result.status).toBe(200);
-    expect(result.body).toEqual({ status: "ok" });
-    expect(result.contentType).toBe("application/json");
+    expect(result).toMatchObject({
+      status: 200,
+      body: { status: "ok" },
+      contentType: "application/json",
+    });
     expect(result.dispatched).not.toHaveBeenCalled();
   });
   it("reports non-Error admission failures without object Object", async () => {
@@ -124,33 +103,28 @@ describe("LINE webhook POST contract", () => {
   });
 });
 describe("createLineNodeWebhookHandler", () => {
-  it("returns 200 for GET", async () => {
+  it.each([
+    { method: "GET", statusCode: 200, body: "OK" },
+    { method: "HEAD", statusCode: 204, body: undefined },
+  ])("returns $statusCode for $method", async ({ method, statusCode, body }) => {
     const { handler } = createPostWebhookTestHarness("");
-    const { res } = createRes();
-    await handler({ method: "GET", headers: {} } as unknown as IncomingMessage, res);
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toBe("OK");
-  });
-  it("returns 204 for HEAD", async () => {
-    const { handler } = createPostWebhookTestHarness("");
-    const { res } = createRes();
-    await handler({ method: "HEAD", headers: {} } as unknown as IncomingMessage, res);
-    expect(res.statusCode).toBe(204);
-    expect(res.body).toBeUndefined();
+    const res = createRes();
+    await handler({ method, headers: {} } as IncomingMessage, res);
+    expect(res).toMatchObject({ statusCode, body });
   });
   it("returns 405 for non-GET/HEAD/POST methods", async () => {
     const { bot, handler } = createPostWebhookTestHarness(JSON.stringify({ events: [] }));
-    const { res, headers } = createRes();
+    const res = createRes();
     await handler({ method: "PUT", headers: {} } as unknown as IncomingMessage, res);
     expect(res.statusCode).toBe(405);
-    expect(headers.allow).toBe("GET, HEAD, POST");
+    expect(res.getHeader("allow")).toBe("GET, HEAD, POST");
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
   it("rejects unsigned POST requests before reading the body", async () => {
     const { bot, handler, readBody } = createPostWebhookTestHarness(
       JSON.stringify({ events: [{ type: "message" }] }),
     );
-    const { res } = createRes();
+    const res = createRes();
     await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
     expect(res.statusCode).toBe(400);
     expect(readBody).not.toHaveBeenCalled();
@@ -164,7 +138,7 @@ describe("createLineNodeWebhookHandler", () => {
       return rawBody;
     });
     const { bot, handler } = createPostWebhookTestHarness(rawBody, readBody);
-    const { res } = createRes();
+    const res = createRes();
     await runSignedPost({ handler, rawBody, secret: "secret", res });
     expect(res.statusCode).toBe(200);
     expect(readBody).toHaveBeenCalledTimes(1);
@@ -173,7 +147,7 @@ describe("createLineNodeWebhookHandler", () => {
   it("rejects invalid signatures before parsing the body", async () => {
     const rawBody = "not json";
     const { bot, handler } = createPostWebhookTestHarness(rawBody);
-    const { res } = createRes();
+    const res = createRes();
     await handler(
       { method: "POST", headers: { "x-line-signature": "bad" } } as unknown as IncomingMessage,
       res,
@@ -211,7 +185,7 @@ describe("createLineNodeWebhookHandler", () => {
       runtime,
       readBody: async () => rawBody,
     });
-    const { res } = createRes();
+    const res = createRes();
     const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
     await admitted.promise;
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);

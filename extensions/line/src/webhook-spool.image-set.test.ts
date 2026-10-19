@@ -1,4 +1,3 @@
-// Line tests cover grouping the durable claims LINE splits one multi-image send into.
 import type { webhook } from "@line/bot-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -92,6 +91,37 @@ function acceptEvent(
 ) {
   return spool.accept(callback(createEvent(event)));
 }
+function orderedDelivery(
+  labelFor: (message: webhook.MessageEvent["message"]) => string,
+  blocked: string,
+) {
+  const order: string[] = [];
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  let active = 0;
+  let overlapped = false;
+  const deliver = vi.fn<Deliver>(async (events, _destination, control) => {
+    active += 1;
+    overlapped ||= active > 1;
+    const label = labelFor((events[0] as webhook.MessageEvent).message);
+    if (label === blocked) {
+      entered.resolve();
+      await release.promise;
+    }
+    order.push(label);
+    active -= 1;
+    await control.turnAdoptionLifecycle.onAdopted();
+  });
+  return {
+    deliver,
+    order,
+    entered,
+    release,
+    get overlapped() {
+      return overlapped;
+    },
+  };
+}
 describe("LINE webhook spool image sets", () => {
   it("hands back every claim in a set when shutdown interrupts its delivery", async () => {
     await withQueue(async (queue) => {
@@ -139,19 +169,17 @@ describe("LINE webhook spool image sets", () => {
       });
       const spool = createSpool(queue, deliver);
       const imagePart = (index: number) =>
-        callback(
-          createEvent({
-            webhookEventId: `event-split-${index}`,
-            userId: "user-split",
-            imageSet: { id: "set-split", index, total: 3 },
-          }),
-        );
+        acceptEvent(spool, {
+          webhookEventId: `event-split-${index}`,
+          userId: "user-split",
+          imageSet: { id: "set-split", index, total: 3 },
+        });
       spool.start();
       try {
-        await spool.accept(imagePart(2));
+        await imagePart(2);
         await acceptEvent(spool, { webhookEventId: "event-split-text", userId: "user-split" });
-        await spool.accept(imagePart(1));
-        await spool.accept(imagePart(3));
+        await imagePart(1);
+        await imagePart(3);
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2), { timeout: 20_000 });
         // One image turn carrying all three parts, then the text behind it.
         expect(turns).toEqual(["imagex3", "textx1"]);
@@ -191,22 +219,10 @@ describe("LINE webhook spool image sets", () => {
   });
   it("keeps a later message on the same lane behind an incomplete image set", async () => {
     await withQueue(async (queue) => {
-      const order: string[] = [];
       const runtimeEnv = runtime();
-      const imageEntered = createDeferred<void>();
-      const releaseImage = createDeferred<void>();
-      const deliver = vi.fn<Deliver>(async (events, _destination, control) => {
-        const kind = (events[0] as webhook.MessageEvent).message.type;
-        if (kind === "image") {
-          // The real handler fetches every part's media before its turn exists.
-          // The lane has to stay held across that work, not just until the set
-          // is taken, or the later message wins the race to the agent.
-          imageEntered.resolve();
-          await releaseImage.promise;
-        }
-        order.push(kind);
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
+      // Keep the lane while media preparation is paused, not merely while buffering parts.
+      const delivery = orderedDelivery((message) => message.type, "image");
+      const { deliver, order, entered, release } = delivery;
       const clock = createImageSetClockSpool(queue, deliver, runtimeEnv);
       const { spool } = clock;
       spool.start();
@@ -223,7 +239,7 @@ describe("LINE webhook spool image sets", () => {
           1,
           1,
         );
-        await imageEntered.promise;
+        await entered.promise;
         expect(runtimeEnv.error).toHaveBeenCalledWith(
           expect.stringContaining(
             "image set set-order delivered 1 of the send's parts, 2 still missing",
@@ -232,40 +248,26 @@ describe("LINE webhook spool image sets", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(order).toEqual([]);
-        releaseImage.resolve();
+        release.resolve();
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2), {
           interval: 0,
           timeout: 20_000,
         });
         expect(order).toEqual(["image", "text"]);
       } finally {
-        releaseImage.resolve();
+        release.resolve();
         await clock.stop();
       }
     });
   });
   it("delivers two messages queued behind an image set in arrival order", async () => {
     await withQueue(async (queue) => {
-      const order: string[] = [];
-      let inFlight = 0;
-      let overlapped = false;
-      const firstEntered = createDeferred<void>();
-      const releaseFirst = createDeferred<void>();
-      const deliver = vi.fn<Deliver>(async (events, _destination, control) => {
-        inFlight += 1;
-        overlapped ||= inFlight > 1;
-        const message = (events[0] as webhook.MessageEvent).message;
-        const label = message.type === "text" ? message.text : message.type;
-        // The first queued message prepares slowly. Released together, the
-        // second would reach the agent first and reorder the conversation.
-        if (label === "first") {
-          firstEntered.resolve();
-          await releaseFirst.promise;
-        }
-        order.push(label);
-        inFlight -= 1;
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
+      // A slow first queued message must not be overtaken by the second.
+      const delivery = orderedDelivery(
+        (message) => (message.type === "text" ? message.text : message.type),
+        "first",
+      );
+      const { deliver, order, entered, release } = delivery;
       const clock = createImageSetClockSpool(queue, deliver);
       const { spool } = clock;
       spool.start();
@@ -294,48 +296,32 @@ describe("LINE webhook spool image sets", () => {
           1,
           2,
         );
-        await firstEntered.promise;
+        await entered.promise;
         await vi.advanceTimersByTimeAsync(0);
         expect(deliver).toHaveBeenCalledTimes(2);
         expect(order).toEqual(["image"]);
-        expect(overlapped).toBe(false);
-        releaseFirst.resolve();
+        expect(delivery.overlapped).toBe(false);
+        release.resolve();
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3), {
           interval: 0,
           timeout: 20_000,
         });
         expect(order).toEqual(["image", "first", "second"]);
-        expect(overlapped).toBe(false);
+        expect(delivery.overlapped).toBe(false);
       } finally {
-        releaseFirst.resolve();
+        release.resolve();
         await clock.stop();
       }
     });
   });
   it("keeps a later image set behind a message already queued on the lane", async () => {
     await withQueue(async (queue) => {
-      const order: string[] = [];
-      let inFlight = 0;
-      let overlapped = false;
-      const messageEntered = createDeferred<void>();
-      const releaseMessage = createDeferred<void>();
-      const deliver = vi.fn<Deliver>(async (events, _destination, control) => {
-        inFlight += 1;
-        overlapped ||= inFlight > 1;
-        const message = (events[0] as webhook.MessageEvent).message;
-        const label =
-          message.type === "text" ? message.text : (message as { id: string }).id.slice(-4);
-        if (message.type === "text") {
-          // A queued message still has to build its turn. The later set is
-          // already whole, so nothing but the lane queue can stop it from
-          // overtaking this work the moment the first set lets go.
-          messageEntered.resolve();
-          await releaseMessage.promise;
-        }
-        order.push(label);
-        inFlight -= 1;
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
+      // A complete later set must wait while the queued text builds its turn.
+      const delivery = orderedDelivery(
+        (message) => (message.type === "text" ? message.text : message.id.slice(-4)),
+        "queued",
+      );
+      const { deliver, order, entered, release } = delivery;
       const clock = createImageSetClockSpool(queue, deliver);
       const { spool } = clock;
       spool.start();
@@ -369,20 +355,20 @@ describe("LINE webhook spool image sets", () => {
           3,
           1,
         );
-        await messageEntered.promise;
+        await entered.promise;
         await vi.advanceTimersByTimeAsync(0);
         expect(deliver).toHaveBeenCalledTimes(2);
         expect(order).toEqual(["seta"]);
-        expect(overlapped).toBe(false);
-        releaseMessage.resolve();
+        expect(delivery.overlapped).toBe(false);
+        release.resolve();
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3), {
           interval: 0,
           timeout: 30_000,
         });
         expect(order).toEqual(["seta", "queued", "etb1"]);
-        expect(overlapped).toBe(false);
+        expect(delivery.overlapped).toBe(false);
       } finally {
-        releaseMessage.resolve();
+        release.resolve();
         await clock.stop();
       }
     });

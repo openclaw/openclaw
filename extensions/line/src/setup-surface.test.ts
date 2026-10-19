@@ -1,4 +1,3 @@
-// Line tests cover setup surface plugin behavior.
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -17,9 +16,7 @@ import { stubLineApiFetch } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 const monitorLineProviderMock = vi.hoisted(() =>
-  vi.fn<
-    (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => Promise<void>
-  >(),
+  vi.fn<typeof import("./monitor.js").monitorLineProvider>(),
 );
 vi.mock("./monitor.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
 afterEach(() => {
@@ -39,6 +36,13 @@ const credentials = (token = "token", secret = "secret") => ({
 const lineConfig = (line: NonNullable<OpenClawConfig["channels"]>["line"]): OpenClawConfig => ({
   channels: { line },
 });
+const identity = {
+  displayName: "OpenClaw",
+  userId: "U123",
+  basicId: "@openclaw",
+  pictureUrl: "https://example.com/bot.png",
+};
+const stubBot = () => stubLineApiFetch(Response.json(identity), Response.json({ type: "none" }));
 describe("line setup wizard", () => {
   it("configures token and secret for the default account", async () => {
     const prompter = createTestWizardPrompter({
@@ -69,12 +73,7 @@ describe("line setup wizard", () => {
       defaultAccount: "work",
       dmPolicy: "disabled",
       allowFrom: ["Uroot"],
-      accounts: {
-        work: {
-          ...credentials(),
-          dmPolicy: "allowlist",
-        },
-      },
+      accounts: { work: { ...credentials(), dmPolicy: "allowlist" } },
     });
     const policy = lineSetupWizard.dmPolicy!;
     expect(policy.getCurrent(cfg)).toBe("allowlist");
@@ -83,10 +82,10 @@ describe("line setup wizard", () => {
       allowFromKey: "channels.line.accounts.work.allowFrom",
     });
     const next = policy.setPolicy(cfg, "open");
-    expect(next.channels?.line).toMatchObject({ dmPolicy: "disabled", allowFrom: ["Uroot"] });
-    expect(next.channels?.line?.accounts?.work).toMatchObject({
-      dmPolicy: "open",
-      allowFrom: ["Uroot", "*"],
+    expect(next.channels?.line).toMatchObject({
+      dmPolicy: "disabled",
+      allowFrom: ["Uroot"],
+      accounts: { work: { dmPolicy: "open", allowFrom: ["Uroot", "*"] } },
     });
   });
   it("uses configured defaultAccount for omitted setup configured state", async () => {
@@ -103,40 +102,26 @@ describe("line setup wizard", () => {
     expect(configured).toBe(false);
   });
 });
-describe("linePlugin status.probeAccount", () => {
-  it("reports bot identity without initializing the message runtime", async () => {
-    vi.resetModules();
-    const { lineStatusAdapter } = await import("./status.js");
-    const identity = {
-      displayName: "OpenClaw",
-      userId: "U123",
-      basicId: "@openclaw",
-      pictureUrl: "https://example.com/bot.png",
-    };
-    const fetchMock = stubLineApiFetch(Response.json(identity), Response.json({ type: "none" }));
-    const params = {
-      cfg: {} as OpenClawConfig,
-      account: {
-        accountId: "default",
-        enabled: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-      } as ResolvedLineAccount,
-      timeoutMs: 50,
-    };
-    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual({
-      ok: true,
-      bot: identity,
-      quota: { kind: "unlimited" },
-      elapsedMs: expect.any(Number),
-    });
-    expect(fetchMock.mock.calls.map(([url]) => resolveRequestUrl(url))).toEqual([
-      "https://api.line.me/v2/bot/info",
-      "https://api.line.me/v2/bot/message/quota",
-      "https://api.line.me/v2/bot/channel/webhook/endpoint",
-    ]);
+it("status.probeAccount reports bot identity without initializing the message runtime", async () => {
+  vi.resetModules();
+  const { lineStatusAdapter } = await import("./status.js");
+  const fetchMock = stubBot();
+  const params = {
+    cfg: {} as OpenClawConfig,
+    account: createAccount(),
+    timeoutMs: 50,
+  };
+  await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual({
+    ok: true,
+    bot: identity,
+    quota: { kind: "unlimited" },
+    elapsedMs: expect.any(Number),
   });
+  expect(fetchMock.mock.calls.map(([url]) => resolveRequestUrl(url))).toEqual([
+    "https://api.line.me/v2/bot/info",
+    "https://api.line.me/v2/bot/message/quota",
+    "https://api.line.me/v2/bot/channel/webhook/endpoint",
+  ]);
 });
 function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: AbortSignal }) {
   const providerStarted = createDeferred<void>();
@@ -144,11 +129,7 @@ function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: 
     providerStarted.resolve();
     await waitForAbortSignal(opts.abortSignal);
   });
-  setLineRuntime({
-    logging: {
-      shouldLogVerbose: () => false,
-    },
-  } as unknown as PluginRuntime);
+  setLineRuntime({ logging: { shouldLogVerbose: () => false } } as unknown as PluginRuntime);
   const statusEvents: unknown[] = [];
   return {
     monitorLineProvider: monitorLineProviderMock,
@@ -163,43 +144,33 @@ function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: 
     ),
   };
 }
-function createAccount(params: { token: string; secret: string }): ResolvedLineAccount {
+function createAccount(token = "token", secret = "secret"): ResolvedLineAccount {
   return {
     accountId: "default",
     enabled: true,
-    ...credentials(params.token, params.secret),
+    ...credentials(token, secret),
     tokenSource: "config",
     config: {},
   };
 }
 describe("linePlugin gateway.startAccount", () => {
-  it("fails startup when channel secret is missing", async () => {
+  it.each([
+    { token: "token", secret: "   ", field: "channel secret" },
+    { token: "   ", secret: "secret", field: "channel access token" },
+  ])("fails startup when $field is missing", async ({ token, secret, field }) => {
     const { monitorLineProvider, task } = startLineAccount({
-      account: createAccount({ token: "token", secret: "   " }),
+      account: createAccount(token, secret),
     });
     await expect(task).rejects.toThrow(
-      'LINE webhook mode requires a non-empty channel secret for account "default".',
-    );
-    expect(monitorLineProvider).not.toHaveBeenCalled();
-  });
-  it("fails startup when channel access token is missing", async () => {
-    const { monitorLineProvider, task } = startLineAccount({
-      account: createAccount({ token: "   ", secret: "secret" }),
-    });
-    await expect(task).rejects.toThrow(
-      'LINE webhook mode requires a non-empty channel access token for account "default".',
+      `LINE webhook mode requires a non-empty ${field} for account "default".`,
     );
     expect(monitorLineProvider).not.toHaveBeenCalled();
   });
   it("starts provider when token and secret are present", async () => {
-    // Startup probes before entering the monitor; keep that HTTP boundary local to this test.
-    stubLineApiFetch(
-      Response.json({ displayName: "OpenClaw", userId: "U123" }),
-      Response.json({ type: "none" }),
-    );
+    stubBot();
     const abort = new AbortController();
     const { monitorLineProvider, providerStarted, statusEvents, task } = startLineAccount({
-      account: createAccount({ token: "token", secret: "secret" }),
+      account: createAccount(),
       abortSignal: abort.signal,
     });
     try {

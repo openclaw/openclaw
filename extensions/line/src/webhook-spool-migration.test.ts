@@ -114,12 +114,9 @@ describe("LINE webhook spool upgrade migration", () => {
       // The fence dead-lettered the row; a rerun must not resurrect it.
       const rerun = await migrateLineLegacySpoolRows(queue);
       expect(rerun).toEqual(unchanged);
-      const verdict = await queue.enqueue("legacy-fenced", {
-        version: 1,
-        rawEvent: "{}",
-        destination: "",
+      await expect(queue.enqueue("legacy-fenced", payloadFor(event))).resolves.toMatchObject({
+        kind: "failed",
       });
-      expect(verdict.kind).toBe("failed");
     });
   });
   it("does not recover a legacy row dead-lettered for a delivery failure", async () => {
@@ -132,12 +129,9 @@ describe("LINE webhook spool upgrade migration", () => {
       });
       const result = await migrateLineLegacySpoolRows(queue);
       expect(result).toEqual(unchanged);
-      const verdict = await queue.enqueue("legacy-exhausted", {
-        version: 1,
-        rawEvent: "{}",
-        destination: "",
+      await expect(queue.enqueue("legacy-exhausted", payloadFor(event))).resolves.toMatchObject({
+        kind: "failed",
       });
-      expect(verdict.kind).toBe("failed");
     });
   });
   it("delivers a migrated row before a newer event on the same lane", async () => {

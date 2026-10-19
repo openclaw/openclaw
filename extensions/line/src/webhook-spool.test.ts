@@ -1,6 +1,5 @@
-// Line tests cover durable webhook admission, replay, and core-drain recovery.
 import crypto from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { webhook } from "@line/bot-sdk";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -9,6 +8,7 @@ import {
 import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import {
@@ -25,40 +25,10 @@ import {
   waitForVerdict,
   withQueue,
 } from "./webhook-spool.test-support.js";
-function createResponse(): ServerResponse & { body?: string } {
-  const response = {
-    statusCode: 0,
-    headersSent: false,
-    setHeader: vi.fn(),
-    end: vi.fn((body?: string) => {
-      response.headersSent = true;
-      response.body = body;
-    }),
-    body: undefined as string | undefined,
-  };
-  return response as unknown as ServerResponse & { body?: string };
-}
-async function invokeSignedWebhook(params: {
-  handler: ReturnType<typeof createLineNodeWebhookHandler>;
-  body: string;
-  channelSecret: string;
-}): Promise<ServerResponse & { body?: string }> {
-  const response = createResponse();
-  await params.handler(
-    {
-      method: "POST",
-      headers: {
-        "x-line-signature": crypto
-          .createHmac("SHA256", params.channelSecret)
-          .update(params.body)
-          .digest("base64"),
-      },
-    } as unknown as IncomingMessage,
-    response,
-  );
-  return response;
-}
 type Deliver = Parameters<typeof createLineWebhookSpool>[0]["deliver"];
+const adopt: Deliver = async (_events, _destination, control) => {
+  await control.turnAdoptionLifecycle.onAdopted();
+};
 function createSpool(
   queue: ChannelIngressQueue<SpoolPayload>,
   deliver: Deliver,
@@ -66,15 +36,8 @@ function createSpool(
 ) {
   return createLineWebhookSpool({ accountId: "default", runtime: runtimeEnv, queue, deliver });
 }
-async function expectDeadLetter(
-  queue: ChannelIngressQueue<SpoolPayload>,
-  id: string,
-  payload: SpoolPayload,
-  reason: string,
-) {
-  expect(await queue.enqueue(id, payload)).toMatchObject({ kind: "failed", record: { reason } });
-}
-function observeActiveDeliveryStopGrace() {
+function observeActiveDeliveryStopGrace(spool: ReturnType<typeof createSpool>) {
+  vi.useFakeTimers();
   const armed = createDeferred<void>();
   const schedule = globalThis.setTimeout;
   const timeout = vi
@@ -86,7 +49,16 @@ function observeActiveDeliveryStopGrace() {
       }
       return timer;
     });
-  return { armed: armed.promise, restore: () => timeout.mockRestore() };
+  let settled = false;
+  const stopping = spool.stop().then(() => {
+    settled = true;
+  });
+  return {
+    armed: armed.promise,
+    stopping,
+    isSettled: () => settled,
+    restore: () => timeout.mockRestore(),
+  };
 }
 function acceptEvent(
   spool: ReturnType<typeof createLineWebhookSpool>,
@@ -114,7 +86,20 @@ describe("LINE webhook spool", () => {
         readBody: async () => body,
       });
       try {
-        const response = await invokeSignedWebhook({ handler, body, channelSecret });
+        const response = createMockServerResponse();
+        response.statusCode = 0;
+        await handler(
+          {
+            method: "POST",
+            headers: {
+              "x-line-signature": crypto
+                .createHmac("SHA256", channelSecret)
+                .update(body)
+                .digest("base64"),
+            },
+          } as IncomingMessage,
+          response,
+        );
         expect(response.statusCode).toBe(500);
         expect(enqueue).toHaveBeenCalledTimes(1);
         expect(deliver).not.toHaveBeenCalled();
@@ -167,11 +152,8 @@ describe("LINE webhook spool", () => {
         await monitor.waitForPumpIdle();
         expect(deliver).toHaveBeenCalledTimes(8);
         expect(maxActiveDeliveries).toBe(8);
-        expect(await queue.listPending()).toEqual([
-          expect.objectContaining({
-            id: "message:message-event-concurrency-8",
-            laneKey: "user:user-8",
-          }),
+        expect(await queue.listPending()).toMatchObject([
+          { id: "message:message-event-concurrency-8", laneKey: "user:user-8" },
         ]);
         deliveryGate.resolve();
         await vi.waitFor(() => expect(activeDeliveries).toBe(0));
@@ -209,9 +191,7 @@ describe("LINE webhook spool", () => {
       expect(await queue.listClaims()).toHaveLength(1);
       deliveryGate.resolve();
       await stopping;
-      const restartedDeliver = vi.fn(async (_event, _destination, control) => {
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
+      const restartedDeliver = vi.fn(adopt);
       const restarted = createSpool(queue, restartedDeliver);
       restarted.start();
       try {
@@ -225,11 +205,10 @@ describe("LINE webhook spool", () => {
   it("disposes after the active-delivery stop grace expires", async () => {
     await withQueue(async (queue) => {
       const deliveryGate = createDeferred<void>();
-      const deliveryStarted = createDeferred<void>();
+      const deliveryStarted = createDeferred<LineWebhookTurnAdoptionLifecycle>();
       let lateLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
       const firstDeliver = vi.fn<Deliver>(async (_events, _destination, control) => {
-        lateLifecycle = control.turnAdoptionLifecycle;
-        deliveryStarted.resolve();
+        deliveryStarted.resolve(control.turnAdoptionLifecycle);
         await deliveryGate.promise;
       });
       const firstRuntime = runtime();
@@ -240,27 +219,19 @@ describe("LINE webhook spool", () => {
       try {
         first.start();
         await first.accept(callback(event));
-        await deliveryStarted.promise;
+        lateLifecycle = await deliveryStarted.promise;
         expect(firstDeliver).toHaveBeenCalledTimes(1);
-        vi.useFakeTimers();
-        grace = observeActiveDeliveryStopGrace();
-        const stopping = first.stop();
-        let stopSettled = false;
-        void stopping.then(() => {
-          stopSettled = true;
-        });
-        await grace.armed;
+        grace = observeActiveDeliveryStopGrace(first);
+        const stop = grace;
+        await stop.armed;
         await vi.advanceTimersByTimeAsync(4_999);
-        expect(stopSettled).toBe(false);
+        expect(stop.isSettled()).toBe(false);
         expect(lateLifecycle?.abortSignal.aborted).toBe(false);
         await vi.advanceTimersByTimeAsync(1);
-        await stopping;
+        await stop.stopping;
         expect(firstRuntime.log).toHaveBeenCalledWith(
           expect.stringContaining("timed out after 5000ms"),
         );
-        if (!lateLifecycle) {
-          throw new Error("LINE delivery did not expose its adoption lifecycle");
-        }
         expect(lateLifecycle.abortSignal.aborted).toBe(true);
         grace.restore();
         grace = undefined;
@@ -270,9 +241,7 @@ describe("LINE webhook spool", () => {
         await expect(released).resolves.toBe(true);
         expect(await queue.listClaims()).toEqual([]);
         const replayCompleted = observeChannelIngressQueueWrite(queue, "complete");
-        const restartedDeliver = vi.fn(async (_event, _destination, control) => {
-          await control.turnAdoptionLifecycle.onAdopted();
-        });
+        const restartedDeliver = vi.fn(adopt);
         restarted = createSpool(queue, restartedDeliver);
         restarted.start();
         await expect(replayCompleted).resolves.toBe(true);
@@ -320,19 +289,14 @@ describe("LINE webhook spool", () => {
         await acceptEvent(spool, { webhookEventId: "event-stop-deferred", userId: "user-2" });
         await deliveriesStarted.promise;
         expect(deliver).toHaveBeenCalledTimes(2);
-        vi.useFakeTimers();
-        grace = observeActiveDeliveryStopGrace();
-        const stopping = spool.stop();
-        let stopSettled = false;
-        void stopping.then(() => {
-          stopSettled = true;
-        });
-        await grace.armed;
+        grace = observeActiveDeliveryStopGrace(spool);
+        const stop = grace;
+        await stop.armed;
         await vi.advanceTimersByTimeAsync(5_000);
         expect(spoolRuntime.log).toHaveBeenCalledWith(
           expect.stringContaining("timed out after 5000ms"),
         );
-        expect(stopSettled).toBe(false);
+        expect(stop.isSettled()).toBe(false);
         grace.restore();
         grace = undefined;
         vi.useRealTimers();
@@ -341,11 +305,11 @@ describe("LINE webhook spool", () => {
         }
         activeLifecycle.onDeferred();
         await deferredLifecycle.onAbandoned();
-        expect(stopSettled).toBe(false);
+        expect(stop.isSettled()).toBe(false);
         await activeLifecycle.onAbandoned();
         deliveryGate.resolve();
-        await stopping;
-        expect(stopSettled).toBe(true);
+        await stop.stopping;
+        expect(stop.isSettled()).toBe(true);
         expect(await queue.listClaims()).toEqual([]);
       } finally {
         grace?.restore();
@@ -362,9 +326,7 @@ describe("LINE webhook spool", () => {
   it("deduplicates a redelivered message id even when webhookEventId changes", async () => {
     await withQueue(async (queue) => {
       const enqueue = vi.spyOn(queue, "enqueue");
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
+      const deliver = vi.fn(adopt);
       const spool = createSpool(queue, deliver);
       spool.start();
       try {
@@ -381,100 +343,66 @@ describe("LINE webhook spool", () => {
       }
     });
   });
-  it("dead-letters malformed stored JSON without dispatch", async () => {
-    await withQueue(async (queue) => {
-      await queue.enqueue(
-        "message:malformed",
-        { version: 1, rawEvent: "{", destination: "destination-1" },
-        { laneKey: "user:user-1" },
-      );
-      const deliver = vi.fn(async () => {});
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        await waitForVerdict(queue, "message:malformed", "failed");
-        expect(deliver).not.toHaveBeenCalled();
-        await expectDeadLetter(
-          queue,
-          "message:malformed",
-          { version: 1, rawEvent: "{}", destination: "" },
-          "invalid-event",
-        );
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-  it("dead-letters the eighth retryable failure without a minimum-age floor", async () => {
-    await withQueue(async (queue) => {
-      const event = createEvent({ webhookEventId: "event-retry-limit" });
-      const eventId = "message:message-event-retry-limit";
-      await queue.enqueue(eventId, payloadFor(event), { laneKey: "user:user-1" });
-      for (let attempt = 0; attempt < 7; attempt += 1) {
-        const claim = await queue.claim(eventId);
-        if (!claim) {
-          throw new Error(`failed to seed LINE retry attempt ${attempt + 1}`);
+  it.each([
+    ["invalid-event", undefined, 0, "{"],
+    ["retry-limit-exceeded", new Error("persistent transient failure"), 7, undefined],
+    [
+      "authentication-failed",
+      Object.assign(new Error("invalid channel access token"), { status: 401 }),
+      0,
+      undefined,
+    ],
+    [
+      "delivery-side-effects-committed",
+      new LineWebhookTerminalDeliveryError("reply token consumed"),
+      0,
+      undefined,
+    ],
+  ] as const)(
+    "dead-letters %s without another attempt",
+    async (reason, error, priorAttempts, rawEvent) => {
+      await withQueue(async (queue) => {
+        const event = createEvent({ webhookEventId: "event-failure" });
+        const eventId = "message:message-event-failure";
+        const stored = rawEvent !== undefined || priorAttempts > 0;
+        if (stored) {
+          await queue.enqueue(
+            eventId,
+            { ...payloadFor(event), ...(rawEvent === undefined ? {} : { rawEvent }) },
+            { laneKey: "user:user-1" },
+          );
         }
-        await queue.release(claim, {
-          lastError: "seeded transient failure",
-          releasedAt: Date.now() - 4 * 60_000,
+        for (let attempt = 0; attempt < priorAttempts; attempt += 1) {
+          const claim = await queue.claim(eventId);
+          if (!claim) {
+            throw new Error(`failed to seed LINE retry attempt ${attempt + 1}`);
+          }
+          await queue.release(claim, {
+            lastError: "seeded transient failure",
+            releasedAt: Date.now() - 4 * 60_000,
+          });
+        }
+        const deliver = vi.fn(async () => {
+          if (error) {
+            throw error;
+          }
         });
-      }
-      const deliver = vi.fn(async () => {
-        throw new Error("persistent transient failure");
+        const spool = createSpool(queue, deliver);
+        spool.start();
+        try {
+          if (!stored) {
+            await spool.accept(callback(event));
+          }
+          await waitForVerdict(queue, eventId, "failed");
+          expect(deliver).toHaveBeenCalledTimes(rawEvent === undefined ? 1 : 0);
+          expect(await queue.enqueue(eventId, payloadFor(event))).toMatchObject({
+            kind: "failed",
+            record: { reason },
+          });
+        } finally {
+          await spool.stop();
+        }
       });
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        await waitForVerdict(queue, eventId, "failed");
-        expect(deliver).toHaveBeenCalledTimes(1);
-        await expectDeadLetter(queue, eventId, payloadFor(event), "retry-limit-exceeded");
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-  it("dead-letters LINE API authentication failures without retry", async () => {
-    await withQueue(async (queue) => {
-      const event = createEvent({ webhookEventId: "event-auth" });
-      const deliver = vi.fn(async () => {
-        throw Object.assign(new Error("invalid channel access token"), { status: 401 });
-      });
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        await spool.accept(callback(event));
-        const eventId = "message:message-event-auth";
-        await waitForVerdict(queue, eventId, "failed");
-        expect(deliver).toHaveBeenCalledTimes(1);
-        await expectDeadLetter(queue, eventId, payloadFor(event), "authentication-failed");
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-  it("dead-letters delivery failures after side effects", async () => {
-    await withQueue(async (queue) => {
-      const event = createEvent({ webhookEventId: "event-terminal" });
-      const deliver = vi.fn(async () => {
-        throw new LineWebhookTerminalDeliveryError("reply token consumed");
-      });
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        await spool.accept(callback(event));
-        const eventId = "message:message-event-terminal";
-        await waitForVerdict(queue, eventId, "failed");
-        expect(deliver).toHaveBeenCalledTimes(1);
-        await expectDeadLetter(
-          queue,
-          eventId,
-          payloadFor(event),
-          "delivery-side-effects-committed",
-        );
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
+    },
+  );
 });
