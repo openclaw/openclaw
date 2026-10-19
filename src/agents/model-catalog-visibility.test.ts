@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
+import { subscriptionRoute as selectedRoute } from "./model-auth-availability.test-support.js";
+import { providerConfig, row } from "./model-catalog-fixtures.test-support.js";
 import {
   prepareLogicalVisibleModelCatalog,
   resolveLogicalModelCatalogEntryState,
@@ -19,15 +21,12 @@ const entryState = (
   evaluation: ModelAuthAvailabilityEvaluation = { availability: true, routeResolution: null },
 ) =>
   resolveLogicalModelCatalogEntryState({ evaluation, routePolicy: openAIModelCatalogRoutePolicy });
-const visible = (
-  params: Pick<
-    Parameters<typeof resolveLogicalVisibleModelCatalog>[0],
-    "catalog" | "defaultProvider"
-  > &
-    Partial<Parameters<typeof resolveLogicalVisibleModelCatalog>[0]>,
-) =>
+type VisibleParams = Parameters<typeof resolveLogicalVisibleModelCatalog>[0];
+const visible = (catalog: ModelCatalogEntry[], params: Partial<VisibleParams> = {}) =>
   resolveLogicalVisibleModelCatalog({
     cfg: {},
+    catalog,
+    defaultProvider: "fixture",
     view: "all",
     routePolicy: openAIModelCatalogRoutePolicy,
     evaluateEntry: async () => entryState(),
@@ -35,6 +34,7 @@ const visible = (
   });
 
 describe("resolveLogicalVisibleModelCatalog", () => {
+  afterEach(() => vi.restoreAllMocks());
   it("keeps the selected model ahead of curated and live rows in a large catalog", async () => {
     const catalog: ModelCatalogEntry[] = Array.from({ length: 300 }, (_, index) => ({
       provider: "fixture",
@@ -42,9 +42,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       name: `Model ${index}`,
       providerOrder: index,
     }));
-    const result = await visible({
-      catalog,
-      defaultProvider: "fixture",
+    const result = await visible(catalog, {
       defaultModel: { provider: "fixture", model: "model-298" },
       selectedModel: { provider: "fixture", model: "model-299" },
       metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -61,16 +59,12 @@ describe("resolveLogicalVisibleModelCatalog", () => {
   });
 
   it("leads each provider with its hosted-catalog recommendations after the selected model", async () => {
-    const row = (provider: string, id: string, providerOrder: number): ModelCatalogEntry => ({
-      provider,
-      id,
-      name: id,
-      providerOrder,
-    });
     const catalog = [
-      ...["a-0", "a-1", "a-2", "a-3", "a-4"].map((id, index) => row("alpha", id, index)),
-      row("beta", "b-0", 0),
-      row("beta", "b-1", 1),
+      ...["a-0", "a-1", "a-2", "a-3", "a-4"].map((id, providerOrder) =>
+        row("alpha", id, { providerOrder }),
+      ),
+      row("beta", "b-0", { providerOrder: 0 }),
+      row("beta", "b-1", { providerOrder: 1 }),
     ];
     const result = await withRemoteModelCatalogSnapshot(
       {
@@ -84,8 +78,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         upstreamPricing: {},
       },
       () =>
-        visible({
-          catalog,
+        visible(catalog, {
           defaultProvider: "alpha",
           selectedModel: { provider: "alpha", model: "a-4" },
           metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -127,7 +120,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         ],
       });
       const api = scenario === "projected API" ? "openai-completions" : "openai-responses";
-      const row: ModelCatalogEntry = {
+      const entry: ModelCatalogEntry = {
         provider: "personal",
         id: "auto",
         name: "Auto",
@@ -143,28 +136,17 @@ describe("resolveLogicalVisibleModelCatalog", () => {
             modelPolicy: { allow: [] },
           },
         },
-        ...(scenario === "opaque runtime"
-          ? {}
-          : {
-              models: {
-                providers: {
-                  personal: {
-                    api,
-                    baseUrl,
-                    models: [
-                      makeProviderModelFixture<typeof api>({
-                        id: "auto",
-                        name: "Auto",
-                        provider: "personal",
-                        api,
-                        baseUrl,
-                      }),
-                    ].map(({ provider: _provider, ...model }) => model),
-                  },
-                },
-              },
-            }),
       };
+      if (scenario === "projected API") {
+        const { provider: _provider, ...model } = makeProviderModelFixture<typeof api>({
+          id: entry.id,
+          name: entry.name,
+          provider: entry.provider,
+          api,
+          baseUrl,
+        });
+        cfg.models = providerConfig("personal", { api, baseUrl, models: [model] }).models;
+      }
       const route = {
         api: "openai-responses" as const,
         baseUrl,
@@ -172,9 +154,8 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         requestTransportOverrides: "none" as const,
       };
       const projected = scenario === "projected API";
-      const result = await visible({
+      const result = await visible([entry], {
         cfg,
-        catalog: [row],
         defaultProvider: "personal",
         metadataSnapshot,
         evaluateEntry: async () =>
@@ -187,9 +168,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
               : {}),
           }),
       });
-      expect(result.map((entry) => entry.id)).toEqual(
-        scenario === "opaque runtime" ? ["auto"] : [],
-      );
+      expect(result.map((item) => item.id)).toEqual(scenario === "opaque runtime" ? ["auto"] : []);
     },
   );
 
@@ -209,69 +188,54 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       .mockReturnValue({
         normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^vendor\//u, ""),
       });
-    try {
-      const preparedEntries: ModelCatalogEntry[] = [];
-      const read = await prepareLogicalVisibleModelCatalog({
-        cfg: {},
-        catalog,
-        policy,
-        defaultProvider: "fixture",
-        view: "all",
-        routePolicy: openAIModelCatalogRoutePolicy,
-        prepareEntry: async (entry) => {
-          preparedEntries.push(entry);
-          if (entry === first) {
-            await Promise.resolve();
-            later.id = "vendor/second";
-            resolvePolicy.mockReturnValue(null);
-          }
-          return () => entryState();
-        },
-      });
-      expect(preparedEntries).toEqual([first, later]);
-      expect(read()).toEqual([first, later]);
-    } finally {
-      resolvePolicy.mockRestore();
-    }
+    const preparedEntries: ModelCatalogEntry[] = [];
+    const read = await prepareLogicalVisibleModelCatalog({
+      cfg: {},
+      catalog,
+      policy,
+      defaultProvider: "fixture",
+      view: "all",
+      routePolicy: openAIModelCatalogRoutePolicy,
+      prepareEntry: async (entry) => {
+        preparedEntries.push(entry);
+        if (entry === first) {
+          await Promise.resolve();
+          later.id = "vendor/second";
+          resolvePolicy.mockReturnValue(null);
+        }
+        return () => entryState();
+      },
+    });
+    expect(preparedEntries).toEqual([first, later]);
+    expect(read()).toEqual([first, later]);
   });
 
-  it("keeps case-distinct and literal provider-prefixed identities in the default view", async () => {
-    const catalog: ModelCatalogEntry[] = [
-      { provider: "fixture", id: "MixedCase", name: "Large", contextWindow: 64_000 },
-      { provider: "fixture", id: "mixedcase", name: "Small", contextWindow: 16_000 },
-      { provider: "fixture", id: "fixture/MixedCase", name: "Namespaced", contextWindow: 32_000 },
-    ];
-    const result = await visible({
+  it.each([
+    {
+      name: "case-distinct and provider-prefixed",
+      view: "default" as const,
       cfg: { agents: { defaults: { modelPolicy: { allow: ["fixture/*"] } } } },
-      catalog,
-      defaultProvider: "fixture",
-      view: "default",
-    });
-
+      catalog: [
+        { provider: "fixture", id: "MixedCase", name: "Large", contextWindow: 64_000 },
+        { provider: "fixture", id: "mixedcase", name: "Small", contextWindow: 16_000 },
+        { provider: "fixture", id: "fixture/MixedCase", name: "Namespaced", contextWindow: 32_000 },
+      ],
+    },
+    {
+      name: "literal suffixed",
+      view: "all" as const,
+      cfg: {},
+      catalog: [
+        { provider: "fixture", id: "reader", name: "Base" },
+        { provider: "fixture", id: "reader@variant", name: "Literal variant" },
+      ],
+    },
+  ])("keeps $name identities distinct", async ({ catalog, view, cfg }) => {
+    const result = await visible(catalog, { view, cfg });
     expect(result).toEqual(expect.arrayContaining(catalog));
-    expect(result).toHaveLength(3);
+    expect(result).toHaveLength(catalog.length);
   });
 
-  it("keeps a literal catalog suffix distinct from its base model", async () => {
-    const catalog: ModelCatalogEntry[] = [
-      { provider: "fixture", id: "reader", name: "Base" },
-      { provider: "fixture", id: "reader@variant", name: "Literal variant" },
-    ];
-    const result = await visible({
-      catalog,
-      defaultProvider: "fixture",
-    });
-
-    expect(result).toEqual(expect.arrayContaining(catalog));
-    expect(result).toHaveLength(2);
-  });
-
-  const selectedRoute = {
-    api: "openai-chatgpt-responses" as const,
-    baseUrl: "https://chatgpt.com/backend-api/codex",
-    authRequirement: "subscription" as const,
-    requestTransportOverrides: "none" as const,
-  };
   const platform: ModelCatalogEntry = {
     provider: "openai",
     id: "gpt-5.5",
@@ -308,9 +272,8 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       { provider: "openai", id: "gpt-5.6-terra", name: "GPT-5.6 Terra", providerOrder: 1 },
     ];
 
-    const result = await visible({
+    const result = await visible(catalog, {
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      catalog,
       defaultProvider: "openai",
       evaluateEntry: evaluateSelectedEntry,
     });
@@ -349,9 +312,8 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       allowPluginNormalization: false,
     });
 
-    const result = await visible({
+    const result = await visible(catalog, {
       cfg,
-      catalog,
       defaultProvider: "demo",
       defaultModel: "primary",
       view: "configured",
@@ -366,8 +328,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       { ...platform, alias: "platform" },
       { ...chatGPT, alias: "selected" },
     ];
-    const result = await visible({
-      catalog,
+    const result = await visible(catalog, {
       defaultProvider: "openai",
       view: "default",
       evaluateEntry: evaluateSelectedEntry,
@@ -380,8 +341,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     const platformAvailable = { ...platform, status: "available" as const };
     const chatGPTSelected = { ...chatGPT, status: "deprecated" as const };
     const catalog = [platformAvailable, chatGPTSelected];
-    const result = await visible({
-      catalog,
+    const result = await visible(catalog, {
       routeVariants: catalog,
       defaultProvider: "openai",
       view: undefined,
@@ -392,8 +352,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
   });
 
   it("omits physical capabilities while managed route selection is unresolved", async () => {
-    const result = await visible({
-      catalog: [platform],
+    const result = await visible([platform], {
       defaultProvider: "openai",
       evaluateEntry: async () =>
         entryState({
