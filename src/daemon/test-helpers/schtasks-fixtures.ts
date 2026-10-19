@@ -1,4 +1,4 @@
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, SpawnSyncReturns } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -90,14 +90,15 @@ export async function writeNodeScript(env: Record<string, string>, port = "18789
   ]);
 }
 
-export type SpawnSyncResult = {
-  pid: number;
-  output: (string | null)[];
-  stdout: string;
-  stderr: string;
-  status: number;
-  signal: null;
-};
+const spawnSyncDefaults = {
+  pid: 0,
+  output: [null, "", ""],
+  stdout: "",
+  stderr: "",
+  status: 0,
+  signal: null,
+} satisfies SpawnSyncReturns<string>;
+export type SpawnSyncResult = typeof spawnSyncDefaults;
 
 export function isProcessSnapshotQuery(args: readonly string[] | undefined): boolean {
   return (
@@ -111,15 +112,7 @@ export function isProcessSnapshotQuery(args: readonly string[] | undefined): boo
 }
 
 export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
-  return {
-    pid: 0,
-    output: [null, "", ""],
-    stdout: "",
-    stderr: "",
-    status: 0,
-    signal: null,
-    ...overrides,
-  };
+  return { ...spawnSyncDefaults, output: [...spawnSyncDefaults.output], ...overrides };
 }
 
 export function createSpawnChild(unref: () => void, error?: Error): ChildProcess {
