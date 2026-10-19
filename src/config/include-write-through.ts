@@ -10,6 +10,7 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
@@ -281,7 +282,7 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
   pathProof: IncludePublicationProof;
   assertOwner: () => void;
 }): Promise<boolean> {
-  return await rollbackConfigFileWriteIfUnchanged({
+  const restored = await rollbackConfigFileWriteIfUnchanged({
     configPath: params.target.absolutePath,
     previousSnapshot: {
       path: params.target.absolutePath,
@@ -298,6 +299,14 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
     durable: true,
     destinationHardlinks: "reject",
   });
+  if (restored) {
+    recordUpdateDoctorConfigFileWrite(
+      params.target.absolutePath,
+      hashConfigRaw(params.committedRaw),
+      hashConfigRaw(params.previousRaw),
+    );
+  }
+  return restored;
 }
 
 export type StagedIncludeWrite = {
@@ -558,6 +567,18 @@ export async function publishStagedIncludeWrites(params: {
           },
           captureRollbackProof: (assertOwner) => guardedFs.captureRollbackProof(assertOwner),
         };
+        const recordPublication = () => {
+          if (publication.phase === "published") {
+            return;
+          }
+          registerRestorer(entry.bytes, publicationProof);
+          recordUpdateDoctorConfigFileWrite(
+            target.absolutePath,
+            hashConfigRaw(currentRaw),
+            hashConfigRaw(entry.bytes),
+          );
+          publication.phase = "published";
+        };
         const guardedFs = createConfigFileWriteGuard(target.absolutePath, fsNode, assertCurrent, {
           snapshot: { path: target.absolutePath, exists: currentRaw !== null, raw: currentRaw },
           includeGraph: leafIncludeGraph(),
@@ -566,12 +587,7 @@ export async function publishStagedIncludeWrites(params: {
           onRootRemoved: () => {
             publication.phase = "removed";
           },
-          onRootPublished: () => {
-            if (publication.phase !== "published") {
-              registerRestorer(entry.bytes, publicationProof);
-            }
-            publication.phase = "published";
-          },
+          onRootPublished: recordPublication,
         });
         await using preparedFile = await prepareConfigFileWrite({
           configPath: target.absolutePath,
@@ -584,11 +600,12 @@ export async function publishStagedIncludeWrites(params: {
           destinationHardlinks: "reject",
           durable: true,
         });
-        // The rename callback registers compensation before descriptor cleanup can throw;
+        // The rename callback records publication before descriptor cleanup can throw;
         // copy fallback damage instead uses the bytes left by its failed write.
         try {
           params.assertBeforePublish?.();
           preparedFile.publish();
+          recordPublication();
         } catch (error) {
           if (publication.phase === "removed") {
             const damageRaw = await readRootBoundFileRawIfExists(target);
@@ -604,9 +621,6 @@ export async function publishStagedIncludeWrites(params: {
         includeGraph.hashes[entry.includeGraphKey] = hashConfigIncludeRaw(entry.bytes);
         guardedFs.assertCurrent();
         guardedFs.assertPublishedIdentity();
-        if (publication.phase !== "published") {
-          registerRestorer(entry.bytes, publicationProof);
-        }
       },
       params.env,
       liveAuthority,
