@@ -19,16 +19,20 @@ function expectAudioCaptureReleased(state: MeetingBrowserFixture["state"]) {
   expect(state.audioCaptureId).toBeUndefined();
 }
 
+type ChromeLaunch = (
+  params: MeetingChromeLaunchParams<MeetingChromeTransportConfig, "agent">,
+) => Promise<unknown>;
+const browserScript = (params?: Record<string, unknown>) =>
+  (params?.body as { fn?: string } | undefined)?.fn;
+const leavesBrowser = (params?: Record<string, unknown>) =>
+  params?.method === "DELETE" || Boolean(browserScript(params)?.includes("leaveAction"));
+
 type ChromeFixtureOptions = MeetingBrowserFixtureOptions & {
   nodeCommand: string;
   preserveTrackedBrowser: boolean;
   resolveConfig(value: unknown): MeetingChromeTransportConfig;
-  launchInChrome(
-    params: MeetingChromeLaunchParams<MeetingChromeTransportConfig, "agent">,
-  ): Promise<unknown>;
-  launchOnNode(
-    params: MeetingChromeLaunchParams<MeetingChromeTransportConfig, "agent">,
-  ): Promise<unknown>;
+  launchInChrome: ChromeLaunch;
+  launchOnNode: ChromeLaunch;
   engineMocks: {
     localDispose: ReturnType<typeof vi.fn>;
     nodeDispose: ReturnType<typeof vi.fn>;
@@ -66,118 +70,81 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
     options.engineMocks.startAgent.mockRejectedValue(new Error("realtime startup failed"));
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("keeps auto-join enabled when recovering an active meeting tab", async () => {
-    const { state, runtime, gatewayRequest } = createMeetingBrowserFixture({
-      ...options,
-      tabOpen: true,
-      status: readyStatus,
-    });
-
-    await expect(options.launchInChrome(launchParams(runtime, true))).rejects.toThrow(
+  afterEach(() => vi.restoreAllMocks());
+  const browserOptions = (tabOpen: boolean) => ({ ...options, tabOpen, status: readyStatus });
+  async function failStartup<T extends MeetingBrowserFixture>(
+    browser: T,
+    launch = options.launchInChrome,
+    recovering = false,
+  ) {
+    await expect(launch(launchParams(browser.runtime, recovering))).rejects.toThrow(
       "realtime startup failed",
     );
+    expectAudioCaptureReleased(browser.state);
+    return browser;
+  }
 
-    expectAudioCaptureReleased(state);
-
-    const evaluated = gatewayRequest.mock.calls.find(
-      ([, params]) =>
-        params.path === "/act" &&
-        !(params.body as { fn?: string } | undefined)?.fn?.includes("leaveAction"),
+  it.each([true, false])("cleans up failed local startup (recovering=%s)", async (recovering) => {
+    const { state, gatewayRequest } = await failStartup(
+      createMeetingBrowserFixture(browserOptions(recovering)),
+      options.launchInChrome,
+      recovering,
     );
-    expect((evaluated?.[1].body as { fn?: string } | undefined)?.fn).toContain(
-      "const autoJoin = true",
-    );
-    if (options.preserveTrackedBrowser) {
-      expect(
-        gatewayRequest.mock.calls.some(
-          ([, params]) =>
-            params.method === "DELETE" ||
-            (params.body as { fn?: string } | undefined)?.fn?.includes("leaveAction"),
-        ),
-      ).toBe(false);
-      expect(state.tabOpen).toBe(true);
+    if (recovering) {
+      const requests = gatewayRequest.mock.calls.map(([, params]) => params);
+      const evaluated = requests.find(
+        (params) => params.path === "/act" && !browserScript(params)?.includes("leaveAction"),
+      );
+      expect(browserScript(evaluated)).toContain("const autoJoin = true");
+      if (options.preserveTrackedBrowser) {
+        expect(requests.some(leavesBrowser)).toBe(false);
+        expect(state.tabOpen).toBe(true);
+      }
+    } else {
+      expect(options.engineMocks.localDispose).toHaveBeenCalled();
+      expect(gatewayRequest).toHaveBeenCalledWith(
+        "browser.request",
+        expect.objectContaining({ method: "DELETE", path: `/tabs/${options.tabId}` }),
+        expect.anything(),
+      );
+      expect(state.tabOpen).toBe(false);
     }
   });
 
-  it("disposes local audio and leaves the browser when realtime startup fails", async () => {
-    const { state, runtime, gatewayRequest } = createMeetingBrowserFixture({
-      ...options,
-      tabOpen: false,
-      status: readyStatus,
-    });
-
-    await expect(options.launchInChrome(launchParams(runtime))).rejects.toThrow(
-      "realtime startup failed",
-    );
-
-    expectAudioCaptureReleased(state);
-    expect(options.engineMocks.localDispose).toHaveBeenCalled();
-    expect(gatewayRequest).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({ method: "DELETE", path: `/tabs/${options.tabId}` }),
-      expect.anything(),
-    );
-    expect(state.tabOpen).toBe(false);
-  });
-
-  it("stops node audio and leaves the remote browser when realtime startup fails", async () => {
-    const { state, runtime, invoke } = createMeetingNodeBrowserFixture({
-      ...options,
-      tabOpen: false,
-      status: readyStatus,
-    });
-
-    await expect(options.launchOnNode(launchParams(runtime))).rejects.toThrow(
-      "realtime startup failed",
-    );
-
-    expectAudioCaptureReleased(state);
-    expect(options.engineMocks.nodeDispose).toHaveBeenCalled();
-    expect(
-      invoke.mock.calls.filter(
-        ([request]) =>
-          request.command === options.nodeCommand &&
-          (request.params as Record<string, unknown>)?.action === "stopByUrl",
-      ),
-    ).toHaveLength(2);
-    expect(
-      invoke.mock.calls.some(
-        ([request]) =>
-          request.command === "browser.proxy" &&
-          (request.params as Record<string, unknown>)?.method === "DELETE",
-      ),
-    ).toBe(true);
-    expect(state.tabOpen).toBe(false);
-  });
-
-  if (options.preserveTrackedBrowser) {
-    it("stops failed node audio recovery without leaving the active browser call", async () => {
-      const { state, runtime, invoke } = createMeetingNodeBrowserFixture({
-        ...options,
-        tabOpen: true,
-        status: readyStatus,
-      });
-
-      await expect(options.launchOnNode(launchParams(runtime, true))).rejects.toThrow(
-        "realtime startup failed",
+  it.each(options.preserveTrackedBrowser ? [false, true] : [false])(
+    "cleans up failed node startup (recovering=%s)",
+    async (recovering) => {
+      const { state, invoke } = await failStartup(
+        createMeetingNodeBrowserFixture(browserOptions(recovering)),
+        options.launchOnNode,
+        recovering,
       );
-
-      expectAudioCaptureReleased(state);
       expect(options.engineMocks.nodeDispose).toHaveBeenCalled();
-      expect(
-        invoke.mock.calls.some(
-          ([request]) =>
-            request.command === "browser.proxy" &&
-            ((request.params as Record<string, unknown>)?.method === "DELETE" ||
-              ((request.params as { body?: { fn?: string } }).body?.fn?.includes("leaveAction") ??
-                false)),
-        ),
-      ).toBe(false);
-      expect(state.tabOpen).toBe(true);
-    });
-  }
+      const requests = invoke.mock.calls.map(([request]) => request);
+      if (recovering) {
+        const browserRequests = requests.filter((request) => request.command === "browser.proxy");
+        expect(
+          browserRequests.some((request) =>
+            leavesBrowser(request.params as Record<string, unknown>),
+          ),
+        ).toBe(false);
+      } else {
+        expect(
+          requests.filter(
+            (request) =>
+              request.command === options.nodeCommand &&
+              (request.params as Record<string, unknown>)?.action === "stopByUrl",
+          ),
+        ).toHaveLength(2);
+        expect(
+          requests.some(
+            (request) =>
+              request.command === "browser.proxy" &&
+              (request.params as Record<string, unknown>)?.method === "DELETE",
+          ),
+        ).toBe(true);
+      }
+      expect(state.tabOpen).toBe(recovering);
+    },
+  );
 }

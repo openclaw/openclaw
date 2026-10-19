@@ -1,4 +1,3 @@
-// Channel contract suites provide reusable expectations for channel plugin test coverage.
 import { expect, it } from "vitest";
 import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
 import type { ChannelSetupDmPolicy } from "../../channels/plugins/setup-wizard-types.js";
@@ -18,40 +17,22 @@ function sortStrings(values: readonly string[]) {
   return [...values].toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveContractMessageDiscovery(params: {
-  plugin: Pick<ChannelPlugin, "actions">;
-  cfg: OpenClawConfig;
-}) {
-  const actions = params.plugin.actions;
-  if (!actions) {
-    return {
-      actions: [] as ChannelMessageActionName[],
-      capabilities: [] as readonly ChannelMessageCapability[],
-    };
-  }
-  const discovery = actions.describeMessageTool({ cfg: params.cfg }) ?? null;
-  return {
-    actions: Array.isArray(discovery?.actions) ? [...discovery.actions] : [],
-    capabilities: Array.isArray(discovery?.capabilities) ? discovery.capabilities : [],
-  };
-}
-
 export function expectChannelPluginContract(
   plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">,
 ) {
   expect(typeof plugin.id).toBe("string");
-  expect(plugin.id.trim()).not.toBe("");
-
+  expect(
+    [plugin.id, plugin.meta.label, plugin.meta.selectionLabel, plugin.meta.blurb].map((value) =>
+      value.trim(),
+    ),
+  ).not.toContain("");
   expect(plugin.meta.id).toBe(plugin.id);
-  expect(plugin.meta.label.trim()).not.toBe("");
-  expect(plugin.meta.selectionLabel.trim()).not.toBe("");
   expect(plugin.meta.docsPath).toMatch(/^\/channels\//);
-  expect(plugin.meta.blurb.trim()).not.toBe("");
-
   expect(plugin.capabilities.chatTypes.length).toBeGreaterThan(0);
-
-  expect(typeof plugin.config.listAccountIds).toBe("function");
-  expect(typeof plugin.config.resolveAccount).toBe("function");
+  expect(plugin.config).toMatchObject({
+    listAccountIds: expect.any(Function),
+    resolveAccount: expect.any(Function),
+  });
 }
 
 type ChannelActionsContractCase = {
@@ -76,12 +57,9 @@ export function installChannelActionsContractSuite(params: {
     it(`actions contract: ${testCase.name}`, () => {
       testCase.beforeTest?.();
 
-      const discovery = resolveContractMessageDiscovery({
-        plugin: params.plugin,
-        cfg: testCase.cfg,
-      });
-      const actions = discovery.actions;
-      const capabilities = discovery.capabilities;
+      const discovery = params.plugin.actions?.describeMessageTool({ cfg: testCase.cfg });
+      const actions = Array.isArray(discovery?.actions) ? [...discovery.actions] : [];
+      const capabilities = Array.isArray(discovery?.capabilities) ? discovery.capabilities : [];
 
       expect(actions).toEqual([...new Set(actions)]);
       expect(capabilities).toEqual([...new Set(capabilities)]);
@@ -131,30 +109,16 @@ export function installChannelSetupContractSuite<
     it(`setup contract: ${testCase.name}`, () => {
       testCase.beforeTest?.();
 
-      const resolvedAccountId =
-        setup?.resolveAccountId?.({
-          cfg: testCase.cfg,
-          accountId: testCase.accountId,
-          input: testCase.input,
-        }) ??
-        testCase.accountId ??
-        "default";
+      const input = { cfg: testCase.cfg, accountId: testCase.accountId, input: testCase.input };
+      const resolvedAccountId = setup?.resolveAccountId?.(input) ?? testCase.accountId ?? "default";
+      const patch = { ...input, accountId: resolvedAccountId };
 
       expect(resolvedAccountId).toBe(testCase.expectedAccountId ?? resolvedAccountId);
 
-      const validation =
-        setup?.validateInput?.({
-          cfg: testCase.cfg,
-          accountId: resolvedAccountId,
-          input: testCase.input,
-        }) ?? null;
+      const validation = setup?.validateInput?.(patch) ?? null;
       expect(validation).toBe(testCase.expectedValidation ?? null);
 
-      const nextCfg = setup?.applyAccountConfig({
-        cfg: testCase.cfg,
-        accountId: resolvedAccountId,
-        input: testCase.input,
-      });
+      const nextCfg = setup?.applyAccountConfig(patch);
       expect(nextCfg).toBeDefined();
 
       const account = params.plugin.config.resolveAccount(nextCfg!, resolvedAccountId);
@@ -182,26 +146,25 @@ type ChannelDmPolicyContractCase = {
   };
 };
 
-function createDmPolicyContractConfig(params: {
-  testCase: ChannelDmPolicyContractCase;
-  mode: "read" | "write" | "default";
-}): OpenClawConfig {
-  const { testCase } = params;
-  const defaultAccount = params.mode === "default" ? testCase.defaultAccount : undefined;
+function createDmPolicyContractConfig(
+  testCase: ChannelDmPolicyContractCase,
+  mode: "read" | "write" | "default",
+): OpenClawConfig {
+  const defaultAccount = mode === "default" ? testCase.defaultAccount : undefined;
   const account = {
     ...testCase.accountConfig,
-    ...(params.mode === "write" ? {} : { dmPolicy: "allowlist" }),
+    ...(mode === "write" ? {} : { dmPolicy: "allowlist" }),
     ...(defaultAccount?.accountAllowFrom
       ? { allowFrom: [...defaultAccount.accountAllowFrom] }
       : {}),
   };
   const rootAllowFrom =
-    params.mode === "write" ? testCase.inheritedAllowFrom : defaultAccount?.rootAllowFrom;
+    mode === "write" ? testCase.inheritedAllowFrom : defaultAccount?.rootAllowFrom;
   return {
     channels: {
       [testCase.channel]: {
-        ...(params.mode === "write" ? {} : { dmPolicy: "disabled" }),
-        ...(params.mode === "default" ? { defaultAccount: testCase.accountId } : {}),
+        ...(mode === "write" ? {} : { dmPolicy: "disabled" }),
+        ...(mode === "default" ? { defaultAccount: testCase.accountId } : {}),
         ...(rootAllowFrom ? { allowFrom: [...rootAllowFrom] } : {}),
         accounts: { [testCase.accountId]: account },
       },
@@ -226,75 +189,58 @@ function resolveDmPolicyConfig(
   return { channel: channelConfig!, account: accountConfig! };
 }
 
-function expectOpenDmPolicyPatch(params: {
-  dmPolicy: ChannelSetupDmPolicy;
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId?: string;
-  resolvedAccountId: string;
-  expectedAllowFrom: readonly unknown[];
-}) {
-  const before = resolveDmPolicyConfig(params.cfg, params.channel, params.resolvedAccountId);
-  const beforeRootPolicy = before.channel.dmPolicy;
-  const beforeRootAllowFrom = Array.isArray(before.channel.allowFrom)
-    ? [...before.channel.allowFrom]
-    : before.channel.allowFrom;
-  const next = params.dmPolicy.setPolicy(params.cfg, "open", params.accountId);
-  const after = resolveDmPolicyConfig(next, params.channel, params.resolvedAccountId);
-
-  expect(after.channel.dmPolicy).toBe(beforeRootPolicy);
-  expect(after.channel.allowFrom).toEqual(beforeRootAllowFrom);
-  expect(after.account.dmPolicy).toBe("open");
-  expect(after.account.allowFrom).toEqual(params.expectedAllowFrom);
-}
-
 export function installChannelDmPolicyContractSuite(params: {
   dmPolicy: ChannelSetupDmPolicy;
   cases: readonly ChannelDmPolicyContractCase[];
 }) {
+  const { dmPolicy } = params;
   for (const testCase of params.cases) {
+    const { channel, accountId, defaultAccount } = testCase;
+    const config = (mode: "read" | "write" | "default") =>
+      createDmPolicyContractConfig(testCase, mode);
+    const expectKeys = (cfg: OpenClawConfig, id?: string) =>
+      expect(dmPolicy.resolveConfigKeys?.(cfg, id)).toEqual({
+        policyKey: `channels.${channel}.accounts.${accountId}.dmPolicy`,
+        allowFromKey: `channels.${channel}.accounts.${accountId}.allowFrom`,
+      });
+    const expectOpenPatch = (
+      cfg: OpenClawConfig,
+      values: ReadonlyArray<string | number> | undefined,
+      id?: string,
+    ) => {
+      const before = resolveDmPolicyConfig(cfg, channel, accountId);
+      const root = {
+        dmPolicy: before.channel.dmPolicy,
+        allowFrom: Array.isArray(before.channel.allowFrom)
+          ? [...before.channel.allowFrom]
+          : before.channel.allowFrom,
+      };
+      const next = dmPolicy.setPolicy(cfg, "open", id);
+      const after = resolveDmPolicyConfig(next, channel, accountId);
+      expect({ dmPolicy: after.channel.dmPolicy, allowFrom: after.channel.allowFrom }).toEqual(
+        root,
+      );
+      expect({ dmPolicy: after.account.dmPolicy, allowFrom: after.account.allowFrom }).toEqual({
+        dmPolicy: "open",
+        allowFrom: addExpectedWildcard(values),
+      });
+    };
     it(`dm policy contract: ${testCase.name} reads the named-account policy`, () => {
-      expect(params.dmPolicy.channel).toBe(testCase.channel);
-      const cfg = createDmPolicyContractConfig({ testCase, mode: "read" });
-      expect(params.dmPolicy.getCurrent(cfg, testCase.accountId)).toBe("allowlist");
+      expect(dmPolicy.channel).toBe(channel);
+      expect(dmPolicy.getCurrent(config("read"), accountId)).toBe("allowlist");
     });
-
     it(`dm policy contract: ${testCase.name} reports account-scoped config keys`, () => {
-      expect(params.dmPolicy.resolveConfigKeys?.({}, testCase.accountId)).toEqual({
-        policyKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.dmPolicy`,
-        allowFromKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.allowFrom`,
-      });
+      expectKeys({}, accountId);
     });
-
     it(`dm policy contract: ${testCase.name} writes open policy with inherited allowFrom`, () => {
-      expectOpenDmPolicyPatch({
-        dmPolicy: params.dmPolicy,
-        cfg: createDmPolicyContractConfig({ testCase, mode: "write" }),
-        channel: testCase.channel,
-        accountId: testCase.accountId,
-        resolvedAccountId: testCase.accountId,
-        expectedAllowFrom: addExpectedWildcard(testCase.inheritedAllowFrom),
-      });
+      expectOpenPatch(config("write"), testCase.inheritedAllowFrom, accountId);
     });
-
-    const defaultAccount = testCase.defaultAccount;
     if (defaultAccount) {
       it(`dm policy contract: ${testCase.name} uses defaultAccount when accountId is omitted`, () => {
-        const cfg = createDmPolicyContractConfig({ testCase, mode: "default" });
-        expect(params.dmPolicy.getCurrent(cfg)).toBe("allowlist");
-        expect(params.dmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-          policyKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.dmPolicy`,
-          allowFromKey: `channels.${testCase.channel}.accounts.${testCase.accountId}.allowFrom`,
-        });
-        expectOpenDmPolicyPatch({
-          dmPolicy: params.dmPolicy,
-          cfg,
-          channel: testCase.channel,
-          resolvedAccountId: testCase.accountId,
-          expectedAllowFrom: addExpectedWildcard(
-            defaultAccount.accountAllowFrom ?? defaultAccount.rootAllowFrom,
-          ),
-        });
+        const cfg = config("default");
+        expect(dmPolicy.getCurrent(cfg)).toBe("allowlist");
+        expectKeys(cfg);
+        expectOpenPatch(cfg, defaultAccount.accountAllowFrom ?? defaultAccount.rootAllowFrom);
       });
     }
   }
@@ -334,11 +280,13 @@ export function installChannelStatusContractSuite<ResolvedAccount, Probe = unkno
   for (const testCase of params.cases) {
     it(`status contract: ${testCase.name}`, async () => {
       testCase.beforeTest?.();
-
-      const account = params.plugin.config.resolveAccount(testCase.cfg, testCase.accountId);
-      const snapshot = await params.plugin.status!.buildAccountSnapshot!({
-        account,
+      const { config, status } = params.plugin;
+      const base = {
         cfg: testCase.cfg,
+        account: config.resolveAccount(testCase.cfg, testCase.accountId),
+      };
+      const snapshot = await status!.buildAccountSnapshot!({
+        ...base,
         runtime: testCase.runtime,
         probe: testCase.probe,
       });
@@ -347,12 +295,11 @@ export function installChannelStatusContractSuite<ResolvedAccount, Probe = unkno
       expect(snapshot.accountId.trim()).not.toBe("");
       testCase.assertSnapshot?.(snapshot);
 
-      if (params.plugin.status?.buildChannelSummary) {
+      if (status?.buildChannelSummary) {
         const defaultAccountId =
-          params.plugin.config.defaultAccountId?.(testCase.cfg) ?? testCase.accountId ?? "default";
-        const summary = await params.plugin.status.buildChannelSummary({
-          account,
-          cfg: testCase.cfg,
+          config.defaultAccountId?.(testCase.cfg) ?? testCase.accountId ?? "default";
+        const summary = await status.buildChannelSummary({
+          ...base,
           defaultAccountId,
           snapshot,
         });
@@ -360,10 +307,9 @@ export function installChannelStatusContractSuite<ResolvedAccount, Probe = unkno
         testCase.assertSummary?.(summary);
       }
 
-      if (testCase.expectedState && params.plugin.status?.resolveAccountState) {
-        const state = params.plugin.status.resolveAccountState({
-          account,
-          cfg: testCase.cfg,
+      if (testCase.expectedState && status?.resolveAccountState) {
+        const state = status.resolveAccountState({
+          ...base,
           configured: testCase.resolveStateInput?.configured ?? true,
           enabled: testCase.resolveStateInput?.enabled ?? true,
         });

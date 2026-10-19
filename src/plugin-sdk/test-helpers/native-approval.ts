@@ -80,72 +80,51 @@ export function createNativeApprovalTestFixture(params: {
       approvals: { [approvalKind]: { enabled: true, mode: options.mode ?? "targets", targets } },
     });
   }
-  function getAvailability(
+  const getAvailability = (
     cfg: OpenClawConfig,
     accountId = "default",
     approvalKind: ChannelApprovalKind = "exec",
-  ) {
-    return capability.getActionAvailabilityState?.({
-      cfg,
-      accountId,
-      action: "approve",
-      approvalKind,
-    });
-  }
-  async function describeDelivery(
+  ) => capability.getActionAvailabilityState?.({ cfg, accountId, action: "approve", approvalKind });
+  const describeDelivery = async (
     cfg: OpenClawConfig,
     request: ApprovalRequest,
     approvalKind: ChannelApprovalKind = "exec",
-  ) {
-    return native?.describeDeliveryCapabilities({
-      cfg,
-      accountId: "default",
-      approvalKind,
-      request,
-    });
-  }
-  async function nativeShouldHandle(input: {
+  ) => native?.describeDeliveryCapabilities({ cfg, accountId: "default", approvalKind, request });
+  const nativeShouldHandle = async (input: {
     cfg: OpenClawConfig;
     approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
     accountId?: string | null;
-  }) {
-    return nativeRuntime?.availability.shouldHandle({
+  }) =>
+    nativeRuntime?.availability.shouldHandle({
       ...input,
       accountId: input.accountId ?? "default",
       context: {},
     });
-  }
-  async function resolveExecOrigin(cfg: OpenClawConfig, request: ExecApprovalRequest) {
-    return native?.resolveOriginTarget?.({
-      cfg,
-      accountId: "default",
-      approvalKind: "exec",
-      request,
-    });
-  }
-  async function suppressForwardingFallback(input: ForwardingParams) {
-    const suppress =
+  const resolveExecOrigin = async (cfg: OpenClawConfig, request: ExecApprovalRequest) =>
+    native?.resolveOriginTarget?.({ cfg, accountId: "default", approvalKind: "exec", request });
+  const suppressForwardingFallback = async (input: ForwardingParams) =>
+    (
       capability.delivery?.shouldSuppressForwardingFallbackAsync ??
-      capability.delivery?.shouldSuppressForwardingFallback;
-    return suppress?.(input);
-  }
-  function suppressTargetForwarding(cfg: OpenClawConfig, to: string, request = buildExecRequest()) {
-    return suppressForwardingFallback({
+      capability.delivery?.shouldSuppressForwardingFallback
+    )?.(input);
+  const suppressTargetForwarding = (
+    cfg: OpenClawConfig,
+    to: string,
+    request = buildExecRequest(),
+  ) =>
+    suppressForwardingFallback({
       cfg,
       approvalKind: "exec",
       target: { channel, to, source: "target" },
       request,
     });
-  }
-  async function expectHandling(
+  const expectHandling = async (
     cfg: OpenClawConfig,
     request: ApprovalRequest,
     expected: boolean,
     approvalKind: ChannelApprovalKind = "exec",
-  ) {
-    expect(await nativeShouldHandle({ cfg, approvalKind, request })).toBe(expected);
-  }
+  ) => expect(await nativeShouldHandle({ cfg, approvalKind, request })).toBe(expected);
   const enabledConfig = (
     exec: NonNullable<OpenClawConfig["approvals"]>["exec"] = { enabled: true },
   ) => buildConfig({ approvals: { exec } });
@@ -164,12 +143,11 @@ export function createNativeApprovalTestFixture(params: {
       disabledByDefault: async () => {
         const cfg = buildConfig();
         const execRequest = buildExecRequest();
-        const pluginRequest = buildPluginRequest();
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
         expect(getAvailability(cfg, "default", "plugin")).toEqual({ kind: "disabled" });
         expect((await describeDelivery(cfg, execRequest))?.enabled).toBe(false);
         await expectHandling(cfg, execRequest, false);
-        await expectHandling(cfg, pluginRequest, false, "plugin");
+        await expectHandling(cfg, buildPluginRequest(), false, "plugin");
       },
       sessionDelivery: async () => {
         const cfg = enabledConfig();
@@ -218,10 +196,7 @@ export function createNativeApprovalTestFixture(params: {
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
       },
       requestFilters: async () => {
-        const request = buildExecRequest(directTarget, {
-          agentId: "main",
-          sessionKey: `agent:main:${channel}:+15551230000`,
-        });
+        const request = buildExecRequest();
         const blockedByAgent = enabledConfig({ enabled: true, agentFilter: ["other"] });
         const blockedBySession = enabledConfig({ enabled: true, sessionFilter: ["telegram"] });
         await expectHandling(blockedByAgent, request, false);
