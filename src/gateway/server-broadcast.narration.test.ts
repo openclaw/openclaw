@@ -1,49 +1,27 @@
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../agents/internal-runtime-context.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
+import {
+  broadcastFor,
+  createBroadcastPeer,
+  type BroadcastFrame,
+} from "./server-broadcast.test-support.js";
 import { chatWireProjection } from "./server-chat-live-text.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const key = "agent:main:narrated";
-type Frame = {
-  event: string;
-  seq: number;
-  payload: { runId: string; sessionKey?: string; agentId?: string; text?: string; state?: string };
-};
-
-function peer(connId: string) {
-  const frames: Frame[] = [];
-  const socket = Object.assign(new EventEmitter(), {
-    readyState: 1,
-    bufferedAmount: 0,
-    close: vi.fn(),
-    terminate: vi.fn(),
-    send: (
-      wire: string | Buffer,
-      options?: { binary: false } | (() => void),
-      done?: () => void,
-    ) => {
-      frames.push(JSON.parse(String(wire)));
-      (typeof options === "function" ? options : done)?.();
-    },
+type Frame = BroadcastFrame<{
+  runId: string;
+  sessionKey?: string;
+  agentId?: string;
+  text?: string;
+  state?: string;
+}>;
+const peer = (connId: string) =>
+  createBroadcastPeer<Frame["payload"]>(connId, true, {
+    caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
   });
-  const client: GatewayWsClient = {
-    connId,
-    socket: socket as unknown as GatewayWsClient["socket"],
-    connect: {
-      role: "operator",
-      scopes: ["operator.read"],
-      caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-    } as GatewayWsClient["connect"],
-    usesSharedGatewayAuth: false,
-  };
-  return { client, socket, frames };
-}
 
 function chat(text: string, state = "delta", runId = "run") {
   return {
@@ -60,13 +38,11 @@ function harness() {
   vi.setSystemTime(0);
   const narration = peer("narration");
   const foreground = peer("foreground");
-  const clients = new GatewayClientRegistry([narration.client, foreground.client]);
   const subscribers = createSessionMessageSubscriberRegistry();
   subscribers.subscribe("narration", key, { mode: "narration" });
   subscribers.subscribe("foreground", key);
   let allowed = true;
-  const broadcaster = createGatewayBroadcaster({
-    clients,
+  const broadcaster = broadcastFor([narration, foreground], {
     sessionMessageSubscribers: subscribers,
     canReceiveSessionEvent: () => allowed,
   });
@@ -79,7 +55,6 @@ function harness() {
     narration,
     foreground,
     subscribers,
-    clients,
     revoke: () => {
       allowed = false;
     },

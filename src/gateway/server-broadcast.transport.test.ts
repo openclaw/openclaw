@@ -1,10 +1,15 @@
-import { EventEmitter, getEventListeners } from "node:events";
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { listSystemPresence } from "../infra/system-presence.js";
 import { gatewayFrameSegments } from "./serialized-json.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import {
+  broadcastFor as broadcaster,
+  coalesced,
+  createBroadcastPeer,
+} from "./server-broadcast.test-support.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -23,48 +28,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-function controlledPeer(connId: string) {
-  const callbacks: Array<(error?: Error) => void> = [];
-  const frames: Array<{ seq: number; payload: unknown }> = [];
-  const socket = Object.assign(new EventEmitter(), {
-    readyState: WebSocket.OPEN as WebSocket["readyState"],
-    bufferedAmount: 0,
-    close: vi.fn(),
-    terminate: vi.fn(),
-    send: vi.fn(
-      (
-        wire: string | Buffer,
-        options: { binary: false } | ((error?: Error) => void),
-        callback?: (error?: Error) => void,
-      ) => {
-        frames.push(JSON.parse(String(wire)));
-        callbacks.push(typeof options === "function" ? options : callback!);
-      },
-    ),
-  });
-  const client: GatewayWsClient = {
-    connId,
-    socket: socket as unknown as WebSocket,
-    connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-    usesSharedGatewayAuth: false,
-  };
-  return { client, socket, callbacks, frames };
-}
-
-function broadcaster(
-  peers: ReturnType<typeof controlledPeer>[],
-  options: Omit<Parameters<typeof createGatewayBroadcaster>[0], "clients"> = {},
-) {
-  return createGatewayBroadcaster({
-    clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
-    ...options,
-  });
-}
-
-const liveText = (group: AbortSignal) => ({
-  group,
-  coalesce: { key: "text", merge: (_previous: unknown, next: unknown) => next },
-});
+const controlledPeer = (connId: string) => createBroadcastPeer(connId);
 
 describe("broadcast transport retirement", () => {
   afterEach(() => {
@@ -393,51 +357,33 @@ describe("broadcast transport retirement", () => {
     },
   );
 
-  it("terminates only the slow socket captured before replacement", () => {
+  it.each(["replaced", "closed", "close-failed"])("settles slow-consumer closure: %s", (mode) => {
     vi.useFakeTimers();
-    const retired = controlledPeer("replacement");
-    const replacement = controlledPeer("replacement");
+    const retired = controlledPeer("retired");
+    const replacement = controlledPeer("retired");
     retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    if (mode === "close-failed") {
+      retired.socket.close.mockImplementationOnce(() => {
+        throw new Error("close unavailable");
+      });
+    }
     const { broadcast } = broadcaster([retired]);
-
     broadcast("tick", {});
+    if (mode === "close-failed") {
+      expect(retired.socket.terminate).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      return;
+    }
     expect(retired.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
     expect(retired.socket.terminate).not.toHaveBeenCalled();
-
-    retired.client.socket = replacement.client.socket;
-    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
-    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
-
-    expect(retired.socket.terminate).toHaveBeenCalledOnce();
+    if (mode === "closed") {
+      retired.socket.emit("close", 1008, Buffer.from("slow consumer"));
+    } else {
+      retired.client.socket = replacement.client.socket;
+    }
+    vi.advanceTimersByTime(2 * WEBSOCKET_CLOSE_GRACE_MS);
+    expect(retired.socket.terminate).toHaveBeenCalledTimes(mode === "closed" ? 0 : 1);
     expect(replacement.socket.terminate).not.toHaveBeenCalled();
-  });
-
-  it("cancels the slow-consumer fallback after the socket closes", () => {
-    vi.useFakeTimers();
-    const retired = controlledPeer("closed");
-    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    const { broadcast } = broadcaster([retired]);
-
-    broadcast("tick", {});
-    retired.socket.emit("close", 1008, Buffer.from("slow consumer"));
-    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
-
-    expect(retired.socket.terminate).not.toHaveBeenCalled();
-  });
-
-  it("terminates immediately when a slow-consumer close cannot be queued", () => {
-    vi.useFakeTimers();
-    const retired = controlledPeer("close-failed");
-    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    retired.socket.close.mockImplementationOnce(() => {
-      throw new Error("close unavailable");
-    });
-    const { broadcast } = broadcaster([retired]);
-
-    broadcast("tick", {});
-
-    expect(retired.socket.terminate).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps failed delivery terminal through late callbacks and permits a replacement socket", () => {
@@ -449,10 +395,10 @@ describe("broadcast transport retirement", () => {
     broadcast("tick", {});
     broadcast("tick", {});
     broadcast("tick", {});
-    broadcast("chat", { text: "old pending" }, { liveText: liveText(owner.signal) });
+    broadcast("chat", { text: "old pending" }, coalesced(owner.signal));
     retired.callbacks[0]!(new Error("transport failed"));
     // A transport may invoke callbacks synchronously before changing readyState.
-    broadcast("chat", { text: "after failure" }, { liveText: liveText(owner.signal) });
+    broadcast("chat", { text: "after failure" }, coalesced(owner.signal));
     retired.callbacks[1]!();
     retired.callbacks[0]!(new Error("duplicate callback"));
     expect(retired.frames).toHaveLength(3);
@@ -463,7 +409,7 @@ describe("broadcast transport retirement", () => {
 
     retired.client.socket = replacement.client.socket;
     broadcast("chat", { text: "new socket" });
-    broadcast("chat", { text: "new pending" }, { liveText: liveText(owner.signal) });
+    broadcast("chat", { text: "new pending" }, coalesced(owner.signal));
     retired.callbacks[2]!(new Error("late old failure"));
     replacement.callbacks[0]!();
     expect(replacement.frames).toEqual([
@@ -515,7 +461,7 @@ describe("broadcast transport retirement", () => {
     const { broadcast } = broadcaster([peer]);
     const owner = new AbortController();
     broadcast("tick", {});
-    broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });
+    broadcast("chat", { text: "pending" }, coalesced(owner.signal));
     sendError.mockClear();
     peer.socket.send.mockImplementationOnce((_wire, options, callback) => {
       const error = new Error("flush failed");
