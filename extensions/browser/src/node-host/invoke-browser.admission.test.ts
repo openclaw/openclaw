@@ -125,59 +125,41 @@ describe("node browser proxy admission", () => {
     );
   });
 
-  it("rejects PUT before it can become a host-local GET", async () => {
-    await expect(invoke({ method: "PUT", path: "/system-profiles" })).rejects.toThrow(
-      /method must be GET, POST, or DELETE/,
-    );
-    expect(mocks.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("does not close an owned target through DELETE", async () => {
-    await expect(
-      invoke({ method: "DELETE", path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH, body: { ownership } }),
-    ).rejects.toThrow(/requires POST/);
+  it.each([
+    { method: "PUT", path: "/system-profiles", error: /method must be GET, POST, or DELETE/ },
+    { method: "DELETE", path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH, error: /requires POST/ },
+  ])("rejects $method on $path before dispatch", async ({ method, path, error }) => {
+    await expect(invoke({ method, path, body: { ownership } })).rejects.toThrow(error);
     expect(mocks.close).not.toHaveBeenCalled();
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it.each([
-    { phase: "startup", restriction: "disabled" },
-    { phase: "staging", restriction: "profile" },
-  ] as const)(
-    "rechecks $restriction admission after awaited $phase",
-    async ({ phase, restriction }) => {
-      const entered = createDeferred<void>();
-      const released = createDeferred<void>();
-      if (phase === "startup") {
-        mocks.start.mockImplementationOnce(async () => {
-          entered.resolve();
-          await released.promise;
-          return state;
-        });
-      } else {
-        mocks.stage.mockImplementationOnce(async ({ body }) => {
-          entered.resolve();
-          await released.promise;
-          return { body };
-        });
-      }
-      const run = invoke({ profile: "openclaw" });
-      const rejected = expect(run).rejects.toThrow(
-        restriction === "disabled" ? "node browser proxy disabled" : "browser profile not allowed",
-      );
-      await entered.promise;
-      mocks.config = {
-        ...mocks.config,
-        nodeHost: {
-          browserProxy:
-            restriction === "disabled"
-              ? { enabled: false }
-              : { enabled: true, allowProfiles: ["user"] },
-        },
-      };
-      released.resolve();
-      await rejected;
-      expect(mocks.dispatch).not.toHaveBeenCalled();
+    { phase: "startup", policy: { enabled: false }, error: "node browser proxy disabled" },
+    {
+      phase: "staging",
+      policy: { enabled: true, allowProfiles: ["user"] },
+      error: "browser profile not allowed",
     },
-  );
+  ])("rechecks admission after awaited $phase", async ({ phase, policy, error }) => {
+    const entered = createDeferred<void>();
+    const released = createDeferred<void>();
+    async function pause<T>(value: T) {
+      entered.resolve();
+      await released.promise;
+      return value;
+    }
+    if (phase === "startup") {
+      mocks.start.mockImplementationOnce(() => pause(state));
+    } else {
+      mocks.stage.mockImplementationOnce(({ body }) => pause({ body }));
+    }
+    const run = invoke({ profile: "openclaw" });
+    const rejected = expect(run).rejects.toThrow(error);
+    await entered.promise;
+    mocks.config = { ...mocks.config, nodeHost: { browserProxy: policy } };
+    released.resolve();
+    await rejected;
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
 });

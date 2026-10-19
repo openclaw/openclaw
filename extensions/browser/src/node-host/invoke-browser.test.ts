@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import nodePath from "node:path";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
@@ -15,11 +15,10 @@ import { firstBrowserDispatchRequest, stagedReportUpload } from "./invoke-browse
 const BROWSER_PROXY_MAX_FILES = 256;
 const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 const okResponse = { status: 200, body: { ok: true } };
+const okPayload = JSON.stringify({ result: { ok: true } });
 
 function uploadParams(timeoutMs?: number) {
   return {
-    method: "POST",
-    path: "/hooks/file-chooser",
     body: {},
     upload: {
       envelope: "browser-upload-v1",
@@ -30,7 +29,7 @@ function uploadParams(timeoutMs?: number) {
 }
 
 function uploadRequest(timeoutMs?: number) {
-  return invoke(uploadParams(timeoutMs), "browser.proxy.upload.v1");
+  return invoke("/hooks/file-chooser", uploadParams(timeoutMs), "browser.proxy.upload.v1");
 }
 
 const control = vi.hoisted(() => ({
@@ -42,6 +41,7 @@ const control = vi.hoisted(() => ({
 
 const cdp = vi.hoisted(() => ({
   closeTrackedCdpTarget: vi.fn(async () => ({ status: "closed" as const })),
+  redactCdpUrl: vi.fn<(url: string) => string>(),
 }));
 
 const routes = vi.hoisted(() => ({
@@ -54,7 +54,6 @@ const config = vi.hoisted(() => ({
     browser: {},
     nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
   })),
-  sourceConfig: null as Record<string, unknown> | null,
 }));
 
 const browserConfig = vi.hoisted(() => ({
@@ -84,7 +83,7 @@ const uploads = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   readRuntimeConfig: config.loadConfig,
-  getRuntimeConfigSourceSnapshot: () => config.sourceConfig,
+  getRuntimeConfigSourceSnapshot: () => null,
   loadConfig: config.loadConfig,
 }));
 
@@ -95,21 +94,7 @@ vi.mock("openclaw/plugin-sdk/media-mime", async (importOriginal) => ({
 
 vi.mock("../browser/cdp.helpers.js", () => ({
   closeTrackedCdpTarget: cdp.closeTrackedCdpTarget,
-  redactCdpUrl: vi.fn((url: string) => {
-    try {
-      const parsed = new URL(url);
-      parsed.username = "";
-      parsed.password = "";
-      const normalized = parsed.toString().replace(/\/$/, "");
-      const token = parsed.searchParams.get("token");
-      if (!token || token.length <= 8) {
-        return normalized;
-      }
-      return normalized.replace(token, `${token.slice(0, 6)}…${token.slice(-4)}`);
-    } catch {
-      return url;
-    }
-  }),
+  redactCdpUrl: cdp.redactCdpUrl,
 }));
 
 vi.mock("../browser/cdp-reachability-policy.js", () => ({
@@ -140,8 +125,8 @@ vi.mock("../browser-control-state.js", () => ({
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 let browserState: BrowserServerState;
 
-function invoke(params: Record<string, unknown>, command?: string) {
-  return runBrowserProxyCommand(JSON.stringify(params), command);
+function invoke(path: string, params: Record<string, unknown> = {}, command?: string) {
+  return runBrowserProxyCommand(JSON.stringify({ method: "POST", path, ...params }), command);
 }
 
 function allowProfiles(...profiles: string[]) {
@@ -169,7 +154,7 @@ async function expectSnapshotTimeout(
   vi.useFakeTimers();
   timeoutStatus(status);
   const result = expect(
-    invoke({ method: "GET", path: "/snapshot", profile, timeoutMs: 5 }),
+    invoke("/snapshot", { method: "GET", profile, timeoutMs: 5 }),
   ).rejects.toThrow(message);
   await vi.advanceTimersByTimeAsync(10);
   await result;
@@ -186,36 +171,23 @@ describe("runBrowserProxyCommand", () => {
       profiles: new Map(),
     };
     vi.useRealTimers();
-    routes.dispatch.mockReset();
-    routes.createBrowserRouteDispatcher.mockClear();
-    control.createBrowserControlContext.mockReset().mockReturnValue({ control: true });
-    control.getBrowserControlState.mockReset().mockReturnValue(null);
-    control.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(browserState);
-    config.sourceConfig = null;
-    config.loadConfig.mockReset();
+    vi.resetAllMocks();
+    control.startBrowserControlServiceFromConfig.mockResolvedValue(browserState);
     allowProfiles();
-    browserConfig.resolveBrowserConfig.mockReset();
-    browserConfig.resolveProfile.mockClear();
-    cdp.closeTrackedCdpTarget.mockReset().mockResolvedValue({ status: "closed" });
-    uploads.stageBrowserProxyUploadRequest
-      .mockReset()
-      .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
-    uploads.discardStagedBrowserProxyUpload.mockReset().mockResolvedValue(undefined);
-    uploads.ensureBrowserProxyUploadCleanup.mockReset().mockResolvedValue(undefined);
+    uploads.stageBrowserProxyUploadRequest.mockImplementation(
+      async ({ body }: { body: unknown }) => ({ body }),
+    );
     vi.resetModules();
     ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
   });
 
   it("retries a disabled browser startup", async () => {
-    const message = "browser control disabled";
     control.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
     routes.dispatch.mockResolvedValue(okResponse);
     const request = JSON.stringify({ method: "GET", path: "/snapshot" });
 
-    await expect(runBrowserProxyCommand(request)).rejects.toThrow(message);
-    await expect(runBrowserProxyCommand(request)).resolves.toBe(
-      JSON.stringify({ result: { ok: true } }),
-    );
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(okPayload);
 
     expect(control.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
     expect(routes.dispatch).toHaveBeenCalledOnce();
@@ -230,9 +202,7 @@ describe("runBrowserProxyCommand", () => {
     } as const;
 
     const payload = JSON.parse(
-      await invoke({
-        method: "POST",
-        path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+      await invoke(BROWSER_PROXY_OWNED_TAB_CLOSE_PATH, {
         profile: "user",
         body: { ownership },
         errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
@@ -286,13 +256,11 @@ describe("runBrowserProxyCommand", () => {
     successfulStartup.resolve(browserState);
 
     await expect(retriedRequests).resolves.toEqual([
-      { status: "fulfilled", value: JSON.stringify({ result: { ok: true } }) },
-      { status: "fulfilled", value: JSON.stringify({ result: { ok: true } }) },
+      { status: "fulfilled", value: okPayload },
+      { status: "fulfilled", value: okPayload },
     ]);
     control.getBrowserControlState.mockReturnValue(browserState);
-    await expect(runBrowserProxyCommand(request)).resolves.toBe(
-      JSON.stringify({ result: { ok: true } }),
-    );
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(okPayload);
     expect(control.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
     expect(routes.dispatch).toHaveBeenCalledTimes(3);
   });
@@ -368,23 +336,20 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("rejects upload envelopes sent through the legacy proxy command", async () => {
-    await expect(invoke(uploadParams())).rejects.toThrow(
+    await expect(invoke("/hooks/file-chooser", uploadParams())).rejects.toThrow(
       "browser.proxy does not accept upload envelopes",
     );
     expect(uploads.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
     expect(routes.dispatch).not.toHaveBeenCalled();
   });
 
-  it.each([undefined])(
-    "rejects a %j upload envelope sent through the upload proxy command",
-    async (upload) => {
-      await expect(
-        invoke({ method: "GET", path: "/snapshot", upload }, "browser.proxy.upload.v1"),
-      ).rejects.toThrow("browser.proxy.upload.v1 requires an upload envelope");
-      expect(uploads.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
-      expect(routes.dispatch).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a missing envelope sent through the upload proxy command", async () => {
+    await expect(invoke("/snapshot", { method: "GET" }, "browser.proxy.upload.v1")).rejects.toThrow(
+      "browser.proxy.upload.v1 requires an upload envelope",
+    );
+    expect(uploads.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
+    expect(routes.dispatch).not.toHaveBeenCalled();
+  });
 
   it("does not dispatch after upload staging exhausts the proxy deadline", async () => {
     const staged = stagedReportUpload;
@@ -426,26 +391,22 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("serializes plural action downloads without reading nested page paths", async () => {
-    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-action-"));
-    const firstPath = nodePath.join(tempDir, "first.txt");
-    const secondPath = nodePath.join(tempDir, "second.txt");
-    const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
-    const result = {
-      ok: true,
-      downloads: [
-        { path: firstPath, suggestedFilename: "first.txt" },
-        null,
-        { path: 42 },
-        { path: secondPath, suggestedFilename: "second.txt" },
-        { path: firstPath, suggestedFilename: "first-copy.txt" },
-      ],
-      result: {
-        path: nestedPagePath,
-        downloads: [{ path: nestedPagePath }],
-      },
-    };
+    await withTempDir("openclaw-browser-proxy-action-", async (tempDir) => {
+      const firstPath = nodePath.join(tempDir, "first.txt");
+      const secondPath = nodePath.join(tempDir, "second.txt");
+      const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
+      const result = {
+        ok: true,
+        downloads: [
+          { path: firstPath, suggestedFilename: "first.txt" },
+          null,
+          { path: 42 },
+          { path: secondPath, suggestedFilename: "second.txt" },
+          { path: firstPath, suggestedFilename: "first-copy.txt" },
+        ],
+        result: { path: nestedPagePath, downloads: [{ path: nestedPagePath }] },
+      };
 
-    try {
       await Promise.all([
         fs.writeFile(firstPath, "first browser download", "utf8"),
         fs.writeFile(secondPath, "second browser download", "utf8"),
@@ -453,33 +414,28 @@ describe("runBrowserProxyCommand", () => {
       ]);
       dispatchResult(result);
 
-      const payload = JSON.parse(await invoke({ method: "POST", path: "/act" })) as {
-        result: unknown;
-        files?: Array<{ path: string; base64: string; mimeType?: string }>;
-      };
-
-      expect(payload.result).toEqual(result);
-      expect(
-        payload.files?.map((file) => ({
-          path: file.path,
-          contents: Buffer.from(file.base64, "base64").toString("utf8"),
-          mimeType: file.mimeType,
-        })),
-      ).toEqual([
-        { path: firstPath, contents: "first browser download", mimeType: "image/png" },
-        { path: secondPath, contents: "second browser download", mimeType: "image/png" },
-      ]);
-      expect(payload.files?.some((file) => file.path === nestedPagePath)).toBe(false);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+      expect(JSON.parse(await invoke("/act"))).toEqual({
+        result,
+        files: [
+          {
+            path: firstPath,
+            base64: Buffer.from("first browser download").toString("base64"),
+            mimeType: "image/png",
+          },
+          {
+            path: secondPath,
+            base64: Buffer.from("second browser download").toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+      });
+    });
   });
 
   it("rejects an aggregate above the proxy transport budget", async () => {
-    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-limit-"));
-    const firstPath = nodePath.join(tempDir, "first.bin");
-    const secondPath = nodePath.join(tempDir, "second.bin");
-    try {
+    await withTempDir("openclaw-browser-proxy-limit-", async (tempDir) => {
+      const firstPath = nodePath.join(tempDir, "first.bin");
+      const secondPath = nodePath.join(tempDir, "second.bin");
       await Promise.all([fs.writeFile(firstPath, ""), fs.writeFile(secondPath, "")]);
       await Promise.all([
         fs.truncate(firstPath, BROWSER_PROXY_MAX_FILE_BYTES),
@@ -490,14 +446,12 @@ describe("runBrowserProxyCommand", () => {
       ]);
       dispatchResult({ downloads: [{ path: firstPath }, { path: secondPath }] });
 
-      const error = await invoke({ method: "POST", path: "/act" }).catch((err: unknown) => err);
+      const error = await invoke("/act").catch((err: unknown) => err);
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe(
         `browser proxy file read failed for ${secondPath}: Error: browser proxy files exceed 16 MiB aggregate limit`,
       );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("rejects too many unique files before reading them", async () => {
@@ -507,15 +461,13 @@ describe("runBrowserProxyCommand", () => {
       })),
     });
 
-    await expect(invoke({ method: "POST", path: "/act" })).rejects.toThrow(
-      "browser proxy response exceeds 256 file limit",
-    );
+    await expect(invoke("/act")).rejects.toThrow("browser proxy response exceeds 256 file limit");
   });
 
   it("rejects a result whose encoded node frame would exceed the transport limit", async () => {
     dispatchResult({ result: "\\".repeat(7 * 1024 * 1024) });
 
-    await expect(invoke({ method: "POST", path: "/act" })).rejects.toThrow(
+    await expect(invoke("/act")).rejects.toThrow(
       "browser proxy payload exceeds 24 MiB encoded limit",
     );
   });
@@ -529,29 +481,28 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("redacts sensitive cdpUrl details in timeout diagnostics", async () => {
+    const cdpUrl =
+      "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890";
+    cdp.redactCdpUrl.mockReturnValue("https://example.com/chrome?token=supers…7890");
     await expectSnapshotTimeout(
       "remote",
       {
         running: true,
         cdpHttp: true,
         cdpReady: false,
-        cdpUrl:
-          "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+        cdpUrl,
       },
       /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=remote; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
     );
+    expect(cdp.redactCdpUrl).toHaveBeenCalledWith(cdpUrl);
   });
 
-  it.each([{ status: 503, body: { error: "" }, expected: "HTTP 503" }])(
-    "preserves legacy node errors without envelope opt-in: $expected",
-    async (response) => {
-      routes.dispatch.mockResolvedValue(response);
-
-      await expect(
-        invoke({ method: "POST", path: "/act", profile: "openclaw", timeoutMs: 50 }),
-      ).rejects.toThrow(response.expected);
-    },
-  );
+  it("preserves legacy node errors without envelope opt-in", async () => {
+    dispatchResult({ error: "" }, 503);
+    await expect(invoke("/act", { profile: "openclaw", timeoutMs: 50 })).rejects.toThrow(
+      "HTTP 503",
+    );
+  });
 
   it("preserves only validated browser error metadata in the proxy envelope", async () => {
     const body = {
@@ -574,9 +525,7 @@ describe("runBrowserProxyCommand", () => {
     });
 
     const result = JSON.parse(
-      await invoke({
-        method: "POST",
-        path: "/start",
+      await invoke("/start", {
         profile: "openclaw",
         errorEnvelope: "browser-v1",
       }),
@@ -592,20 +541,15 @@ describe("runBrowserProxyCommand", () => {
     allowProfiles("openclaw");
 
     await expect(
-      invoke({
-        method: "GET",
-        path: "/snapshot",
-        query: { profile: "user" },
-        timeoutMs: 50,
-      }),
+      invoke("/snapshot", { method: "GET", query: { profile: "user" }, timeoutMs: 50 }),
     ).rejects.toThrow("INVALID_REQUEST: browser profile not allowed");
     expect(routes.dispatch).not.toHaveBeenCalled();
   });
 
   it("rejects host-local system profile listing on a browser node", async () => {
-    await expect(
-      invoke({ method: "GET", path: "/system-profiles", timeoutMs: 50 }),
-    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot run host-local browser routes");
+    await expect(invoke("/system-profiles", { method: "GET", timeoutMs: 50 })).rejects.toThrow(
+      "INVALID_REQUEST: browser.proxy cannot run host-local browser routes",
+    );
     expect(routes.dispatch).not.toHaveBeenCalled();
   });
 
@@ -613,12 +557,7 @@ describe("runBrowserProxyCommand", () => {
     allowProfiles("openclaw");
     routes.dispatch.mockResolvedValue(okResponse);
 
-    await invoke({
-      method: "POST",
-      path: "/stop",
-      body: { profile: "openclaw" },
-      timeoutMs: 50,
-    });
+    await invoke("/stop", { body: { profile: "openclaw" }, timeoutMs: 50 });
 
     const request = firstBrowserDispatchRequest(routes.dispatch.mock.calls);
     expect(request.path).toBe("/stop");
@@ -627,9 +566,7 @@ describe("runBrowserProxyCommand", () => {
 
   it("rejects persistent profile creation when allowProfiles is empty", async () => {
     await expect(
-      invoke({
-        method: "POST",
-        path: "/profiles/create",
+      invoke("/profiles/create", {
         body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
         timeoutMs: 50,
       }),
