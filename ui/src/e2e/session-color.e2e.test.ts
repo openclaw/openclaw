@@ -217,6 +217,17 @@ suite.define(() => {
     const dot = page.locator(".chat-pane__session-title .session-color-dot");
     const stripe = () =>
       row.evaluate((element) => getComputedStyle(element, "::before").backgroundColor);
+    const appearancePage = page.locator(".session-actions-page--appearance");
+    const openCompactAppearance = async () => {
+      await page.locator(".chat-header-session-menu__trigger").click();
+      await menuItem(page, "Advanced").click();
+      await button(page.locator(".session-actions-page"), "Icon & color").click();
+    };
+    const reopenCompactAppearance = async () => {
+      await page.keyboard.press("Escape");
+      await appearancePage.waitFor({ state: "hidden" });
+      await openCompactAppearance();
+    };
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       await row.waitFor({ state: "visible" });
@@ -280,18 +291,18 @@ suite.define(() => {
         .not.toContain("sidebar-recent-session--colored");
 
       await page.setViewportSize({ width: 560, height: 900 });
-      await page.locator(".chat-header-session-menu__trigger").click();
-      await menuItem(page, "Advanced").click();
-      await button(page.locator(".session-actions-page"), "Icon & color").click();
+      await openCompactAppearance();
       await button(page, "Blue").click();
       await patched({ color: "blue" });
-      await expectAttribute(dot, "aria-label", "Session color: Blue");
+      await reopenCompactAppearance();
+      await expectAttribute(button(appearancePage, "Blue"), "aria-pressed", "true");
       await shot("after-compact-menu.png", page.locator(".session-actions-page--appearance"), [
         button(page, "Blue"),
       ]);
       await button(page, "Reset to default").click();
       await patched({ color: null, icon: null });
-      await expect.poll(() => dot.count()).toBe(0);
+      await reopenCompactAppearance();
+      await expectAttribute(button(appearancePage, "No color"), "aria-pressed", "true");
     } finally {
       await context.close();
     }
