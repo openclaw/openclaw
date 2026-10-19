@@ -345,8 +345,10 @@ describe("resident Codex catalog", () => {
         root,
         idleThread({ id: "partial", preview: "Completed native request" }),
       );
-      await index.reconcile();
-      expect(open.mock.calls.map(([opened]) => opened)).toEqual([file]);
+      await vi.waitFor(async () => {
+        await index.reconcile();
+        expect(open.mock.calls.map(([opened]) => opened)).toEqual([file]);
+      });
       expect((await index.list({})).sessions[0]?.fallbackName).toBe("Completed native request");
     } finally {
       await index.close();

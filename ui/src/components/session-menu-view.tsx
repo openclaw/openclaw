@@ -250,87 +250,81 @@ export function useSessionMenuEntries(
     kinds.map((kind) =>
       item({ kind, label: t(STANDARD_ITEMS[kind][0]), icon: STANDARD_ITEMS[kind][1] }),
     );
-  function copyOptions(): MenuEntry[] {
-    return [
-      ...(state.navigationAllowed ? items(["copy-session-preview-link"]) : []),
-      ...items(["copy-markdown", "copy-session-id"]),
-    ];
-  }
-  function openOptions(): MenuEntry[] {
-    return [
-      ...(state.navigationAllowed ? items(["open-new-tab", "open-new-window"]) : []),
-      ...(state.splitAllowed ? items(["split-right", "split-below"]) : []),
-      ...(options.openInExtra?.() ?? []),
-      ...(state.worktreePath
-        ? [
-            content(
-              "editors-heading",
-              <div class="session-menu__info">{t("sessionsView.workspaceEditors")}</div>,
-            ),
-            ...EDITOR_IDS.map((editor) => ({
-              id: `open-in:${editor}`,
-              label: EDITOR_LABELS[editor],
-              class: "session-menu__item",
-              disabled: actions.actionDisabled("open-in"),
-            })),
-          ]
-        : []),
-    ];
-  }
-  function advancedBody(): MenuEntry[] {
-    return [
-      submenu({
-        view: "icon",
-        label: t("sessionsView.setIconColorMenu"),
-        icon: "palette",
-        disabled: actions.actionDisabled("set-icon") && actions.actionDisabled("set-color"),
-        title: state.actionDisabledReasons["set-icon"] ?? state.actionDisabledReasons["set-color"],
-      }),
-      item({
-        kind: "fork",
-        label: t("sessionsView.forkSession"),
-        icon: "copy",
-        shortcut: "f",
-        title: state.forkFromLastCompleted ? t("sessionsView.forkFromLastCompleted") : undefined,
-      }),
-      submenu({ view: "copy", label: t("sessionsView.copyDetails"), icon: "copy" }),
-      ...(state.navigationAllowed || state.worktreePath || options.openInExtra
-        ? [
-            submenu({
-              view: "open-in",
-              label: t("sessionsView.openInEditorMenu"),
-              icon: "externalLink",
-            }),
-          ]
-        : []),
-      ...details.communication(),
-      ...(details.error() !== null
-        ? [
-            content(
-              "settings-error",
-              <div class="session-menu__info" role="alert">
-                {details.error()}
-              </div>,
-            ),
-            { id: "reload-settings", label: t("common.retry"), class: "session-menu__item" },
-          ]
-        : []),
-      ...(!state.involvingMeContext ? involvement() : []),
-      deleteDivider,
-      deleteAction(),
-    ];
-  }
   function body(view: CompactSessionMenuView): MenuEntry[] {
     switch (view) {
       case "advanced":
-        return advancedBody();
+        return [
+          submenu({
+            view: "icon",
+            label: t("sessionsView.setIconColorMenu"),
+            icon: "palette",
+            disabled: actions.actionDisabled("set-icon") && actions.actionDisabled("set-color"),
+            title:
+              state.actionDisabledReasons["set-icon"] ?? state.actionDisabledReasons["set-color"],
+          }),
+          item({
+            kind: "fork",
+            label: t("sessionsView.forkSession"),
+            icon: "copy",
+            shortcut: "f",
+            title: state.forkFromLastCompleted
+              ? t("sessionsView.forkFromLastCompleted")
+              : undefined,
+          }),
+          submenu({ view: "copy", label: t("sessionsView.copyDetails"), icon: "copy" }),
+          ...(state.navigationAllowed || state.worktreePath || options.openInExtra
+            ? [
+                submenu({
+                  view: "open-in",
+                  label: t("sessionsView.openInEditorMenu"),
+                  icon: "externalLink",
+                }),
+              ]
+            : []),
+          ...details.communication(),
+          ...(details.error() !== null
+            ? [
+                content(
+                  "settings-error",
+                  <div class="session-menu__info" role="alert">
+                    {details.error()}
+                  </div>,
+                ),
+                { id: "reload-settings", label: t("common.retry"), class: "session-menu__item" },
+              ]
+            : []),
+          ...(!state.involvingMeContext ? involvement() : []),
+          deleteDivider,
+          deleteAction(),
+        ];
       case "snooze":
         snoozeEntries ??= runWithOwner(owner, () => useSessionSnoozeEntries(actions, readState));
         return snoozeEntries();
       case "copy":
-        return copyOptions();
+        return [
+          ...(state.navigationAllowed ? items(["copy-session-preview-link"]) : []),
+          ...items(["copy-markdown", "copy-session-id"]),
+        ];
       case "open-in":
-        return openOptions();
+        return [
+          ...(state.navigationAllowed ? items(["open-new-tab", "open-new-window"]) : []),
+          ...(state.splitAllowed ? items(["split-right", "split-below"]) : []),
+          ...(options.openInExtra?.() ?? []),
+          ...(state.worktreePath
+            ? [
+                content(
+                  "editors-heading",
+                  <div class="session-menu__info">{t("sessionsView.workspaceEditors")}</div>,
+                ),
+                ...EDITOR_IDS.map((editor) => ({
+                  id: `open-in:${editor}`,
+                  label: EDITOR_LABELS[editor],
+                  class: "session-menu__item",
+                  disabled: actions.actionDisabled("open-in"),
+                })),
+              ]
+            : []),
+        ];
       case "icon":
         appearanceContent ??= runWithOwner(owner, () => appearance.render());
         return [content("appearance", appearanceContent)];

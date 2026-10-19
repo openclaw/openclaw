@@ -235,7 +235,7 @@ test("incognito operator RPCs treat identityless connections as owner-equivalent
   const connect = (name: string, scope: string) =>
     openClient({
       scopes: [scope],
-      deviceIdentityPath: path.join(dir, `${name}-device.json`),
+      deviceIdentityPath: path.join(dir, `${name}-device`, "client", "credentials.sqlite"),
     });
   const admin = await connect("admin", "operator.admin");
   const reader = await connect("reader", "operator.read");

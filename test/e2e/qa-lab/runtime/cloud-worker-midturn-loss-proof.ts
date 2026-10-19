@@ -317,7 +317,7 @@ async function runProof(options: ProducerOptions) {
     });
     const events: GatewayEvent[] = [];
     const deviceIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(fixtureRoot, "operator-identity.sqlite"),
+      path: path.join(fixtureRoot, "operator", "client", "credentials.sqlite"),
     });
     operator = await connectOperator(gateway, events, deviceIdentity);
     workerNode = await createPairedNodeWorkerHost({

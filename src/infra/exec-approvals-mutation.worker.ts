@@ -1,9 +1,8 @@
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import {
-  generateToken,
   normalizeExecApprovalsInternal,
   resolveExecApprovalsDisplayPath,
-  resolveExecApprovalsSocketPath,
+  stripExecApprovalsSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
@@ -120,26 +119,16 @@ export const execPolicyMutationOperations = {
       context.open().db,
       resolveExecApprovalsDisplayPath(options.env),
     );
-    const socketPath = resolveExecApprovalsSocketPath(options.env);
-    const ensureSocket = (file: ExecApprovalsFile): ExecApprovalsFile => {
-      const next = normalizeExecApprovalsInternal(file);
-      return {
-        ...next,
-        socket: {
-          path: next.socket?.path?.trim() || socketPath,
-          token: next.socket?.token?.trim() || generateToken(),
-        },
-      };
-    };
-    if (
-      snapshot.file.socket?.path?.trim() &&
-      snapshot.file.socket.token?.trim() &&
-      snapshot.raw === serializeExecApprovals(ensureSocket(snapshot.file))
-    ) {
+    const normalized = stripExecApprovalsSocketCredentials(
+      normalizeExecApprovalsInternal(snapshot.file),
+    );
+    if (snapshot.exists && snapshot.raw === serializeExecApprovals(normalized)) {
       return snapshot;
     }
     return mutate(context, "exec-approvals.ensure", (current, db) => {
-      const next = ensureSocket(current.file);
+      const next = stripExecApprovalsSocketCredentials(
+        normalizeExecApprovalsInternal(current.file),
+      );
       assertExecApprovalsMutationAllowed({ db, current: current.file, next });
       return { next, result: (result) => result };
     });

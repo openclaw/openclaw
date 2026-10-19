@@ -98,7 +98,6 @@ function bindRoute(
       authFingerprint,
       ...(authProfileId ? { authProfileId } : {}),
     },
-    deps: { pluginMetadataPlugins: [] },
   });
 }
 
@@ -378,7 +377,6 @@ it.each([
       },
     };
     vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
-    const deps = { readConfigFileSnapshot: readSnapshot };
     const attemptedOwners: Array<string | undefined> = [];
     if (entrypoint === "fallback") {
       const verify = vi
@@ -413,7 +411,6 @@ it.each([
               kind: "existing-model",
               surface: "gateway",
               runtime,
-              deps,
             }));
     expect(result.ok, result.ok ? undefined : result.error).toBe(!rotateBeforeBinding);
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();

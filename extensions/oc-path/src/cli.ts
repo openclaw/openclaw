@@ -141,23 +141,24 @@ async function loadOcPathFile(
   }
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
-    const sizeDiagnostic = result.diagnostics.find(
-      (diagnostic) => diagnostic.code === "OC_JSONC_INPUT_TOO_LARGE",
-    );
-    if (sizeDiagnostic) {
-      emitError(mode, sizeDiagnostic.message, sizeDiagnostic.code);
+    if (result.oversizedInputBytes !== undefined) {
+      emitError(
+        mode,
+        `input exceeds MAX_JSONC_INPUT_BYTES (${MAX_JSONC_INPUT_BYTES} bytes; got ${result.oversizedInputBytes})`,
+        "OC_JSONC_INPUT_TOO_LARGE",
+      );
       process.exitCode = 2;
       return null;
     }
-    return result.ast;
+    return result;
   }
   if (kind === "jsonl") {
-    return parseJsonl(raw).ast;
+    return parseJsonl(raw);
   }
   if (kind === "yaml") {
-    return parseYaml(raw).ast;
+    return parseYaml(raw);
   }
-  return parseMd(raw).ast;
+  return parseMd(raw);
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {

@@ -30,9 +30,9 @@ import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.
 import { buildMemoryWikiImportInsights } from "./import-insights.js";
 import {
   appendMemoryWikiLog,
+  hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createWikiPromptSectionPreparer } from "./prompt-section.js";
@@ -43,6 +43,8 @@ import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./va
 import { buildMemoryWikiOverview } from "./wiki-overview.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
+// Publication fixtures below have no vault source pages.
+const EMPTY_SOURCE_GENERATION = hashMemoryWikiVaultSources([]);
 let blobStateDir = "";
 let blobStoreEnv: NodeJS.ProcessEnv = {};
 
@@ -143,7 +145,6 @@ async function publishSnapshot(
     timestamp: "2026-07-17T00:00:00.000Z",
     details: { compiledCacheReservationId: reservationId },
   });
-  const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
   await appendMemoryWikiLog(config.vault.path, {
     type: "compile",
     timestamp: "2026-07-17T00:00:00.000Z",
@@ -151,7 +152,7 @@ async function publishSnapshot(
       compiledCachePublicationId: publicationId,
       compiledCacheParentPublicationId: parentPublicationId,
       compiledCacheReservationId: reservationId,
-      compiledCacheSourceGeneration: sourceGeneration,
+      compiledCacheSourceGeneration: EMPTY_SOURCE_GENERATION,
     },
   });
   await writeMemoryWikiCompiledCache(
@@ -462,7 +463,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     const republishedId = randomUUID();
     const staleReservationId = randomUUID();
-    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
     await appendMemoryWikiLog(config.vault.path, {
       type: "compile",
       timestamp: "2026-07-17T00:02:00.000Z",
@@ -470,7 +470,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         compiledCachePublicationId: republishedId,
         compiledCacheParentPublicationId: preRestorePublicationId,
         compiledCacheReservationId: staleReservationId,
-        compiledCacheSourceGeneration: sourceGeneration,
+        compiledCacheSourceGeneration: EMPTY_SOURCE_GENERATION,
       },
     });
     await expect(
@@ -508,7 +508,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     });
     const compiledAfterBackup = snapshot("Private content scanned after backup.");
     await fs.writeFile(logPath, backupLog, "utf8");
-    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(rootDir);
 
     await expect(
       writeMemoryWikiCompiledCache(
@@ -524,7 +523,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
               compiledCachePublicationId: reservedPublicationId,
               compiledCacheParentPublicationId: parentPublicationId,
               compiledCacheReservationId: reservationId,
-              compiledCacheSourceGeneration: sourceGeneration,
+              compiledCacheSourceGeneration: EMPTY_SOURCE_GENERATION,
             },
           });
         },
@@ -547,7 +546,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       details: { compiledCacheReservationId: staleReservationId },
     });
     const staleSnapshot = snapshot("stale candidate");
-    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
     const callbackEntered = createDeferred<void>();
     const releaseCallback = createDeferred<void>();
     const staleWrite = writeMemoryWikiCompiledCache(
@@ -565,7 +563,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
             compiledCachePublicationId: stalePublicationId,
             compiledCacheParentPublicationId: parentPublicationId,
             compiledCacheReservationId: staleReservationId,
-            compiledCacheSourceGeneration: sourceGeneration,
+            compiledCacheSourceGeneration: EMPTY_SOURCE_GENERATION,
           },
         });
       },

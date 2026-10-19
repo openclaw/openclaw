@@ -1,3 +1,4 @@
+import { prepareExecApprovalPresentation } from "../infra/approval-presentation.js";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
@@ -31,7 +32,6 @@ import {
 } from "./exec-approval-recovery.js";
 import {
   createExecApprovalRecord,
-  prepareExecApprovalPresentation,
   prepareExecApprovalRegistration,
 } from "./exec-approval-registration.js";
 import { assertExecApprovalStandingGrantCurrent } from "./exec-approval-resolution-authority.js";

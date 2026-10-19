@@ -220,9 +220,10 @@ failures still show their failure notice.
 
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
-with their keyboard shortcuts. Open **Subagents** there or from the side-panel
-**+** menu to inspect child runs, including swarm workers. An empty conversation
-starts with the panel closed. The first running batch adds it automatically,
+with their keyboard shortcuts. Open **Subagents** there, from the side-panel
+**+** menu, or by clicking the header’s **Subagents · N running** status to inspect
+child runs, including swarm workers. The header status also supports Enter and
+Space. An empty conversation starts with the panel closed. The first running batch adds it automatically,
 preserving another panel you selected; closing it keeps it closed for that batch.
 Finished results stay open until you close them. While the parent waits on
 subagents, the conversation keeps each child’s claw, name, and current activity

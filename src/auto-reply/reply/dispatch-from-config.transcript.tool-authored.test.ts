@@ -1,16 +1,17 @@
 // A tool-authored source reply is mirrored into the transcript by delivery, after
 // the send, under the dispatching run's writer fence: a writer replaced after the
 // tool captured the reply cannot receive that assistant row.
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { mirrorDeliveredReplyToTranscript } from "./dispatch-from-config.transcript.js";
 
@@ -19,10 +20,14 @@ const sessionId = "tool-authored-session";
 const replyText = "Pedido SO1 creado. 18 botellas.";
 
 describe("tool-authored source reply transcript mirror", () => {
-  const fixture = useTempSessionsFixture("tool-authored-mirror-");
+  const tempDirs = useSessionStoreTempDirs(afterAll, "tool-authored-mirror-");
+  let storePath: string;
+  beforeEach(() => {
+    storePath = path.join(tempDirs.make(), "agents", "main", "sessions", "sessions.json");
+  });
 
   async function seedSession() {
-    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, {
       sessionId,
       updatedAt: 1,
       lifecycleRevision: "rev-1",
@@ -55,7 +60,7 @@ describe("tool-authored source reply transcript mirror", () => {
       expectedSessionId: sessionId,
       expectedLifecycleRevision: "rev-1",
       expectedWriterRunId: "run-a",
-      storePath: fixture.storePath(),
+      storePath,
     };
   }
 
@@ -64,7 +69,7 @@ describe("tool-authored source reply transcript mirror", () => {
       agentId: "main",
       sessionId,
       sessionKey,
-      storePath: fixture.storePath(),
+      storePath,
     })) as Array<{ message?: { role?: string; content?: unknown } }>;
     return events
       .filter((event) => event.message?.role === "assistant")
@@ -87,7 +92,7 @@ describe("tool-authored source reply transcript mirror", () => {
     await seedSession();
     const metadata = fencedMirrorForCapturedReply();
     await updateSessionEntry(
-      { agentId: "main", sessionKey, storePath: fixture.storePath() },
+      { agentId: "main", sessionKey, storePath },
       async () => ({ activeWriterRunId: "run-b" }) as Partial<InternalSessionEntry>,
     );
 

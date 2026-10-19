@@ -1,5 +1,20 @@
 // Native process probes start their deadlines after the invocation owner prepares these modules.
 export const nativeProcessTestEntrypoints = {
+  backupDatabaseDiscovery: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "backup-database-discovery",
+    distWorkerPath: "infra/backup-database-discovery.js",
+  },
+  databaseBackup: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../snapshot/database-backup",
+    distWorkerPath: "snapshot/database-backup.js",
+  },
+  updatePostgresState: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "update-candidate-state.postgres",
+    distWorkerPath: "infra/update-candidate-state.postgres.js",
+  },
   tailscale: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "tailscale",

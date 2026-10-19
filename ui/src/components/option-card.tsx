@@ -19,23 +19,21 @@ type OptionCardProps = {
   onSkip?: () => void;
 };
 
-export function OptionCard(input: { props?: OptionCardProps }) {
+export function OptionCard(input: { props: OptionCardProps }) {
   let host!: HTMLElement;
-  const options = createMemo(() => input.props?.options.slice(0, 4) ?? []);
+  const options = createMemo(() => input.props.options.slice(0, 4));
   const recommendedIndex = createMemo(() => options().findIndex((option) => option.recommended));
   const request = createMemo(
     () => ({
-      key: input.props
-        ? JSON.stringify([
-            input.props.header ?? "",
-            input.props.question,
-            input.props.options.map((option) => [
-              option.value,
-              option.label,
-              option.recommended === true,
-            ]),
-          ])
-        : "",
+      key: JSON.stringify([
+        input.props.header ?? "",
+        input.props.question,
+        input.props.options.map((option) => [
+          option.value,
+          option.label,
+          option.recommended === true,
+        ]),
+      ]),
       recommended: options().find((option) => option.recommended)?.value ?? "",
     }),
     { equals: (previous, next) => previous.key === next.key },
@@ -44,7 +42,7 @@ export function OptionCard(input: { props?: OptionCardProps }) {
   const [selected, setSelected] = createSignal(() => request().recommended);
   const choices = new Set<HTMLButtonElement>();
   createPendingFocus(
-    () => ({ request: request(), disabled: input.props?.disabled, selected: selected() }),
+    () => ({ request: request(), disabled: input.props.disabled, selected: selected() }),
     {
       requested: (current, previous) =>
         current.request.key !== previous?.request.key
@@ -63,82 +61,64 @@ export function OptionCard(input: { props?: OptionCardProps }) {
     },
   );
   const select = (value: string) => {
-    if (input.props?.disabled) {
+    if (input.props.disabled) {
       return;
     }
     setSelected(value);
-    input.props?.onSelect?.(value);
-    host.dispatchEvent(
-      new CustomEvent("option-select", {
-        bubbles: true,
-        composed: true,
-        detail: { value },
-      }),
-    );
-  };
-  const skip = () => {
-    if (input.props?.disabled) {
-      return;
-    }
-    input.props?.onSkip?.();
-    host.dispatchEvent(new CustomEvent("option-skip", { bubbles: true, composed: true }));
+    input.props.onSelect?.(value);
   };
   return (
     <openclaw-option-card ref={(element) => (host = element)}>
-      <Show when={input.props}>
-        {(props) => (
-          <section class="option-card" role="group" aria-label={props().question}>
-            <Show when={props().header}>
-              <div class="option-card__chip">{props().header}</div>
-            </Show>
-            <div class="option-card__question">{props().question}</div>
-            <div class="option-card__choices" role="radiogroup">
-              <For each={options()} keyed={(option) => option.value}>
-                {(option, index) => {
-                  let button: HTMLButtonElement;
-                  onCleanup(() => choices.delete(button));
-                  return (
-                    <button
-                      ref={(element) => choices.add((button = element))}
-                      class={[
-                        "option-card__choice",
-                        {
-                          "option-card__choice--recommended": index() === recommendedIndex(),
-                          "option-card__choice--selected": option().value === selected(),
-                        },
-                      ]}
-                      type="button"
-                      role="radio"
-                      aria-checked={option().value === selected() ? "true" : "false"}
-                      data-option-value={option().value}
-                      disabled={props().disabled}
-                      onClick={() => select(option().value)}
-                    >
-                      <span class="option-card__choice-copy">
-                        <strong>{option().label}</strong>
-                        <Show when={option().description}>
-                          <span class="option-card__description">{option().description}</span>
-                        </Show>
-                      </span>
-                      <Show when={index() === recommendedIndex()}>
-                        <span class="option-card__recommended">{t("optionCard.recommended")}</span>
-                      </Show>
-                    </button>
-                  );
-                }}
-              </For>
-            </div>
-            <button
-              class="option-card__skip"
-              type="button"
-              disabled={props().disabled}
-              onClick={skip}
-            >
-              {t("optionCard.skip")}
-            </button>
-          </section>
-        )}
-      </Show>
+      <section class="option-card" role="group" aria-label={input.props.question}>
+        <Show when={input.props.header}>
+          <div class="option-card__chip">{input.props.header}</div>
+        </Show>
+        <div class="option-card__question">{input.props.question}</div>
+        <div class="option-card__choices" role="radiogroup">
+          <For each={options()} keyed={(option) => option.value}>
+            {(option, index) => {
+              let button: HTMLButtonElement;
+              onCleanup(() => choices.delete(button));
+              return (
+                <button
+                  ref={(element) => choices.add((button = element))}
+                  class={[
+                    "option-card__choice",
+                    {
+                      "option-card__choice--recommended": index() === recommendedIndex(),
+                      "option-card__choice--selected": option().value === selected(),
+                    },
+                  ]}
+                  type="button"
+                  role="radio"
+                  aria-checked={option().value === selected() ? "true" : "false"}
+                  data-option-value={option().value}
+                  disabled={input.props.disabled}
+                  onClick={() => select(option().value)}
+                >
+                  <span class="option-card__choice-copy">
+                    <strong>{option().label}</strong>
+                    <Show when={option().description}>
+                      <span class="option-card__description">{option().description}</span>
+                    </Show>
+                  </span>
+                  <Show when={index() === recommendedIndex()}>
+                    <span class="option-card__recommended">{t("optionCard.recommended")}</span>
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+        <button
+          class="option-card__skip"
+          type="button"
+          disabled={input.props.disabled}
+          onClick={() => !input.props.disabled && input.props.onSkip?.()}
+        >
+          {t("optionCard.skip")}
+        </button>
+      </section>
     </openclaw-option-card>
   );
 }

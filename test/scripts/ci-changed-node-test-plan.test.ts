@@ -863,7 +863,7 @@ describe("CI changed Node test plan", () => {
         { targets: [acp], configs: ["test/vitest/vitest.acp.config.ts"] },
         {
           targets: ["src/gateway/setup-inference.first-signin.integration.test.ts"],
-          configs: ["test/vitest/vitest.gateway-database-workers.config.ts"],
+          configs: ["test/vitest/vitest.gateway-server-isolated.config.ts"],
         },
         {
           targets: [
@@ -910,7 +910,9 @@ describe("CI changed Node test plan", () => {
             const singleton = job.groups.length === 1 && ownerJob.planConcurrency === 2;
             expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
             expect(job.env).toEqual(
-              singleton ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : ownerJob.env,
+              singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+                ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+                : ownerJob.env,
             );
             expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
           }
@@ -1155,7 +1157,9 @@ describe("CI changed Node test plan", () => {
         expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
         const singleton = job.groups?.length === 1 && ownerJob.planConcurrency === 2;
         expect(job.env).toEqual(
-          singleton ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : ownerJob.env,
+          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+            ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+            : ownerJob.env,
         );
         expect(job.runner).toBe(ownerJob.runner);
         expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);

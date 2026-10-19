@@ -6,7 +6,6 @@ import {
 } from "../../components/config-form.analyze.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ConfigViewState } from "./view-types.ts";
 
 export function asConfigSchema(value: unknown): JsonSchema | null {
   if (!isRecord(value)) {
@@ -17,22 +16,10 @@ export function asConfigSchema(value: unknown): JsonSchema | null {
 }
 
 export function getConfigSchemaAnalysis(
-  viewState: ConfigViewState,
   schema: JsonSchema | null,
   include?: ReadonlySet<string> | null,
   exclude?: ReadonlySet<string> | null,
 ): ConfigSchemaAnalysis {
-  const includeKey = include ? [...include].join("\u001f") : "";
-  const excludeKey = exclude ? [...exclude].join("\u001f") : "";
-  const cached = viewState.schemaAnalysisCache;
-  if (
-    cached &&
-    cached.schema === schema &&
-    cached.includeKey === includeKey &&
-    cached.excludeKey === excludeKey
-  ) {
-    return cached.analysis;
-  }
   let scopedSchema = schema;
   if (schema && schemaType(schema) === "object" && schema.properties) {
     const properties: Record<string, JsonSchema> = {};
@@ -43,9 +30,7 @@ export function getConfigSchemaAnalysis(
     }
     scopedSchema = { ...schema, properties };
   }
-  const analysis = analyzeConfigSchema(scopedSchema);
-  viewState.schemaAnalysisCache = { schema, includeKey, excludeKey, analysis };
-  return analysis;
+  return analyzeConfigSchema(scopedSchema);
 }
 
 export function configValueExistsAtPath(

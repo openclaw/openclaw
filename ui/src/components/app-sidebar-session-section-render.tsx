@@ -17,7 +17,7 @@ import {
   SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
 } from "./app-sidebar-session-types.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -321,36 +321,20 @@ export function renderSessionSection(params: {
                   {labelText()}
                 </button>
               )}
-              {group() || section().id === "ungrouped"
-                ? renderNewSessionLink({
-                    get basePath() {
-                      return host().basePath;
-                    },
-                    get agentId() {
-                      return host().expandedAgentId();
-                    },
-                    get target() {
-                      return {
-                        group: group() ?? "",
-                      };
-                    },
-                    get class() {
-                      return "sidebar-session-group-actions sidebar-new-session";
-                    },
-                    get label() {
-                      return t("sessionsView.newSessionInGroup", {
-                        group: label(),
-                      });
-                    },
-                    get disabledReason() {
-                      return (() => {
-                        const access = newSessionAccess();
-                        return access.allowed ? undefined : access.reason;
-                      })();
-                    },
-                    onOpen: (agentId, target) => host().requestOpenNewSession(agentId, target),
-                  })
-                : undefined}
+              {group() || section().id === "ungrouped" ? (
+                <NewSessionLink
+                  basePath={host().basePath}
+                  agentId={host().expandedAgentId()}
+                  target={{ group: group() ?? "" }}
+                  class="sidebar-session-group-actions sidebar-new-session"
+                  label={t("sessionsView.newSessionInGroup", { group: label() })}
+                  disabledReason={(() => {
+                    const access = newSessionAccess();
+                    return access.allowed ? undefined : access.reason;
+                  })()}
+                  onOpen={(agentId, target) => host().requestOpenNewSession(agentId, target)}
+                />
+              ) : undefined}
               <Show when={group()}>
                 {(currentGroup) => (
                   <button

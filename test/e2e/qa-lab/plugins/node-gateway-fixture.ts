@@ -74,7 +74,9 @@ export async function withNodeGateway(
   let node: GatewayClient | undefined;
   try {
     const identity = (name: string) =>
-      loadOrCreateDeviceIdentity({ path: path.join(state.home, `${name}.sqlite`) });
+      loadOrCreateDeviceIdentity({
+        path: path.join(state.home, "proof-clients", name, "client", "credentials.sqlite"),
+      });
     const nodeIdentity = identity("node");
     const context = {
       state,

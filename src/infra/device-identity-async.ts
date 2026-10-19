@@ -1,14 +1,17 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { runClientCredentialOperationAsync } from "./client-credential-async.js";
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "./device-identity-material.js";
 import {
   cacheProcessDeviceIdentity,
   getChatRequestIdentityKey,
   readProcessDeviceIdentity,
 } from "./device-identity-process-cache.js";
 import {
-  assertNoPendingLegacyIdentity,
+  identityFromCredentialResult,
+  resolveDeviceIdentityEnvironment,
   resolveDeviceIdentityStore,
   type DeviceIdentity,
   type DeviceIdentityStoreOptions,
@@ -17,17 +20,26 @@ import {
 const log = createSubsystemLogger("gateway/chat");
 let warnedUnavailableChatIdentity = false;
 
-/** Bootstrap through the identity owner before the shared actor opens a missing database. */
+/** Resolve private signing material without opening the selected Gateway database. */
 export async function loadOrCreateDeviceIdentityAsync(
   options: DeviceIdentityStoreOptions = {},
 ): Promise<DeviceIdentity> {
-  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const context = captureOpenClawStateWorkerContext({ ...options, path: databasePath });
-  return await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "deviceIdentity.load", input: { identityKey } }),
-    { preparation: { type: "deviceIdentity", identityKey } },
+  const { identityKey } = resolveDeviceIdentityStore(options);
+  const env = resolveDeviceIdentityEnvironment(options);
+  const stored = identityFromCredentialResult(
+    await runClientCredentialOperationAsync(env, {
+      kind: "identity.create",
+      identity: storedDeviceIdentityToRow(identityKey, generateStoredDeviceIdentity()),
+    }),
   );
+  if (!stored) {
+    throw new Error(`Client credential owner did not persist identity "${identityKey}".`);
+  }
+  return {
+    deviceId: stored.deviceId,
+    publicKeyPem: stored.publicKeyPem,
+    privateKeyPem: stored.privateKeyPem,
+  };
 }
 
 /** Keep the existing process-lifetime identity cache without opening SQLite on a warm hit. */
@@ -73,18 +85,22 @@ export async function loadChatRequestIdentityKeyAsync(
   return null;
 }
 
-/** Read the admitted snapshot without creating SQLite state or joining the writer. */
+/** Existing-only reads never create a local store or a signing identity. */
 export async function loadDeviceIdentityIfPresentAsync(
   options: DeviceIdentityStoreOptions = {},
 ): Promise<DeviceIdentity | null> {
-  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const reply = await executeExistingOpenClawStateRead(
-    { path: databasePath, env: options.env },
-    { type: "deviceIdentity.read", input: { identityKey } },
+  const { identityKey } = resolveDeviceIdentityStore(options);
+  const stored = identityFromCredentialResult(
+    await runClientCredentialOperationAsync(resolveDeviceIdentityEnvironment(options), {
+      kind: "identity.read",
+      identity_key: identityKey,
+    }),
   );
-  const identity = reply?.identity ?? null;
-  if (!identity) {
-    assertNoPendingLegacyIdentity({ path: databasePath, identityKey });
-  }
-  return identity;
+  return stored
+    ? {
+        deviceId: stored.deviceId,
+        publicKeyPem: stored.publicKeyPem,
+        privateKeyPem: stored.privateKeyPem,
+      }
+    : null;
 }

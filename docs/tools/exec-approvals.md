@@ -107,7 +107,7 @@ not that the command may have run.
 
 ## Settings and storage
 
-Approvals live in the shared SQLite state database on the execution host. When
+Approval policy lives in the selected shared state database on the execution host. When
 `OPENCLAW_STATE_DIR` is set, the database follows that state directory.
 Otherwise it uses the default OpenClaw state directory:
 
@@ -122,7 +122,10 @@ SQLite row, not part of the database filename. The row keeps the JSON document
 shown below as its authoritative value, so CLI and Gateway compare-and-swap
 hashes remain stable.
 
-The default approval socket follows the same root:
+Socket paths and authentication tokens live separately in the local
+`client/credentials.sqlite` store under the resolved client state root. They never
+enter the shared policy row or its compare-and-swap hash. The default approval
+socket follows that local root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
 
@@ -143,15 +146,11 @@ policies remain preserved for operator recovery, and exec approvals stay
 blocked until the legacy file is resolved. After repair, verify with
 `openclaw approvals get` using the same state directory.
 
-Example schema:
+Example shared policy (socket credentials are held by the local client owner):
 
 ```json
 {
   "version": 1,
-  "socket": {
-    "path": "~/.openclaw/exec-approvals.sock",
-    "token": "base64url-token"
-  },
   "defaults": {
     "security": "deny",
     "ask": "on-miss",

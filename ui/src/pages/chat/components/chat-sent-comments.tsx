@@ -161,11 +161,3 @@ function SentComments(props: {
     </openclaw-chat-sent-comments>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-sent-comments": HTMLAttributes<HTMLElement>;
-    }
-  }
-}

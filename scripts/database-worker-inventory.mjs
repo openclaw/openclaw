@@ -30,7 +30,39 @@ const reviewed = new Map([
     {
       tier: "T3",
       evidence:
-        "Preparatory local client owner: production capture imports only its path resolver. Credential operations have no production callers until cutover, which must reclassify their worker/offline entry points.",
+        "Runtime operations enter through client-credential.worker.ts. Synchronous access is limited to Doctor credential/exec-policy migration, verified archive restore, and device-identity-store.ts offline CLI/Doctor adapters; runtime identity and token callers await client-credential-async.ts.",
+    },
+  ],
+  [
+    "src/infra/client-credential-legacy.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Only state-migrations.device-identity.ts and state-migrations.device-auth.ts call the consumed-claim importer under Doctor migration custody.",
+    },
+  ],
+  [
+    "src/infra/client-credential-native-tokens.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Only client-credential-operations.ts calls scoped-token claim/clear. Runtime operations enter client-credential.worker.ts; synchronous consumers are offline Doctor/CLI migration and verified restore.",
+    },
+  ],
+  [
+    "src/infra/client-credential-operations.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Only client-credential-store.ts dispatches these local operations. Runtime identity/token/socket callers use client-credential-async.ts and client-credential.worker.ts; native calls are offline Doctor/CLI identity, legacy exec-policy migration, or verified archive restore.",
+    },
+  ],
+  [
+    "src/infra/client-credential-readiness.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Receipt admission runs in client-credential.worker.ts for runtime operations and in the offline local owner for Doctor/CLI. Other receipt writers are canonical/legacy credential migration and verified archive relocation; no Gateway main-thread runtime caller.",
     },
   ],
   [
@@ -3047,7 +3079,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["stageHookInstall", "stageHookInstall.rollback"],
         evidence:
-          "CLI install/update only: cli/hook-install-persistence.ts calls stageHookInstall; hooks/update.ts reaches it only through cli/plugins-update-command.ts. Rollback belongs to that same offline install transaction.",
+          "CLI install/update only: cli/plugins-install-command.ts calls stageHookInstall; hooks/update.ts reaches it only through cli/plugins-update-command.ts. Rollback belongs to that same offline install transaction.",
       },
     ],
   ],

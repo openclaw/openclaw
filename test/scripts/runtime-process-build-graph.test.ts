@@ -16,7 +16,7 @@ const forbiddenInputs = [
 describe("standalone runtime process build graph", () => {
   it.each(Object.entries(standaloneRuntimeProcessBuildEntries))(
     "keeps %s out of the Gateway server graph",
-    async (_name, entry) => {
+    async (name, entry) => {
       const result = await build({
         absWorkingDir: repoRoot,
         entryPoints: [entry],
@@ -33,6 +33,15 @@ describe("standalone runtime process build graph", () => {
       expect(
         inputs.filter((input) => forbiddenInputs.some((pattern) => pattern.test(input))),
       ).toEqual([]);
+      if (name === "infra/sqlite-source-revision.worker") {
+        expect(
+          inputs.filter((input) =>
+            /^src\/(?:config\/|plugins\/|snapshot\/|infra\/(?:node-sqlite|update-database-generations)\.)/u.test(
+              input,
+            ),
+          ),
+        ).toEqual([]);
+      }
     },
   );
 });

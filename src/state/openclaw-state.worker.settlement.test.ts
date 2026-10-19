@@ -93,8 +93,9 @@ it.each(["removed", "replaced"] as const)("refuses a %s locator with a hardlink"
       type: "stateLease.acquire",
       input: { identity, leaseMs: 300_000, operationLabel: "lease", schemaPolicy: "existing" },
     },
-    { type: "deviceIdentity.load", input: { identityKey: "fixture" } },
+    { type: "machineState.write", input: { key: "fixture", value: "synthetic" } },
   ] as const) {
+    await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
     expect(() => run(() => backend.execute(command))).toThrow(
       kind === "removed" ? /ENOENT/ : /identity changed/,
     );

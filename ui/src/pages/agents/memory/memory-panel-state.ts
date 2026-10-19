@@ -20,6 +20,8 @@ import {
   canCallDreamingMethod,
   copyDreamingArchivePath,
   createDreamingState,
+  createDreamingViewState,
+  DREAM_PHRASE_KEYS,
   loadDreamingResource,
   resolveConfiguredDreaming,
   runDreamDiaryAction,
@@ -27,11 +29,11 @@ import {
   type DreamDiaryActionMethod,
   type DreamingResourceKey,
   type DreamingState,
+  type DreamingViewState,
   type WikiPagePreview,
+  type WikiPreviewState,
 } from "./dreaming.ts";
 import type { DreamingToggleConfirmationProps } from "./toggle-confirmation.tsx";
-import type { DreamingViewState, WikiPreviewState } from "./view-types.ts";
-import { createDreamingViewState, DREAM_PHRASE_KEYS, type DreamingProps } from "./view.tsx";
 
 registerDreamingEnglish();
 
@@ -460,7 +462,7 @@ export function createAgentMemory(
             message: t("dreaming.actions.confirmRepairDescription"),
             confirmLabel: t("dreaming.scene.repairCache"),
           }),
-      } satisfies Omit<DreamingProps, "viewState" | "onViewStateChange">,
+      },
       toggle: {
         open: pendingEnabled !== null,
         enabling: pendingEnabled === true,

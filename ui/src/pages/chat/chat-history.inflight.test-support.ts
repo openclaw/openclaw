@@ -28,7 +28,6 @@ export function createState(result: ChatHistoryResult): TestState {
     chatToolMessages: host.chatToolMessages ?? [],
     chatStreamSegments: host.chatStreamSegments ?? [],
     connectionEpoch: 1,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
     toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),

@@ -628,7 +628,7 @@ export async function mountSidebarContext(
   const owner = getAppSidebarOwner(element)!;
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
-    owner.preloadCatalogRenderer(),
+    owner.catalogRendererImport.load(),
     owner.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;

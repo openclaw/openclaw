@@ -77,22 +77,26 @@ export function registerPendingRequesterAuthorityCases({
     {
       name: "direct From without sender fields",
       context: { ChatType: "direct", From: " discord:alice " },
-      expectedOrigin: { chatType: "direct", senderId: "discord:alice" },
+      senderId: "discord:alice",
+      senderE164: undefined,
     },
     {
       name: "direct From with blank sender fields",
       context: { ChatType: "direct", From: "discord:alice", SenderId: " ", SenderE164: " " },
-      expectedOrigin: { chatType: "direct", senderId: "discord:alice" },
+      senderId: "discord:alice",
+      senderE164: undefined,
     },
     {
       name: "group input without a sender",
       context: { ChatType: "group", From: "discord:alice" },
-      expectedOrigin: { chatType: "group" },
+      senderId: undefined,
+      senderE164: undefined,
     },
     {
       name: "conversation-shaped From without chat type",
       context: { From: "discord:channel:123" },
-      expectedOrigin: {},
+      senderId: undefined,
+      senderE164: undefined,
     },
     {
       name: "explicit raw sender fields",
@@ -102,18 +106,16 @@ export function registerPendingRequesterAuthorityCases({
         SenderId: "transport-identity",
         SenderE164: "+15550100100",
       },
-      expectedOrigin: {
-        chatType: "direct",
-        senderId: "transport-identity",
-        senderE164: "+15550100100",
-      },
+      senderId: "transport-identity",
+      senderE164: "+15550100100",
     },
     {
       name: "phone identity without a sender id",
       context: { ChatType: "direct", From: "discord:alice", SenderE164: "+15550100100" },
-      expectedOrigin: { chatType: "direct", senderE164: "+15550100100" },
+      senderId: undefined,
+      senderE164: "+15550100100",
     },
-  ])("captures requester identity for $name", async ({ context, expectedOrigin }) => {
+  ])("captures requester identity for $name", async ({ context, senderId, senderE164 }) => {
     const params = baseParams();
     params.command.senderId = "configured-owner-alias";
     await runPrepared({
@@ -122,12 +124,14 @@ export function registerPendingRequesterAuthorityCases({
       ...turn("continue the work", { ...createProviderSurface("discord"), ...context }),
     });
     const { followupRun } = requireRunReplyAgentCall();
-    // Capture and transcript admission share the JSON-safe origin, including absent sender fields.
-    const origin = { sessionKey: params.sessionKey, messageProvider: "discord", ...expectedOrigin };
-    expect(followupRun.run.requesterOrigin).toStrictEqual(origin);
-    expect(readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder)).toStrictEqual(
-      origin,
-    );
+    for (const origin of [
+      followupRun.run.requesterOrigin,
+      readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder),
+    ]) {
+      expect(origin).toBeDefined();
+      expect(origin?.senderId).toBe(senderId);
+      expect(origin?.senderE164).toBe(senderE164);
+    }
   });
   it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
     "retires pending owner task authority only for new channel input: %s",

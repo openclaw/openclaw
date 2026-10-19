@@ -290,8 +290,10 @@ public enum ExecApprovalsSQLiteStore {
         document: ExecApprovalsDocument,
         updatedAtMilliseconds: Int64) throws
     {
-        let rawJSON = try self.serialize(document)
-        let projected = self.projectionDocument(document)
+        var policy = document
+        policy.socket = nil
+        let rawJSON = try self.serialize(policy)
+        let projected = self.projectionDocument(policy)
         let agents = Array((projected.agents ?? [:]).values)
         let statement = try database.prepare("""
         INSERT INTO exec_approvals_config (

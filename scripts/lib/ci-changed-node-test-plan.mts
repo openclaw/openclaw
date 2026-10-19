@@ -45,6 +45,7 @@ import {
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
   packNodeTestGroups,
+  normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
@@ -821,18 +822,20 @@ function boundChangedNodeRows(
       true,
     );
     return bins.map((bin, index) =>
-      Object.assign({}, shard, {
-        checkName: bins.length === 1 ? shard.checkName : `${shard.checkName}-${index + 1}`,
-        shardName: bins.length === 1 ? shard.shardName : `${shard.shardName}-${index + 1}`,
-        groups: bin.map(({ group }) => group),
-        requiresDist: bin.some(({ group }) => group.requiresDist),
-        pretestBuildMode: mergeVitestPretestBuildModes([
-          shard.pretestBuildMode,
-          ...bin.map(({ group }) => group.pretestBuildMode),
-        ]),
-        predictedSeconds: bin.reduce((seconds, piece) => seconds + piece.seconds, 0),
-        predictedTestSeconds: testSeconds(bin),
-      }),
+      normalizeSingletonNodeTestJob(
+        Object.assign({}, shard, {
+          checkName: bins.length === 1 ? shard.checkName : `${shard.checkName}-${index + 1}`,
+          shardName: bins.length === 1 ? shard.shardName : `${shard.shardName}-${index + 1}`,
+          groups: bin.map(({ group }) => group),
+          requiresDist: bin.some(({ group }) => group.requiresDist),
+          pretestBuildMode: mergeVitestPretestBuildModes([
+            shard.pretestBuildMode,
+            ...bin.map(({ group }) => group.pretestBuildMode),
+          ]),
+          predictedSeconds: bin.reduce((seconds, piece) => seconds + piece.seconds, 0),
+          predictedTestSeconds: testSeconds(bin),
+        }),
+      ),
     );
   });
 }

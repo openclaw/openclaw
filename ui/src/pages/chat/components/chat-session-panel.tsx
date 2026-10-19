@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../../../app/context.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../../lib/reactive/projection.ts";
 
 export type SessionPanelProps = { sessionKey: string; agentId: string; presented: boolean };
 type SessionPanelData = {
@@ -27,16 +27,8 @@ export function useSessionPanel<Data extends SessionPanelData>(
 ) {
   let changed = () => {};
   const data = new DataType(useApplication(), () => changed());
-  const view = projectSource(data, {
-    read: (source) => source,
-    subscribe: (_source, notify) => {
-      changed = notify;
-      return () => {
-        changed = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const view = projectMutableSource(data, (source) => source);
+  changed = view.publish;
   let identity = "";
   let active = false;
   let queued = false;

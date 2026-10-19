@@ -42,7 +42,9 @@ it(
         tempHome,
         ".openclaw",
         "test-device-identities",
-        `${GATEWAY_CLIENT_NAMES.TEST}-${GATEWAY_CLIENT_MODES.TEST}-${process.platform}-none-operator.sqlite`,
+        `${GATEWAY_CLIENT_NAMES.TEST}-${GATEWAY_CLIENT_MODES.TEST}-${process.platform}-none-operator`,
+        "client",
+        "credentials.sqlite",
       ),
     });
     const token = nextGatewayId("code-mode-clock-token");

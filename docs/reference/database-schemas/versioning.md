@@ -23,42 +23,28 @@ Each database records its published schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. [`openclaw update`](/cli/update) also refuses a package or source target whose declared schema support is older than an on-disk database. Known stable releases published before schema metadata was added are checked against their shipped schema-1 contract. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
 
-Native clients make a narrow exception for their local `device_identities` and
-`device_auth_tokens` tables. Connecting to a remote Gateway must not depend on
-unrelated local backend migrations. A newer shared-state schema is admitted for
-these stores only when its global metadata matches `user_version` and the
-credential table and index definitions still match the complete native contract,
-with no additional indexes or triggers. Missing or incompatible tables remain
-errors; the native client never repairs them or changes either schema-version
-marker. Existing identity keys and gateway-scoped tokens remain in the same
-database, without a migration or a second source of truth.
+### Local client credentials
 
-These table names, definitions, and credential row meanings are a stable native
-storage contract. Future incompatible credential semantics must change the
-table name or definition so existing clients refuse access; bumping only the
-backend version is not a credential compatibility fence. Config, execution
-approvals, port-guardian state, Gateway startup, and updater admission retain
-their backend schema-version checks. Apps predating this exception still need
-an app update when their local backend advances beyond their supported schema.
-
-### Local credential-store preparation
-
-The prepared client credential format is SQLite schema version 1 at
+The client credential format is SQLite schema version 1 at
 `<resolved-client-root>/client/credentials.sqlite`, independent of the selected
 Gateway engine. It contains client identities, device and Gateway-scoped token
-caches, local native socket credentials, and a migration receipt. This stage
-does not switch production clients or import or remove shared-state records.
-The native shared-table contract above remains in use until the later atomic
-cutover.
+caches, local native socket credentials, and a migration receipt. Native bootstrap
+never opens the selected Gateway database. Shared state schema 29 retires
+`device_identities`, `device_auth_tokens`, and `gateway_origin_device_tokens`,
+and removes socket material from `exec_approvals_config`. Approval policy remains
+shared; its meaning and execution authority are unchanged.
 
 The TypeScript owner and Swift adapter use exclusive SQLite custody in DELETE
-journal mode. A macOS app may retain that custody while serving bounded local
-operations; other clients must use that owner and must not fall back to direct
-access when its IPC fails. App-absent operations release custody at completion.
+journal mode. A running macOS app owns the bounded operation route; other clients
+use its authenticated control socket first. The app closes the physical database
+between operations so existing maintenance custody can capture and restore it.
+A dispatched operation with a lost reply is never replayed offline. When no app
+received the request, clients acquire bounded exclusive custody and release it
+at completion, including when another CLI briefly owns the file.
 iOS app and extension operations use the same Swift owner for a bounded
 operation and close before suspension. No owner selects an identity or token
-by comparing timestamps with another store. Maintenance must drain and close
-an active native owner before capturing or restoring the file.
+by comparing timestamps with another store. The existing maintenance lock blocks
+new native operations while capture, migration, or restore holds custody.
 The TypeScript adapter refuses existing macOS ACL entries instead of removing
 them. A directory with custom deny or mixed ACLs requires explicit permission
 repair before that adapter can use it.
@@ -69,21 +55,65 @@ client identity and cached-token records, but remove the local socket token,
 matching shared approval backup sanitization. Restoring an ordinary archive
 therefore requires local socket credentials to be initialized again.
 
-This preparation creates no credential store in production. A published SQLite
-updater therefore captures the shared database while it still contains the
-credential tables. If a later cutover candidate fails, rollback restores those
+The preparatory release creates no credential store in production. A published
+SQLite updater therefore captures the shared database while it still contains
+the credential tables. If the cutover candidate fails, rollback restores those
 tables and the old version ignores the orphaned local credential store. Credentials
 issued between upgrade and rollback are lost; affected clients must pair again.
-The next cutover must rebuild an orphan from authoritative shared records unless
-its completed receipt matches the shared database identity, generation, and source
-hash. It must never merge stale local credentials into the restored shared state.
-Shared records remain authoritative until the verified receipt completes and
-their retirement finishes under the same maintenance custody.
+The next cutover rebuilds an orphan from authoritative shared records. A complete
+receipt binds the source identity, generation, and content hash; its
+`destinationVersion` is the local schema version, **1**, independently of the
+shared cutover version. Reappearing shared credential tables make a previous
+canonical copy stale, even when their contents match an earlier capture. Migration
+never merges stale local credentials into restored shared state. Under updater
+or Doctor custody, migration captures the source, copies exact key and token
+bytes, verifies them, and records `copied`. Only then does it retire the shared
+records and publish `complete`. Interrupted work resumes through the same owner;
+normal clients refuse a pending or stale receipt. Shared records stay authoritative
+until this verified retirement finishes in that custody.
+
+Canonical receipt bindings relative to the local store root survive matched archive activation by directory rename; independent native-source bindings remain absolute.
+
+Outside an update, Doctor takes a fresh table-scoped backup in the same source
+transaction immediately before extraction and verifies its copied rows against
+the source. A previous backup never authorizes credential retirement. During an
+update, the installed driver's capture and its held custody supply that authority.
 
 Releases predating this local format do not support PostgreSQL shared state.
 PostgreSQL installations start with an engine-aware updater that includes this local family's capture and
 restore support. Their failed-candidate recovery restores the captured shared and
-local stores together. The later cutover must prove both update paths before use.
+local stores together. PostgreSQL extraction uses the engine-aware owner, verifies
+the local copy, and only then retires server rows.
+
+A canonical native version-zero file created by an older app cannot become a
+PostgreSQL anchor directly. Start the Gateway once with SQLite selected, run
+`openclaw doctor --fix`, then use `openclaw database port` before selecting
+PostgreSQL. The refusal leaves the native source unchanged.
+
+Older native clients require an app update after the shared tables are retired;
+the missing table contract fences them even when they accept newer backend version
+numbers. Do not lower schema markers or recreate those tables. Run
+`openclaw doctor --fix` from the matching new installation and restart the updated
+app. A rolled-back shared file invalidates the local receipt, so the new client
+also requires Doctor before reuse.
+
+Independent client-only native databases are read-only import sources. Import
+does not change their bytes, permissions, journals, or directory contents, and
+does not add a retirement marker or private backup. The local receipt records
+both source file identity and content hash. Reopening the same source preserves
+local token refreshes and consumed-import claims; a changed or restored source
+rebuilds the local copy. Old native clients can still read that untouched source
+after rollback. These historical native sources use DELETE journal mode. A source
+in WAL mode is refused before SQLite opens it, because even a read-only SQLite
+connection can change shared-memory files. Use the previous release's export or
+restore workflow to recover that source; import never silently ignores WAL data.
+Full or unknown native databases require the engine-aware Doctor route.
+
+Legacy JSON identity and token imports target the local store. A consumed import
+is recorded atomically, including an observed absent source; rewriting or restoring
+the JSON cannot reimport a revoked token. The original files remain untouched,
+and their consumed claims survive a native-source rebuild. Exact private keys, token bytes,
+scope strings, and timestamps survive migration.
 
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `openclaw doctor --fix`; run `openclaw doctor --fix` from the compatible install if further migration is required, then restart through the service or deployment owner.
 

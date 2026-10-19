@@ -4,12 +4,7 @@ import { postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
-import type { AnnotationStroke } from "./browser-annotation.ts";
-import type {
-  BrowserRequestClient,
-  BrowserInspectedNode,
-  BrowserPanelTab,
-} from "./browser-client.ts";
+import type { BrowserRequestClient } from "./browser-client.ts";
 import {
   closeBrowserTab,
   focusBrowserTab,
@@ -29,33 +24,11 @@ import {
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import { createBrowserPanelSnapshot } from "./browser-panel-snapshot.ts";
+import type { BrowserPanelMode, BrowserPanelState } from "./browser-panel-state.ts";
 import { BrowserPanelStream } from "./browser-panel-stream.ts";
-import type { BrowserPanelView } from "./browser-panel-surface.ts";
 import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
-
-type BrowserPanelMode = "interact" | "annotate" | "inspect";
-type BrowserPanelState = {
-  running: boolean | null;
-  canAutoResizeViewport: boolean;
-  tabs: BrowserPanelTab[];
-  /** Stable tab handle (plugin alias when available), not a raw CDP target id. */
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  loading: boolean;
-  errorText: string | null;
-  noticeText: string | null;
-  mode: BrowserPanelMode;
-  strokes: AnnotationStroke[];
-  inspected: BrowserInspectedNode | null;
-  inspectPointer: { x: number; y: number } | null;
-  evaluateUnavailable: boolean;
-  urlDraft: string;
-  pendingNewTab: boolean;
-  urlDraftEditing: boolean;
-  addressInput: HTMLInputElement | undefined;
-};
 
 export type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
@@ -227,7 +200,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         }
         // A mutation may adopt the same tab while this snapshot is pending.
         // Reconcile its tab strip, but never let it own document or loading state.
-        if (!operations.canCaptureSnapshot(invocation)) {
+        if (!invocation.isCurrent()) {
           return;
         }
         if (!snapshot.running) {

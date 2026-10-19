@@ -23,9 +23,9 @@ import {
 import {
   appendMemoryWikiLog,
   ensureMemoryWikiVaultGeneration,
+  hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
 import {
   createWikiPromptSectionBuilder,
@@ -122,7 +122,7 @@ async function seedCompiledDigest(params: {
     timestamp: "2026-07-17T00:00:00.000Z",
     details: { compiledCacheReservationId: reservationId },
   });
-  const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(params.config.vault.path);
+  const sourceGeneration = hashMemoryWikiVaultSources([]);
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "compile",
     timestamp: "2026-07-17T00:00:00.000Z",

@@ -16,9 +16,9 @@ import { resolveMemoryWikiConfig } from "./src/config.js";
 import { deferred } from "./src/deferred.test-helpers.js";
 import {
   appendMemoryWikiLog,
+  hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
 } from "./src/log.js";
 import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
 import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
@@ -299,7 +299,7 @@ describe("memory-wiki plugin", () => {
       timestamp: "2026-07-17T00:00:00.000Z",
       details: { compiledCacheReservationId: reservationId },
     });
-    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(rootDir);
+    const sourceGeneration = hashMemoryWikiVaultSources([]);
     await appendMemoryWikiLog(rootDir, {
       type: "compile",
       timestamp: "2026-07-17T00:00:00.000Z",

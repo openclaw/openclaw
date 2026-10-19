@@ -374,7 +374,6 @@ extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	3
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/flex-templates/basic-cards.ts	2
-extensions/line/src/flex-templates/media-control-cards.ts	1
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	3
@@ -1296,7 +1295,6 @@ src/agents/session-tool-result-guard.ts	3
 src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-models.ts	1
-src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
@@ -2248,7 +2246,6 @@ src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	5
 src/plugins/memory-runtime.ts	1
 src/plugins/native-module-require.ts	2
-src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-runtime.ts	1
@@ -2265,7 +2262,6 @@ src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
-src/plugins/recommended-tool-installs.ts	1
 src/plugins/registry-registrars-host.ts	1
 src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-registrars-tools-hooks.ts	1
@@ -2429,8 +2425,7 @@ src/version.ts	4
 src/video-generation/capability-overlays.ts	1
 src/video-generation/runtime.ts	1
 src/web-fetch/runtime.ts	2
-src/web-search/runtime-execution.ts	1
-src/web-search/runtime.ts	2
+src/web-search/runtime.ts	1
 src/web/provider-runtime-shared.ts	1
 src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
@@ -2533,7 +2528,7 @@ ui/src/pages/chat/session-cache.ts	2
 ui/src/pages/chat/stream-reconciliation.ts	1
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
-ui/src/pages/chat/talk/shared.ts	3
+ui/src/pages/chat/talk/shared.ts	1
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/settings-search.ts	1

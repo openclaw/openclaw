@@ -66,7 +66,7 @@ import { resolveIMessageAccount } from "../accounts.js";
 import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
-import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
+import { handleIMessageApprovalReaction } from "../approval-reactions.js";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageStartupRowidWatermark } from "../chat-db.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -119,7 +119,7 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
@@ -216,7 +216,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
-  const selfChatCache = createSelfChatCache();
+  const selfChatCache = new SelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeStringEntries(imessageCfg.allowFrom);
@@ -600,7 +600,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       echoCache: sentMessageCache,
       selfChatCache,
       reactionNotifications: imessageCfg.reactionNotifications,
-      logVerbose,
     });
 
     const chatId = message.chat_id ?? undefined;
@@ -704,7 +703,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     }
 
     if (decision.kind === "reaction") {
-      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
+      enqueueIMessageReactionSystemEvent({ decision, runtime });
       return;
     }
 
@@ -792,7 +791,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
           allowedRoots: effectiveAttachmentRoots,
-          deps: { logVerbose },
         });
     const mediaAttachments = staged.attachments;
     const unavailableCount = staged.unavailableCount;
@@ -825,7 +823,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
             senderNormalized: decision.senderNormalized,
             limit: dmHistoryLimit,
             envelopeOptions: resolveEnvelopeFormatOptions(cfg),
-            logVerbose,
           })
         : undefined;
     // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
@@ -1080,14 +1077,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     ) {
       return true;
     }
-    return await maybeResolveIMessageApprovalReaction({
+    const result = await handleIMessageApprovalReaction({
       cfg,
       accountId: accountInfo.accountId,
       message,
       bodyText: resolveIMessageInboundBodyText(message).bodyText,
       gatewayRuntime: approvalGatewayRuntime,
-      logVerboseMessage: logVerbose,
     });
+    return result.handled;
   };
 
   const ingress = createIMessageDurableIngress({
@@ -1319,7 +1316,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
         gatewayRuntime: approvalGatewayRuntime,
-        logVerboseMessage: logVerbose,
       }).catch((err: unknown) => {
         logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
       });
