@@ -50,8 +50,6 @@ const nativeRows = {
   typing: ChatTypingIndicator,
 };
 
-export type NativeRowComponents = typeof nativeRows;
-
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   const Row = dynamic(() => nativeRows[props.value.kind]);
   return <Row {...props.value} />;
