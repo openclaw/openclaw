@@ -22,16 +22,12 @@ export type GhConfigDiscoveryInput = {
   platform: NodeJS.Platform;
   env: GhConfigDiscoveryEnv;
   fileExists: (absolutePath: string) => boolean;
-  // Known operator homes; defaults to a small Linux/macOS set.
-  candidateOperatorHomes?: readonly string[];
 };
 
 type GhConfigDirMismatch = {
   effectiveConfigDir: string;
   alternateConfigDir: string;
-  alternateHostsFile: string;
-  alternateHomeHint?: string;
-  suggestedEnvValue: string;
+  alternateHomeHint: string;
 };
 
 export type GhConfigDiscoveryResult =
@@ -114,8 +110,7 @@ export function detectGhConfigDirMismatch(input: GhConfigDiscoveryInput): GhConf
   if (input.fileExists(effectiveHosts)) {
     return { kind: "auth-discoverable", effectiveConfigDir: effective };
   }
-  const candidates = input.candidateOperatorHomes ?? defaultCandidateOperatorHomes(input);
-  for (const home of candidates) {
+  for (const home of defaultCandidateOperatorHomes(input)) {
     const candidateDir = pathFor(input.platform).join(home, ".config", "gh");
     if (candidateDir === effective) {
       continue;
@@ -126,9 +121,7 @@ export function detectGhConfigDirMismatch(input: GhConfigDiscoveryInput): GhConf
         kind: "mismatch",
         effectiveConfigDir: effective,
         alternateConfigDir: candidateDir,
-        alternateHostsFile: candidateHosts,
         alternateHomeHint: home,
-        suggestedEnvValue: candidateDir,
       };
     }
   }
@@ -136,16 +129,11 @@ export function detectGhConfigDirMismatch(input: GhConfigDiscoveryInput): GhConf
 }
 
 export function formatGhConfigDirMismatchHint(mismatch: GhConfigDirMismatch): string[] {
-  const lines: string[] = [
+  return [
     "GitHub CLI auth was found at a different HOME than the one this OpenClaw process uses.",
     `  Process gh config dir: ${mismatch.effectiveConfigDir}`,
     `  Authenticated config:  ${mismatch.alternateConfigDir} (contains ${HOSTS_FILE})`,
+    `  Authenticated HOME:    ${mismatch.alternateHomeHint}`,
+    `  Fix: set GH_CONFIG_DIR=${mismatch.alternateConfigDir} on the OpenClaw service environment, then restart the gateway.`,
   ];
-  if (mismatch.alternateHomeHint) {
-    lines.push(`  Authenticated HOME:    ${mismatch.alternateHomeHint}`);
-  }
-  lines.push(
-    `  Fix: set GH_CONFIG_DIR=${mismatch.suggestedEnvValue} on the OpenClaw service environment, then restart the gateway.`,
-  );
-  return lines;
 }

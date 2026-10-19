@@ -12,6 +12,7 @@ import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
@@ -26,10 +27,7 @@ import {
   isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
-import {
-  resolveSystemdUserTransport,
-  SystemdTransportInspectionTimeout,
-} from "./systemd-user-transport.js";
+import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 type SystemdExecResult = ExecResult & {
   inspectionReason?: ServiceInspectionReason;
@@ -103,7 +101,7 @@ export function systemdInspectionError(
     return new ServiceInspectionError("service-manager-unavailable");
   }
   if (result.termination === "timeout" || result.termination === "no-output-timeout") {
-    return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    return new SystemdInspectionTimeout(`${scope} manager command`);
   }
   if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
     return new ServiceInspectionError("service-manager-access-denied");
@@ -214,7 +212,7 @@ async function execSystemdUserCommand(
     try {
       transport = await inspect();
     } catch (error) {
-      if (!stopInspection || !(error instanceof SystemdTransportInspectionTimeout)) {
+      if (!stopInspection || !(error instanceof SystemdInspectionTimeout)) {
         throw error;
       }
       stopInspection.warn(`${error.message} Retrying systemd stop inspection once.`);
@@ -256,7 +254,7 @@ async function execSystemdUserCommand(
     }
     return {
       code: 1,
-      termination: error instanceof SystemdTransportInspectionTimeout ? "timeout" : "error",
+      termination: error instanceof SystemdInspectionTimeout ? "timeout" : "error",
       stdout: "",
       stderr: error.message,
       inspectionReason: error.reason,

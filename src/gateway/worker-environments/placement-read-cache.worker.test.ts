@@ -229,10 +229,18 @@ describe("worker placement read cache", () => {
       });
       const claimed = await reader.readProjection([identity.sessionId]);
       expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
-      // A warm read must still return independent placement and nested claim snapshots.
+      // Borrowed owner facts reject both placement and nested claim mutation.
       const warm = await reader.readProjection([identity.sessionId]);
-      warm.placements.get(identity.sessionId)!.state = "requested";
-      warm.placements.get(identity.sessionId)!.turnClaim!.claimId = "caller-change";
+      expect(Reflect.set(warm.placements.get(identity.sessionId)!, "state", "requested")).toBe(
+        false,
+      );
+      expect(
+        Reflect.set(
+          warm.placements.get(identity.sessionId)!.turnClaim!,
+          "claimId",
+          "caller-change",
+        ),
+      ).toBe(false);
       expect(
         (await writer.readProjection([identity.sessionId])).placements.get(identity.sessionId),
       ).toMatchObject({ state: "local", turnClaim: { claimId: "claim" } });
@@ -241,8 +249,11 @@ describe("worker placement read cache", () => {
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),
       ).toMatchObject({ state: "local", turnClaim: null });
       expect(reads).toHaveBeenCalledTimes(preloaded ? 0 : 1);
-      // Returned snapshots cannot mutate the next reader's facts.
-      claimed.placements.get(identity.sessionId)!.state = "requested";
+      // A committed replacement leaves the earlier snapshot intact.
+      expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      expect(Reflect.set(claimed.placements.get(identity.sessionId)!, "state", "requested")).toBe(
+        false,
+      );
       expect(
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId)
           ?.state,

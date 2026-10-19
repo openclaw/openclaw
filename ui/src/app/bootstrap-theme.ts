@@ -244,6 +244,7 @@ export function createApplicationTheme(
     typeof globalThis.addEventListener === "function"
       ? listen(globalThis, "storage", onStorage)
       : undefined;
+  // Connection changes refresh scoped preferences and the document's theme owner.
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {

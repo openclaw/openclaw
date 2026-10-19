@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -152,7 +151,23 @@ export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFa
 /** Keep optional health diagnostics bounded across Doctor and its update parent. */
 export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
   return [
-    ...new Set(warnings.map((warning) => truncateUtf16Safe(warning.trim(), 500)).filter(Boolean)),
+    ...new Set(
+      warnings
+        .map((warning) => {
+          const value = warning.trim();
+          if (value.length <= 500) {
+            return value;
+          }
+          const prefix = value.slice(0, 498);
+          const complete =
+            prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
+          return complete
+            ? `${complete.trimEnd()} …`
+            : "Warning detail omitted because it exceeds the display limit.";
+        })
+        .filter(Boolean),
+    ),
   ].slice(0, 32);
 }
 

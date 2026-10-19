@@ -7,10 +7,7 @@ import {
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import {
-  createOpenClawAgentDatabasePathMatcher,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -31,7 +28,6 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -90,10 +86,6 @@ function withConversationRead<T>(
     input.storePath ?? resolveSessionStorePathCore(undefined, { agentId: input.agentId, env }),
   );
   const context = captureOpenClawStateReadWorkerContext({ env });
-  const source = createOpenClawAgentDatabasePathMatcher();
-  for (const candidate of captureSessionStoreReadCandidates(storePath)) {
-    source(candidate.path, candidate.path);
-  }
   return withSessionStoreReaderInWorker(
     { agentId: input.agentId, storePath, env },
     async (owner) => {
@@ -110,11 +102,6 @@ function withConversationRead<T>(
         assertCurrent() {
           context.maintenanceScope?.assertAdmission();
           context.admission.assertCurrent();
-          if (!source.isCurrent()) {
-            throw new Error(
-              "Session store changed while reading conversations. Retry the request.",
-            );
-          }
         },
       },
     },

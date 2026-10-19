@@ -520,6 +520,7 @@ export function createAgentMemory(
   onSettled(() => {
     const agentTarget = getInitialAgentTarget();
     const syncAgent = () => setAgentId(agentTarget.read() ?? "");
+    // Agent receipts invalidate prior requests and replace their resource state synchronously.
     const stopAgent = agentTarget.subscribe(syncAgent);
     syncAgent();
     active = true;

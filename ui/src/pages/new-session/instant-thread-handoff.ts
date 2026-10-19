@@ -128,6 +128,7 @@ export class InstantThreadHandoff {
       once: true,
       signal: this.lifetime.signal,
     });
+    // Connection receipts retire preview authority and start the retained draft's rollback.
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;
       if (

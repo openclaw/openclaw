@@ -209,7 +209,6 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         aria-label={t("board.label")}
         aria-busy={view().loading ? "true" : "false"}
         inert={view().loading}
-        onOpenclaw-board-widget-presentation={owner.reconcileInitialPresentation}
       >
         <BoardTabs
           tabs={view().tabs}

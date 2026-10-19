@@ -31,7 +31,6 @@ type NarrationState = {
   timer?: ReturnType<typeof setTimeout>;
 };
 type ConnectionNarration = {
-  socket: GatewayWsClient["socket"];
   sessions: Map<string, NarrationState>;
   close: () => void;
 };
@@ -71,10 +70,9 @@ export function createGatewayNarrationDelivery(params: {
   };
   const connectionFor = (client: GatewayWsClient) => {
     const existing = connections.get(client);
-    if (existing?.socket === client.socket) {
+    if (existing) {
       return existing;
     }
-    existing?.close();
     const socket = client.socket;
     const sessions = new Map<string, NarrationState>();
     const close = () => {
@@ -85,7 +83,7 @@ export function createGatewayNarrationDelivery(params: {
       socket.off("close", close);
       connections.delete(client);
     };
-    const connection = { socket, sessions, close };
+    const connection = { sessions, close };
     connections.set(client, connection);
     socket.once("close", close);
     return connection;
@@ -153,14 +151,10 @@ export function createGatewayNarrationDelivery(params: {
     projection.digest = digest;
     return digest;
   };
-  const flush = (
-    client: GatewayWsClient,
-    connection: ConnectionNarration,
-    state: NarrationState,
-  ) => {
+  const flush = (client: GatewayWsClient, state: NarrationState) => {
     const pending = state.pending;
     cancelPending(state);
-    if (!pending || client.socket !== connection.socket || !params.clients.has(client)) {
+    if (!pending || !params.clients.has(client)) {
       return;
     }
     const { payload, projection, sessionKeys, opts } = pending;
@@ -259,14 +253,14 @@ export function createGatewayNarrationDelivery(params: {
       }
       if (terminal) {
         if (state.pending?.payload.runId === payload.runId) {
-          flush(client, connection, state);
+          flush(client, state);
         }
       } else if (state.pending) {
         const delay = NARRATION_INTERVAL_MS - (Date.now() - (state.lastSentAt ?? -Infinity));
         if (delay <= 0) {
-          flush(client, connection, state);
+          flush(client, state);
         } else if (!state.timer) {
-          state.timer = setTimeout(() => flush(client, connection, state), delay);
+          state.timer = setTimeout(() => flush(client, state), delay);
           state.timer.unref?.();
         }
       }

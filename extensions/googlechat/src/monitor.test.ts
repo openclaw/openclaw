@@ -270,6 +270,38 @@ it.each([1, 9])(
   },
 );
 
+it("honors an inbound media cap below one MiB", async () => {
+  const { dispatch, runTurn, saveMediaBuffer } = createHarness();
+  const buffer = Buffer.alloc(768 * 1024);
+  apiMocks.downloadGoogleChatMedia.mockImplementation(
+    async ({ maxBytes }: { maxBytes: number }) => {
+      if (buffer.length > maxBytes) {
+        throw new MediaFetchError("max_bytes", `Google Chat media exceeds max bytes (${maxBytes})`);
+      }
+      return { buffer, contentType: "application/pdf" };
+    },
+  );
+
+  await dispatch(
+    {
+      id: "fractional-cap",
+      text: "summarize this",
+      attachments: [attachment("fractional-cap")],
+    },
+    { mediaMaxMb: 0.5 },
+  );
+
+  expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledExactlyOnceWith({
+    account: googleChatMediaTestAccount,
+    resourceName: "media/fractional-cap",
+    maxBytes: 512 * 1024,
+  });
+  expect(saveMediaBuffer).not.toHaveBeenCalled();
+  expect(readGoogleChatTestIngest(runTurn)).toMatchObject({
+    rawText: "summarize this\n\n[Google Chat attachment too large; maximum 0.5 MB]",
+  });
+});
+
 it.each([
   {
     name: "Drive file without a caption",

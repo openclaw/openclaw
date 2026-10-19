@@ -7,6 +7,7 @@ import {
   selectChatLayoutAction,
 } from "../../../test-helpers/chat-layout-menu.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/layout.css";
@@ -420,7 +421,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           state === "idle"
             ? "position: fixed; top: 80px; left: 80px; width: 1000px"
             : "position: fixed; top: 80px; left: 500px; width: 650px";
-        await container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
+        await waitForSolid(() =>
+          expect(
+            container.querySelector(
+              editor ? ".sidebar-file-view__action" : ".chat-pane__branches-trigger",
+            ),
+          ).not.toBeNull(),
+        );
         const trigger = container.querySelector<HTMLButtonElement>(
           editor ? ".sidebar-file-view__action" : ".chat-pane__branches-trigger",
         )!;

@@ -76,10 +76,10 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       refreshChannelInventory();
     });
     store.replaceSource(host.store);
-    const subscriptions = [
-      store.subscribe(refreshChannelInventory),
-      channels.subscribe(refreshChannelInventory),
-    ];
+    // Setup and channel receipts admit missing onboarding inventory before another refresh.
+    const subscriptions = [store, channels].map((source) =>
+      source.subscribe(refreshChannelInventory),
+    );
     void host.store.refreshTranscriptIfIdle();
     refreshChannelInventory();
     return () => {

@@ -45,10 +45,7 @@ function createBlockReplyCoalescer(params: {
   onFlush: (payload: ReplyPayload) => Promise<void> | void;
 }) {
   const { config, shouldAbort, onFlush } = params;
-  const minChars = Math.max(1, Math.floor(config.minChars));
-  const maxChars = Math.max(minChars, Math.floor(config.maxChars));
-  const idleMs = Math.max(0, Math.floor(config.idleMs));
-  const joiner = config.joiner ?? "";
+  const { minChars, maxChars, idleMs, joiner } = config;
 
   let bufferText = "";
   let bufferSource: Pick<ReplyPayloadMetadata, "blockSourceText" | "blockSourceRange"> = {};

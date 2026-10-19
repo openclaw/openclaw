@@ -158,7 +158,7 @@ export function createConfigWriteCoordinator({
   };
   const invalidateConfigLoad = () => {
     resetConfigLoad();
-    nextRequestVersion(state, "config");
+    nextRequestVersion(state);
     state.configLoading = false;
   };
   const trackWrite = <T>(

@@ -55,13 +55,17 @@ import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
-  ChatToolApprovalReviews,
+  ToolApprovalReviews,
   ChatToolCard,
   ChatToolIcon,
   syncToolDisclosureOverflow,
   type ToolCardOptions,
 } from "./chat-tool-cards.solid.tsx";
-import { ChatToolContent, ChatToolRawOutput, ChatToolOutcome } from "./chat-tool-content.solid.tsx";
+import {
+  ExpandedToolCardContent,
+  RawOutputToggle,
+  ToolOutcome,
+} from "./chat-tool-content.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
@@ -312,11 +316,12 @@ function AssistantViews(props: ContentProps) {
               />
               <Show when={block().rawText}>
                 <div class="chat-tool-card__widget-raw">
-                  <ChatToolRawOutput
-                    text={block().rawText!}
-                    toggleRef={(element) => (rawToggle = element)}
-                    style={{ display: "contents" }}
-                  />
+                  <openclaw-chat-tool-raw style={{ display: "contents" }}>
+                    <RawOutputToggle
+                      text={block().rawText!}
+                      toggleRef={(element) => (rawToggle = element)}
+                    />
+                  </openclaw-chat-tool-raw>
                 </div>
               </Show>
             </div>
@@ -515,19 +520,18 @@ function BubbleContents(props: ContentProps) {
             />
           }
         >
-          <ChatToolContent
-            card={props.state().singleToolCard!}
-            options={props.state().toolRenderOptions}
-            style={{ display: "contents" }}
-          />
+          <openclaw-chat-tool-content style={{ display: "contents" }}>
+            <ExpandedToolCardContent
+              card={props.state().singleToolCard!}
+              options={props.state().toolRenderOptions}
+            />
+          </openclaw-chat-tool-content>
         </Show>
       </Show>
       <Show when={props.state().isStandaloneToolMessage && props.state().failedToolCard}>
-        <ChatToolOutcome
-          outcome="failed"
-          exitCode={props.state().failedToolCard!.exitCode}
-          style={{ display: "contents" }}
-        />
+        <openclaw-chat-tool-outcome style={{ display: "contents" }}>
+          <ToolOutcome outcome="failed" exitCode={props.state().failedToolCard!.exitCode} />
+        </openclaw-chat-tool-outcome>
       </Show>
     </>
   );
@@ -597,7 +601,11 @@ function ToolMessageFallback(props: ContentProps) {
         </div>
       </Show>
       <For each={props.state().toolCards} keyed={(card) => card.callId ?? card}>
-        {(card) => <ChatToolApprovalReviews card={card()} style={{ display: "contents" }} />}
+        {(card) => (
+          <openclaw-chat-tool-reviews style={{ display: "contents" }}>
+            <ToolApprovalReviews card={card()} />
+          </openclaw-chat-tool-reviews>
+        )}
       </For>
     </div>
   );

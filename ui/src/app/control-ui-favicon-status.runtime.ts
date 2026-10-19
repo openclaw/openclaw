@@ -166,6 +166,7 @@ export function connectControlUiFavicon(
     synchronize();
   }
 
+  // Track completion transitions and write the document favicon outside Solid rendering.
   const stops = [
     context.gateway.subscribe(synchronizeGateway),
     context.gateway.subscribeEvents((event) => handleQuestionPromptEvent(questions, event)),

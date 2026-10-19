@@ -17,6 +17,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import {
   clearDeliveryState,
   normalizeSubagentRunState,
@@ -483,6 +484,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             subagentRuns.commitOwnership(next);
             if (replaceParams.successor) {
               subagentRuns.releaseCompletionAuthority(replaceParams.successor);
+            }
+            if (!preserveCompletedRun && previousRunId !== nextRunId) {
+              // Remapped cohorts must not queue behind their restored, now-unbound input.
+              retireSubagentControllerInputs(value.source);
             }
             replaceParams.onPublished?.(next);
           },

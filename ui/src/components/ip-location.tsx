@@ -36,9 +36,8 @@ function IpLocationContent(props: IpLocationProps, host: HTMLElement) {
     }
     return null;
   });
-  const label = createMemo(() =>
-    [location()?.city, location()?.region ?? location()?.country].filter(Boolean).join(", "),
-  );
+  const label = () =>
+    [location()?.city, location()?.region ?? location()?.country].filter(Boolean).join(", ");
   return (
     <Loading on={ip()} fallback={null}>
       <Show when={label()}>

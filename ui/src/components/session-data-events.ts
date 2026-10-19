@@ -1,6 +1,7 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
@@ -13,6 +14,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarSessionOwnerFilter,
   SidebarSessionStatusFilter,
+  SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 
 // Chat panes announce catalog adoptions so rows bind immediately.
@@ -56,6 +58,24 @@ export function publishSidebarSessionError(
     sidebarSessionErrorOwners.delete(owner);
   } else {
     sidebarSessionErrorOwners.set(owner, source);
+  }
+}
+
+export function clearSidebarSessionError(owner: SidebarSessionListOwner): void {
+  publishSidebarSessionError(owner, null, "action");
+  owner.requestSessionDataUpdate();
+}
+
+export function publishScopedSessionError(
+  owner: SidebarSessionListOwner & {
+    isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean;
+  },
+  scope: SidebarSessionMutationScope,
+  error: unknown,
+): void {
+  if (owner.isSessionMutationScopeCurrent(scope)) {
+    publishSidebarSessionError(owner, formatUiError(error), "action");
+    owner.requestSessionDataUpdate();
   }
 }
 

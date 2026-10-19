@@ -24,12 +24,12 @@ export function createLinkReaderPanelLifecycle(
   props: LinkReaderPanelProps,
   scheduleAfterRender: (callback: () => void) => void,
   reconcile: (previous: LinkReaderPanelProps | undefined) => void,
+  render: () => void,
 ) {
   let connected = false;
   let completion: Promise<boolean> = Promise.resolve(true);
   let complete: ((value: boolean) => void) | undefined;
   let previousProps: LinkReaderPanelProps | undefined;
-  const listeners = new Set<() => void>();
 
   function publish(): void {
     if (!connected) {
@@ -42,7 +42,7 @@ export function createLinkReaderPanelLifecycle(
       });
     }
     const pending = complete;
-    listeners.forEach((listener) => listener());
+    render();
     if (needsCommit) {
       scheduleAfterRender(() => {
         // A disposed panel's receipt cannot publish into its replacement.
@@ -83,12 +83,6 @@ export function createLinkReaderPanelLifecycle(
       connected = false;
       complete?.(false);
       complete = undefined;
-    },
-    subscribe(this: void, listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
     },
   };
 }
