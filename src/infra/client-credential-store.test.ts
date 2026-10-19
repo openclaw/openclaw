@@ -49,6 +49,16 @@ const token: ClientTokenRecord = {
   updated_at_ms: 789,
 };
 
+it("reports store creation for rollback attribution without claiming an existing store", () => {
+  const { env } = fixture();
+  {
+    using first = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
+    expect(first?.created).toBe(true);
+  }
+  using reopened = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
+  expect(reopened?.created).toBe(false);
+});
+
 it("keeps read-existing credential operations local and does not bootstrap missing state", () => {
   const { root, run } = fixture();
   expect(run({ kind: "identity.read", identity_key: "primary" })).toEqual({

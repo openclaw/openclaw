@@ -62,8 +62,6 @@ const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
   read: (value) => (value === true ? true : undefined),
 };
 
-
-
 function assertPrivateAcl(pathname: string): void {
   if (process.platform === "darwin" && inspectDarwinAcl(pathname).kind !== "none") {
     throw new Error("Client credentials require a private directory and file without ACL entries.");

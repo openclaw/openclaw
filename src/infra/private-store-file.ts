@@ -33,7 +33,9 @@ export function preparePrivateStoreFileSync(pathname: string, directoryExists: b
   applyPrivateModeSync(directory, 0o700);
   if (!fs.existsSync(pathname)) {
     return createPrivateIfMissing(() =>
-      createFileSync(path.join(creationDirectory, path.basename(pathname)), { private: true }).close(),
+      createFileSync(path.join(creationDirectory, path.basename(pathname)), {
+        private: true,
+      }).close(),
     );
   }
   return false;

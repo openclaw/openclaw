@@ -1082,6 +1082,7 @@ src/infra/ports-netstat.ts
 src/infra/private-dir-mode.ts
 src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
+src/infra/private-store-file.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
