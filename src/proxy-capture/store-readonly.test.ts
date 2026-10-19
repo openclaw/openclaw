@@ -97,11 +97,11 @@ describe("createDebugProxyCaptureReader", () => {
       const before = inspectDatabase(databasePath);
       const reader = createDebugProxyCaptureReader({ env });
 
-    expect(reader.getSessionEvents("session-1")).toMatchObject([
-      { id: 1, sessionId: "session-1", flowId: "flow-1", host: "slack.com" },
-    ]);
-    expect(reader.readBlob("blob-1")).toBe('{"ok":true}');
-    expect(inspectDatabase(databasePath)).toEqual(before);
+      expect(reader.getSessionEvents("session-1")).toMatchObject([
+        { id: 1, sessionId: "session-1", flowId: "flow-1", host: "slack.com" },
+      ]);
+      expect(reader.readBlob("blob-1")).toBe('{"ok":true}');
+      expect(inspectDatabase(databasePath)).toEqual(before);
     },
   );
 
