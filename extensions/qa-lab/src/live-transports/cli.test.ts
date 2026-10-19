@@ -17,6 +17,7 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
   listQaRunnerCliContributions: mocks.listQaRunnerCliContributions,
 }));
+// mock-isolation: Count lazy suite loads without importing or running the real QA suite.
 vi.mock("./shared/live-transport-suite.runtime.js", () => {
   mocks.suiteRuntimeLoads.count += 1;
   return {
@@ -24,15 +25,19 @@ vi.mock("./shared/live-transport-suite.runtime.js", () => {
     runStandardLiveTransportQaSuiteCommand: mocks.runLiveTransportQaSuiteCommand,
   };
 });
+// mock-isolation: Verify CLI dispatch without loading Telegram's live transport and suite runtime.
 vi.mock("./telegram/cli.runtime.js", () => ({ runQaTelegramCommand: mocks.runTelegram }));
+// mock-isolation: Count lazy adapter loads and inject factory failures without the live transport.
 vi.mock("./discord/adapter.runtime.js", () => {
   mocks.adapterRuntimeLoads.discord += 1;
   return { createDiscordQaTransportAdapter: mocks.createDiscordAdapter };
 });
+// mock-isolation: Count lazy adapter loads and inject factory failures without the live transport.
 vi.mock("./slack/adapter.runtime.js", () => {
   mocks.adapterRuntimeLoads.slack += 1;
   return { createSlackQaTransportAdapter: mocks.createSlackAdapter };
 });
+// mock-isolation: Count lazy adapter loads and inject factory failures without the live transport.
 vi.mock("./whatsapp/adapter.runtime.js", () => {
   mocks.adapterRuntimeLoads.whatsapp += 1;
   return { createWhatsAppQaTransportAdapter: mocks.createWhatsAppAdapter };
