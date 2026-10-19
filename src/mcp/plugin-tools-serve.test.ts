@@ -124,14 +124,6 @@ async function expectApprovalReported(tool: AnyAgentTool, execute: ReturnType<ty
   });
 }
 
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 describe("plugin tools MCP server", () => {
   it.each([
     { agentSessionKey: "agent:research:acp:session-1", agentId: undefined, owner: "research" },
@@ -139,12 +131,6 @@ describe("plugin tools MCP server", () => {
   ])(
     "passes $agentSessionKey owner into plugin tool factories",
     async ({ agentSessionKey, agentId, owner }) => {
-      const runtimeRegistry = createMockPluginRegistry([]);
-      acquireStandalonePluginToolRegistryMock.mockResolvedValue({
-        registry: runtimeRegistry,
-        resolveTools: resolvePluginToolsMock,
-        release: releasePluginToolsMock,
-      });
       const config = { plugins: { enabled: true } } as never;
 
       const acquisition = await acquirePluginToolsForMcp({ config, agentSessionKey, agentId });
@@ -304,10 +290,10 @@ describe("plugin tools MCP server", () => {
     const handlers = createPluginToolsMcpHandlers([tool]);
     await handlers.callTool({ name: "memory_store", arguments: { text: "original" } });
 
-    const executeCall = requireFirstMockCall(execute.mock.calls, "plugin tool execute");
-    const toolCallId = String(executeCall[0]);
-    expect(executeCall[1]).toEqual({ text: "adjusted" });
-    expect(consumeAdjustedParamsForToolCall(toolCallId, runId)).toBeUndefined();
+    const [toolCallId, params] = execute.mock.calls[0] ?? [];
+    expect(execute).toHaveBeenCalledOnce();
+    expect(params).toEqual({ text: "adjusted" });
+    expect(consumeAdjustedParamsForToolCall(String(toolCallId), runId)).toBeUndefined();
   });
 
   it.each([false, true])(

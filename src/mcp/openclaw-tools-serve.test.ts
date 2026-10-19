@@ -122,10 +122,7 @@ describe("OpenClaw tools MCP server", () => {
         sourceConfig: {
           agents: {
             ownership: "explicit",
-            entries: {
-              work: { model: "openai/gpt-5.6-luna" },
-              other: { model: "example/other" },
-            },
+            entries: { work: { model: "openai/gpt-5.6-luna" }, other: { model: "example/other" } },
           },
           gateway: { port: 1 },
         },

@@ -217,15 +217,11 @@ describe("openclaw channel mcp server", () => {
     );
 
     await flushMcpNotifications();
+    const meta = { session_key: sessionKey, channel: "imessage", to: "+15551234567" };
     expect(channels).toMatchObject([
       {
         content: "hello Claude",
-        meta: {
-          session_key: sessionKey,
-          channel: "imessage",
-          to: "+15551234567",
-          message_id: "msg-user-1",
-        },
+        meta: { ...meta, message_id: "msg-user-1" },
       },
     ]);
 
@@ -290,27 +286,25 @@ describe("openclaw channel mcp server", () => {
       } else {
         await bridge.sendMessage({ sessionKey, text: "reply from mcp" });
       }
-      const describeCall = [
-        "sessions.describe",
-        { key: sessionKey, includeDerivedTitles: true, includeLastMessage: true },
+      const expectedCalls: unknown[][] = [
+        [
+          "sessions.describe",
+          { key: sessionKey, includeDerivedTitles: true, includeLastMessage: true },
+        ],
       ];
-      expect(gatewayRequest.mock.calls).toEqual(
-        action === "get"
-          ? [describeCall]
-          : [
-              describeCall,
-              [
-                "send",
-                {
-                  ...route,
-                  threadId: "42",
-                  sessionKey,
-                  message: "reply from mcp",
-                  idempotencyKey: expect.any(String),
-                },
-              ],
-            ],
-      );
+      if (action === "send") {
+        expectedCalls.push([
+          "send",
+          {
+            ...route,
+            threadId: "42",
+            sessionKey,
+            message: "reply from mcp",
+            idempotencyKey: expect.any(String),
+          },
+        ]);
+      }
+      expect(gatewayRequest.mock.calls).toEqual(expectedCalls);
     },
   );
 
