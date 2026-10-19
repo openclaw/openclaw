@@ -477,13 +477,15 @@ describe("private MCP projection operations at the session owner", () => {
     }
   });
 
-  it("forwards progress and cancels in-flight stdio work without retaining a lease", async ({
+  it("forwards progress and retires cancelled legacy work without retaining a lease", async ({
     signal,
   }) => {
     const { runtime, file } = await fixture();
-    const view = await acquireNativeMcpServer(runtime, "fixture", context());
+    const caller = context();
+    let view = await acquireNativeMcpServer(runtime, "fixture", caller);
     try {
       for (let attempt = 0; attempt < 3; attempt += 1) {
+        const pid = processId(payload(await view.callTool({ name: "probe" }, options(signal))));
         const abort = new AbortController();
         const progress = createDeferred();
         const releaseToken = `finish-${attempt}`;
@@ -502,10 +504,13 @@ describe("private MCP projection operations at the session owner", () => {
         expect(runtime.activeLeases).toBe(1);
         abort.abort(new Error("cancel test"));
         await rejected;
-        await withinTest(receipts.waitFor(file, "cancelled", attempt + 1), signal);
         expect(runtime.activeLeases).toBe(0);
-        receipts.release(file, releaseToken);
-        await withinTest(receipts.waitFor(file, "finished " + releaseToken), signal);
+        expect(() => process.kill(pid, 0)).toThrow();
+        await expect(view.callTool({ name: "probe" }, options(signal))).rejects.toThrow(
+          "reacquire",
+        );
+        await view.release();
+        view = await acquireNativeMcpServer(runtime, "fixture", caller);
       }
       expect(payload(await view.callTool({ name: "probe" }, options(signal)))).toMatchObject({
         capabilities: { roots: { listChanged: true } },
@@ -567,23 +572,26 @@ describe("private MCP projection operations at the session owner", () => {
       await withinTest(humanRelease.promise, callbackSignal);
       return { action: "accept", content: { choice: "held" } };
     };
-    const view = await acquireNativeMcpServer(runtime, "fixture", caller);
+    let view = await acquireNativeMcpServer(runtime, "fixture", caller);
     const timeoutMs = view.runtime.getServerRequestTimeoutMs?.("fixture");
     if (timeoutMs === undefined) {
       throw new Error("Expected negotiated owner's request timeout");
     }
     const pending: Promise<unknown>[] = [];
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
+      // This deadline retires a real process; its cleanup grace also needs the real clock.
       const sampling = Promise.allSettled([view.callTool({ name: "sample" }, options(signal))]);
       pending.push(sampling);
       const samplingSignal = await withinTest(samplingEntered.promise, signal);
-      await vi.advanceTimersByTimeAsync(timeoutMs);
-      expect(samplingSignal.aborted).toBe(true);
       expect(await sampling).toMatchObject([
         { status: "rejected", reason: expect.objectContaining({ message: "Request timed out" }) },
       ]);
+      expect(samplingSignal.aborted).toBe(true);
       expect(runtime.activeLeases).toBe(0);
+      await expect(view.callTool({ name: "probe" }, options(signal))).rejects.toThrow("reacquire");
+      await view.release();
+      view = await acquireNativeMcpServer(runtime, "fixture", caller);
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const human = Promise.allSettled([view.callTool({ name: "elicit" }, options(signal))]);
       pending.push(human);
       const humanSignal = await withinTest(humanEntered.promise, signal);

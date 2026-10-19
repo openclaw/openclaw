@@ -53,6 +53,7 @@ export function createNativeMcpClientBridge(params: {
   context: NativeMcpClientContext;
   signal: AbortSignal;
   invalidateCatalog: () => void;
+  retire: () => Promise<void>;
   acquireLease: () => () => void;
   runRequest: <T>(
     signal: AbortSignal,
@@ -74,6 +75,11 @@ export function createNativeMcpClientBridge(params: {
   const active = new Set<ActiveRequest>();
   const urlElicitations = new Map<string, View>();
   let closed = false;
+  const assertOpen = () => {
+    if (closed) {
+      throw new Error("MCP connection closed; reacquire the server view");
+    }
+  };
 
   const callbackOwner = () => {
     // Legacy callbacks have no portable parent id. Never guess between callers.
@@ -110,6 +116,7 @@ export function createNativeMcpClientBridge(params: {
     client.setRequestHandler("roots/list", (_request, extra) => {
       // Roots belong to this capability context even when no operation is active.
       params.signal.throwIfAborted();
+      assertOpen();
       extra.mcpReq.signal.throwIfAborted();
       return roots;
     });
@@ -171,6 +178,9 @@ export function createNativeMcpClientBridge(params: {
     }
   };
   const notification = (value: ServerNotification) => {
+    if (closed) {
+      return;
+    }
     if (value.method === "notifications/elicitation/complete") {
       // URL completion can arrive after the initiating request, or during another view's work.
       const owner = urlElicitations.get(value.params.elicitationId);
@@ -201,6 +211,7 @@ export function createNativeMcpClientBridge(params: {
       signal: viewSignal,
       assertCurrent() {
         viewSignal.throwIfAborted();
+        assertOpen();
         context.assertCurrent();
       },
       restore: AsyncLocalStorage.snapshot(),
@@ -237,6 +248,15 @@ export function createNativeMcpClientBridge(params: {
               holdForHumanInput,
             };
             active.add(call);
+            let retirement: Promise<void> | undefined;
+            const onAbort = () => {
+              if (client.getProtocolEra() === "legacy") {
+                // Cancelled legacy work can still emit callbacks with no portable parent id.
+                retirement ??= params.retire();
+                void retirement.catch(() => undefined);
+              }
+            };
+            requestOptions.signal.addEventListener("abort", onAbort, { once: true });
             try {
               return await view.restore(() =>
                 withGuardedFetchRequestAuthority(assertActive, () =>
@@ -251,8 +271,18 @@ export function createNativeMcpClientBridge(params: {
                   }),
                 ),
               );
+            } catch (error) {
+              requestOptions.signal.throwIfAborted();
+              throw error;
             } finally {
-              active.delete(call);
+              requestOptions.signal.removeEventListener("abort", onAbort);
+              try {
+                if (retirement) {
+                  await retirement;
+                }
+              } finally {
+                active.delete(call);
+              }
             }
           },
         );
@@ -373,5 +403,20 @@ export function createNativeMcpClientBridge(params: {
       },
     };
   }
-  return { bind, emit };
+  return {
+    bind,
+    emit,
+    async listenForCatalogChanges(timeout: number) {
+      const capabilities = client.getServerCapabilities();
+      const filter = {
+        ...(capabilities?.tools?.listChanged ? { toolsListChanged: true } : {}),
+        ...(capabilities?.resources?.listChanged ? { resourcesListChanged: true } : {}),
+        ...(capabilities?.prompts?.listChanged ? { promptsListChanged: true } : {}),
+      };
+      if (Object.keys(filter).length > 0) {
+        return client.listen(filter, { signal: params.signal, timeout });
+      }
+      return undefined;
+    },
+  };
 }

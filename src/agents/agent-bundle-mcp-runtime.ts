@@ -236,6 +236,7 @@ function createServerMcpRuntime(
     }
     session.retiring = true;
     currentSession = undefined;
+    session.nativeBridge?.emit({ kind: "closed" });
     await disposeSession(session);
     return true;
   };
@@ -408,6 +409,12 @@ function createServerMcpRuntime(
             context: nativeContext,
             signal: lifecycleAbortController.signal,
             invalidateCatalog,
+            retire: async () => {
+              if (currentSession === createdSession) {
+                invalidateCatalog();
+                await retireSessionIfCurrent(createdSession);
+              }
+            },
             acquireLease: () => {
               runtime.markUsed();
               return runtime.acquireLease!();
@@ -523,27 +530,18 @@ function createServerMcpRuntime(
           session.client.getProtocolEra() === "modern" &&
           !session.nativeSubscription
         ) {
-          const capabilities = session.client.getServerCapabilities();
-          const filter = {
-            ...(capabilities?.tools?.listChanged ? { toolsListChanged: true } : {}),
-            ...(capabilities?.resources?.listChanged ? { resourcesListChanged: true } : {}),
-            ...(capabilities?.prompts?.listChanged ? { promptsListChanged: true } : {}),
-          };
-          if (Object.keys(filter).length > 0) {
-            const subscribedSession = session;
-            const subscription = await session.client.listen(filter, {
-              signal: lifecycleAbortController.signal,
-              timeout: session.requestTimeoutMs,
-            });
-            session.nativeSubscription = subscription;
-            void subscription.closed.then(() => {
-              subscribedSession.nativeSubscription = undefined;
-              if (!subscribedSession.retiring && !retiredCatalog) {
-                invalidateCatalog();
-                subscribedSession.nativeBridge?.emit({ kind: "invalidated" });
-              }
-            });
-          }
+          const subscribedSession = session;
+          const subscription = await session.nativeBridge.listenForCatalogChanges(
+            session.requestTimeoutMs,
+          );
+          session.nativeSubscription = subscription;
+          void subscription?.closed.then(() => {
+            subscribedSession.nativeSubscription = undefined;
+            if (!subscribedSession.retiring && !retiredCatalog) {
+              invalidateCatalog();
+              subscribedSession.nativeBridge?.emit({ kind: "invalidated" });
+            }
+          });
         }
         startupRetryAfterMs = undefined;
         failIfDisposed();
