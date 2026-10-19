@@ -1,6 +1,7 @@
-import { createEffect, createMemo, Show } from "solid-js";
+import { createSignal, createMemo, Show } from "solid-js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
 import {
@@ -206,31 +207,21 @@ export function MobileWorkspaceContents(props: { workspace: SessionWorkspaceProp
       ],
     };
   });
-  let scroll: HTMLDivElement | null = null;
-  let restored: string | undefined;
+  const [scroll, onScrollElement] = createSignal<HTMLDivElement | null>(null);
   const destination = createMemo(() => JSON.stringify([sessionKey(), path(), query()]));
-  const restoreScroll = () => {
-    if (!scroll || model().status.kind !== "ready" || restored === destination()) {
-      return;
-    }
-    scroll.scrollTop = props.workspace.mobileNavigation?.scrollTop ?? 0;
-    restored = destination();
-  };
-  let lastDestination: string | undefined;
-  createEffect(
-    () => [destination(), model().status.kind] as const,
-    ([nextDestination, status]) => {
-      if (nextDestination !== lastDestination || status !== "ready") {
-        restored = undefined;
-      }
-      lastDestination = nextDestination;
-      restoreScroll();
-    },
-  );
-  const onScrollElement = (element: HTMLDivElement | null) => {
-    scroll = element;
-    restoreScroll();
-  };
+  createScrollPosition(() => {
+    const element = scroll();
+    return {
+      restore:
+        model().status.kind === "ready"
+          ? {
+              identity: [destination(), element],
+              target: element,
+              top: props.workspace.mobileNavigation?.scrollTop ?? 0,
+            }
+          : undefined,
+    };
+  });
   const onScroll = (top: number) => {
     if (model().status.kind === "ready") {
       props.workspace.onMobileScroll?.(top);
