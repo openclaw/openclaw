@@ -17,13 +17,8 @@ const image = "/tmp/generated.png";
 const voice = "/tmp/voice.ogg";
 const imageEvent = { mediaUrls: [image] };
 const hidden = `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nMEDIA:/tmp/hidden.png\n${INTERNAL_RUNTIME_CONTEXT_END}`;
-const sent = {
-  channel: "discord",
-  to: "dm:U123",
-  via: "direct" as const,
-  mediaUrl: null,
-  result: { messageId: "msg-1" },
-};
+const sent = { channel: "discord", to: "dm:U123", via: "direct" as const, mediaUrl: null };
+const delivered = { delivered: true, path: "direct" } as const;
 
 async function deliver(params: {
   event?: Partial<AgentInternalEvent>;
@@ -138,7 +133,7 @@ it.each<
     expect(sendMessage).not.toHaveBeenCalled();
     return;
   }
-  expect(result).toMatchObject({ delivered: true, path: "direct" });
+  expect(result).toMatchObject(delivered);
   expect(sendMessage).toHaveBeenCalledOnce();
   const payload = mockCallArg(sendMessage);
   const [content, mediaUrls, asVoice] = expected;
@@ -184,15 +179,11 @@ it("settles the full batch before mirroring, retaining delivery if bookkeeping f
   try {
     await settled.promise;
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-        deliveredAt: expect.any(Number),
-      }),
+      expect.objectContaining({ ...delivered, deliveredAt: expect.any(Number) }),
     );
   } finally {
     mirror.resolve();
   }
-  expect((await delivery).result).toMatchObject({ delivered: true, path: "direct" });
+  expect((await delivery).result).toMatchObject(delivered);
   expect(onDeliveryResult).toHaveBeenCalledOnce();
 });
