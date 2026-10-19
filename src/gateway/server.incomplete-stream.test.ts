@@ -3,6 +3,11 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
@@ -35,62 +40,55 @@ it(
     let scenario: Scenario = "started-text";
     let requests: unknown[] = [];
     const events: unknown[] = [];
-    const provider = createServer((request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk) => {
-        body += chunk;
-      });
-      request.on("end", () => {
-        const payload: unknown = JSON.parse(body);
-        requests.push({ method: request.method, url: request.url, payload });
-        const tool =
-          scenario.endsWith("tool") && (scenario !== "compatible-tool" || requests.length === 1);
-        const complete = scenario.startsWith("complete") || scenario.startsWith("compatible");
-        const frames: unknown[] = [
-          {
-            type: "message_start",
-            message: {
-              id: `msg_${requests.length}`,
-              type: "message",
-              role: "assistant",
-              model: "stream-fixture",
-              content: [],
-              stop_reason: null,
-              usage: { input_tokens: 10, output_tokens: 0 },
-            },
+    const provider = createServer(async (request, response) => {
+      const payload: unknown = JSON.parse(await readRequestText(request));
+      requests.push({ method: request.method, url: request.url, payload });
+      const tool =
+        scenario.endsWith("tool") && (scenario !== "compatible-tool" || requests.length === 1);
+      const complete = scenario.startsWith("complete") || scenario.startsWith("compatible");
+      const frames: unknown[] = [
+        {
+          type: "message_start",
+          message: {
+            id: `msg_${requests.length}`,
+            type: "message",
+            role: "assistant",
+            model: "stream-fixture",
+            content: [],
+            stop_reason: null,
+            usage: { input_tokens: 10, output_tokens: 0 },
           },
-        ];
-        frames.push({
-          type: "content_block_start",
-          index: 0,
-          content_block: tool
-            ? { type: "tool_use", id: "call_read_fixture", name: "read", input: {} }
-            : { type: "text", text: "" },
-        });
-        frames.push({
-          type: "content_block_delta",
-          index: 0,
-          delta: tool
-            ? { type: "input_json_delta", partial_json: JSON.stringify({ path: fixture }) }
-            : { type: "text_delta", text: complete ? "COMPLETE_REPLY_MARKER" : "Partial answer" },
-        });
-        if (!scenario.startsWith("started")) {
-          frames.push({ type: "content_block_stop", index: 0 });
-        }
-        if (complete) {
-          frames.push({
-            type: "message_delta",
-            delta: { stop_reason: tool ? "tool_use" : "end_turn" },
-            usage: { output_tokens: 4 },
-          });
-        }
-        if (scenario === "complete-text") {
-          frames.push({ type: "message_stop" });
-        }
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
+        },
+      ];
+      frames.push({
+        type: "content_block_start",
+        index: 0,
+        content_block: tool
+          ? { type: "tool_use", id: "call_read_fixture", name: "read", input: {} }
+          : { type: "text", text: "" },
       });
+      frames.push({
+        type: "content_block_delta",
+        index: 0,
+        delta: tool
+          ? { type: "input_json_delta", partial_json: JSON.stringify({ path: fixture }) }
+          : { type: "text_delta", text: complete ? "COMPLETE_REPLY_MARKER" : "Partial answer" },
+      });
+      if (!scenario.startsWith("started")) {
+        frames.push({ type: "content_block_stop", index: 0 });
+      }
+      if (complete) {
+        frames.push({
+          type: "message_delta",
+          delta: { stop_reason: tool ? "tool_use" : "end_turn" },
+          usage: { output_tokens: 4 },
+        });
+      }
+      if (scenario === "complete-text") {
+        frames.push({ type: "message_stop" });
+      }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
     });
     let gateway: OpenClawTestInstance | undefined;
     let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -125,13 +123,7 @@ it(
         );
         fixture = path.join(workspace, "fixture.txt");
         await fs.writeFile(fixture, "COMPLETE_TOOL_READ_MARKER");
-        await new Promise<void>((resolve) => {
-          provider.listen(0, "127.0.0.1", resolve);
-        });
-        const address = provider.address();
-        if (!address || typeof address === "string") {
-          throw new Error("loopback provider did not bind");
-        }
+        const baseUrl = await listenLoopback(provider);
         await gateway.state.writeConfig({
           agents: {
             defaults: {
@@ -145,17 +137,13 @@ it(
             mode: "replace",
             providers: {
               "stream-fixture": {
-                baseUrl: `http://127.0.0.1:${address.port}`,
+                baseUrl,
                 apiKey: "local-fixture-key",
                 api: "anthropic-messages",
                 models: [
                   {
                     id: "stream-fixture",
                     name: "Stream fixture",
-                    api: "anthropic-messages",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 200_000,
                     maxTokens: 4096,
                   },
@@ -250,10 +238,7 @@ it(
         if (!provider.listening) {
           return;
         }
-        provider.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          provider.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(provider);
       },
     );
   },

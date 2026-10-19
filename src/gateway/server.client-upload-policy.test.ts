@@ -1,8 +1,7 @@
-// Real RPC owners and media filesystem; only inference uses the shared Gateway fixture.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getMediaDir } from "../media/store.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -25,245 +24,238 @@ const handlers: Record<string, GatewayRequestHandler> = {
   "sessions.create": sessionCreateHandlers["sessions.create"]!,
 };
 
-describe("client upload policy at the input commit owner", () => {
-  const fixture = installAgentAuthorityProofFixture();
-  const uploadsDisabled = { code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } };
-  const cached = expect.objectContaining({ cached: true });
-  async function prepare() {
-    const f = await fixture({ imageCapable: true });
-    const original = f.context.getCommittedRuntimeConfig;
-    const config = f.context.getRuntimeConfig();
-    let enabled = true;
-    f.context.getCommittedRuntimeConfig = () => ({
-      ...config,
-      gateway: { ...config.gateway, uploads: { enabled } },
-    });
-    return {
-      ...f,
-      disable: () => {
-        enabled = false;
+const fixture = installAgentAuthorityProofFixture();
+const uploadsDisabled = { code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } };
+const cached = expect.objectContaining({ cached: true });
+async function prepare() {
+  const f = await fixture({ imageCapable: true });
+  const original = f.context.getCommittedRuntimeConfig;
+  const config = f.context.getRuntimeConfig();
+  let enabled = true;
+  f.context.getCommittedRuntimeConfig = () => ({
+    ...config,
+    gateway: { ...config.gateway, uploads: { enabled } },
+  });
+  return {
+    ...f,
+    disable: () => {
+      enabled = false;
+    },
+    cleanup: async () => {
+      f.context.getCommittedRuntimeConfig = original;
+      await f.cleanup();
+    },
+  };
+}
+function request(
+  f: Awaited<ReturnType<typeof prepare>>,
+  method: string,
+  params: Record<string, unknown>,
+  receipt = false,
+) {
+  return {
+    req: { type: "req", id: receipt ? "receipt-wire-id" : f.runId, method, params },
+    params,
+    client: {
+      connId: receipt ? "upload-receipt-proof" : "upload-policy-proof",
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        role: "operator",
+        scopes: ["operator.admin"],
+        client: { id: "cli", mode: "cli", platform: "test", version: "test" },
+        ...(receipt
+          ? {
+              device: {
+                id: "upload-receipt-device",
+                publicKey: "synthetic",
+                signature: "synthetic",
+                signedAt: 1,
+                nonce: "synthetic",
+              },
+            }
+          : {}),
       },
-      cleanup: async () => {
-        f.context.getCommittedRuntimeConfig = original;
-        await f.cleanup();
-      },
+    },
+    context: f.context,
+    respond: vi.fn<RespondFn>(),
+    isWebchatConnect: () => false,
+  } satisfies Parameters<GatewayRequestHandler>[0];
+}
+
+it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as const)(
+  "replays accepted %s uploads after disable without admitting fresh bytes",
+  async (method) => {
+    const f = await prepare();
+    const params = {
+      agentId: "main",
+      ...(method === "chat.send"
+        ? { sessionKey: f.sessionKey }
+        : { key: method === "sessions.create" ? f.sessionKey + "-created" : f.sessionKey }),
+      message: "Accepted upload receipt",
+      idempotencyKey: f.runId,
+      attachments: [{ mimeType: "image/png", fileName: "proof.png", content: PNG }],
     };
-  }
-  function request(
-    f: Awaited<ReturnType<typeof prepare>>,
-    method: string,
-    params: Record<string, unknown>,
-    receipt = false,
-  ) {
-    return {
-      req: { type: "req", id: receipt ? "receipt-wire-id" : f.runId, method, params },
-      params,
-      client: {
-        connId: receipt ? "upload-receipt-proof" : "upload-policy-proof",
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.admin"],
-          client: { id: "cli", mode: "cli", platform: "test", version: "test" },
-          ...(receipt
-            ? {
-                device: {
-                  id: "upload-receipt-device",
-                  publicKey: "synthetic",
-                  signature: "synthetic",
-                  signedAt: 1,
-                  nonce: "synthetic",
-                },
-              }
-            : {}),
-        },
-      },
-      context: f.context,
-      respond: vi.fn<RespondFn>(),
-      isWebchatConnect: () => false,
-    } satisfies Parameters<GatewayRequestHandler>[0];
-  }
-
-  it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as const)(
-    "replays accepted %s uploads after disable without admitting fresh bytes",
-    async (method) => {
-      const f = await prepare();
-      const params = {
-        agentId: "main",
-        ...(method === "chat.send"
-          ? { sessionKey: f.sessionKey }
-          : { key: method === "sessions.create" ? f.sessionKey + "-created" : f.sessionKey }),
-        message: "Accepted upload receipt",
-        idempotencyKey: f.runId,
-        attachments: [{ mimeType: "image/png", fileName: "proof.png", content: PNG }],
-      };
-      const invoke = async (requestParams = params) => {
-        const options = request(f, method, requestParams, true);
-        await handleGatewayRequest(options);
-        return options.respond;
-      };
-      try {
-        const accepted = await invoke();
-        expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
-        await f.drain();
-        const baseline = await invoke();
-        const receipt = baseline.mock.calls.at(-1)!;
-        expect(receipt[0]).toBe(true);
-        expect(receipt[3]).toMatchObject({ cached: true });
-        const mediaDir = path.join(getMediaDir(), "inbound");
-        const files = await fs.readdir(mediaDir);
-        const dispatches = dispatchInboundMessageMock.mock.calls.length;
-        f.disable();
-        const replay = await invoke();
-        expect(replay).toHaveBeenCalledExactlyOnceWith(receipt[0], receipt[1], receipt[2], cached);
-        const freshRunId = randomUUID();
-        const denied = await invoke({ ...params, idempotencyKey: freshRunId });
-        expect(denied.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
-        expect(f.context.dedupe.has("chat:" + freshRunId)).toBe(false);
-        expect(await fs.readdir(mediaDir)).toEqual(files);
-        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
-      } finally {
-        await f.cleanup();
-      }
-    },
-  );
-
-  it.each([
-    ["chat.send", "inline-image", "policy"],
-    ["chat.send", "offloaded-image", "policy"],
-    ["chat.send", "document", "policy"],
-    ["agent", "inline-image", "policy"],
-    ["agent", "offloaded-image", "policy"],
-    ["sessions.send", "inline-image", "policy"],
-    ["sessions.create", "document", "policy"],
-    ["agent", "offloaded-image", "stop"],
-    ["agent", "offloaded-image", "stop-and-policy"],
-  ] as const)(
-    "settles %s %s when %s interrupts the real media writer",
-    async (method, kind, interruption) => {
-      const f = await prepare();
+    const invoke = async (requestParams = params) => {
+      const options = request(f, method, requestParams, true);
+      await handleGatewayRequest(options);
+      return options.respond;
+    };
+    try {
+      const accepted = await invoke();
+      expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
+      await f.drain();
+      const baseline = await invoke();
+      const receipt = baseline.mock.calls.at(-1)!;
+      expect(receipt[0]).toBe(true);
+      expect(receipt[3]).toMatchObject({ cached: true });
       const mediaDir = path.join(getMediaDir(), "inbound");
-      const before = await fs.readdir(mediaDir).catch(() => [] as string[]);
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const mkdir = fs.mkdir.bind(fs);
-      let intercepted = false;
-      const pause = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-        const result = await mkdir(...args);
-        if (!intercepted && String(args[0]) === mediaDir) {
-          intercepted = true;
-          entered.resolve();
-          await resume.promise;
-        }
-        return result;
-      });
-      const content =
-        kind === "document"
-          ? Buffer.from("late upload policy proof")
-          : Buffer.concat([
-              Buffer.from(PNG, "base64"),
-              Buffer.alloc(kind === "offloaded-image" ? 2_000_001 : 0),
-            ]);
-      const requestParams = {
-        agentId: "main",
-        ...(method === "sessions.create"
-          ? { key: `agent:main:upload-create:${f.runId}` }
-          : method === "sessions.send"
-            ? { key: f.sessionKey }
-            : { sessionKey: f.sessionKey }),
-        message: "Inspect this attachment",
-        ...(method === "sessions.create" ? {} : { idempotencyKey: f.runId }),
-        attachments: [
-          {
-            mimeType: kind === "document" ? "text/plain" : "image/png",
-            fileName: kind === "document" ? "proof.txt" : "proof.png",
-            content: content.toString("base64"),
-          },
-        ],
-      };
-      const handlerOptions = request(f, method, requestParams);
-      const { respond } = handlerOptions;
-      const pending = Promise.resolve(handlers[method]!(handlerOptions));
-      try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("handler finished before entering the media writer");
-          }),
-        ]);
-        let stoppedPayload: unknown;
-        if (interruption !== "policy") {
-          const abortRespond = vi.fn<RespondFn>();
-          const abortParams = { sessionKey: f.sessionKey, agentId: "main", runId: f.runId };
-          await handleChatAbortRequest({
-            ...handlerOptions,
-            req: { type: "req", id: f.runId + "-stop", method: "chat.abort", params: abortParams },
-            params: abortParams,
-            respond: abortRespond,
-          });
-          expect(abortRespond.mock.calls.at(-1)?.[1]).toMatchObject({ aborted: true });
-          stoppedPayload = f.context.dedupe.get(`agent:${f.runId}`)?.payload;
-          expect(stoppedPayload).toMatchObject({
-            runId: f.runId,
-            sessionKey: f.sessionKey,
-            status: "timeout",
-            stopReason: "rpc",
-          });
-        }
-        if (interruption !== "stop") {
-          f.disable();
-        }
-        resume.resolve();
-        await pending;
-        await f.drain();
-        expect(intercepted).toBe(true);
-        if (interruption !== "policy") {
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, stoppedPayload, undefined, cached);
-          expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toEqual(stoppedPayload);
-          if (interruption === "stop-and-policy") {
-            const replayRespond = vi.fn<RespondFn>();
-            await handleGatewayRequest({
-              ...handlerOptions,
-              req: { ...handlerOptions.req, id: f.runId + "-retry" },
-              respond: replayRespond,
-            });
-            expect(replayRespond).toHaveBeenCalledExactlyOnceWith(
-              true,
-              stoppedPayload,
-              undefined,
-              cached,
-            );
-            const freshRespond = vi.fn<RespondFn>();
-            const freshParams = { ...requestParams, idempotencyKey: f.runId + "-fresh" };
-            await handleGatewayRequest({
-              ...handlerOptions,
-              req: { ...handlerOptions.req, id: f.runId + "-fresh", params: freshParams },
-              respond: freshRespond,
-            });
-            expect(freshRespond.mock.calls.some(([ok]) => ok)).toBe(false);
-            expect(freshRespond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
-            expect(f.context.dedupe.has(`agent:${f.runId}-fresh`)).toBe(false);
-          }
-        } else if (method === "sessions.create") {
-          // Creation remains committed; only its initial input is rejected.
-          expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-            runStarted: false,
-            runError: uploadsDisabled,
-          });
-        } else {
-          expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
-          expect(respond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
-        }
-        expect(await fs.readdir(mediaDir)).toEqual(before);
-        expect(agentCommandMock).not.toHaveBeenCalled();
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      } finally {
-        resume.resolve();
-        await Promise.allSettled([pending]);
-        pause.mockRestore();
-        await f.cleanup();
+      const files = await fs.readdir(mediaDir);
+      const dispatches = dispatchInboundMessageMock.mock.calls.length;
+      f.disable();
+      const replay = await invoke();
+      expect(replay).toHaveBeenCalledExactlyOnceWith(receipt[0], receipt[1], receipt[2], cached);
+      const freshRunId = randomUUID();
+      const denied = await invoke({ ...params, idempotencyKey: freshRunId });
+      expect(denied.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
+      expect(f.context.dedupe.has("chat:" + freshRunId)).toBe(false);
+      expect(await fs.readdir(mediaDir)).toEqual(files);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+it.each([
+  ["chat.send", "inline-image", "policy"],
+  ["chat.send", "offloaded-image", "policy"],
+  ["chat.send", "document", "policy"],
+  ["agent", "inline-image", "policy"],
+  ["agent", "offloaded-image", "policy"],
+  ["sessions.send", "inline-image", "policy"],
+  ["sessions.create", "document", "policy"],
+  ["agent", "offloaded-image", "stop"],
+  ["agent", "offloaded-image", "stop-and-policy"],
+] as const)(
+  "settles %s %s when %s interrupts the real media writer",
+  async (method, kind, interruption) => {
+    const f = await prepare();
+    const mediaDir = path.join(getMediaDir(), "inbound");
+    const before = await fs.readdir(mediaDir).catch(() => [] as string[]);
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const mkdir = fs.mkdir.bind(fs);
+    let intercepted = false;
+    const pause = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+      const result = await mkdir(...args);
+      if (!intercepted && String(args[0]) === mediaDir) {
+        intercepted = true;
+        entered.resolve();
+        await resume.promise;
       }
-    },
-  );
-});
+      return result;
+    });
+    const content =
+      kind === "document"
+        ? Buffer.from("late upload policy proof")
+        : Buffer.concat([
+            Buffer.from(PNG, "base64"),
+            Buffer.alloc(kind === "offloaded-image" ? 2_000_001 : 0),
+          ]);
+    const requestParams = {
+      agentId: "main",
+      ...(method === "sessions.create"
+        ? { key: `agent:main:upload-create:${f.runId}` }
+        : method === "sessions.send"
+          ? { key: f.sessionKey }
+          : { sessionKey: f.sessionKey }),
+      message: "Inspect this attachment",
+      ...(method === "sessions.create" ? {} : { idempotencyKey: f.runId }),
+      attachments: [
+        {
+          mimeType: kind === "document" ? "text/plain" : "image/png",
+          fileName: kind === "document" ? "proof.txt" : "proof.png",
+          content: content.toString("base64"),
+        },
+      ],
+    };
+    const handlerOptions = request(f, method, requestParams);
+    const { respond } = handlerOptions;
+    const pending = Promise.resolve(handlers[method]!(handlerOptions));
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("handler finished before entering the media writer");
+        }),
+      ]);
+      let stoppedPayload: unknown;
+      if (interruption !== "policy") {
+        const abortRespond = vi.fn<RespondFn>();
+        const abortParams = { sessionKey: f.sessionKey, agentId: "main", runId: f.runId };
+        await handleChatAbortRequest({
+          ...handlerOptions,
+          req: { type: "req", id: f.runId + "-stop", method: "chat.abort", params: abortParams },
+          params: abortParams,
+          respond: abortRespond,
+        });
+        expect(abortRespond.mock.calls.at(-1)?.[1]).toMatchObject({ aborted: true });
+        stoppedPayload = f.context.dedupe.get(`agent:${f.runId}`)?.payload;
+        expect(stoppedPayload).toMatchObject({
+          runId: f.runId,
+          sessionKey: f.sessionKey,
+          status: "timeout",
+          stopReason: "rpc",
+        });
+      }
+      if (interruption !== "stop") {
+        f.disable();
+      }
+      resume.resolve();
+      await pending;
+      await f.drain();
+      expect(intercepted).toBe(true);
+      if (interruption !== "policy") {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, stoppedPayload, undefined, cached);
+        expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toEqual(stoppedPayload);
+        if (interruption === "stop-and-policy") {
+          const replay = vi.fn<RespondFn>();
+          await handleGatewayRequest({
+            ...handlerOptions,
+            req: { ...handlerOptions.req, id: f.runId + "-retry" },
+            respond: replay,
+          });
+          expect(replay).toHaveBeenCalledExactlyOnceWith(true, stoppedPayload, undefined, cached);
+          const freshRespond = vi.fn<RespondFn>();
+          const freshParams = { ...requestParams, idempotencyKey: f.runId + "-fresh" };
+          await handleGatewayRequest({
+            ...handlerOptions,
+            req: { ...handlerOptions.req, id: f.runId + "-fresh", params: freshParams },
+            respond: freshRespond,
+          });
+          expect(freshRespond.mock.calls.some(([ok]) => ok)).toBe(false);
+          expect(freshRespond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
+          expect(f.context.dedupe.has(`agent:${f.runId}-fresh`)).toBe(false);
+        }
+      } else if (method === "sessions.create") {
+        // Creation remains committed; only its initial input is rejected.
+        expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+          runStarted: false,
+          runError: uploadsDisabled,
+        });
+      } else {
+        expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
+        expect(respond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
+      }
+      expect(await fs.readdir(mediaDir)).toEqual(before);
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending]);
+      pause.mockRestore();
+      await f.cleanup();
+    }
+  },
+);

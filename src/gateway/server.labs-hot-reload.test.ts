@@ -1,52 +1,35 @@
-// Exercise Labs through the same authenticated config RPC used by Settings.
 import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type {
-  HelloOk,
   PluginsControlUiCatalog,
   PluginsUiDescriptorsResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import { getFreePort } from "../test-utils/ports.js";
-import { GatewayClient } from "./client.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { installHotReloadFixture } from "./server.hot-reload-fixture.test-support.js";
 import { startGatewayServer } from "./server.js";
 
 const TOKEN = "labs-hot-reload-synthetic-token";
 const PLUGIN_ID = "labs-browser-fixture";
 const RFB_VERSION = "RFB 003.008\n";
-let state: OpenClawTestState | undefined;
-let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-let client: GatewayClient | undefined;
 let rfbServer: net.Server | undefined;
 const rfbPeers = new Set<net.Socket>();
 const observers: WebSocket[] = [];
 const restartSignal = vi.fn();
 
-afterEach(async () => {
-  await runQaGatewayFixture(
-    async () => resetGatewayRestartStateForInProcessRestart(),
-    async () => {
+const fixture = installHotReloadFixture("labs-hot-reload", {
+  beforeClose: [
+    () => resetGatewayRestartStateForInProcessRestart(),
+    () => {
       for (const observer of observers.splice(0)) {
         observer.terminate();
       }
-      await client?.stopAndWait();
-      client = undefined;
     },
-    async () => {
-      await server?.close();
-      server = undefined;
-    },
+  ],
+  afterClose: [
     async () => {
       for (const peer of rfbPeers) {
         peer.destroy();
@@ -60,28 +43,11 @@ afterEach(async () => {
     },
     () => resetGatewayRestartStateForInProcessRestart(),
     () => process.off("SIGUSR1", restartSignal),
-    () => state?.cleanup(),
-    () => resetLogger(),
-    () => clearPluginMetadataLifecycleCaches(),
-  );
+  ],
 });
 
 it("applies all Labs switches through config.patch without restarting the Gateway", async () => {
-  state = await createOpenClawTestState({
-    label: "labs-hot-reload",
-    env: {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-  });
+  const { state, port } = fixture;
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   process.on("SIGUSR1", restartSignal);
 
@@ -150,63 +116,32 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
       entries: { [PLUGIN_ID]: { enabled: true } },
     },
   });
-  const port = await getFreePort();
   const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-  server = await startGatewayServer(port, {
-    auth: { mode: "token", token: TOKEN },
-    controlUiEnabled: false,
-    hotReloadRecovery,
-  });
-  const connected = createDeferredCore<HelloOk>();
-  const hellos: HelloOk[] = [];
-  const connectionClosed = vi.fn();
-  client = new GatewayClient({
-    url: `ws://127.0.0.1:${port}`,
-    token: TOKEN,
-    clientName: "gateway-client",
-    clientVersion: "1.0.0",
-    platform: "test",
-    mode: "backend",
-    deviceIdentity: null,
-    scopes: ["operator.admin"],
-    hostDeps: {
-      loadDeviceAuthToken: () => null,
-      storeDeviceAuthToken: () => {},
-      clearDeviceAuthToken: () => {},
-    },
-    onHelloOk: (hello) => {
-      hellos.push(hello);
-      connected.resolve(hello);
-    },
-    onConnectError: (error) => connected.reject(error),
-    onClose: connectionClosed,
-  });
-  client.start();
-  const hello = await withTestTimeout(connected.promise, 10_000, "Gateway connect timeout");
+  const server = fixture.ownServer(
+    await startGatewayServer(port, {
+      auth: { mode: "token", token: TOKEN },
+      controlUiEnabled: false,
+      hotReloadRecovery,
+    }),
+  );
+  const { client: gateway, hello, hellos, closeEvents } = await fixture.connect({ token: TOKEN });
   await server.startupSettled;
-  const gateway = client;
   const identity = await gateway.request("labsFixture.identity", {});
 
   const assertPluginUi = async (enabled: boolean) => {
+    const fromFixture = (entry: { pluginId: string }) => entry.pluginId === PLUGIN_ID;
+    const disabledUi = expect.objectContaining({
+      pluginId: PLUGIN_ID,
+      code: "custom-plugin-ui-disabled",
+    });
     const catalog = await gateway.request<PluginsControlUiCatalog>("plugins.controlUi.list", {});
-    expect(catalog.plugins.some((entry) => entry.pluginId === PLUGIN_ID)).toBe(enabled);
-    expect(catalog.diagnostics).toEqual(
-      enabled
-        ? []
-        : [
-            expect.objectContaining({
-              pluginId: PLUGIN_ID,
-              code: "custom-plugin-ui-disabled",
-            }),
-          ],
-    );
+    expect(catalog.plugins.some(fromFixture)).toBe(enabled);
+    expect(catalog.diagnostics).toEqual(enabled ? [] : [disabledUi]);
     const descriptors = await gateway.request<PluginsUiDescriptorsResult>(
       "plugins.uiDescriptors",
       {},
     );
-    expect(descriptors.controlUiWidgetKinds?.some((entry) => entry.pluginId === PLUGIN_ID)).toBe(
-      enabled,
-    );
+    expect(descriptors.controlUiWidgetKinds?.some(fromFixture)).toBe(enabled);
   };
   const observeHost = () =>
     gateway.request<{ wsPath: string; transport: string; auth: string }>("desktop.observe", {
@@ -224,27 +159,24 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     return observer;
   };
   const assertWorkerDesktop = async (enabled: boolean) => {
+    const environmentId = "missing-labs-worker";
     for (const [method, params] of [
-      ["worker.desktop.observe", { environmentId: "missing-labs-worker" }],
-      ["worker.desktop.launch", { environmentId: "missing-labs-worker", app: "browser" }],
-      [
-        "desktop.launch",
-        { source: { kind: "environment", environmentId: "missing-labs-worker" }, app: "browser" },
-      ],
+      ["worker.desktop.observe", { environmentId }],
+      ["worker.desktop.launch", { environmentId, app: "browser" }],
+      ["desktop.launch", { source: { kind: "environment", environmentId }, app: "browser" }],
     ] as const) {
       await expect(gateway.request(method, params)).rejects.toMatchObject({
         code: "INVALID_REQUEST",
         message: expect.stringContaining(
-          enabled ? "Unknown worker environment: missing-labs-worker" : "is disabled",
+          enabled ? `Unknown worker environment: ${environmentId}` : "is disabled",
         ),
       });
     }
   };
 
   await assertPluginUi(false);
-  await expect(observeHost()).rejects.toMatchObject({
-    message: expect.stringContaining("disabled"),
-  });
+  const disabledHost = { message: expect.stringContaining("disabled") };
+  await expect(observeHost()).rejects.toMatchObject(disabledHost);
   let activeObserver: WebSocket | undefined;
   for (const enabled of [true, false, true]) {
     const config = await gateway.request<{ hash: string }>("config.get", {});
@@ -262,13 +194,11 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
       activeObserver = await connectObserver(observed.wsPath);
     } else {
       await expect.poll(() => activeObserver?.readyState).toBe(WebSocket.CLOSED);
-      await expect(observeHost()).rejects.toMatchObject({
-        message: expect.stringContaining("disabled"),
-      });
+      await expect(observeHost()).rejects.toMatchObject(disabledHost);
     }
     expect(await gateway.request("labsFixture.identity", {})).toEqual(identity);
     expect(hellos.map((entry) => entry.server.connId)).toEqual([hello.server.connId]);
-    expect(connectionClosed).not.toHaveBeenCalled();
+    expect(closeEvents).toEqual([]);
     expect(hotReloadRecovery).not.toHaveBeenCalled();
     expect(restartSignal).not.toHaveBeenCalled();
   }
