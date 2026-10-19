@@ -441,4 +441,124 @@ describe("activation planner", () => {
       }),
     ).toStrictEqual([]);
   });
+
+  it("plans endpoint owners for custom provider ids from configured base URLs", () => {
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "qwen",
+          origin: "bundled",
+          providers: ["qwen", "dashscope"],
+          providerEndpoints: [
+            {
+              endpointClass: "modelstudio-native",
+              baseUrls: ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
+            },
+          ],
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = {
+      models: {
+        providers: {
+          "custom-dashscope": {
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const trigger = { kind: "provider" as const, provider: "custom-dashscope" };
+    expect(resolveManifestActivationPluginIds({ config, trigger })).toEqual(["qwen"]);
+    expect(resolveManifestActivationPlan({ config, trigger }).entries).toEqual([
+      {
+        pluginId: "qwen",
+        origin: "bundled",
+        reasons: ["manifest-provider-endpoint-owner"],
+      },
+    ]);
+  });
+
+  it("applies disable, deny, and allowlist policy to endpoint owners", () => {
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "qwen",
+          origin: "bundled",
+          providers: ["qwen"],
+          providerEndpoints: [
+            {
+              endpointClass: "modelstudio-native",
+              baseUrls: ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
+            },
+          ],
+        },
+      ],
+      diagnostics: [],
+    });
+    const models = {
+      providers: {
+        "custom-dashscope": {
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          models: [],
+        },
+      },
+    };
+    const trigger = { kind: "provider" as const, provider: "custom-dashscope" };
+    expect(
+      resolveManifestActivationPluginIds({
+        config: { models, plugins: { entries: { qwen: { enabled: false } } } },
+        trigger,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveManifestActivationPluginIds({
+        config: { models, plugins: { deny: ["qwen"] } },
+        trigger,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveManifestActivationPluginIds({
+        config: { models, plugins: { allow: ["other"] } },
+        trigger,
+      }),
+    ).toEqual([]);
+  });
+
+  it("requires explicit trust for workspace endpoint owners", () => {
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-qwen",
+          origin: "workspace",
+          providers: ["qwen"],
+          providerEndpoints: [
+            {
+              endpointClass: "modelstudio-native",
+              baseUrls: ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
+            },
+          ],
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = {
+      models: {
+        providers: {
+          "custom-dashscope": {
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    expect(
+      resolveManifestActivationPluginIds({
+        config,
+        trigger: { kind: "provider", provider: "custom-dashscope" },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
+  });
 });

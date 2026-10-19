@@ -70,6 +70,45 @@ export function matchesPluginProviderEndpoint(
   );
 }
 
+/**
+ * Resolves plugin owners for a custom provider id through the endpoint its
+ * manifest declares. Registered provider ids keep id-based ownership.
+ */
+export function resolveConfiguredProviderEndpointOwnerPluginIds(params: {
+  providerId: string;
+  baseUrl: unknown;
+  plugins: readonly PluginManifestRecord[];
+}): string[] {
+  const normalizedProviderId = normalizeProviderId(params.providerId);
+  if (
+    !normalizedProviderId ||
+    params.plugins.some(
+      (plugin) =>
+        (plugin.providers ?? []).some(
+          (providerId) => normalizeProviderId(providerId) === normalizedProviderId,
+        ) ||
+        (plugin.autoEnableWhenConfiguredProviders ?? []).some(
+          (providerId) => normalizeProviderId(providerId) === normalizedProviderId,
+        ),
+    )
+  ) {
+    return [];
+  }
+  const normalizedBaseUrl =
+    typeof params.baseUrl === "string" ? normalizePluginProviderBaseUrl(params.baseUrl) : undefined;
+  if (!normalizedBaseUrl) {
+    return [];
+  }
+  const { hostname: host } = new URL(normalizedBaseUrl);
+  return params.plugins
+    .filter((plugin) =>
+      (plugin.providerEndpoints ?? []).some((endpoint) =>
+        matchesPluginProviderEndpoint(endpoint, { host, normalizedBaseUrl }),
+      ),
+    )
+    .map((plugin) => plugin.id);
+}
+
 function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
   if (!Array.isArray(value)) {
     return [];

@@ -117,4 +117,90 @@ describe("plugin auto-enable declared provider endpoints", () => {
       qwen: ["custom-intl provider endpoint configured"],
     });
   });
+
+  it("does not widen a restrictive plugin allowlist for an endpoint-only match", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["other"],
+          entries: { other: { enabled: true } },
+        },
+        models: {
+          providers: {
+            "custom-dashscope": {
+              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        qwenPlugin,
+        { id: "other", channels: [], origin: "bundled" },
+      ]),
+    });
+    expect(result.config.plugins?.allow).toEqual(["other"]);
+    expect(result.config.plugins?.entries?.qwen).toBeUndefined();
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
+  it("does not activate a denied endpoint owner", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: { deny: ["qwen"] },
+        models: {
+          providers: {
+            "custom-dashscope": {
+              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([qwenPlugin]),
+    });
+    expect(result.config.plugins?.entries?.qwen).toBeUndefined();
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
+  it("does not activate an explicitly disabled endpoint owner", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: { entries: { qwen: { enabled: false } } },
+        models: {
+          providers: {
+            "custom-dashscope": {
+              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([qwenPlugin]),
+    });
+    expect(result.config.plugins?.entries?.qwen).toEqual({ enabled: false });
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
+  it("does not activate an untrusted workspace endpoint owner", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        models: {
+          providers: {
+            "custom-dashscope": {
+              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([{ ...qwenPlugin, origin: "workspace" }]),
+    });
+    expect(result.config.plugins?.entries?.qwen).toBeUndefined();
+    expect(result.autoEnabledReasons).toEqual({});
+  });
 });

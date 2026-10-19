@@ -13,10 +13,7 @@ import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-s
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
-import {
-  matchesPluginProviderEndpoint,
-  normalizePluginProviderBaseUrl,
-} from "../plugins/plugin-metadata-provider-facts.js";
+import { resolveConfiguredProviderEndpointOwnerPluginIds } from "../plugins/plugin-metadata-provider-facts.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
@@ -100,34 +97,15 @@ function resolveConfiguredProviderEndpointCandidates(params: {
   if (!providers) {
     return [];
   }
-  const registeredProviderIds = new Set(
-    params.registry.plugins
-      .flatMap((plugin) => [
-        ...(plugin.providers ?? []),
-        ...(plugin.autoEnableWhenConfiguredProviders ?? []),
-      ])
-      .map((providerId) => normalizeProviderId(providerId)),
-  );
   const candidates: PluginAutoEnableCandidate[] = [];
   for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (registeredProviderIds.has(normalizeProviderId(providerId))) {
-      continue;
-    }
     const baseUrl = isRecord(providerConfig) ? providerConfig.baseUrl : undefined;
-    const normalizedBaseUrl =
-      typeof baseUrl === "string" ? normalizePluginProviderBaseUrl(baseUrl) : undefined;
-    if (!normalizedBaseUrl) {
-      continue;
-    }
-    const { hostname: host } = new URL(normalizedBaseUrl);
-    for (const plugin of params.registry.plugins) {
-      if (
-        (plugin.providerEndpoints ?? []).some((endpoint) =>
-          matchesPluginProviderEndpoint(endpoint, { host, normalizedBaseUrl }),
-        )
-      ) {
-        candidates.push({ pluginId: plugin.id, kind: "provider-endpoint-configured", providerId });
-      }
+    for (const pluginId of resolveConfiguredProviderEndpointOwnerPluginIds({
+      providerId,
+      baseUrl,
+      plugins: params.registry.plugins,
+    })) {
+      candidates.push({ pluginId, kind: "provider-endpoint-configured", providerId });
     }
   }
   return candidates;

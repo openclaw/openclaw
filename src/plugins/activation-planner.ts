@@ -1,5 +1,8 @@
 /** Computes which manifest-owned plugins need activation for commands, routes, providers, or capabilities. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty as normalizeCommandId } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
@@ -12,6 +15,7 @@ import {
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
+import { resolveConfiguredProviderEndpointOwnerPluginIds } from "./plugin-metadata-provider-facts.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
@@ -38,6 +42,7 @@ type PluginActivationPlannerManifestReason =
   | "manifest-cli-command-owner"
   | "manifest-command-alias"
   | "manifest-hook-owner"
+  | "manifest-provider-endpoint-owner"
   | "manifest-provider-owner"
   | "manifest-setup-provider-owner"
   | "manifest-tool-contract";
@@ -107,6 +112,19 @@ function collectManifestActivationMatches(
   const normalizedConfig =
     params.normalizedConfig ?? normalizePluginsConfig(params.config?.plugins);
   const expected = normalizeActivationTrigger(params.trigger);
+  const configuredProviderEndpointOwnerIds =
+    params.trigger.kind === "provider"
+      ? new Set(
+          resolveConfiguredProviderEndpointOwnerPluginIds({
+            providerId: params.trigger.provider,
+            baseUrl: findNormalizedProviderValue(
+              params.config?.models?.providers,
+              params.trigger.provider,
+            )?.baseUrl,
+            plugins: registry.plugins,
+          }),
+        )
+      : undefined;
   const matchedIds: string[] = [];
   for (const plugin of registry.plugins) {
     if (params.origin && plugin.origin !== params.origin) {
@@ -131,7 +149,15 @@ function collectManifestActivationMatches(
       continue;
     }
     const reasons: PluginActivationPlannerReason[] | undefined = entries ? [] : undefined;
-    if (matchesActivation(plugin, params.trigger, expected, reasons)) {
+    if (
+      matchesActivation(
+        plugin,
+        params.trigger,
+        expected,
+        reasons,
+        configuredProviderEndpointOwnerIds?.has(plugin.id) === true,
+      )
+    ) {
       matchedIds.push(plugin.id);
     }
     if (reasons?.length) {
@@ -173,6 +199,7 @@ function matchesActivation(
   trigger: PluginActivationPlannerTrigger,
   expected: string,
   reasons?: PluginActivationPlannerReason[],
+  configuredProviderEndpointOwner = false,
 ): boolean {
   const record = (
     condition: boolean | number | undefined,
@@ -220,6 +247,10 @@ function matchesActivation(
       return (
         record(owns(activation?.onProviders, normalizeProviderId), "activation-provider-hint") ||
         record(owns(plugin.providers, normalizeProviderId), "manifest-provider-owner") ||
+        record(
+          !capability && configuredProviderEndpointOwner,
+          "manifest-provider-endpoint-owner",
+        ) ||
         record(
           capability
             ? plugin.setup?.providers?.length

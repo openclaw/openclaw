@@ -322,6 +322,15 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     const allow = next.plugins?.allow;
     const hasRestrictiveAllowlist = Array.isArray(allow) && allow.length > 0;
     const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
+    // Endpoint metadata identifies the plugin that owns a configured URL; it
+    // does not grant permission to widen an operator's restrictive allowlist.
+    if (
+      entry.kind === "provider-endpoint-configured" &&
+      hasRestrictiveAllowlist &&
+      !allow.includes(entry.pluginId)
+    ) {
+      continue;
+    }
     const alreadyEnabled =
       builtInChannelId != null
         ? asOptionalRecord(next.channels?.[builtInChannelId])?.enabled === true
