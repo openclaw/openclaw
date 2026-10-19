@@ -218,8 +218,9 @@ function applyCronJobsEvent<Row extends CronInventoryJob>(
     return true;
   }
   // SAFETY: The authenticated cron publisher owns this compact runtime projection.
-  const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } = payload
-    .job.state as CronRuntimeState;
+  const runtime = payload.job.state as CronRuntimeState;
+  const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
+    runtime;
   const finished = payload.action === "finished";
   return projection.applyRuntime(state, index, {
     updatedAtMs: payload.job.updatedAtMs,
