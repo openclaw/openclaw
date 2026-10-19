@@ -143,31 +143,8 @@ export function resetDiscordComponentRuntimeMocks() {
   upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
   recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
   resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
-  const plugin = {
-    pluginId: "openclaw-codex-app-server",
-    pluginName: "OpenClaw App Server",
-    pluginRoot: "/plugins/codex",
-  };
-  const conversation = {
-    channel: "discord",
-    accountId: "default",
-    conversationId: "user:123456789",
-  };
-  resolvePluginConversationBindingApprovalMock.mockReset().mockResolvedValue({
-    status: "approved",
-    binding: {
-      bindingId: "binding-1",
-      ...plugin,
-      ...conversation,
-      boundAt: Date.now(),
-    },
-    request: {
-      id: "approval-1",
-      ...plugin,
-      requestedAt: Date.now(),
-      conversation,
-    },
-    decision: "allow-once",
-  });
+  resolvePluginConversationBindingApprovalMock
+    .mockReset()
+    .mockResolvedValue({ status: "approved" });
   buildPluginBindingResolvedTextMock.mockReset().mockReturnValue("Binding approved.");
 }
