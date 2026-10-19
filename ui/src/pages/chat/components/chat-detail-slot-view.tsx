@@ -80,7 +80,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
             githubRepositories: props.chat.githubRepositories,
           }}
           prop:onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) =>
-            openSessionWorkspaceFile(props.host, target)
+            void openSessionWorkspaceFile(props.host, target)
           }
           prop:onOpenSessionLink={props.chat.onOpenSessionLink}
           prop:onRevealInWorkspace={(path: string) => {
