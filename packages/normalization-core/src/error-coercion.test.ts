@@ -13,16 +13,17 @@ import {
 
 const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
+const throwRead = (): never => {
+  throw new Error("unexpected field read");
+};
+const enumerableGetter = (get: () => unknown) => ({ enumerable: true, get });
 
 describe("formatErrorMessage", () => {
   it("preserves error content when no diagnostic redaction policy is supplied", () => {
-    expect(
-      formatErrorMessage(
-        new Error("API_TOKEN = computeToken()", {
-          cause: new Error("sk-abc123456789012345678"),
-        }),
-      ),
-    ).toBe("API_TOKEN = computeToken() | sk-abc123456789012345678");
+    const error = new Error("API_TOKEN = computeToken()", {
+      cause: new Error("sk-abc123456789012345678"),
+    });
+    expect(formatErrorMessage(error)).toBe("API_TOKEN = computeToken() | sk-abc123456789012345678");
   });
 
   it("keeps provider persistence diagnostics in initiating order without reordering other errors", () => {
@@ -81,11 +82,7 @@ describe("formatErrorMessage", () => {
 
   it("isolates inaccessible messages on VM errors", () => {
     const error: unknown = runInNewContext("new Error('')");
-    Object.defineProperty(error, "message", {
-      get() {
-        throw new Error("diagnostic field unavailable");
-      },
-    });
+    Object.defineProperty(error, "message", { get: throwRead });
     const redact = vi.fn(keepText);
 
     expect(formatErrorMessage(error, { redact })).toBe("Error");
@@ -128,23 +125,15 @@ describe("formatErrorMessage", () => {
   });
 
   it("omits cause text the wrapper message already spells out", () => {
-    // Wrappers that embed the cause verbatim printed the whole sentence twice.
-    const parseFailure = new SyntaxError("JSON5: invalid character 'j' at 1:7");
-    const wrapped = new Error(`Failed to parse --file as JSON5: ${parseFailure.message}`, {
-      cause: parseFailure,
+    const wrapped = new Error("Parse failed: invalid character", {
+      cause: new SyntaxError("invalid character"),
     });
-    expect(format(wrapped)).toBe(
-      "Failed to parse --file as JSON5: JSON5: invalid character 'j' at 1:7",
-    );
+    expect(format(wrapped)).toBe("Parse failed: invalid character");
 
     // Codes keep their own segment even when the detail already names them.
-    const errno = Object.assign(
-      new Error("ENOENT: no such file or directory, open '/tmp/missing.json'"),
-      { code: "ENOENT" },
-    );
-    const notFound = new Error("--file not found: /tmp/missing.json.", { cause: errno });
-    expect(format(notFound)).toBe(
-      "--file not found: /tmp/missing.json. | ENOENT: no such file or directory, open '/tmp/missing.json' | ENOENT",
+    const errno = Object.assign(new Error("ENOENT: missing file"), { code: "ENOENT" });
+    expect(format(new Error("File not found", { cause: errno }))).toBe(
+      "File not found | ENOENT: missing file | ENOENT",
     );
   });
 
@@ -160,13 +149,10 @@ describe("formatErrorMessage", () => {
     expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
       'request failed | {"statusCode":429}',
     );
-    expect(
-      format(
-        new Error("request failed", {
-          cause: { status: 503, code: "UNAVAILABLE", requestId: "abc" },
-        }),
-      ),
-    ).toBe('request failed | {"status":503,"code":"UNAVAILABLE","requestId":"abc"}');
+    const extraFields = { status: 503, code: "UNAVAILABLE", requestId: "abc" };
+    expect(format(new Error("request failed", { cause: extraFields }))).toBe(
+      'request failed | {"status":503,"code":"UNAVAILABLE","requestId":"abc"}',
+    );
   });
 
   it("stringifies primitives and circular records without throwing", () => {
@@ -199,13 +185,9 @@ describe("toErrorObject", () => {
 describe("toStructuredErrorObject", () => {
   it("preserves Error identity without coercing it", () => {
     class ThrowingToStringError extends Error {
-      override toString(): string {
-        throw new Error("unexpected stringification");
-      }
+      override toString = throwRead;
     }
-    const original = new ThrowingToStringError("request failed", {
-      cause: { code: "EIO" },
-    });
+    const original = new ThrowingToStringError("request failed", { cause: { code: "EIO" } });
 
     expect(toStructuredErrorObject(original)).toBe(original);
   });
@@ -232,19 +214,17 @@ describe("toStructuredErrorObject", () => {
       [detailKey]: "symbol detail",
     };
     Object.defineProperty(cause, "hidden", { value: "secret", enumerable: false });
-    Object.defineProperty(cause, throwingDetailKey, {
-      enumerable: true,
-      get() {
-        throw new Error("unexpected symbol field read");
-      },
-    });
+    Object.defineProperty(cause, throwingDetailKey, enumerableGetter(throwRead));
 
     const error = toStructuredErrorObject(cause);
 
     expect(error).not.toBe(cause);
-    expect(error.message).toBe("[object Object]");
     expect(error.cause).toBe(cause);
-    expect(error).toMatchObject({ code: "EIO", details: { retryable: true } });
+    expect(error).toMatchObject({
+      message: "[object Object]",
+      code: "EIO",
+      details: { retryable: true },
+    });
     expect(Object.getOwnPropertyDescriptor(error, "code")).toEqual({
       value: "EIO",
       writable: true,
@@ -267,31 +247,17 @@ describe("toStructuredErrorObject", () => {
   });
 
   it("skips throwing fields and preserves the base Error for enumeration failures", () => {
-    const throwingGetter = {
-      get details(): never {
-        throw new Error("unexpected structured field read");
-      },
-      code: "EIO",
-    };
-    const ownKeysFailure = new Proxy(
+    const throwingGetter = Object.defineProperty(
       { code: "EIO" },
-      {
-        ownKeys() {
-          throw new Error("unexpected ownKeys call");
-        },
-      },
+      "details",
+      enumerableGetter(throwRead),
     );
+    const ownKeysFailure = new Proxy({ code: "EIO" }, { ownKeys: throwRead });
     const descriptorFailure = new Proxy(
       { code: "EIO", status: 503 },
       {
-        ownKeys() {
-          return ["code", "status"];
-        },
         getOwnPropertyDescriptor(target, key) {
-          if (key === "status") {
-            throw new Error("unexpected descriptor read");
-          }
-          return Reflect.getOwnPropertyDescriptor(target, key);
+          return key === "status" ? throwRead() : Reflect.getOwnPropertyDescriptor(target, key);
         },
       },
     );
@@ -339,27 +305,23 @@ describe("toStructuredErrorObject", () => {
   });
 });
 
-describe("toStringifiedError", () => {
-  it("preserves Error identity and stringifies every other value", () => {
-    const error = new Error("boom");
-    const objectError = toStringifiedError({ ok: true });
+it("toStringifiedError preserves Error identity and stringifies every other value", () => {
+  const error = new Error("boom");
+  const objectError = toStringifiedError({ ok: true });
 
-    expect(toStringifiedError(error)).toBe(error);
-    expect(toStringifiedError("failure")).toMatchObject({ message: "failure" });
-    expect(objectError).toMatchObject({ message: "[object Object]" });
-    expect(objectError).not.toHaveProperty("cause");
-    expect(objectError).not.toHaveProperty("ok");
-    expect(toStringifiedError(null)).toMatchObject({ message: "null" });
-  });
+  expect(toStringifiedError(error)).toBe(error);
+  expect(toStringifiedError("failure")).toMatchObject({ message: "failure" });
+  expect(objectError).toMatchObject({ message: "[object Object]" });
+  expect(objectError).not.toHaveProperty("cause");
+  expect(objectError).not.toHaveProperty("ok");
+  expect(toStringifiedError(null)).toMatchObject({ message: "null" });
 });
 
-describe("coerceErrorMessage", () => {
-  it("preserves Error messages exactly and stringifies other values", () => {
-    expect(coerceErrorMessage(new Error(""))).toBe("");
-    expect(coerceErrorMessage(new Error(" boom "))).toBe(" boom ");
-    expect(coerceErrorMessage("failure")).toBe("failure");
-    expect(coerceErrorMessage(null)).toBe("null");
-  });
+it("coerceErrorMessage preserves Error messages exactly and stringifies other values", () => {
+  expect(coerceErrorMessage(new Error(""))).toBe("");
+  expect(coerceErrorMessage(new Error(" boom "))).toBe(" boom ");
+  expect(coerceErrorMessage("failure")).toBe("failure");
+  expect(coerceErrorMessage(null)).toBe("null");
 });
 
 describe("stringifyNonErrorCause", () => {
