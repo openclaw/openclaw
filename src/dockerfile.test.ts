@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
@@ -21,6 +22,10 @@ async function copyTo(source: string, target: string) {
   await cp(source, target, { recursive: true });
 }
 
+function run(file: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
+  execFileSync(file, args, { cwd, env: { PATH: process.env.PATH, ...env }, stdio: "pipe" });
+}
+
 function expectInOrder(text: string, ...fragments: string[]) {
   let previous = -1;
   for (const fragment of fragments) {
@@ -42,9 +47,7 @@ async function stageManifests(body: string, fixture: string, stage: string) {
   for (const [, from, inputs, destination] of expanded.matchAll(
     /^COPY (?:--from=(\S+) )?(.+) (\S+)$/gm,
   )) {
-    if (!inputs || !destination) {
-      throw new Error("Docker manifest COPY inputs are missing");
-    }
+    assert(inputs && destination, "Docker manifest COPY inputs are missing");
     const sourceRoot = from ? join(fixture, from) : repoRoot;
     const destinationRoot = join(stageRoot, destination.startsWith("/") ? "" : "app", destination);
     for (const input of inputs.split(/\s+/)) {
@@ -60,14 +63,13 @@ async function stageManifests(body: string, fixture: string, stage: string) {
       }
       await mkdir(target, { recursive: true });
       // The extraction stage reads only direct workspace manifests, not their source trees.
-      for (const entry of await readdir(source, { withFileTypes: true })) {
-        if (!entry.isDirectory()) {
-          continue;
-        }
-        for (const file of await readdir(join(source, entry.name))) {
-          if (file === "package.json" || file === "openclaw.plugin.json") {
-            await copyTo(join(source, entry.name, file), join(target, entry.name, file));
-          }
+      const entries = await readdir(source, { withFileTypes: true });
+      for (const entry of entries.filter((item) => item.isDirectory())) {
+        const files = await readdir(join(source, entry.name));
+        for (const file of files.filter(
+          (name) => name === "package.json" || name === "openclaw.plugin.json",
+        )) {
+          await copyTo(join(source, entry.name, file), join(target, entry.name, file));
         }
       }
     }
@@ -87,9 +89,7 @@ describe("Dockerfile", () => {
       );
       const workspaceBody = stages.get("workspace-deps");
       const dependencyBody = stages.get("dependency-inputs");
-      if (!workspaceBody || !dependencyBody) {
-        throw new Error("Docker dependency input stages are missing");
-      }
+      assert(workspaceBody && dependencyBody, "Docker dependency input stages are missing");
       const fixture = tempDirs.make("openclaw-docker-workspace-manifests-");
       const workspaceRoot = await stageManifests(workspaceBody, fixture, "workspace-deps");
       const extraction = [...workspaceBody.matchAll(/^RUN (.+)$/gm)]
@@ -97,12 +97,9 @@ describe("Dockerfile", () => {
         .join("\n")
         .replace(/\/(tmp|out)(?=\/|["\s]|$)/g, `${workspaceRoot}/$1`);
       expect(extraction).not.toBe("");
-      execFileSync("/bin/sh", ["-eu", "-c", extraction], {
-        env: {
-          PATH: process.env.PATH,
-          OPENCLAW_EXTENSIONS: selection,
-          OPENCLAW_BUNDLED_PLUGIN_DIR: BUNDLED_PLUGIN_ROOT_DIR,
-        },
+      run("/bin/sh", ["-eu", "-c", extraction], {
+        OPENCLAW_EXTENSIONS: selection,
+        OPENCLAW_BUNDLED_PLUGIN_DIR: BUNDLED_PLUGIN_ROOT_DIR,
       });
       const inputsRoot = await stageManifests(dependencyBody, fixture, "dependency-inputs");
       const appRoot = join(inputsRoot, "app");
@@ -158,17 +155,12 @@ describe("Dockerfile", () => {
       // Execute lifecycle scripts using only actual pre-install COPY inputs.
       for (const [, sources, destination] of dockerfile
         .slice(0, installIndex)
-        .matchAll(/^COPY ([^\n]+) (\.\/\S*)$/gm)) {
-        if (!sources || !destination) {
-          throw new Error("Expected local COPY sources and destination");
-        }
-        if (sources.startsWith("--")) {
-          continue;
-        }
-        for (const input of sources.split(/\s+/)) {
-          if (input !== "package.json" && !input.endsWith(".mjs")) {
-            continue;
-          }
+        .matchAll(/^COPY (?!-{2})([^\n]+) (\.\/\S*)$/gm)) {
+        assert(sources && destination, "Expected local COPY sources and destination");
+        const inputs = sources
+          .split(/\s+/)
+          .filter((s) => s === "package.json" || s.endsWith(".mjs"));
+        for (const input of inputs) {
           await copyTo(
             join(repoRoot, input),
             join(fixture, destination, destination.endsWith("/") ? basename(input) : ""),
@@ -180,27 +172,16 @@ describe("Dockerfile", () => {
       };
       const home = join(fixture, "home");
       await mkdir(home);
+      const env = { HOME: home, USERPROFILE: home, npm_config_user_agent: "pnpm/12" };
       for (const lifecycle of ["preinstall", "install", "postinstall", "prepare"]) {
         const command = packageJson.scripts[lifecycle];
         if (!command) {
           continue;
         }
         const scriptPath = command.match(/^node (scripts\/[^\s]+)$/)?.[1];
-        if (!scriptPath) {
-          throw new Error(`Unsupported root lifecycle command: ${command}`);
-        }
-        const run = () =>
-          execFileSync(resolveTestNodeExecPath(), [scriptPath], {
-            cwd: fixture,
-            env: {
-              HOME: home,
-              USERPROFILE: home,
-              PATH: process.env.PATH,
-              npm_config_user_agent: "pnpm/12",
-            },
-            stdio: "pipe",
-          });
-        expect.soft(run, lifecycle).not.toThrow();
+        assert(scriptPath, `Unsupported root lifecycle command: ${command}`);
+        const execute = () => run(resolveTestNodeExecPath(), [scriptPath], env, fixture);
+        expect.soft(execute, lifecycle).not.toThrow();
       }
     },
   );
@@ -225,7 +206,6 @@ describe("Dockerfile", () => {
     const anchor = dockerfile.indexOf(
       "https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc",
     );
-    expect(anchor).toBeGreaterThan(-1);
     const slice = dockerfile.slice(anchor);
     expectContains(slice, '$1 == "pub"', '[ "$docker_gpg_pub_count" != "1" ]');
     expect(slice).not.toContain('\\"pub\\"');
