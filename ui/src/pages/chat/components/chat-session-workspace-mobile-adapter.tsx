@@ -30,7 +30,7 @@ type MobileWorkspaceProjection = Pick<
   | "onRetry"
 > & { cachedBrowser?: SessionWorkspaceListResult["browser"] };
 
-export function projectMobileWorkspace(workspace: MobileWorkspaceProjection): {
+function projectMobileWorkspace(workspace: MobileWorkspaceProjection): {
   groups: SessionWorkspaceMobileGroup[];
   status: SessionWorkspaceMobileStatus;
 } {
