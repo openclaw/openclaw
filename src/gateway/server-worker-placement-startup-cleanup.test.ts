@@ -149,7 +149,7 @@ describe("worker placement startup cleanup ownership", () => {
       return prune(input);
     });
     let stopping: Promise<void> | undefined;
-    let sweeping: void | Promise<void>;
+    let sweeping: void | Promise<void> = undefined;
     try {
       holdInspection = true;
       sweeping = time.advanceBy(60_000);
