@@ -66,7 +66,7 @@ suite.define(() => {
         await capture("retry-focus");
         const count = await gateway.getSocketCount();
         // Two clicks in one task also exercise the synchronous owner guard before Solid flushes.
-        await retry.evaluate((button) => {
+        await retry.evaluate((button: HTMLButtonElement) => {
           button.click();
           button.click();
         });
