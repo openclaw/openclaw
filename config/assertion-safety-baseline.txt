@@ -152,7 +152,6 @@ extensions/codex/src/session-catalog.ts	2
 extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
-extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8

@@ -281,7 +281,6 @@
 ["extensions/clickclack/src/setup-core.test.ts","./setup-verify.js","4d518358282f746102a8688881668a0740f8939cc4824074d9a37d0283d40405",1]
 ["extensions/clickclack/src/setup-surface.test.ts","./http-client.js","39e9f3bd0effe9da372eaaa85f55f81c643c2fc19b275f06a2e5b38dd321a0e4",1]
 ["extensions/clickclack/src/setup-verify.test.ts","./http-client.js","39e9f3bd0effe9da372eaaa85f55f81c643c2fc19b275f06a2e5b38dd321a0e4",1]
-["extensions/cloudflare-ai-gateway/stream-wrappers.test.ts","openclaw/plugin-sdk/runtime-env","3ac4cb7250cf8186dbbf6499c92f4fa35022c138c0dceda1868a323ad2668db3",1]
 ["extensions/codex/cli-metadata.test.ts","./src/session-cli.js","40b31049f1c7f7a74492e74cc52e69de1f75365b8924c0789877528ec3e819d6",1]
 ["extensions/codex/doctor-contract-api.cold.test.ts","./src/migration/session-binding-sidecars.js","856e6125009a7c3a98573f3be8e07d37ca5f79458c7fc0540cc1506c107d914a",1]
 ["extensions/codex/doctor-contract-api.cold.test.ts","openclaw/plugin-sdk/session-store-runtime","dd7fe5ea2e1d825607a9721ad498d0c0a8e2aa030015c70b4245576ab087a533",1]
