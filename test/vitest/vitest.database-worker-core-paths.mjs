@@ -348,6 +348,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-service-maintenance.test.ts",
   "src/cli/update-cli/update-command-service-maintenance-handoff.test.ts",
   "src/cli/update-cli/update-command-service-maintenance-native.test.ts",
+  "src/cli/update-cli/update-command-terminal-authority.test.ts",
   "src/cli/update-cli/update-command-terminal-outcome.test.ts",
   "src/state/session-repository-workspaces.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",

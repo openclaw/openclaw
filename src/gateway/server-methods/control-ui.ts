@@ -605,7 +605,11 @@ export function createControlUiHandlers(
           resolve,
           parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
         );
-        void replacement.catch(() => {});
+        void replacement.catch((error: unknown) => {
+          context.logGateway.warn(
+            `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
+          );
+        });
       });
       respond(
         true,

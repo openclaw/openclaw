@@ -281,7 +281,7 @@ it.skipIf(process.platform !== "linux")(
         expect(serviceStop, instance.logs()).toBeDefined();
         expect(serviceStop!.at).toBeLessThanOrEqual(exitedAt);
         // The Gateway and test runner use the same runtime and storage policy.
-        const artifactSchema = sqliteDatabaseSealSchemaFor("agent");
+        const artifactSchema = sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity;
         const seal = readSqliteCleanCloseSeal(agentPath, statSync(agentPath, { bigint: true }));
         expect(seal).toMatchObject({ schemaIdentity: artifactSchema });
         const shared = openNodeSqliteDatabase(

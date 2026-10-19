@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
+import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import "../../../components/openclaw-mascot.ts";
@@ -143,6 +144,7 @@ function WelcomeHero(props: ChatWelcomeProps) {
 export function ChatWelcome(
   props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
 ) {
+  const welcomeRef = createBackgroundLayoutRef("welcome");
   const recentSessions = createMemo(() => {
     if (props.preparedRecents) {
       return props.preparedRecents;
@@ -158,7 +160,7 @@ export function ChatWelcome(
     <Show
       when={!props.modelSetupRequired}
       fallback={
-        <div class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
+        <div ref={welcomeRef} class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
           <WelcomeClawd />
           <h2>{t("modelSetup.required.title")}</h2>
           <p class="agent-chat__hint">{t("modelSetup.required.body")}</p>
@@ -170,7 +172,7 @@ export function ChatWelcome(
         </div>
       }
     >
-      <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
+      <div ref={welcomeRef} class="agent-chat__welcome" style="--agent-color: var(--accent)">
         <WelcomeHero {...props} />
         {props.composer}
         <Show when={!props.hideSecondaryContent}>

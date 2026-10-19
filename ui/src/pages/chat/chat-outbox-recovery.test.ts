@@ -29,7 +29,7 @@ it("shows a failed recovery module only for the owner still awaiting it", async 
   const host = createPageState(
     createInitializationContext(),
     { afterCommit: () => () => {} },
-    { dispatchEvent: () => true, querySelector: () => null },
+    { dispatchEvent: () => true },
   );
   host.connected = true;
   host.client = createTestGatewayClient(async () => ({}));

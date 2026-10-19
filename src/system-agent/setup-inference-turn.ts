@@ -35,7 +35,6 @@ import {
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import {
-  type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
   type CompleteSetupInferenceResult,
   describeSetupInferenceError,
@@ -67,7 +66,6 @@ import {
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentOwnerPluginArtifactSnapshot,
   type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 /**
@@ -307,7 +305,6 @@ async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
   ownerPluginIds?: readonly string[];
-  deps: ActivateSetupInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const configuredHarnessId =
     params.route.runner === "embedded"
@@ -321,7 +318,6 @@ async function revalidateSetupInferenceOwner(params: {
       configuredRoute: params.route,
       executionRoute: params.route,
       auth: params.auth,
-      deps: params.deps,
     });
   if (
     params.ownerPluginIds?.length ||
@@ -374,7 +370,6 @@ export async function revalidateStableSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
   stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
-  deps: ActivateSetupInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   let binding: SystemAgentVerifiedInferenceBinding;
   try {
@@ -382,7 +377,6 @@ export async function revalidateStableSetupInferenceOwner(params: {
       route: params.route,
       auth: params.auth,
       ownerPluginIds: params.stagedOwnerPluginArtifacts?.ownerPluginIds,
-      deps: params.deps,
     });
   } catch (error) {
     throw new SetupInferenceOwnerDriftError(
@@ -406,7 +400,6 @@ type SetupInferenceRequestParams = {
   modelTarget?: "utility";
   runtime: RuntimeEnv;
   timeoutMs?: number;
-  deps?: ActivateSetupInferenceDeps;
 };
 
 type VerifySetupInferenceParams = SetupInferenceRequestParams & { kind?: "existing-model" };
@@ -423,9 +416,7 @@ export function verifySetupInference(
 export async function verifySetupInference(
   params: VerifySetupInferenceParams & { bindSession?: boolean },
 ): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
-  const readSnapshot =
-    params.deps?.readConfigFileSnapshot ??
-    (await import("../config/config.js")).readConfigFileSnapshot;
+  const readSnapshot = (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   if (!snapshot.exists) {
     return {
@@ -456,7 +447,6 @@ export async function verifySetupInference(
     ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-    ...(params.deps ? { deps: params.deps } : {}),
     onVerifiedExecution: params.bindSession
       ? (binding) => {
           verifiedBinding = binding;
@@ -509,14 +499,12 @@ function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
 export async function resolvePersistentApplyInference(params: {
   binding: SystemAgentVerifiedInferenceBinding;
   runtime: RuntimeEnv;
-  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentConfiguredRoute | null> {
-  const deps = params.deps ?? {};
-  const initialRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding, deps);
+  const initialRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding);
   if (!initialRoute) {
     return null;
   }
-  if (!(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding, deps))) {
+  if (!(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding))) {
     return null;
   }
   if (params.binding.auth.proofKind !== "runtime-owner") {
@@ -527,7 +515,6 @@ export async function resolvePersistentApplyInference(params: {
     runtime: params.runtime,
     bindSession: true,
     agentId: params.binding.execution.agentId,
-    deps,
   });
   if (
     !live.ok ||
@@ -544,8 +531,8 @@ export async function resolvePersistentApplyInference(params: {
   }
   // The live probe is not a lock. Recheck the authored route after it returns,
   // then keep using the original frozen execution snapshot.
-  const finalRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding, deps);
-  if (!finalRoute || !(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding, deps))) {
+  const finalRoute = await resolveSystemAgentVerifiedInferenceRoute(params.binding);
+  if (!finalRoute || !(await hasCurrentSystemAgentOwnerPluginArtifacts(params.binding))) {
     return null;
   }
   return finalRoute;
@@ -564,7 +551,6 @@ export async function verifySetupInferenceConfig(
     requireExecutionOwner?: boolean;
   },
 ): Promise<VerifySetupInferenceResult> {
-  const deps = params.deps ?? {};
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
@@ -648,7 +634,6 @@ export async function verifySetupInferenceConfig(
         route: params.agentDir ? { ...currentRoute, agentDir: params.agentDir } : currentRoute,
         auth: turn.auth,
         stagedOwnerPluginArtifacts,
-        deps,
       });
       params.onVerifiedExecution?.(binding);
     } catch (error) {
@@ -667,9 +652,7 @@ export async function verifySetupInferenceConfig(
 export async function completeSetupInference(
   params: SetupInferenceRequestParams & { prompt: string },
 ): Promise<CompleteSetupInferenceResult> {
-  const readSnapshot =
-    params.deps?.readConfigFileSnapshot ??
-    (await import("../config/config.js")).readConfigFileSnapshot;
+  const readSnapshot = (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   if (!snapshot.exists) {
     return { ok: false, status: "unavailable", error: "No OpenClaw config exists." };

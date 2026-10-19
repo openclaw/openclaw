@@ -1,6 +1,7 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import "./chat-attribution.css";
 import { pathForRoute } from "../../../app-route-paths.ts";
+import { registerSessionTitleTarget } from "../../../components/session-title-target-registration.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -69,6 +70,65 @@ function forwardedSource(group: ForwardedGroup, opts: ForwardedAttributionOption
 
 type ForwardedSource = ReturnType<typeof forwardedSource>;
 
+function sessionTitleRefs() {
+  let target: HTMLElement;
+  let label: HTMLSpanElement;
+  onSettled(() =>
+    target.hasAttribute("data-session-key") ? registerSessionTitleTarget(target, label) : undefined,
+  );
+  return {
+    target: (element: HTMLElement) => {
+      target = element;
+    },
+    label: (element: HTMLSpanElement) => {
+      label = element;
+    },
+  };
+}
+
+function ForwardedSessionLink(props: { source: ForwardedSource; label: string }) {
+  const refs = sessionTitleRefs();
+  return (
+    <a
+      ref={refs.target}
+      class={[
+        "markdown-session-link",
+        {
+          "markdown-session-link--titled": Boolean(props.source.sourceLabel),
+          "markdown-session-link--agent": Boolean(
+            props.source.sourceIsOtherAgent && props.source.sourceIsMainSession,
+          ),
+        },
+      ]}
+      role="link"
+      tabindex="0"
+      data-session-key={props.source.linkableSourceKey}
+    >
+      <span ref={refs.label} class="session-label" textContent={props.label} />
+    </a>
+  );
+}
+
+function ForwardedSourceLabel(props: { source: ForwardedSource; label: string }) {
+  const refs = sessionTitleRefs();
+  return (
+    <span
+      ref={refs.target}
+      data-session-title-only={
+        props.source.sourceParsed && !props.source.cronJobId ? "" : undefined
+      }
+      data-session-key={
+        props.source.sourceParsed && !props.source.cronJobId
+          ? props.source.sourceSessionKey
+          : undefined
+      }
+      class={{ "markdown-session-link--titled": Boolean(props.source.sourceLabel) }}
+    >
+      <span ref={refs.label} class="session-label" textContent={props.label} />
+    </span>
+  );
+}
+
 function ForwardedLink(props: { source: ForwardedSource; basePath?: string }) {
   // The titler owns later label/href writes. Equal initial labels must not erase them.
   const initialLabel = createMemo(
@@ -78,22 +138,9 @@ function ForwardedLink(props: { source: ForwardedSource; basePath?: string }) {
     <Show
       when={props.source.cronJobId && props.source.cronRunSessionId}
       fallback={
-        <a
-          class={[
-            "markdown-session-link",
-            {
-              "markdown-session-link--titled": Boolean(props.source.sourceLabel),
-              "markdown-session-link--agent": Boolean(
-                props.source.sourceIsOtherAgent && props.source.sourceIsMainSession,
-              ),
-            },
-          ]}
-          role="link"
-          tabindex="0"
-          data-session-key={props.source.linkableSourceKey}
-        >
-          <span class="session-label" textContent={initialLabel()} />
-        </a>
+        <Show when={props.source.linkableSourceKey} keyed>
+          {(_sessionKey) => <ForwardedSessionLink source={props.source} label={initialLabel()} />}
+        </Show>
       }
     >
       <a
@@ -151,6 +198,7 @@ export function ForwardedAttribution(props: {
         fallback={
           <Show
             when={source().sourceSessionKey}
+            keyed
             fallback={
               <span>
                 {props.options.updateCount === undefined
@@ -170,25 +218,19 @@ export function ForwardedAttribution(props: {
               </span>
             }
           >
-            <span>{from()}</span>{" "}
-            <Show when={source().sourceAgentPrefix}>
-              {(prefix) => (
-                <>
-                  <span>{prefix()} ·</span>{" "}
-                </>
-              )}
-            </Show>
-            <span
-              data-session-title-only={
-                source().sourceParsed && !source().cronJobId ? "" : undefined
-              }
-              data-session-key={
-                source().sourceParsed && !source().cronJobId ? source().sourceSessionKey : undefined
-              }
-              class={{ "markdown-session-link--titled": Boolean(source().sourceLabel) }}
-            >
-              <span class="session-label" textContent={initialPlainLabel()} />
-            </span>
+            {(_sessionKey) => (
+              <>
+                <span>{from()}</span>{" "}
+                <Show when={source().sourceAgentPrefix}>
+                  {(prefix) => (
+                    <>
+                      <span>{prefix()} ·</span>{" "}
+                    </>
+                  )}
+                </Show>
+                <ForwardedSourceLabel source={source()} label={initialPlainLabel()} />
+              </>
+            )}
           </Show>
         }
       >

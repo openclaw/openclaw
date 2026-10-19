@@ -36,20 +36,16 @@ async function withDecisionFixture(
     const scoresPath = path.join(dir, "scores.yaml");
     fs.writeFileSync(
       taxonomyPath,
-      YAML.stringify({
-        version: 1,
-        title: "Synthetic decision fixture",
-        levels: [{ id: "experimental" }, { id: "stable" }],
-        surfaces: [
-          {
-            id: "tools",
-            name: "Tools",
-            family: "core",
-            level: "experimental",
-            categories: [{ id: "review", name: "Review", category_note: "Fixture" }],
-          },
-        ],
-      }),
+      `version: 1
+title: Synthetic decision fixture
+levels: [{id: experimental}, {id: stable}]
+surfaces:
+  - id: tools
+    name: Tools
+    family: core
+    level: experimental
+    categories: [{id: review, name: Review, category_note: Fixture}]
+`,
     );
     const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
     const bundle = () => ({
@@ -86,7 +82,7 @@ async function withDecisionFixture(
   });
 }
 
-describe("maturity decision context", () => {
+describe("QA maturity taxonomy", () => {
   it("retains every authored decision and non-gating mismatch without changing aggregates", async () => {
     await withDecisionFixture(({ scores, taxonomy, read }) => {
       const identity = qaMaturityTaxonomyIdentity(taxonomy);
@@ -109,41 +105,24 @@ describe("maturity decision context", () => {
     });
   });
 
-  it.each([
-    [
-      "score label mismatch",
-      (scores: QaMaturityScores) =>
+  it.each(["score label mismatch", "undeclared level decision"])("rejects %s", async (fault) => {
+    await withDecisionFixture(({ scores, taxonomy, read }) => {
+      if (fault === "score label mismatch") {
         Object.assign(scores.surfaces[0]!.scores.quality, {
           label: "Stable",
           decision: decision(70),
-        }),
-    ],
-  ] as const)("keeps %s outside the decision contract", async (_name, mutate) => {
-    await withDecisionFixture(({ scores, read }) => {
-      mutate(scores);
+        });
+      } else {
+        taxonomy.surfaces[0]!.level_decision = decision("undeclared");
+      }
       expect(read).toThrow();
     });
   });
-
-  it.each(["undeclared"])("rejects invalid level decision %j", async (value) => {
-    await withDecisionFixture(({ taxonomy, read }) => {
-      Object.assign(taxonomy.surfaces[0]!, { level_decision: decision(value) });
-      expect(read).toThrow();
-    });
-  });
-});
-
-describe("QA maturity YAML readers", () => {
-  it.each([
-    {
-      name: "root",
-      value: null,
-      issues: "<root>: Invalid input: expected object, received null",
-    },
-  ])("preserves $name diagnostics and caller-specific labels", async ({ value, issues }) => {
+  it("preserves root diagnostics and caller-specific labels", async () => {
     await withTempDir("qa-taxonomy-", async (dir) => {
       const taxonomyPath = path.join(dir, "taxonomy.yaml");
-      fs.writeFileSync(taxonomyPath, YAML.stringify(value));
+      fs.writeFileSync(taxonomyPath, YAML.stringify(null));
+      const issues = "<root>: Invalid input: expected object, received null";
 
       expect(() => readQaMaturityTaxonomySource(taxonomyPath)).toThrow(
         new Error(`${taxonomyPath}: ${issues}`),
@@ -153,9 +132,6 @@ describe("QA maturity YAML readers", () => {
       );
     });
   });
-});
-
-describe("semantic taxonomy identity", () => {
   it("includes explicit proof meaning without assigning requirements to other profiles", () => {
     const taxonomy = readQaMaturityTaxonomySource(
       path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
@@ -185,29 +161,19 @@ describe("semantic taxonomy identity", () => {
     delete profile.proofRequirements;
     expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual(before);
   });
-  const source = path.resolve(import.meta.dirname, "../../../taxonomy.yaml");
-  const read = () => readQaMaturityTaxonomySource(source);
-  const category = (taxonomy: QaMaturityTaxonomy) =>
-    taxonomy.surfaces
+  it("changes when a feature is added", () => {
+    const taxonomy = readQaMaturityTaxonomySource(
+      path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+    );
+    const before = qaMaturityTaxonomyIdentity(taxonomy);
+    const category = taxonomy.surfaces
       .find(
         (surface) =>
           !surface.archived && surface.categories.some((entry) => entry.features.length > 1),
       )!
       .categories.find((entry) => entry.features.length > 1)!;
 
-  it.each<[string, (taxonomy: QaMaturityTaxonomy) => void]>([
-    [
-      "feature addition",
-      (taxonomy) =>
-        category(taxonomy).features.push({
-          name: "New capability",
-          coverageIds: ["tools.new-capability"],
-        }),
-    ],
-  ])("changes when %s changes", (_name, mutate) => {
-    const taxonomy = read();
-    const before = qaMaturityTaxonomyIdentity(taxonomy);
-    mutate(taxonomy);
+    category.features.push({ name: "New capability", coverageIds: ["tools.new-capability"] });
     expect(qaMaturityTaxonomyIdentity(taxonomy)).not.toEqual(before);
   });
 });

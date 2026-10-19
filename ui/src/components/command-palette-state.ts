@@ -147,10 +147,13 @@ export class CommandPaletteState {
     promise: Promise<void>;
     loadedAt?: number;
   };
+  private modelItems: readonly CommandPaletteItem[] = [];
   private readonly modelReader = new ModelCatalogReader(() => {
     const snapshot = this.modelReader.snapshot;
     if (snapshot.hasSnapshot) {
       this.settledModels = snapshot;
+      // Project accepted catalog publications, not every rendering/selection read.
+      this.modelItems = getCommandPaletteModelItems(snapshot);
     }
     this.changed();
   });
@@ -215,6 +218,7 @@ export class CommandPaletteState {
         this.catalogLoad = undefined;
         this.catalogItems = [];
         this.settledModels = this.modelReader.snapshot;
+        this.modelItems = getCommandPaletteModelItems(this.settledModels);
       }
       if (this.open) {
         void this.ensureCatalogItems(true);
@@ -416,6 +420,7 @@ export class CommandPaletteState {
 
   private clearCatalogSearch() {
     this.modelReader.clear();
+    this.modelItems = [];
     this.settledModels = this.modelReader.snapshot;
     this.catalogLoad = undefined;
     this.catalogItems = [];
@@ -710,7 +715,7 @@ export class CommandPaletteState {
           this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,
-        ...getCommandPaletteModelItems(models),
+        ...this.modelItems,
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(

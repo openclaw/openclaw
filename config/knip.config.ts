@@ -86,6 +86,11 @@ const repositoryScriptEntries = [
   "scripts/perf/seal-version-restart.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
+  // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
+  "scripts/perf/branch-rotation-measure.ts!",
+  "scripts/perf/branch-rotation-measure-preload.ts!",
+  // The documented placement shutdown reproduction is invoked as a standalone CLI.
+  "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
   "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",

@@ -111,6 +111,17 @@ subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
 
+Agent clean-close receipt messages name the agent. An intermediate `active-leases`
+receipt can precede that same agent's final `written` receipt: idle retained database
+handles still hold leases even when no agent work is running. The final handle must
+release its lease after checkpoint and native close before certifying the seal.
+At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
+report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
+identity changes report `runtime-mismatch`, `sqlite-mismatch`, `schema-mismatch`,
+or `policy-mismatch`. Older seals lack component diagnostics and report
+`identity-mismatch` when their combined identity differs. Matching older seals
+remain reusable; the added diagnostic metadata does not change admission policy.
+
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
 without revoking an earlier clean-close seal. Once native opening begins, failed

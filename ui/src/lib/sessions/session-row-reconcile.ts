@@ -429,13 +429,11 @@ type SessionRowReconcileResult =
       disposition: RejectedRowDisposition;
       row: GatewaySessionRow | undefined;
       admittedRow?: undefined;
-      confirmRead: false;
     }
   | {
       disposition: "unchanged" | "accepted";
       row: GatewaySessionRow | undefined;
       admittedRow: GatewaySessionRow;
-      confirmRead: boolean;
     };
 
 export function isSessionRowOutsideResultScope(
@@ -459,7 +457,6 @@ export function reconcileSessionRow(
   const reject = (disposition: RejectedRowDisposition): SessionRowReconcileResult => ({
     disposition,
     row: previous,
-    confirmRead: false,
   });
   if (!incoming?.key) {
     return reject("invalid");
@@ -505,14 +502,13 @@ export function reconcileSessionRow(
       disposition: "unchanged",
       row: existing,
       admittedRow: confirmRead ? existing : admittedRow,
-      confirmRead,
     };
   }
   const row = retained ? admittedRow : undefined;
   if (row) {
     observation?.observe?.(row);
   }
-  return { disposition: "accepted", row, admittedRow, confirmRead: row !== undefined };
+  return { disposition: "accepted", row, admittedRow };
 }
 
 /** List owners may admit a certified snapshot after proving its query membership. */

@@ -122,7 +122,7 @@ it("admits every previously sealed same-version agent before transcript readers 
   const agents = ids.map((agentId) => ({ agentId, path: fixture.agent(agentId).path }));
   closeDatabases();
   for (const agent of agents) {
-    const identity = sqliteDatabaseSealSchemaFor("agent")!;
+    const identity = sqliteDatabaseSealSchemaFor("agent")!.schemaIdentity;
     const seal = readSqliteCleanCloseSeal(agent.path, fs.statSync(agent.path, { bigint: true }))!;
     expect(seal).toBeDefined();
     revokeSqliteDatabaseAdmissionsForPath(agent.path);

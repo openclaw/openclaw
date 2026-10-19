@@ -35,7 +35,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
-import { modelCatalogKey, modelCatalogParams } from "../../lib/model-catalog-cache.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
@@ -418,17 +417,15 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!connectionScope) {
       return;
     }
-    stopModelSuggestions ??= subscribeModelCatalogCache(client, (update) => {
-      if (!active || cron.client !== client || update.type !== "invalidated") {
-        return;
-      }
-      const scope = modelCatalogParams({
-        agentId: context().agentSelection.state.selectedId ?? undefined,
-      });
-      if (update.matches(scope, modelCatalogKey(scope))) {
-        void loadModelSuggestions(cron);
-      }
-    });
+    stopModelSuggestions ??= subscribeModelCatalogCache(
+      client,
+      (update) => {
+        if (active && cron.client === client && update.type === "invalidated") {
+          void loadModelSuggestions(cron);
+        }
+      },
+      () => ({ agentId: context().agentSelection.state.selectedId ?? undefined }),
+    );
     const request = { state: cronState, agentId };
     modelSuggestionsRequest = request;
     // Only the latest catalog request may publish rows or errors.
