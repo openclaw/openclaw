@@ -362,9 +362,10 @@ export async function buildDynamicTools(
       !webSearchPresent &&
       persistentCodexWebSearchSurface
     ) {
-      const webSearchPolicy = (
+      // Restart recovery can run before the Gateway projection serves this row.
+      const webSearchPolicy = await (
         await import("openclaw/plugin-sdk/agent-harness")
-      ).resolveWebSearchToolPolicy({
+      ).resolveWebSearchToolPolicyAsync({
         config: params.config,
         modelProvider: params.model.provider,
         modelId: params.modelId,
