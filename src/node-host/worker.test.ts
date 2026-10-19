@@ -84,16 +84,10 @@ describe("NodeHostWorkerBridgeClient", () => {
 
   it("tunnels invoke progress and waits for gateway acceptance", async () => {
     let settled = false;
-    const response = client
-      .request("node.invoke.progress", {
-        invokeId: "invoke-1",
-        nodeId: "node-1",
-        seq: 0,
-        chunk: "a",
-      })
-      .then(() => {
-        settled = true;
-      });
+    const params = { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "a" };
+    const response = client.request("node.invoke.progress", params).then(() => {
+      settled = true;
+    });
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(messages()).toEqual([
@@ -102,7 +96,7 @@ describe("NodeHostWorkerBridgeClient", () => {
         generation: 1,
         id: "gateway-1",
         method: "node.invoke.progress",
-        params: { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "a" },
+        params,
         timeoutMs: 15_000,
       },
     ]);
@@ -127,29 +121,27 @@ describe("NodeHostWorkerBridgeClient", () => {
   });
 });
 
-describe("stopNodeHostWorkerFromSignal", () => {
-  it("preserves the signal exit code when closing stdin emits EOF", async () => {
-    const calls: string[] = [];
-    let stopping = false;
-    const stop = async (exitCode: number) => {
-      if (stopping) {
-        return;
-      }
-      stopping = true;
-      calls.push(`stop:${exitCode}`);
-    };
+it("preserves the signal exit code when closing stdin emits EOF", async () => {
+  const calls: string[] = [];
+  let stopping = false;
+  const stop = async (exitCode: number) => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    calls.push(`stop:${exitCode}`);
+  };
 
-    await stopNodeHostWorkerFromSignal(
-      {
-        close: () => {
-          calls.push("close");
-          void stop(0);
-        },
+  await stopNodeHostWorkerFromSignal(
+    {
+      close: () => {
+        calls.push("close");
+        void stop(0);
       },
-      stop,
-      143,
-    );
+    },
+    stop,
+    143,
+  );
 
-    expect(calls).toEqual(["stop:143", "close"]);
-  });
+  expect(calls).toEqual(["stop:143", "close"]);
 });

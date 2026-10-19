@@ -176,10 +176,21 @@ function startWorkerFixture(
   };
 }
 
-it("refreshes runner facts only for the current private bridge generation", async () => {
-  const { send, connect, ready, messages, stop } = startWorkerFixture();
+async function withWorker(
+  run: (worker: ReturnType<typeof startWorkerFixture>) => Promise<void>,
+  ...options: Parameters<typeof startWorkerFixture>
+) {
+  const worker = startWorkerFixture(...options);
   try {
-    await ready();
+    await worker.ready();
+    await run(worker);
+  } finally {
+    await worker.stop();
+  }
+}
+
+it("refreshes runner facts only for the current private bridge generation", async () => {
+  await withWorker(async ({ send, connect, messages }) => {
     connect(2);
     await setImmediate();
     const publications = () =>
@@ -201,9 +212,7 @@ it("refreshes runner facts only for the current private bridge generation", asyn
     send({ type: "runner-inventory-refresh", generation: 3 });
     await setImmediate();
     expect(publications()).toHaveLength(2);
-  } finally {
-    await stop();
-  }
+  });
 });
 
 it("keeps the private app worker unrestricted by a saved headless command allowlist", async () => {
@@ -227,18 +236,14 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     })),
     start: fixture.start,
   }));
-  const { ready, messages, stop } = startWorkerFixture();
-  try {
-    await ready();
+  await withWorker(async ({ messages }) => {
     expect.soft(messages.find((message) => message.type === "ready")).toMatchObject({
       manifest: { commands: expect.arrayContaining(["system.run"]) },
     });
     const prepared = await fixture.prepare.mock.results[0]?.value;
     expect.soft(prepared.workerHostingEnabled).toBe(true);
     expect.soft(prepared.restrictedSurface).toBeUndefined();
-  } finally {
-    await stop();
-  }
+  });
 });
 
 it.each([
@@ -256,21 +261,20 @@ it.each([
       })),
       start: fixture.start,
     }));
-    const { ready, messages, stop } = startWorkerFixture(false, undefined, {
-      desktopSharingEnabled,
-    });
-    try {
-      await ready();
-      expect(messages.find((message) => message.type === "ready")).toMatchObject({
-        manifest: {
-          commands: enabled
-            ? expect.arrayContaining(["desktop.stream"])
-            : expect.not.arrayContaining(["desktop.stream"]),
-        },
-      });
-    } finally {
-      await stop();
-    }
+    await withWorker(
+      async ({ messages }) => {
+        expect(messages.find((message) => message.type === "ready")).toMatchObject({
+          manifest: {
+            commands: enabled
+              ? expect.arrayContaining(["desktop.stream"])
+              : expect.not.arrayContaining(["desktop.stream"]),
+          },
+        });
+      },
+      false,
+      undefined,
+      { desktopSharingEnabled },
+    );
   },
 );
 
@@ -427,6 +431,10 @@ it.runIf(process.platform !== "win32").for([
               config: { nodeHost: { skills: { enabled: false } } },
             });
             let rejectSameGatewayRefresh = false;
+            const unavailable = {
+              ok: false,
+              error: { code: "UNAVAILABLE", message: "Gateway unavailable" },
+            } as const;
             const worker = startWorkerFixture(false, undefined, {
               prepared,
               gatewayResponse: (message) => {
@@ -435,18 +443,10 @@ it.runIf(process.platform !== "win32").for([
                 }
                 if (message.generation === 1 || scenario.target === "a") {
                   return rejectSameGatewayRefresh
-                    ? {
-                        ok: false,
-                        error: { code: "UNAVAILABLE", message: "same Gateway unavailable" },
-                      }
+                    ? unavailable
                     : { ok: true, result: { bins: ["true"] } };
                 }
-                return scenario.rejectRefresh
-                  ? {
-                      ok: false,
-                      error: { code: "UNAVAILABLE", message: "replacement unavailable" },
-                    }
-                  : { ok: true, result: { bins: [] } };
+                return scenario.rejectRefresh ? unavailable : { ok: true, result: { bins: [] } };
               },
             });
             stop = worker.stop;
@@ -512,6 +512,14 @@ it.runIf(process.platform !== "win32").for([
                   };
                 })
                 .filter((event) => event.payload.runId === id);
+            const expectEvent = (id: string, generation: number, event: string, payload: object) =>
+              expect(eventsFor(id)).toEqual([
+                {
+                  generation,
+                  event,
+                  payload: expect.objectContaining({ runId: id, host: "node", ...payload }),
+                },
+              ]);
             const expectExecuted = (
               result: Awaited<ReturnType<typeof invoke>>,
               generation: number,
@@ -526,18 +534,7 @@ it.runIf(process.platform !== "win32").for([
                 stderr: "",
                 error: null,
               });
-              expect(eventsFor(id)).toEqual([
-                {
-                  generation,
-                  event: "exec.finished",
-                  payload: expect.objectContaining({
-                    runId: id,
-                    host: "node",
-                    success: true,
-                    exitCode: 0,
-                  }),
-                },
-              ]);
+              expectEvent(id, generation, "exec.finished", { success: true, exitCode: 0 });
             };
             const skillRequests = () =>
               messages.filter((message) => message.method === "skills.bins");
@@ -567,17 +564,7 @@ it.runIf(process.platform !== "win32").for([
                 ok: false,
                 error: { code: "SYSTEM_RUN_DENIED", message: "SYSTEM_RUN_DENIED: allowlist miss" },
               });
-              expect(eventsFor("new-invoke")).toEqual([
-                {
-                  generation: 3,
-                  event: "exec.denied",
-                  payload: expect.objectContaining({
-                    runId: "new-invoke",
-                    host: "node",
-                    reason: "allowlist-miss",
-                  }),
-                },
-              ]);
+              expectEvent("new-invoke", 3, "exec.denied", { reason: "allowlist-miss" });
               expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
             }
             expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
