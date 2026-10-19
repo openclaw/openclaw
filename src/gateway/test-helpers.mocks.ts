@@ -73,10 +73,7 @@ async function importEmbeddedRunMockModule<TModule extends object>(
   actualPath: string,
 ): Promise<TModule> {
   const actual = await vi.importActual<TModule>(actualPath);
-  return {
-    ...actual,
-    ...createEmbeddedRunMockExports(),
-  };
+  return { ...actual, ...createEmbeddedRunMockExports() };
 }
 
 function createDispatchInboundMessageMockExports(
@@ -125,23 +122,14 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
 
   const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
     const modelsFile = path.join(args[1], "models.json");
+    type RegistryInstance = {
+      getAll: () => Array<{ provider?: string; id?: string }>;
+      getAvailable: () => Array<{ provider?: string; id?: string }>;
+      find: (provider: string, modelId: string) => unknown;
+    };
     const Registry = modelSessions.ModelRegistry as unknown as {
-      create?: (
-        authStorage: unknown,
-        modelsFile: string,
-      ) => {
-        getAll: () => Array<{ provider?: string; id?: string }>;
-        getAvailable: () => Array<{ provider?: string; id?: string }>;
-        find: (provider: string, modelId: string) => unknown;
-      };
-      new (
-        authStorage: unknown,
-        modelsFile: string,
-      ): {
-        getAll: () => Array<{ provider?: string; id?: string }>;
-        getAvailable: () => Array<{ provider?: string; id?: string }>;
-        find: (provider: string, modelId: string) => unknown;
-      };
+      create?: (authStorage: unknown, modelsFile: string) => RegistryInstance;
+      new (authStorage: unknown, modelsFile: string): RegistryInstance;
     };
     if (typeof Registry.create === "function") {
       return Registry.create(args[0], modelsFile);
@@ -233,22 +221,17 @@ vi.mock("../config/io.js", async () => {
   // The config facade re-exports IO; waiting for it here can deadlock a fresh module graph.
   const { createGatewayConfigOverrides } = await import("./test-helpers.config-runtime.js");
   const configMock = createGatewayConfigOverrides(actual);
-  const createConfigIO = vi.fn(() => ({
-    ...actual.createConfigIO(),
+  const ioOverrides = {
     getRuntimeConfig: configMock.getRuntimeConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
     readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
-  }));
+  };
   return {
     ...actual,
-    createConfigIO,
-    getRuntimeConfig: configMock.getRuntimeConfig,
-    readConfigFileSnapshot: configMock.readConfigFileSnapshot,
-    readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
-    readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
-    writeConfigFile: configMock.writeConfigFile,
+    ...ioOverrides,
+    createConfigIO: vi.fn(() => ({ ...actual.createConfigIO(), ...ioOverrides })),
   };
 });
 

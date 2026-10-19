@@ -3,6 +3,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type {
@@ -44,62 +45,34 @@ type GatewayConfigOverrides = Pick<
 const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
 
 const composeTestConfig = (baseConfig: Record<string, unknown>) => {
-  const fileAgents =
-    baseConfig.agents && typeof baseConfig.agents === "object" && !Array.isArray(baseConfig.agents)
-      ? (baseConfig.agents as Record<string, unknown>)
-      : {};
-  const fileDefaults =
-    fileAgents.defaults &&
-    typeof fileAgents.defaults === "object" &&
-    !Array.isArray(fileAgents.defaults)
-      ? (fileAgents.defaults as Record<string, unknown>)
-      : {};
+  const fileAgents = asNonArrayRecord(baseConfig.agents);
   const defaults = {
     model: { primary: "anthropic/claude-opus-4-6" },
     workspace: path.join(testConfigRoot.value, "workspace"),
-    ...fileDefaults,
+    ...asNonArrayRecord(fileAgents.defaults),
     ...testState.agentConfig,
   };
   const testAgents = testState.agentsConfig;
-  const agents = testAgents
-    ? { ...fileAgents, ...testAgents, defaults }
-    : { ...fileAgents, defaults };
+  const agents = { ...fileAgents, ...testAgents, defaults };
 
   const fileBindings = Array.isArray(baseConfig.bindings)
     ? (baseConfig.bindings as AgentBinding[])
     : undefined;
 
-  const fileChannels =
-    baseConfig.channels &&
-    typeof baseConfig.channels === "object" &&
-    !Array.isArray(baseConfig.channels)
-      ? ({ ...(baseConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
-      : {};
   const overrideChannels =
     testState.channelsConfig && typeof testState.channelsConfig === "object"
       ? { ...testState.channelsConfig }
       : {};
-  const mergedChannels = { ...fileChannels, ...overrideChannels };
+  const mergedChannels = { ...asNonArrayRecord(baseConfig.channels), ...overrideChannels };
   if (testState.allowFrom !== undefined) {
-    const existing =
-      mergedChannels.whatsapp &&
-      typeof mergedChannels.whatsapp === "object" &&
-      !Array.isArray(mergedChannels.whatsapp)
-        ? (mergedChannels.whatsapp as Record<string, unknown>)
-        : {};
     mergedChannels.whatsapp = {
-      ...existing,
+      ...asNonArrayRecord(mergedChannels.whatsapp),
       allowFrom: testState.allowFrom,
     };
   }
   const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
 
-  const fileSession =
-    baseConfig.session &&
-    typeof baseConfig.session === "object" &&
-    !Array.isArray(baseConfig.session)
-      ? (baseConfig.session as Record<string, unknown>)
-      : {};
+  const fileSession = asNonArrayRecord(baseConfig.session);
   const session: Record<string, unknown> = {
     ...fileSession,
     mainKey: fileSession.mainKey ?? "main",
@@ -111,12 +84,7 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     Object.assign(session, testState.sessionConfig);
   }
 
-  const fileGateway =
-    baseConfig.gateway &&
-    typeof baseConfig.gateway === "object" &&
-    !Array.isArray(baseConfig.gateway)
-      ? ({ ...(baseConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
-      : {};
+  const fileGateway = { ...asNonArrayRecord(baseConfig.gateway) };
   if (testState.gatewayBind) {
     fileGateway.bind = testState.gatewayBind;
   }
@@ -124,14 +92,8 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     fileGateway.auth = testState.gatewayAuth;
   }
   if (testState.gatewayControlUi) {
-    const fileControlUi =
-      fileGateway.controlUi &&
-      typeof fileGateway.controlUi === "object" &&
-      !Array.isArray(fileGateway.controlUi)
-        ? (fileGateway.controlUi as Record<string, unknown>)
-        : {};
     fileGateway.controlUi = {
-      ...fileControlUi,
+      ...asNonArrayRecord(fileGateway.controlUi),
       ...testState.gatewayControlUi,
     };
   }
@@ -139,10 +101,7 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
 
   const hooks = testState.hooksConfig ?? baseConfig.hooks;
 
-  const fileCron =
-    baseConfig.cron && typeof baseConfig.cron === "object" && !Array.isArray(baseConfig.cron)
-      ? ({ ...(baseConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
-      : {};
+  const fileCron = { ...asNonArrayRecord(baseConfig.cron) };
   if (typeof testState.cronEnabled === "boolean") {
     fileCron.enabled = testState.cronEnabled;
   }
@@ -187,15 +146,25 @@ export function loadGatewayTestConfig(): OpenClawConfig {
 /** Creates gateway-test overrides without importing the facade that re-exports mocked IO. */
 export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): GatewayConfigOverrides {
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
+    const configPath = resolveConfigPath();
+    const snapshot = (overrides: Partial<Parameters<typeof buildTestConfigSnapshot>[0]>) =>
+      buildTestConfigSnapshot({
+        path: configPath,
+        exists: true,
+        raw: null,
+        parsed: {},
+        valid: true,
+        config: overrides.config ?? composeTestConfig({}),
+        issues: [],
+        legacyIssues: [],
+        ...overrides,
+      });
     if (testState.legacyIssues.length > 0) {
       const raw = JSON.stringify(testState.legacyParsed ?? {});
-      return buildTestConfigSnapshot({
-        path: resolveConfigPath(),
-        exists: true,
+      return snapshot({
         raw,
         parsed: testState.legacyParsed ?? {},
         valid: false,
-        config: composeTestConfig({}),
         issues: testState.legacyIssues.map((issue) => ({
           path: issue.path,
           message: issue.message,
@@ -203,44 +172,23 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
         legacyIssues: testState.legacyIssues,
       });
     }
-    const configPath = resolveConfigPath();
     try {
       await fs.access(configPath);
     } catch {
-      return buildTestConfigSnapshot({
-        path: configPath,
-        exists: false,
-        raw: null,
-        parsed: {},
-        valid: true,
-        config: composeTestConfig({}),
-        issues: [],
-        legacyIssues: [],
-      });
+      return snapshot({ exists: false });
     }
     try {
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
-      return buildTestConfigSnapshot({
-        path: configPath,
-        exists: true,
+      return snapshot({
         raw,
         parsed,
-        valid: true,
         config: composeTestConfig(parsed),
-        issues: [],
-        legacyIssues: [],
       });
     } catch (err) {
-      return buildTestConfigSnapshot({
-        path: configPath,
-        exists: true,
-        raw: null,
-        parsed: {},
+      return snapshot({
         valid: false,
-        config: composeTestConfig({}),
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
-        legacyIssues: [],
       });
     }
   };

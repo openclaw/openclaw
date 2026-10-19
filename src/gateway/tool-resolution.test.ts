@@ -73,19 +73,18 @@ describe("resolveGatewayScopedTools", () => {
     const opens: string[] = [];
     const closes: string[] = [];
     const commands = new Map<string, OpenClawPluginNodeHostCommand>();
+    const restrictedActions = [
+      "browser_set_input_files",
+      "browser_download",
+      "get_recording_state",
+      "start_recording",
+      "stop_recording",
+      "replay_trajectory",
+    ];
     const capabilities: ReturnType<ComputerUseProvider["capabilities"]> = {
       contractVersion: 2,
       provider: { id: "fixture", label: "Fixture", generation: "computer-generation" },
-      actions: [
-        "screenshot",
-        "list_windows",
-        "browser_set_input_files",
-        "browser_download",
-        "get_recording_state",
-        "start_recording",
-        "stop_recording",
-        "replay_trajectory",
-      ],
+      actions: ["screenshot", "list_windows", ...restrictedActions],
       targets: ["screen"],
       deliveryModes: ["foreground"],
       observations: ["image"],
@@ -164,14 +163,7 @@ describe("resolveGatewayScopedTools", () => {
       });
     const cache = new McpLoopbackToolCache();
     const expectOrdinaryActions = (parameters: unknown) => {
-      for (const action of [
-        "browser_set_input_files",
-        "browser_download",
-        "get_recording_state",
-        "start_recording",
-        "stop_recording",
-        "replay_trajectory",
-      ]) {
+      for (const action of restrictedActions) {
         expect(parameters).not.toMatchObject({
           properties: { action: { enum: expect.arrayContaining([action]) } },
         });

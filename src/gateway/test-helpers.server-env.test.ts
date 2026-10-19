@@ -27,11 +27,12 @@ import {
   writeSessionStore,
 } from "./test-helpers.server.js";
 
-const envBeforeSuite = {
+const startupEnv = () => ({
   PATH: process.env.PATH,
   OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
   OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
-};
+});
+const envBeforeSuite = startupEnv();
 
 installGatewayTestHooks();
 
@@ -65,11 +66,7 @@ describe("Gateway test environment lifecycle", () => {
     assert(configPath);
     setTestEnvValue("PATH", process.env.PATH ?? "");
     deleteTestEnvValue("OPENCLAW_PATH_BOOTSTRAPPED");
-    const envBeforeServer = {
-      PATH: process.env.PATH,
-      OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
-      OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
-    };
+    const envBeforeServer = startupEnv();
     const serverModule = await import("./server.js");
     const start = serverModule.startGatewayServer;
     const entered = createDeferred<number>();
@@ -128,11 +125,7 @@ describe("Gateway test environment lifecycle", () => {
       await started.server.close();
       closed = true;
       expect(await tryListen(competitor, port)).toBeUndefined();
-      expect({
-        PATH: process.env.PATH,
-        OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
-        OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
-      }).toEqual(envBeforeServer);
+      expect(startupEnv()).toEqual(envBeforeServer);
     } finally {
       release.resolve();
       const started = await acquisition.catch(() => undefined);
@@ -206,13 +199,8 @@ describe("Gateway test environment lifecycle", () => {
           expect(error).toBe(adopted ? failure : unadoptedFailure);
           expect(collision).toBeUndefined();
         }
-        if (retained) {
-          expect(process.env.OPENCLAW_CONFIG_PATH).toBe(configPath);
-          expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(port));
-        } else {
-          expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfig);
-          expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(previousPort);
-        }
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(retained ? configPath : previousConfig);
+        expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(retained ? String(port) : previousPort);
       } finally {
         startup.mockRestore();
         await closeListener(competitor);
@@ -288,11 +276,7 @@ describe("Gateway test environment lifecycle", () => {
   );
 
   it("restores startup-owned environment before the next test", () => {
-    expect({
-      PATH: process.env.PATH,
-      OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
-      OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
-    }).toEqual(envBeforeSuite);
+    expect(startupEnv()).toEqual(envBeforeSuite);
   });
 
   it.each([
