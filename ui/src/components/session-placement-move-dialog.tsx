@@ -317,7 +317,7 @@ function SessionPlacementPicker(props: {
     const buttons = [...scroller.querySelectorAll<HTMLButtonElement>('[role="radio"]')].filter(
       (button) => !button.disabled && !button.closest("[inert]") && !button.hidden,
     );
-    const index = buttons.indexOf(event.target as HTMLButtonElement);
+    const index = buttons.findIndex((button) => button === event.target);
     const next =
       event.key === "Home"
         ? 0
@@ -543,9 +543,9 @@ function DestinationGroup(props: {
                     tabindex={props.tabKey === row().key ? 0 : -1}
                     disabled={Boolean(row().disabledReason)}
                     title={row().disabledReason}
-                    onClick={(event: MouseEvent) => {
+                    onClick={(event) => {
                       prepare(event.detail === 0);
-                      restoreFocus = event.currentTarget as HTMLButtonElement;
+                      restoreFocus = event.currentTarget;
                       props.onSelect(row().target);
                       retain(row().key);
                       expand(false);
