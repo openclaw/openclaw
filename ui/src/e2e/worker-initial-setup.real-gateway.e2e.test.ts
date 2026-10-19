@@ -155,6 +155,9 @@ suite.define(() => {
       );
       const launched: string[] = [];
       const setupWaiters: string[] = [];
+      const unexpected = (operation: string) => async () => {
+        throw new Error(`unexpected ${operation}`);
+      };
       const tunnel: WorkerTurnTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
@@ -195,9 +198,7 @@ suite.define(() => {
             termination: "exit",
           };
         },
-        syncWorkspace: async () => {
-          throw new Error("unexpected resync");
-        },
+        syncWorkspace: unexpected("resync"),
         reconcileWorkspace: async (request) => {
           if (request.source.kind !== "local") {
             throw new Error("expected local fixture source");
@@ -238,15 +239,9 @@ suite.define(() => {
             startTunnel: async () => tunnel,
           },
           resolveWorkspace: async () => ({ kind: "local", path: workspace }),
-          reconcileActivePlacement: async () => {
-            throw new Error("unexpected recovery");
-          },
-          waitForAdmissionNode: async () => {
-            throw new Error("unexpected runtime refresh");
-          },
-          redispatchPlacement: async () => {
-            throw new Error("unexpected redispatch");
-          },
+          reconcileActivePlacement: unexpected("recovery"),
+          waitForAdmissionNode: unexpected("runtime refresh"),
+          redispatchPlacement: unexpected("redispatch"),
           workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
           waitForInitialPlacement: async (placement, signal) => {
             setupWaiters.push(placement.sessionId);
@@ -263,6 +258,9 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", viewport: { height: 900, width: 1440 }, serviceWorkers: "block" },
         async ({ page }) => {
+          const pendingCount = async () => (await listSessionPendingInputs(scope)).items.length;
+          const capture = (name: string) =>
+            page.screenshot({ path: path.join(suite.artifactDir, name) });
           const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
           url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
           await page.goto(url.toString());
@@ -276,18 +274,12 @@ suite.define(() => {
             await composer.waitFor({ state: "visible", timeout: 30_000 });
             await composer.fill("Browser input held for setup");
             await page.getByRole("button", { name: "Send message", exact: true }).click();
-            await expect
-              .poll(async () => (await listSessionPendingInputs(scope)).items.length, {
-                timeout: 15000,
-              })
-              .toBe(1);
+            await expect.poll(pendingCount, { timeout: 15000 }).toBe(1);
             expect(launched).toEqual([]);
             await expect.poll(() => setupWaiters.length, { timeout: 30000 }).toBe(1);
             expect((await listSessionPendingInputs(scope)).items).toHaveLength(1);
             await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "01-held-during-setup.png"),
-            });
+            await capture("01-held-during-setup.png");
             const tool = createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,
@@ -298,9 +290,7 @@ suite.define(() => {
               timeoutSeconds: 0,
             });
             expect(sent.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
-            await expect
-              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
-              .toBe(2);
+            await expect.poll(pendingCount).toBe(2);
             expect(launched).toEqual([]);
             const heldInputs = (await listSessionPendingInputs(scope)).items;
             expect(heldInputs.every((input) => input.state === "queued")).toBe(true);
@@ -328,16 +318,12 @@ suite.define(() => {
             expect(launched).toHaveLength(2);
             expect(new Set(launched).size).toBe(2);
             expect(new Set(launched)).toEqual(new Set(heldInputs.map((input) => input.runId)));
-            await expect
-              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
-              .toBe(0);
+            await expect.poll(pendingCount).toBe(0);
             await page
               .getByRole("paragraph")
               .filter({ hasText: /^Worker reply 2$/ })
               .waitFor();
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "02-resumed-on-worker.png"),
-            });
+            await capture("02-resumed-on-worker.png");
           } finally {
             // Release server work before the browser fixture waits for RPC roots.
             release.resolve();

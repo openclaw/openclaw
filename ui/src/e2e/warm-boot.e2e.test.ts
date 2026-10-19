@@ -77,44 +77,25 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
           readRecords("openclaw-chat-snapshots", "sidebarSnapshots"),
           readRecords("openclaw-chat-snapshots", "snapshots"),
         ]);
+        const field = (value: unknown, ...keys: string[]): unknown =>
+          keys.reduce<unknown>(
+            (current, key) =>
+              typeof current === "object" && current !== null && key in current
+                ? Reflect.get(current, key)
+                : undefined,
+            value,
+          );
         return {
           bootRecord: hasBootRecord,
           roster: rosters.some((record) => {
-            if (typeof record !== "object" || record === null || !("model" in record)) {
-              return false;
-            }
-            const model = record.model;
-            if (typeof model !== "object" || model === null || !("roster" in model)) {
-              return false;
-            }
-            const roster = model.roster;
-            if (typeof roster !== "object" || roster === null || !("result" in roster)) {
-              return false;
-            }
-            const result = roster.result;
+            const sessions = field(record, "model", "roster", "result", "sessions");
             return (
-              typeof result === "object" &&
-              result !== null &&
-              "sessions" in result &&
-              Array.isArray(result.sessions) &&
-              result.sessions.some(
-                (row: unknown) =>
-                  typeof row === "object" &&
-                  row !== null &&
-                  "key" in row &&
-                  row.key === "agent:main:cached-only",
-              )
+              Array.isArray(sessions) &&
+              sessions.some((row) => field(row, "key") === "agent:main:cached-only")
             );
           }),
           transcript: snapshots.some(
-            (snapshot) =>
-              typeof snapshot === "object" &&
-              snapshot !== null &&
-              "snapshot" in snapshot &&
-              typeof snapshot.snapshot === "object" &&
-              snapshot.snapshot !== null &&
-              "deltaCursor" in snapshot.snapshot &&
-              snapshot.snapshot.deltaCursor === "warm-reload-cursor",
+            (snapshot) => field(snapshot, "snapshot", "deltaCursor") === "warm-reload-cursor",
           ),
         };
       }),
@@ -125,8 +106,10 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
 suite.define(() => {
   it.each(reloadProfiles)(
     "reconciles the cached shell, roster, and transcript with a %s profile",
-    async (profile) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    (profile) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const capture = (name: string) =>
+          page.screenshot({ path: path.join(suite.artifactDir, name) });
         const timestamp = Date.now();
         const imported = profile === "imported";
         const shortTail = profile === "short-tail";
@@ -180,11 +163,10 @@ suite.define(() => {
           sessions: [
             currentRow,
             {
+              ...currentRow,
               key: "agent:main:cached-only",
               sessionId: "cached-only-session",
-              kind: "direct",
               label: "Cached only session",
-              owner: { actor: { type: "human", id: "profile-a" } },
               updatedAt: timestamp - 1,
             },
           ],
@@ -263,7 +245,7 @@ suite.define(() => {
         );
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "cold-connecting.png") });
+        await capture("cold-connecting.png");
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
         const transcript = page.locator(".chat-thread-inner");
@@ -407,18 +389,14 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);
         if (profile === "trusted-proxy") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
-          });
+          await capture("bootstrap-before-hello.png");
           expect(bootstrapRequests).toBe(0);
           await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
         }
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `warm-${profile}-before-hello.png`),
-        });
+        await capture(`warm-${profile}-before-hello.png`);
 
         await gateway.setSessionsListResponse({
           ownerSessionCounts: [],
@@ -429,9 +407,9 @@ suite.define(() => {
           sessions: [
             { ...currentRow, label: "Live reload conversation", updatedAt: timestamp + 1 },
             {
+              ...currentRow,
               key: "agent:main:live-only",
               sessionId: "live-only-session",
-              kind: "direct",
               label: "Live only session",
               owner: {
                 actor: { type: "human", id: profile === "different" ? "profile-b" : "profile-a" },
@@ -458,9 +436,7 @@ suite.define(() => {
             // Presence attribution alone does not change the authenticated storage owner.
             auth: { ...hello.auth, recoveryScope: "e2e-profile-b-recovery-scope" },
             snapshot: {
-              ...(typeof hello.snapshot === "object" && hello.snapshot !== null
-                ? hello.snapshot
-                : {}),
+              ...hello.snapshot,
               presence: [
                 { instanceId: client.instanceId, reason: "connect", user: { id: "profile-b" } },
               ],
@@ -491,17 +467,10 @@ suite.define(() => {
         await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Live only session", { exact: true }).waitFor();
         expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
-        await transcript
-          .getByText(
-            profile === "different" ? "This is profile B's conversation." : transcriptText,
-            {
-              exact: true,
-            },
-          )
-          .waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
-        });
+        const finalText =
+          profile === "different" ? "This is profile B's conversation." : transcriptText;
+        await transcript.getByText(finalText, { exact: true }).waitFor();
+        await capture(`warm-${profile}-after-hello.png`);
         if (profile === "large" || shortTail || imported) {
           await waitForChatScrollIdle(page);
           expect(await gateway.getRequests("chat.history")).toEqual([]);
@@ -587,7 +556,6 @@ suite.define(() => {
           await gateway.waitForRequest("chat.startup", { after: startupCount });
           await expectOwnMessageAlignment(page);
         }
-      });
-    },
+      }),
   );
 });
