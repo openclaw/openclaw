@@ -1,11 +1,8 @@
 import { createEffect, createMemo, merge, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  EnvironmentChangeCounts,
-  type ChatDetailsEnvironmentProps,
-} from "./chat-details-environment.tsx";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { EnvironmentChangeCounts } from "./chat-details-environment.tsx";
+import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
 import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,
@@ -78,7 +75,7 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
           </div>
         </Show>
         <Show when={project() && !workspace()?.branch}>
-          <div class="chat-environment-mobile__row" aria-label={workspace()?.root ?? project()}>
+          <div class="chat-environment-mobile__row" aria-label={project()}>
             <Show
               when={props.onOpenProject}
               fallback={
