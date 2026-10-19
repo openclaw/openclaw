@@ -674,4 +674,57 @@ describe("Hermes migration config mapping", () => {
       (config.mcp as { servers?: { beta?: { command?: string } } }).servers?.beta?.command,
     ).toBe("beta");
   });
+
+  it("rejects a source config that is not valid UTF-8 instead of importing replacement characters", async () => {
+    const { source } = fixture.paths;
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(
+      path.join(source, "config.yaml"),
+      Buffer.concat([
+        Buffer.from('providers:\n  acme:\n    api: "https://api.acme.example/café'),
+        Buffer.from([0xff]),
+        Buffer.from('"\n    default_model: vendor/custom-v1\n'),
+      ]),
+    );
+
+    await expect(migrationProvider.plan(makeTestContext())).rejects.toThrow(
+      /Source file is not valid UTF-8: .*config\.yaml.*retry migration/s,
+    );
+  });
+
+  it("rejects a credential store that is not valid UTF-8", async () => {
+    const { source } = fixture.paths;
+    await fs.mkdir(source, { recursive: true });
+    await fs.writeFile(
+      path.join(source, "auth.json"),
+      Buffer.concat([
+        Buffer.from('{"openai": {"access_token": "token-'),
+        Buffer.from([0xff]),
+        Buffer.from('"}'),
+      ]),
+    );
+
+    await expect(migrationProvider.plan(makeTestContext())).rejects.toThrow(
+      /Source file is not valid UTF-8: .*auth\.json.*retry migration/s,
+    );
+  });
+
+  it("keeps valid multibyte config text intact", async () => {
+    await writeConfig({
+      providers: {
+        acme: {
+          api: "https://api.acme.example/café-😀/v1",
+          default_model: "vendor/custom-v1",
+          transport: "codex_responses",
+          models: { "vendor/custom-v1": { context_length: 262144, max_tokens: 16384 } },
+        },
+      },
+    });
+
+    const plan = await migrationProvider.plan(makeTestContext());
+
+    expect(modelProviderValues(plan.items)?.acme?.baseUrl).toBe(
+      "https://api.acme.example/café-😀/v1",
+    );
+  });
 });

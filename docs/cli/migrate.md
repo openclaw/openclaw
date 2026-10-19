@@ -114,6 +114,9 @@ Shared flags work in either position, so `openclaw migrate --no-auth-credentials
   <Accordion title="Conflicts">
     Apply refuses to continue when the plan has conflicts. Review the plan, then rerun with `--overwrite` if replacing existing targets is intentional. Providers may still write item-level backups for overwritten files in the migration report directory.
   </Accordion>
+  <Accordion title="Source encoding">
+    The Hermes provider requires its config, dotenv, and credential files to be valid UTF-8. Planning stops with the offending path instead of importing replacement characters into target config or credentials. Re-encode the source file as UTF-8 and rerun the migration.
+  </Accordion>
   <Accordion title="Secrets">
     Interactive apply asks whether to import detected auth credentials, with yes selected by default. Use `--no-auth-credentials` to skip them, or `--include-secrets` for unattended credential import with `--yes`.
   </Accordion>

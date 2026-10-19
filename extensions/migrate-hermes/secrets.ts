@@ -16,7 +16,7 @@ import {
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
 import { collectHermesProviderSecretBindings } from "./config-providers.js";
-import { parseEnv, readJsonObject, readText, sanitizeName } from "./helpers.js";
+import { parseEnv, readJsonObject, readUtf8Text, sanitizeName } from "./helpers.js";
 import {
   createHermesSecretItem,
   HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -226,7 +226,7 @@ async function readSecretCandidateValue(
   if (!details.envVar) {
     return undefined;
   }
-  const env = parseEnv(await readText(source));
+  const env = parseEnv(await readUtf8Text(source));
   return env[details.envVar]?.trim() || undefined;
 }
 
@@ -236,7 +236,7 @@ export async function buildSecretItems(params: {
   source: HermesSource;
   targets: PlannedMigrationTargets;
 }): Promise<MigrationItem[]> {
-  const env = parseEnv(await readText(params.source.envPath));
+  const env = parseEnv(await readUtf8Text(params.source.envPath));
   const candidates = [
     ...buildEnvSecretCandidates({
       config: params.config,

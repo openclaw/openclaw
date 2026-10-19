@@ -45,10 +45,29 @@ export async function readText(filePath: string | undefined): Promise<string | u
   return filePath ? await fs.readFile(filePath, "utf8").catch(() => undefined) : undefined;
 }
 
+// Sources read here become OpenClaw config or credentials. Decoding invalid
+// bytes would import U+FFFD replacement characters instead of the user's text,
+// so reject them; an absent optional source still returns undefined.
+export async function readUtf8Text(filePath: string | undefined): Promise<string | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  const bytes = await fs.readFile(filePath).catch(() => undefined);
+  if (bytes === undefined) {
+    return undefined;
+  }
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `Source file is not valid UTF-8: ${filePath}. Re-encode it as UTF-8 and retry migration.`,
+    );
+  }
+  return bytes.toString("utf8");
+}
+
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const raw = await readText(filePath);
+  const raw = await readUtf8Text(filePath);
   try {
     return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
   } catch {
