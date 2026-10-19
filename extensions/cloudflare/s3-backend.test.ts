@@ -13,7 +13,6 @@ import {
   S3ServiceException,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
-import type { StorageObjectInfo } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createR2Backend } from "./s3-backend.js";
 import type { R2Settings } from "./settings.js";
@@ -36,14 +35,40 @@ function serviceError(name: string, code: number) {
   });
 }
 
-async function* bytes(...chunks: Uint8Array[]) {
-  yield* chunks;
+async function* bytes(...chunks: (Uint8Array | string)[]) {
+  for (const chunk of chunks) {
+    yield typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+  }
 }
 
-function fixture() {
+function fixture(...responses: unknown[]) {
   const send = vi.fn();
+  responses.forEach((response) => send.mockResolvedValueOnce(response));
   const destroy = vi.fn();
   return { send, destroy, backend: createR2Backend(settings, { send, destroy }) };
+}
+
+const head = (ContentLength: number) => ({ ETag: '"original"', ContentLength });
+const target = (key: string) => ({ Bucket: "test-bucket", Key: `archive/team/${key}` });
+
+function expectCommand(command: { input: unknown }, type: unknown, input: unknown) {
+  expect(command).toBeInstanceOf(type);
+  expect(command.input).toEqual(input);
+}
+
+function download(size: number, start: number, end: number, source: AsyncIterable<Uint8Array>) {
+  return {
+    ETag: '"original"',
+    ContentRange: `bytes ${start}-${end}/${size}`,
+    Body: downloadBody(source),
+  };
+}
+
+async function expectSafeFailure(result: Promise<unknown>, ...messages: string[]) {
+  for (const message of messages) {
+    await expect(result).rejects.toThrow(message);
+  }
+  await expect(result).rejects.not.toThrow("private-credential-value");
 }
 
 function downloadBody(source: AsyncIterable<Uint8Array>) {
@@ -78,27 +103,24 @@ describe("R2 object transport", () => {
   it("conditionally creates small objects and preserves a conflicting object", async () => {
     const { send, backend } = fixture();
     send.mockResolvedValueOnce({}).mockRejectedValueOnce(serviceError("PreconditionFailed", 412));
-    expect(
-      await backend.putObject("backup.tar", bytes(Buffer.from("abc")), { sizeBytes: 3 }),
-    ).toEqual({ sizeBytes: 3 });
-    expect(send.mock.calls[0]?.[0]).toBeInstanceOf(PutObjectCommand);
-    expect(send.mock.calls[0]?.[0].input).toEqual({
-      Bucket: "test-bucket",
-      Key: "archive/team/backup.tar",
+    expect(await backend.putObject("backup.tar", bytes("abc"), { sizeBytes: 3 })).toEqual({
+      sizeBytes: 3,
+    });
+    expectCommand(send.mock.calls[0]?.[0], PutObjectCommand, {
+      ...target("backup.tar"),
       Body: Buffer.from("abc"),
       ContentLength: 3,
       IfNoneMatch: "*",
     });
-    await expect(
-      backend.putObject("backup.tar", bytes(Buffer.from("new")), { sizeBytes: 3 }),
-    ).rejects.toThrow("use a new object key");
+    await expect(backend.putObject("backup.tar", bytes("new"), { sizeBytes: 3 })).rejects.toThrow(
+      "use a new object key",
+    );
     expect(send).toHaveBeenCalledTimes(2);
   });
 
   it("uploads ordered bounded parts for a declared large object", async () => {
     const { send, backend } = fixture();
-    const lengths: number[] = [];
-    const edges: number[][] = [];
+    const parts: number[][] = [];
     send.mockImplementation(async (command) => {
       if (command instanceof CreateMultipartUploadCommand) {
         return { UploadId: "upload" };
@@ -108,8 +130,7 @@ describe("R2 object transport", () => {
         if (!(body instanceof Uint8Array)) {
           throw new Error("Expected byte part");
         }
-        lengths.push(body.byteLength);
-        edges.push([body[0]!, body[body.byteLength - 1]!]);
+        parts.push([body.byteLength, body[0]!, body[body.byteLength - 1]!]);
         return { ETag: `part-${command.input.PartNumber}` };
       }
       return {};
@@ -118,16 +139,12 @@ describe("R2 object transport", () => {
     expect(await backend.putObject("large", data, { sizeBytes: PART_BYTES + 3 })).toEqual({
       sizeBytes: PART_BYTES + 3,
     });
-    expect(lengths).toEqual([PART_BYTES, 3]);
-    expect(edges).toEqual([
-      [1, 2],
-      [3, 5],
+    expect(parts).toEqual([
+      [PART_BYTES, 1, 2],
+      [3, 3, 5],
     ]);
-    const complete = send.mock.calls.at(-1)?.[0];
-    expect(complete).toBeInstanceOf(CompleteMultipartUploadCommand);
-    expect(complete.input).toEqual({
-      Bucket: "test-bucket",
-      Key: "archive/team/large",
+    expectCommand(send.mock.calls.at(-1)?.[0], CompleteMultipartUploadCommand, {
+      ...target("large"),
       UploadId: "upload",
       IfNoneMatch: "*",
       MultipartUpload: {
@@ -140,11 +157,7 @@ describe("R2 object transport", () => {
   });
 
   it("completes an empty unknown-size body through multipart", async () => {
-    const { send, backend } = fixture();
-    send
-      .mockResolvedValueOnce({ UploadId: "upload" })
-      .mockResolvedValueOnce({ ETag: "empty" })
-      .mockResolvedValueOnce({});
+    const { send, backend } = fixture({ UploadId: "upload" }, { ETag: "empty" }, {});
     expect(await backend.putObject("empty", bytes(), {})).toEqual({ sizeBytes: 0 });
     expect(send.mock.calls[1]?.[0].input).toMatchObject({ ContentLength: 0, PartNumber: 1 });
     expect(send.mock.calls[2]?.[0]).toBeInstanceOf(CompleteMultipartUploadCommand);
@@ -174,24 +187,18 @@ describe("R2 object transport", () => {
       sizeBytes: failure === "size" ? PART_BYTES + 1 : undefined,
     });
     await expect(result).rejects.not.toThrow("private-credential-value");
-    expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(AbortMultipartUploadCommand);
-    expect(send.mock.calls.at(-1)?.[0].input).toEqual({
-      Bucket: "test-bucket",
-      Key: "archive/team/broken",
+    expectCommand(send.mock.calls.at(-1)?.[0], AbortMultipartUploadCommand, {
+      ...target("broken"),
       UploadId: "upload",
     });
     expect(send.mock.calls.at(-1)).toHaveLength(1);
   });
 
   it("cancels a blocked producer and cleans up its upload", async () => {
-    const { send, backend } = fixture();
+    const { send, backend } = fixture({ UploadId: "upload" }, { ETag: "part" }, {});
     const controller = new AbortController();
     const started = Promise.withResolvers<void>();
     const waiting = Promise.withResolvers<void>();
-    send
-      .mockResolvedValueOnce({ UploadId: "upload" })
-      .mockResolvedValueOnce({ ETag: "part" })
-      .mockResolvedValueOnce({});
     async function* source() {
       yield Buffer.alloc(PART_BYTES);
       started.resolve();
@@ -235,8 +242,7 @@ describe("R2 object transport", () => {
     }
     try {
       const result = backend.putObject("failed-part", source(), {});
-      await expect(result).rejects.toThrow("Object Read & Write");
-      await expect(result).rejects.not.toThrow("private-credential-value");
+      await expectSafeFailure(result, "Object Read & Write");
       expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(AbortMultipartUploadCommand);
     } finally {
       waiting.resolve();
@@ -244,25 +250,23 @@ describe("R2 object transport", () => {
   });
 
   it("reports cleanup failures without exposing the underlying error", async () => {
-    const { send, backend } = fixture();
-    send
-      .mockResolvedValueOnce({ UploadId: "upload" })
-      .mockRejectedValue(new Error("private-credential-value"));
-    await expect(backend.putObject("broken", bytes(Buffer.from("abc")), {})).rejects.toThrow(
+    const { send, backend } = fixture({ UploadId: "upload" });
+    send.mockRejectedValue(new Error("private-credential-value"));
+    await expect(backend.putObject("broken", bytes("abc"), {})).rejects.toThrow(
       "remove incomplete uploads in bucket test-bucket",
     );
   });
 
   it("rejects an oversized body before publication", async () => {
     const { send, backend } = fixture();
-    await expect(
-      backend.putObject("wrong-size", bytes(Buffer.from("abc")), { sizeBytes: 2 }),
-    ).rejects.toThrow("declared size");
+    await expect(backend.putObject("wrong-size", bytes("abc"), { sizeBytes: 2 })).rejects.toThrow(
+      "declared size",
+    );
     expect(send).not.toHaveBeenCalled();
   });
 
   it.each(["getObject", "statObject"] as const)(
-    "returns undefined for an absent object in %s",
+    "handles missing objects in %s",
     async (operation) => {
       const { send, backend } = fixture();
       send.mockRejectedValue(serviceError("NoSuchKey", 404));
@@ -275,30 +279,16 @@ describe("R2 object transport", () => {
   );
 
   it("streams downloads and sanitizes failures while consuming the body", async () => {
-    const { send, backend } = fixture();
-    const stream = new ReadableStream<Uint8Array>(
-      {
-        start(controller) {
-          controller.enqueue(Buffer.from("first"));
-        },
-        pull(controller) {
-          controller.error(new Error("private-credential-value"));
-        },
-      },
-      { highWaterMark: 0 },
-    );
-    send.mockResolvedValueOnce({ ETag: '"original"', ContentLength: 10 }).mockResolvedValue({
-      ETag: '"original"',
-      ContentRange: "bytes 0-9/10",
-      Body: { transformToWebStream: () => stream },
-    });
+    async function* source() {
+      yield Buffer.from("first");
+      throw new Error("private-credential-value");
+    }
+    const { send, backend } = fixture(head(10), download(10, 0, 9, source()));
     const body = await backend.getObject("object");
     const iterator = body![Symbol.asyncIterator]();
     expect(await iterator.next()).toMatchObject({ value: Buffer.from("first") });
     const failure = iterator.next();
-    await expect(failure).rejects.toThrow("R2 download failed");
-    await expect(failure).rejects.toThrow("after 5 of 10 bytes (next offset 5)");
-    await expect(failure).rejects.not.toThrow("private-credential-value");
+    await expectSafeFailure(failure, "R2 download failed", "after 5 of 10 bytes (next offset 5)");
     expect(send).toHaveBeenCalledTimes(2);
   });
 
@@ -307,7 +297,7 @@ describe("R2 object transport", () => {
     let request = 0;
     send.mockImplementation(async (command) => {
       if (command instanceof HeadObjectCommand) {
-        return { ETag: '"original"', ContentLength: 10 };
+        return head(10);
       }
       expect(command).toBeInstanceOf(GetObjectCommand);
       expect(command.input.IfMatch).toBe('"original"');
@@ -326,11 +316,7 @@ describe("R2 object transport", () => {
           });
         }
       }
-      return {
-        ETag: '"original"',
-        ContentRange: `bytes ${start}-9/10`,
-        Body: downloadBody(source()),
-      };
+      return download(10, start, 9, source());
     });
     const body = await backend.getObject("object");
     expect(Buffer.concat(await Array.fromAsync(body!)).toString()).toBe("abcdefghij");
@@ -338,24 +324,12 @@ describe("R2 object transport", () => {
   });
 
   it("advances bounded ranges and resumes a short response without duplicating bytes", async () => {
-    const { send, backend } = fixture();
-    send
-      .mockResolvedValueOnce({ ETag: '"original"', ContentLength: PART_BYTES + 3 })
-      .mockResolvedValueOnce({
-        ETag: '"original"',
-        ContentRange: `bytes 0-${PART_BYTES - 1}/${PART_BYTES + 3}`,
-        Body: downloadBody(bytes(Buffer.alloc(PART_BYTES))),
-      })
-      .mockResolvedValueOnce({
-        ETag: '"original"',
-        ContentRange: `bytes ${PART_BYTES}-${PART_BYTES + 2}/${PART_BYTES + 3}`,
-        Body: downloadBody(bytes(Buffer.from("a"))),
-      })
-      .mockResolvedValueOnce({
-        ETag: '"original"',
-        ContentRange: `bytes ${PART_BYTES + 1}-${PART_BYTES + 2}/${PART_BYTES + 3}`,
-        Body: downloadBody(bytes(Buffer.from("bc"))),
-      });
+    const { send, backend } = fixture(
+      head(PART_BYTES + 3),
+      download(PART_BYTES + 3, 0, PART_BYTES - 1, bytes(Buffer.alloc(PART_BYTES))),
+      download(PART_BYTES + 3, PART_BYTES, PART_BYTES + 2, bytes("a")),
+      download(PART_BYTES + 3, PART_BYTES + 1, PART_BYTES + 2, bytes("bc")),
+    );
     const body = await backend.getObject("object");
     const chunks = await Array.fromAsync(body!);
     expect(chunks.map((chunk) => chunk.byteLength)).toEqual([PART_BYTES, 1, 2]);
@@ -367,65 +341,51 @@ describe("R2 object transport", () => {
     ]);
   });
 
-  it.each(["precondition", "etag", "range"])(
-    "rejects a changed object or wrong resumed range (%s)",
-    async (failure) => {
-      const { send, backend } = fixture();
-      async function* interrupted() {
-        yield Buffer.from("abc");
-        throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
-      }
-      send.mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 }).mockResolvedValueOnce({
-        ETag: '"original"',
-        ContentRange: "bytes 0-5/6",
-        Body: downloadBody(interrupted()),
+  it.each(["precondition", "etag", "range"])("rejects invalid resumed %s", async (failure) => {
+    async function* interrupted() {
+      yield Buffer.from("abc");
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    }
+    const { send, backend } = fixture(head(6), download(6, 0, 5, interrupted()));
+    if (failure === "precondition") {
+      send.mockRejectedValueOnce(serviceError("PreconditionFailed", 412));
+    } else {
+      send.mockResolvedValueOnce({
+        ...download(6, failure === "range" ? 0 : 3, 5, bytes("def")),
+        ETag: failure === "etag" ? '"replacement"' : '"original"',
       });
-      if (failure === "precondition") {
-        send.mockRejectedValueOnce(serviceError("PreconditionFailed", 412));
-      } else {
-        send.mockResolvedValueOnce({
-          ETag: failure === "etag" ? '"replacement"' : '"original"',
-          ContentRange: failure === "range" ? "bytes 0-5/6" : "bytes 3-5/6",
-          Body: downloadBody(bytes(Buffer.from("def"))),
-        });
-      }
-      const body = await backend.getObject("object");
-      const iterator = body![Symbol.asyncIterator]();
-      expect(await iterator.next()).toMatchObject({ value: Buffer.from("abc") });
-      const rejected = iterator.next();
-      await expect(rejected).rejects.toThrow(
-        failure === "range" ? "unexpected byte range" : "object changed",
-      );
-      await expect(rejected).rejects.toThrow("after 3 of 6 bytes (next offset 3)");
-      expect(send).toHaveBeenCalledTimes(3);
-    },
-  );
+    }
+    const body = await backend.getObject("object");
+    const iterator = body![Symbol.asyncIterator]();
+    expect(await iterator.next()).toMatchObject({ value: Buffer.from("abc") });
+    const rejected = iterator.next();
+    await expect(rejected).rejects.toThrow(
+      failure === "range" ? "unexpected byte range" : "object changed",
+    );
+    await expect(rejected).rejects.toThrow("after 3 of 6 bytes (next offset 3)");
+    expect(send).toHaveBeenCalledTimes(3);
+  });
 
   it("bounds stalled download retries and includes a safe cause and byte offset", async () => {
-    const { send, backend } = fixture();
-    send
-      .mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 })
-      .mockRejectedValue(
-        Object.assign(new Error("private-credential-value"), { code: "ECONNRESET" }),
-      );
+    const { send, backend } = fixture(head(6));
+    send.mockRejectedValue(
+      Object.assign(new Error("private-credential-value"), { code: "ECONNRESET" }),
+    );
     const body = await backend.getObject("object");
     const rejected = Array.fromAsync(body!);
-    await expect(rejected).rejects.toThrow("after 0 of 6 bytes (next offset 0; ECONNRESET)");
-    await expect(rejected).rejects.not.toThrow("private-credential-value");
+    await expectSafeFailure(rejected, "after 0 of 6 bytes (next offset 0; ECONNRESET)");
     expect(send).toHaveBeenCalledTimes(10);
   });
 
   it("does not retry permission errors or an aborted download", async () => {
-    const { send, backend } = fixture();
-    send
-      .mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 })
-      .mockRejectedValueOnce(serviceError("AccessDenied", 403));
+    const { send, backend } = fixture(head(6));
+    send.mockRejectedValueOnce(serviceError("AccessDenied", 403));
     const denied = await backend.getObject("object");
     await expect(Array.fromAsync(denied!)).rejects.toThrow("R2 access denied");
     expect(send).toHaveBeenCalledTimes(2);
 
     const controller = new AbortController();
-    send.mockResolvedValueOnce({ ETag: '"original"', ContentLength: 6 });
+    send.mockResolvedValueOnce(head(6));
     const aborted = await backend.getObject("object", { signal: controller.signal });
     controller.abort();
     await expect(Array.fromAsync(aborted!)).rejects.toMatchObject({ name: "AbortError" });
@@ -433,24 +393,19 @@ describe("R2 object transport", () => {
   });
 
   it("paginates within the configured namespace and returns relative keys", async () => {
-    const { send, backend } = fixture();
-    send
-      .mockResolvedValueOnce({
+    const { send, backend } = fixture(
+      {
         Contents: [{ Key: "archive/team/backups/one", Size: 1, LastModified: new Date(1000) }],
         IsTruncated: true,
         NextContinuationToken: "next",
-      })
-      .mockResolvedValueOnce({ Contents: [{ Key: "archive/team/backups/two", Size: 2 }] });
-    const objects: StorageObjectInfo[] = [];
-    for await (const object of backend.listObjects("backups/")) {
-      objects.push(object);
-    }
-    expect(objects).toEqual([
+      },
+      { Contents: [{ Key: "archive/team/backups/two", Size: 2 }] },
+    );
+    expect(await Array.fromAsync(backend.listObjects("backups/"))).toEqual([
       { key: "backups/one", sizeBytes: 1, modifiedAt: 1000 },
       { key: "backups/two", sizeBytes: 2, modifiedAt: undefined },
     ]);
-    expect(send.mock.calls[0]?.[0]).toBeInstanceOf(ListObjectsV2Command);
-    expect(send.mock.calls[0]?.[0].input).toEqual({
+    expectCommand(send.mock.calls[0]?.[0], ListObjectsV2Command, {
       Bucket: "test-bucket",
       Prefix: "archive/team/backups/",
       ContinuationToken: undefined,
@@ -459,10 +414,8 @@ describe("R2 object transport", () => {
   });
 
   it("stats, probes, deletes, and closes the client", async () => {
-    const { send, destroy, backend } = fixture();
-    send
-      .mockResolvedValueOnce({ ContentLength: 42, LastModified: new Date(1000) })
-      .mockResolvedValue({});
+    const { send, destroy, backend } = fixture({ ContentLength: 42, LastModified: new Date(1000) });
+    send.mockResolvedValue({});
     expect(await backend.statObject("object")).toEqual({
       key: "object",
       sizeBytes: 42,
@@ -473,11 +426,7 @@ describe("R2 object transport", () => {
     await backend.close?.();
     expect(send.mock.calls[0]?.[0]).toBeInstanceOf(HeadObjectCommand);
     expect(send.mock.calls[1]?.[0]).toBeInstanceOf(HeadBucketCommand);
-    expect(send.mock.calls[2]?.[0]).toBeInstanceOf(DeleteObjectCommand);
-    expect(send.mock.calls[2]?.[0].input).toEqual({
-      Bucket: "test-bucket",
-      Key: "archive/team/object",
-    });
+    expectCommand(send.mock.calls[2]?.[0], DeleteObjectCommand, target("object"));
     expect(destroy).toHaveBeenCalledOnce();
     expect(backend.displayTarget).toBe("r2://test-bucket/archive/team");
   });
@@ -486,11 +435,11 @@ describe("R2 object transport", () => {
     const { send, backend } = fixture();
     send.mockRejectedValue(serviceError("Error", code));
     const result = backend.probe();
-    await expect(result).rejects.toThrow(
+    await expectSafeFailure(
+      result,
       code === 404
         ? `create bucket test-bucket in account ${settings.accountId}`
         : "check the bucket settings",
     );
-    await expect(result).rejects.not.toThrow("private-credential-value");
   });
 });
