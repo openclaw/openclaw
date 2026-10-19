@@ -557,6 +557,7 @@ export function createNativeConversationBridge(
     surface: "conversation",
     capabilities: ["navigate", "presentation", "focus-composer", ...features],
   });
+  // Publish accepted native-host state from owner receipts, independently of Solid commits.
   stops.push(
     listen(document, CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation),
     listen(document, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation),
