@@ -1,16 +1,40 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   cfg,
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
-import { resolveConfiguredModelRefMock } from "./run.test-harness.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { CronService } from "../service.js";
+import { createNoopLogger } from "../service.test-harness.js";
+import { resolveCronSessionTargetSessionKey } from "../session-target.js";
+import {
+  ensureAgentWorkspaceMock,
+  loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
+  resetRunCronIsolatedAgentTurnHarness,
+  resolveConfiguredModelRefMock,
+  resolveCronDeliveryPlanMock,
+} from "./run.test-harness.js";
+
+export function resetAuthorityRunHarness() {
+  resetRunCronIsolatedAgentTurnHarness();
+  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+  ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
+  resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+  mockRunCronFallbackPassthrough();
+}
 
 export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> = {}) {
   const { resolveAgentDir } = await import("./run.runtime.js");
@@ -44,27 +68,71 @@ export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> 
   return config;
 }
 
-export function createAuthorityTools(
+export async function withAuthorityTools<T>(
   params: RunEmbeddedAgentParams,
-  overrides: Partial<NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>>,
+  run: (tools: ReturnType<typeof createOpenClawCodingTools>) => Promise<T>,
+  options: Partial<NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>> & {
+    includeOpenClawTools?: boolean;
+  } = {},
 ) {
-  return createOpenClawCodingTools({
-    config: params.config,
+  const { includeOpenClawTools = false, ...overrides } = options;
+  const admitted = await expectDefined(params.preparedRunAdmission, "run admission").admit(
+    "gateway",
+    params.runId,
+  );
+  const caller = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: admitted,
     agentId: "main",
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    runId: params.runId,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-    runtimeToolAllowlist: params.toolsAllow,
-    scheduledToolPolicy: params.scheduledToolPolicy,
-    toolConstructionPlan: {
-      includeBaseCodingTools: true,
-      includeShellTools: false,
-      includeChannelTools: false,
-      includeOpenClawTools: false,
-      includePluginTools: false,
-    },
+    sessionKey: overrides.sessionKey ?? params.sessionKey,
+  });
+  return withGatewayToolCallerIdentity(caller, () =>
+    run(
+      createOpenClawCodingTools({
+        config: params.config,
+        agentId: "main",
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        runId: params.runId,
+        operationalRunInstance: admitted.operationalRunInstance,
+        workspaceDir: params.workspaceDir,
+        cwd: params.cwd,
+        runtimeToolAllowlist: params.toolsAllow,
+        scheduledToolPolicy: params.scheduledToolPolicy,
+        toolConstructionPlan: {
+          includeBaseCodingTools: true,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools,
+          includePluginTools: false,
+        },
+        ...overrides,
+      }),
+    ),
+  );
+}
+
+export function createAuthorityCronService(
+  config: OpenClawConfig,
+  runCron: Awaited<ReturnType<typeof loadRunCronIsolatedAgentTurn>>,
+  overrides: Partial<ConstructorParameters<typeof CronService>[0]> = {},
+) {
+  return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    storePath: path.join(stateDir, "cron", "jobs.json"),
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: createNoopLogger(),
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: (request) =>
+      runCron({
+        ...request,
+        cfg: config,
+        deps: {},
+        agentId: "main",
+        sessionKey:
+          resolveCronSessionTargetSessionKey(request.job.sessionTarget) ?? `cron:${request.job.id}`,
+      }),
     ...overrides,
   });
 }

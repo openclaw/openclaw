@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeEach, describe, expect, it } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -12,21 +12,18 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
+import { realCronSession } from "./run.session.test-support.js";
 import {
   loadRunCronIsolatedAgentTurn,
-  loadSessionEntryMock,
   mockRunCronFallbackPassthrough,
-  patchSessionEntryMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
-  "../../config/sessions/session-accessor.js",
-);
-const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
+const realSession = await realCronSession();
+const { accessor } = realSession;
 
 function completedTurn() {
   return {
@@ -88,9 +85,7 @@ describe("session-bound cron lane admission", () => {
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
     mockRunCronFallbackPassthrough();
-    resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
-    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
-    patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
+    realSession.install();
     runEmbeddedAgentMock.mockImplementation(async () => completedTurn());
   });
 
@@ -165,39 +160,36 @@ describe("session-bound cron lane admission", () => {
     }
   });
 
-  it("borrows an inherited controller turn without waiting on itself", async ({ signal }) => {
-    const { target } = await seedSession();
-    await expect(
-      withinTest(
-        withSessionTurn(target, () => startCron(target)),
+  it.for([false, true])(
+    "borrows the controller turn with caller cancellation=%s",
+    async (cancel, { signal }) => {
+      const { target } = await seedSession();
+      const caller = new AbortController();
+      await withinTest(
+        withSessionTurn(target, async (operation) => {
+          assert(operation, "Expected an admitted outer operation");
+          if (cancel) {
+            runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
+              expect(params.abortSignal?.aborted).toBe(false);
+              caller.abort(new Error("cancel nested cron"));
+              expect(params.abortSignal?.aborted).toBe(true);
+              expect(operation.abortSignal.aborted).toBe(false);
+              throw params.abortSignal?.reason;
+            });
+          }
+          const result = await startCron(target, cancel ? { abortSignal: caller.signal } : {});
+          expect(result.status).toBe(cancel ? "error" : "ok");
+          if (cancel) {
+            expect(operation.abortSignal.aborted).toBe(false);
+          }
+        }),
         signal,
-      ),
-    ).resolves.toMatchObject({ status: "ok" });
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  });
-
-  it("passes caller cancellation into a borrowed native turn", async ({ signal }) => {
-    const { target } = await seedSession();
-    const caller = new AbortController();
-    await withinTest(
-      withSessionTurn(target, async (operation) => {
-        if (!operation) {
-          throw new Error("Expected an admitted outer operation");
-        }
-        runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
-          expect(params.abortSignal?.aborted).toBe(false);
-          caller.abort(new Error("cancel nested cron"));
-          expect(params.abortSignal?.aborted).toBe(true);
-          expect(operation.abortSignal.aborted).toBe(false);
-          throw params.abortSignal?.reason;
-        });
-        const result = await startCron(target, { abortSignal: caller.signal });
-        expect(result.status).toBe("error");
-        expect(operation.abortSignal.aborted).toBe(false);
-      }),
-      signal,
-    );
-  });
+      );
+      if (!cancel) {
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("keeps prepared cron invocations in FIFO order through model settlement", async ({
     signal,

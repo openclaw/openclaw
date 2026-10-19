@@ -39,31 +39,29 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-diagnostic-events-")
 let sessionStorePath: string;
 
 function makeParams(config: OpenClawConfig = {}) {
-  const cfg: OpenClawConfig = {
-    ...config,
-    session: { ...config.session, store: sessionStorePath },
-  };
   return makeIsolatedAgentParamsFixture({
-    cfg,
+    cfg: { ...config, session: { ...config.session, store: sessionStorePath } },
     job: {
       id: "cron-diag-events",
-      name: "Diag Events",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "isolated",
-      state: {},
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "run task" },
     },
     message: "run task",
     sessionKey: "cron:diag-events",
   });
 }
-function fallbackResult(agentMeta: Record<string, unknown>, text = "test output") {
+function fallbackResult(
+  agentMeta: Record<string, unknown>,
+  text = "test output",
+  diagnosticTrace?: DiagnosticTraceContext,
+) {
   return {
-    result: { result: { payloads: [{ text }], meta: { agentMeta } } },
+    result: {
+      result: {
+        payloads: [{ text }],
+        meta: { agentMeta },
+        ...(diagnosticTrace ? { diagnosticTrace } : {}),
+      },
+    },
     provider: "openai",
     model: "gpt-5.4",
     attempts: [],
@@ -72,7 +70,7 @@ function fallbackResult(agentMeta: Record<string, unknown>, text = "test output"
 async function runWithEvents(
   params: Parameters<typeof runCronIsolatedAgentTurn>[0] = makeParams(),
   subscribe: (
-    listener: (event: DiagnosticEventPayload) => void,
+    listener: Parameters<typeof onDiagnosticEvent>[0],
     filter?: Parameters<typeof onInternalDiagnosticEvent>[1],
   ) => () => void = onInternalDiagnosticEvent,
   events: DiagnosticEventPayload[] = [],
@@ -119,13 +117,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       );
       executionTrace = getActiveDiagnosticTraceContext();
       harnessTrace = createDiagnosticTraceContextFromActiveScope();
-      const fallback = fallbackResult({ usage: { input: 10, output: 20 } });
-      return {
-        ...fallback,
-        result: {
-          result: { ...fallback.result.result, diagnosticTrace: harnessTrace },
-        },
-      };
+      return fallbackResult({ usage: { input: 10, output: 20 } }, "test output", harnessTrace);
     });
 
     const { result, events } = await runWithDiagnosticTraceContext(parent, async () => {
@@ -137,7 +129,6 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     const starts = events.filter((event) => event.type === "message.dispatch.started");
     const completions = events.filter((event) => event.type === "message.processed");
     expect(starts).toHaveLength(1);
-    expect(completions).toHaveLength(1);
     expect(dispatchStartedBeforeExecution).toBe(true);
     const messageTrace = starts[0]?.trace;
     expect(messageTrace?.spanId).toBeTruthy();
@@ -148,11 +139,12 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       traceId: messageTrace?.traceId,
       parentSpanId: messageTrace?.spanId,
     });
-    expect(completions[0]).toMatchObject({ outcome, trace: messageTrace });
+    const finished = [{ outcome, trace: messageTrace }];
+    expect(completions).toMatchObject(finished);
     expect(starts[0]).toMatchObject({ channel: "cron", source: "cron-isolated" });
-    expect(events.filter((event) => event.type === "message.dispatch.completed")).toMatchObject([
-      { outcome, trace: messageTrace },
-    ]);
+    expect(events.filter((event) => event.type === "message.dispatch.completed")).toMatchObject(
+      finished,
+    );
     const usage = events.find((event) => event.type === "model.usage");
     expect(usage?.trace).toMatchObject({
       traceId: messageTrace?.traceId,

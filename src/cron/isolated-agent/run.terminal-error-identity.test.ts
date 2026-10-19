@@ -1,5 +1,5 @@
-// Protects per-invocation terminal errors in a persistent automation transcript.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { assert, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -10,9 +10,10 @@ import { SessionManager } from "../../agents/sessions/index.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
@@ -27,7 +28,18 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-terminal-identity-");
 
-describe("persistent automation terminal error identity", () => {
+function persistentSession(target: { sessionKey: string; storePath: string }, entry: SessionEntry) {
+  return makeCronSession({
+    storePath: target.storePath,
+    store: { [target.sessionKey]: { ...entry } },
+    initialSessionEntry: entry,
+    sessionEntry: { ...entry },
+    lifecycleRevision: entry.lifecycleRevision,
+    isNewSession: false,
+  });
+}
+
+describe("cron terminal error persistence", () => {
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
     mockRunCronFallbackPassthrough();
@@ -47,20 +59,9 @@ describe("persistent automation terminal error identity", () => {
       updatedAt: 1,
       systemSent: false,
     });
-    resolveCronSessionMock.mockImplementation(() => {
-      const entry = loadSessionEntry(target);
-      if (!entry) {
-        throw new Error("Missing persistent test session");
-      }
-      return makeCronSession({
-        storePath: target.storePath,
-        store: { [target.sessionKey]: { ...entry } },
-        initialSessionEntry: entry,
-        sessionEntry: { ...entry },
-        lifecycleRevision: entry.lifecycleRevision,
-        isNewSession: false,
-      });
-    });
+    resolveCronSessionMock.mockImplementation(() =>
+      persistentSession(target, expectDefined(loadSessionEntry(target), "persistent test session")),
+    );
     loadSessionEntryMock.mockImplementation(() => loadSessionEntry(target));
     const runIds: string[] = [];
     const failures = ["provider refusal response-one", "provider refusal response-two"] as const;
@@ -92,10 +93,10 @@ describe("persistent automation terminal error identity", () => {
       agentId: target.agentId,
       cfg: { session: { store: target.storePath } },
       sessionKey: target.sessionKey,
-      job: makeIsolatedAgentJobFixture({
+      job: {
         sessionTarget: `session:${target.sessionKey}`,
         delivery: { mode: "none" },
-      }),
+      },
     });
     // Reuse both the job and physical transcript, in the incident's execution order.
     const first = await runCronIsolatedAgentTurn(params);
@@ -104,11 +105,11 @@ describe("persistent automation terminal error identity", () => {
     expect(second).toMatchObject({ status: "error", error: expect.stringContaining(failures[1]) });
     expect(new Set(runIds).size).toBe(2);
     expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
-    const readErrors = () =>
+    expect(
       SessionManager.open(target, root)
         .getBranch()
-        .filter((entry) => entry.type === "message" && entry.message.role === "assistant");
-    expect(readErrors()).toMatchObject(
+        .filter((entry) => entry.type === "message" && entry.message.role === "assistant"),
+    ).toMatchObject(
       messages.map((message, index) => ({
         message: {
           errorMessage: message.errorMessage,
@@ -118,12 +119,7 @@ describe("persistent automation terminal error identity", () => {
       })),
     );
   });
-});
-
-describe("synthetic exact cron terminal error persistence", () => {
   it("persists the terminal provider error after its root is renamed", async () => {
-    resetRunCronIsolatedAgentTurnHarness();
-    mockRunCronFallbackPassthrough();
     await withOpenClawTestState({ label: "cron-terminal-entrypoint" }, async (state) => {
       const accessor = await vi.importActual<
         typeof import("../../config/sessions/session-accessor.js")
@@ -132,19 +128,14 @@ describe("synthetic exact cron terminal error persistence", () => {
       const sessionKey = "agent:main:cron:synthetic-job";
       const runKey = sessionKey + ":run:" + sessionId;
       const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+      const target = { agentId: "main", sessionId, sessionKey: runKey, storePath };
+      const failure = "Synthetic provider failure";
       const entry = { sessionId, lifecycleRevision: "synthetic-revision", updatedAt: Date.now() };
       await accessor.replaceSessionEntry({ sessionKey, storePath }, entry);
       patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
       const storedEntry = accessor.loadSessionEntry({ sessionKey, storePath })!;
       resolveCronSessionMock.mockReturnValue(
-        makeCronSession({
-          storePath,
-          store: { [sessionKey]: storedEntry },
-          initialSessionEntry: storedEntry,
-          sessionEntry: { ...storedEntry },
-          lifecycleRevision: entry.lifecycleRevision,
-          isNewSession: false,
-        }),
+        persistentSession({ sessionKey, storePath }, storedEntry),
       );
       loadSessionEntryMock.mockImplementation((lookupStorePath: string, lookupSessionKey: string) =>
         accessor.loadSessionEntry({ storePath: lookupStorePath, sessionKey: lookupSessionKey }),
@@ -152,15 +143,10 @@ describe("synthetic exact cron terminal error persistence", () => {
       runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
         expect(params.sessionKey).toBe(runKey);
         expect(params.assistantErrorTranscript).toBeDefined();
-        const target = { agentId: "main", sessionId, sessionKey: runKey, storePath };
-        if (!params.preparedRunAdmission) {
-          throw new Error("Missing real cron admission");
-        }
+        assert(params.preparedRunAdmission, "Missing real cron admission");
         const admitted = await params.preparedRunAdmission.admit("embedded");
         const assertActive = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
-        if (!assertActive) {
-          throw new Error("Missing real cron active-owner assertion");
-        }
+        assert(assertActive, "Missing real cron active-owner assertion");
         await accessor.patchSessionEntryCore(target, () => ({ activeWriterRunId: params.runId }));
         const fenced = {
           ...target,
@@ -183,7 +169,7 @@ describe("synthetic exact cron terminal error persistence", () => {
               makeAgentAssistantMessage({
                 content: [],
                 stopReason: "error",
-                errorMessage: "Synthetic provider failure",
+                errorMessage: failure,
               }),
             );
           },
@@ -206,7 +192,7 @@ describe("synthetic exact cron terminal error persistence", () => {
           payloads: [],
           meta: {
             durationMs: 1,
-            error: { kind: "test", message: "Synthetic provider failure" },
+            error: { kind: "test", message: failure },
             agentMeta: { sessionId, provider: "mock", model: "mock" },
           },
         };
@@ -216,22 +202,17 @@ describe("synthetic exact cron terminal error persistence", () => {
           agentId: "main",
           cfg: { session: { store: storePath } },
           sessionKey: "cron:synthetic-job",
-          job: makeIsolatedAgentJobFixture({ id: "synthetic-job", delivery: { mode: "none" } }),
+          job: { id: "synthetic-job", delivery: { mode: "none" } },
         }),
       );
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
       expect(result.error ?? "").not.toContain("session rebound");
-      const messages = SessionManager.open({
-        agentId: "main",
-        sessionId,
-        sessionKey: runKey,
-        storePath,
-      })
+      const messages = SessionManager.open(target)
         .getBranch()
         .filter((e) => e.type === "message");
       expect(messages).toHaveLength(2);
       expect(messages.at(-1)).toMatchObject({
-        message: { stopReason: "error", errorMessage: "Synthetic provider failure" },
+        message: { stopReason: "error", errorMessage: failure },
       });
     });
   });
