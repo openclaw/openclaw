@@ -176,11 +176,19 @@ export function warmReloadProbe() {
         : (element?.closest("openclaw-chat-pane, openclaw-app-sidebar")?.localName ?? "shell");
       regions.set(region, (regions.get(region) ?? 0) + 1);
       const textRoot = element?.closest(".chat-text");
-      if (textRoot) textRoots.add(textRoot);
+      if (textRoot) {
+        textRoots.add(textRoot);
+      }
       for (const node of record.addedNodes) {
-        if (!(node instanceof Element)) continue;
-        if (node.matches(".chat-text")) textRoots.add(node);
-        for (const root of node.querySelectorAll(".chat-text")) textRoots.add(root);
+        if (!(node instanceof Element)) {
+          continue;
+        }
+        if (node.matches(".chat-text")) {
+          textRoots.add(node);
+        }
+        for (const root of node.querySelectorAll(".chat-text")) {
+          textRoots.add(root);
+        }
       }
       for (const node of record.removedNodes) {
         if (!(node instanceof Element)) {
@@ -199,7 +207,9 @@ export function warmReloadProbe() {
     // Tag direct text owners before paint. A row/container attribute does not
     // cover descendant block text, and a DOM/rAF timestamp is not presentation.
     for (const root of textRoots) {
-      if (!root.closest(".chat-virtual-row")) continue;
+      if (!root.closest(".chat-virtual-row")) {
+        continue;
+      }
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       let text: Node | null;
       while ((text = walker.nextNode())) {
