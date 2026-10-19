@@ -20,7 +20,10 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
 }));
 
-vi.mock("../../config/logging.js", () => ({ logConfigUpdated: mocks.logConfigUpdated }));
+vi.mock("../../config/logging.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/logging.js")>()),
+  logConfigUpdated: mocks.logConfigUpdated,
+}));
 
 vi.mock("../onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/default-workspace",
@@ -34,6 +37,7 @@ vi.mock("./config-write.js", () => ({
   commitNonInteractiveOnboardConfig: mocks.commitConfig,
 }));
 
+// mock-isolation: The setup orchestrator observes a selected agent result without creating agents or migrating sessions.
 vi.mock("../onboard-agent.js", () => ({ ensureOnboardingAgent: mocks.ensureOnboardingAgent }));
 
 vi.mock("./local/auth-choice.js", () => ({

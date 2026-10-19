@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 
-// This corpus tests classification independently of provider loading.
+// mock-isolation: Test the core classification corpus without loading or consulting provider plugins.
 vi.mock("../../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: () => null,
 }));

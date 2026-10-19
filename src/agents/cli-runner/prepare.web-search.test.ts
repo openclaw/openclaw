@@ -53,6 +53,7 @@ vi.mock("../agent-tools.js", () => ({
     execTool(exec),
   ],
 }));
+// mock-isolation: Keep command execution on the inert node-only tool used by this authority fixture.
 vi.mock("../bash-tools.js", () => ({ createExecTool: execTool }));
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: async (method: string) => {
