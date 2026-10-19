@@ -130,7 +130,6 @@ it.each(["catalog", "catalog-after-panel-switch", "external"] as const)(
         sessionKey: "agent:main:main",
         dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 900),
-        querySelector: () => null,
       },
     );
     state.client = createTestGatewayClient(vi.fn());
