@@ -62,6 +62,7 @@ async function createSweep(
     failDeepReport?: boolean;
     failRemReport?: boolean;
     narrativeGate?: Promise<void>;
+    timeoutSeconds?: number | null;
   } = {},
 ) {
   const workspaceDir = await createTempWorkspace("sweep-narrative-");
@@ -85,7 +86,12 @@ async function createSweep(
   }
   const config: OpenClawConfig = {
     agents: {
-      defaults: { workspace: workspaceDir, timeoutSeconds: 180 },
+      defaults: {
+        workspace: workspaceDir,
+        ...(options.timeoutSeconds === null
+          ? {}
+          : { timeoutSeconds: options.timeoutSeconds ?? 180 }),
+      },
       entries: { main: { workspace: workspaceDir } },
     },
     plugins: {
@@ -138,6 +144,7 @@ async function createSweep(
     // Different replies make duplicate publications observable even without exact-text dedupe.
     return { text: `The archive glowed softly, entry ${narratives.length}.` };
   });
+
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const unexpectedSessionCall = vi.fn(async () => {
     throw new Error("Unexpected session-based subagent call");
@@ -237,6 +244,16 @@ function diaryEntryCount(dreams: string): number {
 }
 
 describe("dreaming sweep diary publication", () => {
+  it("retains the bounded consolidation timeout when agents.defaults.timeoutSeconds is absent", async () => {
+    const sweep = await createSweep({ promote: true, timeoutSeconds: null });
+
+    expectHandled(await sweep.run());
+    const narrative = expectNarrative(sweep, "openai/gpt-5.4");
+    expect(narrative).toMatchObject({ timeoutMs: 180_000 });
+    expect(sweep.consolidations).toHaveLength(1);
+    expect(sweep.consolidations[0]).toMatchObject({ timeoutMs: 60_000 });
+  });
+
   it.each([false, true])(
     "publishes one entry for Light/REM with deep promotion=%s",
     async (promote) => {

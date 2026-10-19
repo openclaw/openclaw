@@ -75,7 +75,8 @@ async function runShortTermDreamingPromotion(params: {
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
-  agentTimeoutMs: number;
+  narrativeTimeoutMs: number;
+  consolidationTimeoutMs?: number;
 }): Promise<{ handled: true; reason: string } | undefined> {
   const recencyHalfLifeDays = params.config.recencyHalfLifeDays;
   const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
@@ -219,7 +220,9 @@ async function runShortTermDreamingPromotion(params: {
           consolidation: {
             ...(params.subagent ? { subagent: params.subagent } : {}),
             ...(params.config.execution?.model ? { model: params.config.execution.model } : {}),
-            timeoutMs: params.agentTimeoutMs,
+            ...(params.consolidationTimeoutMs !== undefined
+              ? { timeoutMs: params.consolidationTimeoutMs }
+              : {}),
             logger: params.logger,
           },
           timezone: params.config.timezone,
@@ -329,7 +332,7 @@ async function runShortTermDreamingPromotion(params: {
     } else {
       const narrativeOutcome = await runDreamNarrative({
         agentId,
-        timeoutMs: params.agentTimeoutMs,
+        timeoutMs: params.narrativeTimeoutMs,
         subagent: params.subagent,
         workspaceDir,
         data,
@@ -623,7 +626,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           config,
           logger: api.logger,
           subagent: api.runtime.subagent,
-          agentTimeoutMs: api.runtime.agent.resolveAgentTimeoutMs({ cfg: currentConfig }),
+          narrativeTimeoutMs: api.runtime.agent.resolveAgentTimeoutMs({ cfg: currentConfig }),
+          ...(typeof currentConfig.agents?.defaults?.timeoutSeconds === "number"
+            ? {
+                consolidationTimeoutMs: api.runtime.agent.resolveAgentTimeoutMs({
+                  cfg: currentConfig,
+                }),
+              }
+            : {}),
         });
       } catch (err) {
         api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
