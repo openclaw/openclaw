@@ -566,6 +566,8 @@ If no `--session-key` is given and multiple agents have `heartbeat` configured, 
 
 Broadcast completion reports an agent failure even if another agent succeeded or was quietly skipped. Busy retries and guarded deferrals keep their existing retry behavior.
 
+Unexpected wake preparation failures are logged and finish that occurrence as failed rather than silently retrying it. A new explicit wake or the next scheduled occurrence can try again after the cause is resolved. Handler disposal and Gateway restart still retain interrupted notifications for the replacement runner.
+
 Related heartbeat controls in the same CLI group:
 
 ```bash
