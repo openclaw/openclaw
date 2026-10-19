@@ -173,6 +173,45 @@ async function registerDiscovery(stateDir: string) {
   };
 }
 
+function holdStoreReply(storageKey: string, action: "set" | "delete") {
+  const binding = vi.mocked(getBrowserStateRuntime().sessionTabs.withCurrent!);
+  const bindStore = binding.getMockImplementation();
+  if (!bindStore) {
+    throw new Error("Expected the registered real-store fixture binding");
+  }
+  const applied = createDeferred<void>();
+  const release = createDeferred<void>();
+  binding.mockImplementation((authority) => {
+    const store = bindStore(authority);
+    return {
+      ...store,
+      compareAndApply: async (key, comparison, intent) => {
+        const result = await store.compareAndApply(key, comparison, intent);
+        if (key === storageKey && intent.action === action && result.status === "applied") {
+          applied.resolve();
+          await release.promise;
+        }
+        return result;
+      },
+    };
+  });
+  return { applied, release, restore: () => binding.mockImplementation(bindStore) };
+}
+
+function tabOptions(targetId: string) {
+  return {
+    sessionKey,
+    targetId,
+    profile: "openclaw",
+    ownership: {
+      status: "durable" as const,
+      nativeTargetId: targetId,
+      profileFingerprint: "shutdown-profile",
+      browserInstanceFingerprint: "shutdown-browser",
+    },
+  };
+}
+
 it.each(["board", "session end"] as const)(
   "discovers %s dashboard owners without querying plugin rows on the host",
   async (trigger) => {
@@ -291,45 +330,14 @@ it("joins an accepted tab registration reply during service shutdown", async () 
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const lifecycle = await registerDiscovery(state.stateDir);
     await lifecycle.start();
-    const binding = vi.mocked(getBrowserStateRuntime().sessionTabs.withCurrent!);
-    const bindStore = binding.getMockImplementation();
-    if (!bindStore) {
-      throw new Error("Expected the registered real-store fixture binding");
-    }
-    const applied = createDeferred<void>();
-    const releaseReply = createDeferred<void>();
-    const ownership = {
-      status: "durable" as const,
-      nativeTargetId: "shutdown-tab",
-      profileFingerprint: "shutdown-profile",
-      browserInstanceFingerprint: "shutdown-browser",
-    };
-    const storageKey = browserSessionTabStorageKey({ ...ownership, sessionKey });
-    binding.mockImplementation((authority) => {
-      const boundStore = bindStore(authority);
-      return {
-        ...boundStore,
-        compareAndApply: async (key, comparison, intent) => {
-          const result = await boundStore.compareAndApply(key, comparison, intent);
-          if (key === storageKey && intent.action === "set" && result.status === "applied") {
-            applied.resolve();
-            await releaseReply.promise;
-          }
-          return result;
-        },
-      };
-    });
-    const tracking = trackSessionBrowserTab({
-      sessionKey,
-      targetId: ownership.nativeTargetId,
-      profile: "openclaw",
-      ownership,
-      now: 1_000,
-    });
+    const options = tabOptions("shutdown-tab");
+    const storageKey = browserSessionTabStorageKey({ ...options.ownership, sessionKey });
+    const reply = holdStoreReply(storageKey, "set");
+    const tracking = trackSessionBrowserTab({ ...options, now: 1_000 });
     let stopping: Promise<void> | undefined;
     try {
       await Promise.race([
-        applied.promise,
+        reply.applied.promise,
         tracking.then(() => {
           throw new Error("Tab registration settled without holding its applied reply");
         }),
@@ -341,19 +349,19 @@ it("joins an accepted tab registration reply during service shutdown", async () 
       const persisted = await getBrowserSessionTabStore().lookup(storageKey);
       expect(persisted).toMatchObject({
         sessionKey,
-        nativeTargetId: ownership.nativeTargetId,
+        nativeTargetId: "shutdown-tab",
         profile: "openclaw",
         lastUsedAt: 1_000,
       });
       expect(stopped).toBe(false);
-      releaseReply.resolve();
+      reply.release.resolve();
       await Promise.all([tracking, stopping]);
       expect(stopped).toBe(true);
       expect(await getBrowserSessionTabStore().lookup(storageKey)).toEqual(persisted);
     } finally {
-      releaseReply.resolve();
+      reply.release.resolve();
       await Promise.allSettled([tracking, stopping]);
-      binding.mockImplementation(bindStore);
+      reply.restore();
       await lifecycle.stop();
     }
   });
@@ -363,40 +371,13 @@ it("joins a cold lifecycle close and its retirement reply during service shutdow
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const lifecycle = await registerDiscovery(state.stateDir);
     await lifecycle.start();
-    const tab = await trackSessionBrowserTab({
-      sessionKey,
-      targetId: "shutdown-close",
-      profile: "openclaw",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "shutdown-close",
-        profileFingerprint: "shutdown-profile",
-        browserInstanceFingerprint: "shutdown-browser",
-      },
-    });
+    const tab = await trackSessionBrowserTab(tabOptions("shutdown-close"));
     if (!tab) {
       throw new Error("Expected a durable cleanup row");
     }
-    const binding = vi.mocked(getBrowserStateRuntime().sessionTabs.withCurrent!);
-    const bindStore = binding.getMockImplementation()!;
     const dispatched = createDeferred<void>();
     const releaseClose = createDeferred<void>();
-    const retired = createDeferred<void>();
-    const releaseRetirement = createDeferred<void>();
-    binding.mockImplementation((authority) => {
-      const store = bindStore(authority);
-      return {
-        ...store,
-        compareAndApply: async (key, comparison, intent) => {
-          const result = await store.compareAndApply(key, comparison, intent);
-          if (key === tab.storageKey && intent.action === "delete" && result.status === "applied") {
-            retired.resolve();
-            await releaseRetirement.promise;
-          }
-          return result;
-        },
-      };
-    });
+    const retirement = holdStoreReply(tab.storageKey, "delete");
     const closing = closeTrackedBrowserTabsForSessions({
       sessionKeys: [sessionKey],
       closeTab: async () => {
@@ -416,17 +397,17 @@ it("joins a cold lifecycle close and its retirement reply during service shutdow
       });
       expect(stopped).toBe(false);
       releaseClose.resolve();
-      await retired.promise;
+      await retirement.applied.promise;
       expect(stopped).toBe(false);
-      releaseRetirement.resolve();
+      retirement.release.resolve();
       expect(await closing).toBe(1);
       await stopping;
       expect(await getBrowserSessionTabStore().lookup(tab.storageKey)).toBeUndefined();
     } finally {
       releaseClose.resolve();
-      releaseRetirement.resolve();
+      retirement.release.resolve();
       await Promise.allSettled([closing, stopping]);
-      binding.mockImplementation(bindStore);
+      retirement.restore();
       await lifecycle.stop();
     }
   });
