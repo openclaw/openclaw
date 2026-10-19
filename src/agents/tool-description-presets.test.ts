@@ -93,3 +93,14 @@ it("bounds sessions_spawn API investigation handoffs without delegating quick lo
   expect(description).not.toContain("trial-and-error");
   expect(description).not.toContain("auth probing");
 });
+
+it("advertises thinking overrides for visible sessions", () => {
+  const description = describeSessionsSpawnTool();
+
+  expect(description).toContain(
+    "an explicit `thinking` override is supported and persisted before the first turn",
+  );
+  expect(description).not.toContain(
+    'omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`',
+  );
+});

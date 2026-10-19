@@ -66,6 +66,7 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+import { resolveVisibleSpawnThinkingLevel } from "./sessions-spawn-visible-thinking.js";
 import {
   correctedVisibleSpawnCall,
   SessionsSpawnPlacementSchema,
