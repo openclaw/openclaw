@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { runWithTrackedCancellation } from "./async-work-resources.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
   isAsyncWorkScopeActiveHere,
+  runWithTrackedCancellation,
   trackAsyncWork,
 } from "./async-work-scope.js";
 import { createDeferredCore, type Deferred } from "./deferred.js";
@@ -196,27 +196,39 @@ it("preserves synchronous returns and throws without inspecting a thenable", asy
   expect(readThen).not.toHaveBeenCalled();
 });
 
-it("joins async descendants through drain and fences late work", async () => {
-  const { scope, gate } = makeHeldScope();
-  let child: Promise<void> | undefined;
-  const startChild = () => {
-    child = trackAsyncWork(() => {
-      expect(getAsyncWorkSignal()).toBe(scope.signal);
-      return gate.promise;
-    });
-  };
-  await scope.track(async () => {
-    await Promise.resolve();
-    startChild();
-  });
-  const closing = own(scope.drain());
-  expect(scope.signal.aborted).toBe(true);
-  expect(getAsyncWorkSignal()).toBeUndefined();
-  await releaseHeld(closing, gate, child);
-  const late = vi.fn();
-  expect(() => scope.run(late)).toThrow("Async work scope is closed");
-  expect(late).not.toHaveBeenCalled();
-});
+it.each(["sync", "async"] as const)(
+  "joins %s descendants through drain and fences late work",
+  async (mode) => {
+    const { scope, gate } = makeHeldScope();
+    let child: Promise<void> | undefined;
+    let closing: Promise<void>;
+    const startChild = () => {
+      child = trackAsyncWork(() => {
+        expect(getAsyncWorkSignal()).toBe(scope.signal);
+        return gate.promise;
+      });
+    };
+    if (mode === "sync") {
+      closing = scope.run(() => {
+        const drain = own(scope.drain());
+        startChild();
+        return drain;
+      });
+    } else {
+      await scope.track(async () => {
+        await Promise.resolve();
+        startChild();
+      });
+      closing = own(scope.drain());
+    }
+    expect(scope.signal.aborted).toBe(true);
+    expect(getAsyncWorkSignal()).toBeUndefined();
+    await releaseHeld(closing, gate, child);
+    const late = vi.fn();
+    expect(() => scope.run(late)).toThrow("Async work scope is closed");
+    expect(late).not.toHaveBeenCalled();
+  },
+);
 
 it("settles work for cleanup without closing its captured tracker, then fences final drain", async () => {
   const scope = makeScope();

@@ -17,10 +17,10 @@ import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import { parseMessageWithAttachments, type ChatAttachment } from "./chat-attachments.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
@@ -484,6 +484,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       requestSignal?.addEventListener("abort", abortRequest, { once: true });
     }
     const timeout = setTimeout(() => abort("timeout"), ASK_TIMEOUT_MS);
+    const aborted = createDeferredCore<never>();
+    const onAbort = () =>
+      aborted.reject(new Error("session companion ask timed out or was cancelled"));
+    controller.signal.addEventListener("abort", onAbort, { once: true });
     let ownedThread: SessionCompanionThread | undefined;
     const discardOwnedThread = () => {
       if (ownedThread && params.threads.get(threadKey) === ownedThread) {
@@ -652,11 +656,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     };
     const execution = execute();
     try {
-      return await racePromiseWithAbortSignal(
-        execution,
-        controller.signal,
-        () => new Error("session companion ask timed out or was cancelled"),
-      );
+      return await Promise.race([execution, aborted.promise]);
     } catch (error) {
       if (
         error instanceof SessionCompanionAskError ||
@@ -686,6 +686,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         await execution.catch(() => undefined);
       }
       clearTimeout(timeout);
+      controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);
       if (activeAsks.get(threadKey) === activeAsk) {
         activeAsks.delete(threadKey);

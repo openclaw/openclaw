@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { racePromiseWithAbortSignal } from "@openclaw/retry";
+import { raceWithTimeout } from "@openclaw/retry";
 import { codeModeGcAttribution } from "../logging/code-mode-diagnostic.js";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -75,7 +75,19 @@ export function createHeadlessDeadlineScope(
       if (controller.signal.aborted) {
         throw headlessAbortError(controller.signal);
       }
-      return await racePromiseWithAbortSignal(promise, controller.signal, headlessAbortError);
+      return await raceWithTimeout(
+        promise,
+        remainingMs,
+        () => {
+          throw timeoutError();
+        },
+        {
+          signal: controller.signal,
+          onAbort: (abortedSignal) => {
+            throw headlessAbortError(abortedSignal);
+          },
+        },
+      );
     },
     cleanup: () => {
       controller.abort(new CodeModeHeadlessAbortError());
