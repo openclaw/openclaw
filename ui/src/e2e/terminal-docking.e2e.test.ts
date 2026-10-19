@@ -205,20 +205,23 @@ suite.define(() => {
             const restoreAfter = await gateway.deferNext("terminal.attach");
             await openChatSidePanelType(activePane, "Terminal");
             await gateway.waitForRequest("terminal.attach", { after: restoreAfter });
-            const addTab = activePane.getByRole("button", { name: "Add side panel tab" });
-            const menu = addTab.locator("..").locator('[role="menu"]');
-            const terminalItem = menu.getByRole("menuitem", { name: /^Terminal\b/ });
+            const positionTrigger = activePane.getByRole("button", {
+              name: "Panel position",
+              exact: true,
+            });
+            const menu = positionTrigger.locator("..").locator('[role="menu"]');
+            const rightPosition = menu.getByRole("menuitemradio", { name: "Right", exact: true });
             const expectMenu = async (open: boolean) => {
-              expect(await addTab.getAttribute("aria-expanded")).toBe(String(open));
+              expect(await positionTrigger.getAttribute("aria-expanded")).toBe(String(open));
               expect(await menu.evaluate((element) => element.matches(":popover-open"))).toBe(open);
               expect((await menu.getAttribute("inert")) === null).toBe(open);
             };
             const openPicker = async () => {
               if (picker === "keyboard") {
-                await addTab.focus();
+                await positionTrigger.focus();
                 await page.keyboard.press("ArrowDown");
               } else {
-                await addTab.click();
+                await positionTrigger.click();
               }
               await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
             };
@@ -233,14 +236,6 @@ suite.define(() => {
               await expectMenu(true);
               expect(await menu.evaluate(hasFocus, true)).toBe(true);
 
-              // A hovered hint owns the first Escape before the focused menu does.
-              await addTab.hover();
-              const hint = page.locator("openclaw-tooltip[open]");
-              await hint.locator('[role="tooltip"]').waitFor();
-              await page.keyboard.press("Escape");
-              await expect.poll(() => hint.count()).toBe(0);
-              expect(await menu.getAttribute("data-phase")).toBe("open");
-              expect(await menu.evaluate((element) => element.matches(":popover-open"))).toBe(true);
               await page.keyboard.press("Escape");
               await expect.poll(() => menu.getAttribute("data-phase")).toBe("hidden");
               await expectMenu(false);
@@ -254,28 +249,33 @@ suite.define(() => {
               if (picker === "keyboard") {
                 // Chat chrome delegates unadvertised printable keys to the composer.
                 const labels = await menu
-                  .getByRole("menuitem")
+                  .getByRole("menuitemradio")
                   .evaluateAll((elements) =>
                     elements.map((element) => element.getAttribute("aria-label")),
                   );
-                const terminalIndex = labels.indexOf("Terminal");
-                expect(terminalIndex).toBeGreaterThanOrEqual(0);
+                const positionIndex = labels.indexOf("Right");
+                expect(positionIndex).toBeGreaterThanOrEqual(0);
                 await page.keyboard.press("Home");
-                for (let index = 0; index < terminalIndex; index += 1) {
+                for (let index = 0; index < positionIndex; index += 1) {
                   await page.keyboard.press("ArrowDown");
                 }
-                await expect.poll(() => terminalItem.evaluate(hasFocus)).toBe(true);
+                await expect.poll(() => rightPosition.evaluate(hasFocus)).toBe(true);
                 await page.keyboard.press("Enter");
               } else {
-                await terminalItem.click();
+                await rightPosition.click();
               }
               await expect.poll(() => menu.getAttribute("data-phase")).toBe("hidden");
-              expect(await addTab.getAttribute("aria-expanded")).toBe("false");
+              expect(await positionTrigger.getAttribute("aria-expanded")).toBe("false");
             } finally {
               if (!restoreReleased) {
                 await gateway.resolveDeferred("terminal.attach");
               }
             }
+            await activePane.getByRole("button", { name: "New tab", exact: true }).click();
+            await activePane
+              .locator(".side-panel-launcher")
+              .getByRole("button", { name: /^Terminal\b/ })
+              .click();
             await expect
               .poll(async () => (await gateway.getRequests("terminal.open")).length)
               .toBe(3);

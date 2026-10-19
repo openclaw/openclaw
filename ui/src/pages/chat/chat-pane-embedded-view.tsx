@@ -252,34 +252,20 @@ export function ClearCompanion(
   props: Props & { actionRef?: (element: HTMLButtonElement) => void },
 ) {
   return (
-    <>
-      <Show when={props.onCreateClaw}>
-        <openclaw-tooltip prop:content={`${t("clawsDraft.title")} · ${t("clawsDraft.railHint")}`}>
-          <button
-            class="rail-header__action"
-            type="button"
-            aria-label={t("clawsDraft.title")}
-            onClick={() => props.onCreateClaw?.()}
-          >
-            <Icon name="box" />
-          </button>
-        </openclaw-tooltip>
-      </Show>
-      <openclaw-tooltip prop:content={t("chat.rail.clear")}>
-        <button
-          ref={props.actionRef}
-          class="rail-header__action chat-session-rail__clear"
-          type="button"
-          aria-label={t("chat.rail.clear")}
-          disabled={
-            !props.connected || props.companion.turns.some((turn) => turn.status === "pending")
-          }
-          onClick={() => props.onClearCompanion()}
-        >
-          <Icon name="trash" />
-        </button>
-      </openclaw-tooltip>
-    </>
+    <openclaw-tooltip prop:content={t("chat.rail.clear")}>
+      <button
+        ref={props.actionRef}
+        class="rail-header__action chat-session-rail__clear"
+        type="button"
+        aria-label={t("chat.rail.clear")}
+        disabled={
+          !props.connected || props.companion.turns.some((turn) => turn.status === "pending")
+        }
+        onClick={() => props.onClearCompanion()}
+      >
+        <Icon name="trash" />
+      </button>
+    </openclaw-tooltip>
   );
 }
 
