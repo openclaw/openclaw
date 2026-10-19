@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
@@ -41,52 +40,19 @@ import {
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type {
-  UserTurnTranscriptRecorder,
-  UserTurnTranscriptTarget,
-} from "../../sessions/user-turn-transcript.types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
-import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
+import type {
+  ReplyRestartRecoveryClaimController,
+  ReplyRestartRecoveryClaimControllerParams,
+} from "./restart-recovery-claim.types.js";
 import { readReplyAdmissionSession } from "./restart-recovery-placement.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
 
-export function createReplyRestartRecoveryClaimController(params: {
-  agentId: string;
-  acquireSessionActor: () => Promise<
-    | {
-        actor: SessionActor;
-        target: SessionEntryTargetPatchScope;
-      }
-    | undefined
-  >;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  inputProvenance?: InputProvenance;
-  admissionRunId?: unknown;
-  executionRunId?: string;
-  lifecycleGeneration: string | undefined;
-  getEntry: () => SessionEntry | undefined;
-  getSessionId: () => string;
-  isRestartAbort: () => boolean;
-  resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
-  requesterAccountId?: unknown;
-  requesterSenderId?: unknown;
-  resolveUserTurnTarget?: (params: {
-    entry: SessionEntry;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) => UserTurnTranscriptTarget | undefined;
-  sessionKey?: string;
-  setEntry: (entry: SessionEntry) => void;
-  sameChannelThreadRequired?: boolean;
-  sourceTurnId?: unknown;
-  strandedReplyRetry?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  storePath?: string;
-}): ReplyRestartRecoveryClaimController {
+export function createReplyRestartRecoveryClaimController(
+  params: ReplyRestartRecoveryClaimControllerParams,
+): ReplyRestartRecoveryClaimController {
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   // The retry shares delivery correlation with its parent, but owns one internal admission.
   const strandedRetryRunId =
@@ -176,8 +142,10 @@ export function createReplyRestartRecoveryClaimController(params: {
   const adoptLifecycle = async (options: {
     entry: SessionEntry;
     patch: SessionTranscriptTurnLifecyclePatch;
+    writer?: { runId: string; assertCurrent?: () => void };
     validate?: (entry: SessionEntry | undefined) => boolean;
     committed: (entry: SessionEntry) => void;
+    rolledBack?: () => void;
   }): Promise<SessionEntry> => {
     const actor = await acquireActor();
     const sessionId = options.entry.sessionId;
@@ -198,6 +166,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     const assertCurrent = () => {
       assertClaimCurrent(sessionId);
       params.operatorAuthority?.assertCurrent();
+      options.writer?.assertCurrent?.();
     };
     if (!actor) {
       const committed = await patchSessionEntryTarget(
@@ -233,32 +202,38 @@ export function createReplyRestartRecoveryClaimController(params: {
         throw error;
       }
     };
-    const authority: SessionActorAuthority = {
-      assertCurrent: authorize,
-      authorize(stage, facts) {
-        authorize(stage, facts.entry);
-      },
-    };
     let committed: SessionEntry | undefined;
-    const outcome = await actor.adoptRun(
-      {
-        commandId: randomUUID(),
-        phaseId: "reply.restart-recovery",
-        sessionId,
-        expectedState,
-        lifecycle: options.patch,
-      },
-      authority,
-      {
-        committed(receipt) {
-          committed = receipt.receipt.postimage.entry;
-          if (!committed) {
-            throw new Error("Committed restart recovery adoption omitted its session");
-          }
-          options.committed(committed);
+    let pending: ReturnType<SessionActor["adoptRun"]>;
+    try {
+      pending = actor.adoptRun(
+        {
+          commandId: randomUUID(),
+          phaseId: "reply.restart-recovery",
+          sessionId,
+          expectedState,
+          lifecycle: options.patch,
+          runId: options.writer?.runId,
         },
-      },
-    );
+        {
+          assertCurrent: authorize,
+          authorize: (stage, facts) => authorize(stage, facts.entry),
+        },
+        {
+          committed(receipt) {
+            committed = receipt.receipt.postimage.entry;
+            if (!committed) {
+              throw new Error("Committed restart recovery adoption omitted its session");
+            }
+            options.committed(committed);
+          },
+        },
+      );
+    } catch (error) {
+      // Synchronous rejection precedes actor acceptance; no write can have started.
+      options.rolledBack?.();
+      throw error;
+    }
+    const outcome = await pending;
     if (outcome.kind === "committed") {
       if (outcome.failure && outcome.failure.origin !== "response") {
         throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
@@ -271,6 +246,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (outcome.kind === "unknown") {
       throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
     }
+    options.rolledBack?.();
     if (authorityFailure) {
       throw toErrorObject(authorityFailure, "Restart recovery authority rejected the operation");
     }
@@ -410,6 +386,43 @@ export function createReplyRestartRecoveryClaimController(params: {
           runId: executionRunId,
           lifecycleGeneration: executionGeneration,
         });
+      }
+      const admission = params.operationAdmission;
+      if (
+        sessionActor &&
+        admission &&
+        (!recorder || recorder.hasPersisted()) &&
+        !preservesTerminalReceipt &&
+        !entry.restartRecoveryBeforeAgentReplyState &&
+        !isMainSessionRestartRecoveryInputProvenance(params.inputProvenance)
+      ) {
+        // The accepted input already survives restart; track it for cancellation
+        // while the native capacity owner delays writer adoption.
+        recordAdmittedClaim(entry, admissionRunId);
+        // Preserve activity written while this input waits for capacity.
+        delete patch.updatedAt;
+        // A rejected outcome stays installed so fallback cannot replay an uncertain write.
+        let adoption: Promise<SessionEntry> | undefined;
+        admission.adoptInput = (writer) => {
+          if (!adoption) {
+            // Uncertain adoption must not clear a possibly committed claim.
+            tracked = false;
+            adoption = adoptLifecycle({
+              entry,
+              patch,
+              writer,
+              committed: (committed) => recordAdmittedClaim(committed, admissionRunId),
+              rolledBack: () => {
+                tracked = true;
+              },
+            }).then((committed) => {
+              admission.adoptInput = undefined;
+              return committed;
+            });
+          }
+          return adoption;
+        };
+        return "admitted";
       }
       const adopted = await persistAdmissionPatch({
         entry,
@@ -693,6 +706,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   return {
     admitUserTurn,
     async beginBeforeAgentReply() {
+      await params.operationAdmission?.adoptInput?.();
       // `pending` records only the ambiguous plugin side-effect window. A
       // finished unhandled hook clears it so recovery can re-enter normally.
       await updateBeforeAgentReply(undefined, { state: "pending" });

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
+import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as cron from "../../cron/active-jobs.js";
@@ -37,8 +39,15 @@ beforeEach(async () => {
     env: { OPENCLAW_GATEWAY_URL: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
   });
   registry = plugins.captureActivePluginRegistrySnapshot();
+  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
+    targetIds: new Set<string>(),
+  });
+  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
+    async ({ config }) => resolvedSecrets(config),
+  );
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   plugins.restoreActivePluginRegistrySnapshot(registry);
   await state.cleanup();
 });
@@ -158,13 +167,9 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     const context = gatewayContext(() => config, dispatched);
     const makeTool = (turnCapability?: string) =>
       createMessageTool({
-        getRuntimeConfig: () => config,
         ...run,
         agentSessionKey: sessionKey,
         messageActionTurnCapability: turnCapability,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) =>
-          resolvedSecrets(resolvedConfig),
       });
     const tools = [makeTool(capability), makeTool(), makeTool(dashboardCapability)];
     const execute = (selectedTool: (typeof tools)[number], accountId?: string) =>
@@ -310,11 +315,13 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       isAvailable: () => catalog.some((tool) => tool.name === "message"),
     });
     const admitInvocation = vi.fn(invocationPolicy.admit);
-    const prepareSecrets = vi.fn(async ({ config }: { config: OpenClawConfig }) => {
-      entered.resolve(config);
-      await release.promise;
-      return resolvedSecrets(config);
-    });
+    const prepareSecrets = vi
+      .spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway")
+      .mockImplementation(async ({ config }) => {
+        entered.resolve(config);
+        await release.promise;
+        return resolvedSecrets(config);
+      });
     const tool = createMessageTool({
       config: configA,
       ...run,
@@ -322,8 +329,6 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       agentAccountId: "default",
       messageActionTurnCapability: capability,
       admitScheduledInvocation: admitInvocation,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: prepareSecrets,
     });
     catalog.push(tool);
     const execute = (callId: string) =>
@@ -371,6 +376,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     source.abort();
     release.resolve();
     await pending?.catch(() => undefined);
+    vi.restoreAllMocks();
     promptAdmission?.close();
     cron.clearCronJobActive(jobId, marker);
   }

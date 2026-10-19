@@ -187,38 +187,34 @@ describe("model catalog refresh presentation", () => {
   ] as const)(
     "explains an empty picker of missing-auth %s rows (runtime %s)",
     (provider, agentRuntimeId, label) => {
-      const container = document.createElement("div");
-      mountSolid(
-        () => (
-          <ChatModelPicker
-            {...{
-              disabled: false,
-              modelSelectionLocked: false,
-              modelCatalogState: { hasSnapshot: true, status: "ready" },
-              modelOptions: [
-                {
-                  agentRuntimeId,
-                  commitValue: `${provider}/model`,
-                  disabled: true,
-                  unavailableReason: "missing-auth",
-                  isDefault: true,
-                  label: "Model",
-                  provider,
-                  value: `${provider}/model`,
-                },
-              ],
-              open: true,
-              selectedModelValue: `${provider}/model`,
-              sessionModelPinned: false,
-              sessionKey: "main",
-              triggerModelLabel: "Model",
-              onModelSelect: async () => {},
-              onModelSetup: () => {},
-            }}
-          />
-        ),
-        { container },
-      );
+      const { container } = mountSolid(() => (
+        <ChatModelPicker
+          {...{
+            disabled: false,
+            modelSelectionLocked: false,
+            modelCatalogState: { hasSnapshot: true, status: "ready" },
+            modelOptions: [
+              {
+                agentRuntimeId,
+                commitValue: `${provider}/model`,
+                disabled: true,
+                unavailableReason: "missing-auth",
+                isDefault: true,
+                label: "Model",
+                provider,
+                value: `${provider}/model`,
+              },
+            ],
+            open: true,
+            selectedModelValue: `${provider}/model`,
+            sessionModelPinned: false,
+            sessionKey: "main",
+            triggerModelLabel: "Model",
+            onModelSelect: async () => {},
+            onModelSetup: () => {},
+          }}
+        />
+      ));
       flush();
       expect(
         container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),

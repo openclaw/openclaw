@@ -51,7 +51,7 @@ export function succeedTelegram(res: ServerResponse, result: unknown = true) {
   writeJson(res, 200, { ok: true, result });
 }
 
-export function createTelegramUpdateQueue() {
+function createTelegramUpdateQueue() {
   const pendingUpdates: unknown[] = [];
   const pendingPolls = new Set<ServerResponse>();
   return {

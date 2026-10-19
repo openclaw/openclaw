@@ -45,7 +45,7 @@ export async function prepareSessionUpstreamLink(
     { context, current: true },
   );
   source.assertCurrent();
-  if (!result?.ok || result.type !== "sessionUpstream.read") {
+  if (!result) {
     throw new Error("Session upstream source is unavailable");
   }
   return result.link;

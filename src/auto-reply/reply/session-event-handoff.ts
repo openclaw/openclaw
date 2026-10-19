@@ -24,12 +24,15 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
@@ -121,6 +124,9 @@ export function enqueueSessionEventForHost(
   const storePath =
     options.expectedTarget?.storePath ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
+  const cleanupContext = isCronRunSessionKey(sessionKey)
+    ? captureOpenClawStateWorkerContext({ env })
+    : undefined;
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
   let preparedBinding: { sessionId: string; lifecycleRevision?: string } | undefined;
@@ -414,6 +420,25 @@ export function enqueueSessionEventForHost(
         ...(failure ? { error: String(failure) } : {}),
         ...(failure instanceof SessionWorkStartError ? { retryable: failure.retryable } : {}),
       });
+      if (cleanupContext) {
+        // Cleanup must outlive the completed event's async work scope.
+        void runWithGatewayDetachedWorkContinuation(
+          () =>
+            runWithSessionControllerCleanup(async () => {
+              const { removeCronRunContinuationSessionIfIdle } =
+                await import("../../cron/run-continuation-cleanup.js");
+              await removeCronRunContinuationSessionIfIdle(
+                sessionKey,
+                undefined,
+                cleanupContext,
+                storePath,
+              );
+            }),
+          "session:event-cleanup",
+        ).catch((error: unknown) => {
+          log.warn("Could not remove settled cron continuation", { error: String(error) });
+        });
+      }
     };
     if (operation?.ownerSettlement) {
       void operation.ownerSettlement.then(complete, complete);

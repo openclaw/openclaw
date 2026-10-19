@@ -17,6 +17,7 @@ import {
 } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { createOAuthRefreshCredential } from "./credential-fixtures.test-support.js";
 import { resolveAuthProfileOrder } from "./order.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { markAuthProfileSuccess, removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
@@ -39,26 +40,23 @@ const PRIMARY_ID = "openai:primary";
 const BACKUP_ID = "openai:backup";
 const LOCAL_ID = "openai:local";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 
 function createMainStore(): AuthProfileStore {
   const expires = Date.now() + 30 * 60 * 1000;
   return {
     version: 1,
     profiles: {
-      [PRIMARY_ID]: {
-        type: "oauth",
-        provider: "openai",
+      [PRIMARY_ID]: createOAuthRefreshCredential({
         access: "primary-access",
         refresh: "primary-refresh",
         expires,
-      },
-      [BACKUP_ID]: {
-        type: "oauth",
-        provider: "openai",
+      }),
+      [BACKUP_ID]: createOAuthRefreshCredential({
         access: "backup-access",
         refresh: "backup-refresh",
         expires,
-      },
+      }),
     },
     order: { openai: [PRIMARY_ID, BACKUP_ID] },
   };
@@ -92,11 +90,21 @@ describe("inherited auth-profile usage persistence", () => {
     env.restore();
   });
 
-  function writeMainStore(): void {
-    saveAuthProfileStore(createMainStore(), mainAgentDir, {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    });
+  function writeMainStore(store = createMainStore()): void {
+    saveAuthProfileStore(store, mainAgentDir, saveOptions);
+  }
+
+  function createChildStore(cooldownUntil: number) {
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { [LOCAL_ID]: { type: "api_key", provider: "openai", key: "local-key" } },
+        usageStats: { [LOCAL_ID]: { cooldownUntil } },
+      },
+      childAgentDir,
+      saveOptions,
+    );
+    return ensureAuthProfileStore(childAgentDir);
   }
 
   function connectPersonalAccount(ownerProfileId: string): string {
@@ -331,18 +339,7 @@ describe("inherited auth-profile usage persistence", () => {
   it("keeps an inherited primary blocked for the next child run", async () => {
     writeMainStore();
     const localCooldownUntil = Date.now() + 30 * 60 * 1000;
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [LOCAL_ID]: { type: "api_key", provider: "openai", key: "local-key" },
-        },
-        usageStats: { [LOCAL_ID]: { cooldownUntil: localCooldownUntil } },
-      },
-      childAgentDir,
-      { filterExternalAuthProfiles: false, syncExternalCli: false },
-    );
-    const childStore = ensureAuthProfileStore(childAgentDir);
+    const childStore = createChildStore(localCooldownUntil);
     const blockedUntil = Date.now() + 60 * 60 * 1000;
 
     await markAuthProfileBlockedUntil({
@@ -384,23 +381,9 @@ describe("inherited auth-profile usage persistence", () => {
         cooldownClassification: "wham_token_expired",
       },
     };
-    saveAuthProfileStore(mainStore, mainAgentDir, {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    });
+    writeMainStore(mainStore);
     const localCooldownUntil = Date.now() + 30_000;
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [LOCAL_ID]: { type: "api_key", provider: "openai", key: "local-key" },
-        },
-        usageStats: { [LOCAL_ID]: { cooldownUntil: localCooldownUntil } },
-      },
-      childAgentDir,
-      { filterExternalAuthProfiles: false, syncExternalCli: false },
-    );
-    const childStore = ensureAuthProfileStore(childAgentDir);
+    const childStore = createChildStore(localCooldownUntil);
 
     await markAuthProfileSuccess({
       store: childStore,

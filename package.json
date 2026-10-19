@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.4",
+  "version": "2026.10.5",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -482,7 +482,8 @@
     "!dist/plugin-sdk/http-response-runtime.d.ts",
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
     "!dist/plugin-sdk/path-existence-runtime.d.ts",
-    "!dist/plugin-sdk/provider-auth-markers.d.ts"
+    "!dist/plugin-sdk/provider-auth-markers.d.ts",
+    "!dist/plugin-sdk/terminal-safe-text.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -844,6 +845,9 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
+    },
+    "./plugin-sdk/terminal-safe-text": {
+      "default": "./dist/plugin-sdk/terminal-safe-text.js"
     },
     "./plugin-sdk/agent-scope-runtime": {
       "types": "./dist/plugin-sdk/agent-scope-runtime.d.ts",
@@ -1950,7 +1954,6 @@
     "lint:tmp:no-raw-http2-imports": "node --import ./scripts/tsx.mjs scripts/check-no-raw-http2-imports.mts",
     "lint:tmp:session-accessor-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts",
     "lint:tmp:session-accessor-boundary:gen": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts --update-debt-baseline",
-    "lint:tmp:session-transcript-reader-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-transcript-reader-boundary.mts",
     "lint:tmp:sqlite-transaction-boundary": "node --import ./scripts/tsx.mjs scripts/check-sqlite-transaction-boundary.mts",
     "lint:tmp:tsgo-core-boundary": "node --import ./scripts/tsx.mjs scripts/check-tsgo-core-boundary.mts",
     "lint:ui:i18n": "pnpm ui:i18n:verify",
@@ -2347,7 +2350,7 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
     "@openclaw/fs-safe": "0.26.8",
-    "@openclaw/proc-safe": "0.4.1",
+    "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",

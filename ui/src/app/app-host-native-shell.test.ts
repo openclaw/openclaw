@@ -13,6 +13,7 @@ import {
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import type { ApplicationContext } from "./context.ts";
+import { COMMAND_PALETTE_ELEMENT, ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 type ShellNavigationState = {
@@ -319,7 +320,7 @@ describe("OpenClaw native shell", () => {
 
   it.each(["operator.write", "operator.sessions.write"])(
     "opens search and starts a session from native titlebar events with %s",
-    (scope) => {
+    async (scope) => {
       const navigate = vi.fn();
       const openPalette = vi.fn();
       const togglePalette = vi.fn();
@@ -359,6 +360,11 @@ describe("OpenClaw native shell", () => {
         cancelable: true,
       });
       document.dispatchEvent(shortcut);
+      // Join the cold import before the shared runner retires this module graph.
+      await ensureCustomElementDefined(
+        COMMAND_PALETTE_ELEMENT.tagName,
+        COMMAND_PALETTE_ELEMENT.loadModule,
+      );
       expect(shortcut.defaultPrevented).toBe(true);
       expect(togglePalette).toHaveBeenCalledOnce();
     },

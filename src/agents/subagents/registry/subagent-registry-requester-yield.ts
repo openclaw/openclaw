@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { promoteGoalContinuationYield } from "../../../auto-reply/reply/goal-continuation-return.js";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -643,6 +644,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       const entries = children(members);
       trackSubagentProgressYield(requesterTurnRunId, entries);
       promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
+      promoteGoalContinuationYield({ requesterTurnRunId, entries, rearmGeneration });
       promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
       if (rearmGeneration !== undefined && params.requesterAgentId) {
         promoteRequesterFinalAttachment({
