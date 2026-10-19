@@ -95,17 +95,9 @@ describe("resolveWorkspaceIcon", () => {
     ["an empty file", "ico", Buffer.alloc(0)],
     ["bytes that are not an image", "ico", Buffer.from("#!/bin/sh\n")],
     ["an SVG carrying a doctype", "svg", '<!DOCTYPE svg><svg xmlns="x"></svg>'],
-    [
-      "an external SVG reference",
-      "svg",
-      '<svg xmlns="x"><image href="https://x.test/a.png"/></svg>',
-    ],
+    ["external SVG", "svg", '<svg xmlns="x"><image href="https://x.test"/></svg>'],
     ["an SVG script", "svg", '<svg xmlns="x"><script>alert(1)</script></svg>'],
-    [
-      "an oversized SVG",
-      "svg",
-      `<svg xmlns="x"><path d="${"1".repeat(SVG_ICON_MAX_BYTES)}"/></svg>`,
-    ],
+    ["oversized SVG", "svg", `<svg xmlns="x">${"1".repeat(SVG_ICON_MAX_BYTES)}</svg>`],
     ["an icon past the size cap", "png", Buffer.alloc(WORKSPACE_ICON_MAX_BYTES + 1, 1)],
   ] as const;
 
