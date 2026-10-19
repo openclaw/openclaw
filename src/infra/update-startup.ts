@@ -620,8 +620,13 @@ export function createGatewayUpdateCheck(params: {
       lifecycle.schedule("update.check", async () => {
         try {
           await runGatewayUpdateCheck(params, lifecycle);
-        } catch {
+        } catch (error) {
           // Discovery failures must not crash or retire the Gateway update loop.
+          if (!lifecycle.signal.aborted) {
+            params.log.info("update check failed; retrying at the next scheduled check", {
+              error: String(error),
+            });
+          }
         }
         return resolveCheckIntervalMs(params.getConfig(), getUpdateSchedule()?.install?.kind);
       });

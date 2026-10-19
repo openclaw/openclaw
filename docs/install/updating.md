@@ -33,6 +33,10 @@ backup.
 
 ## Update implementation contract
 
+Background discovery failures are logged and retried at the next scheduled check.
+Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
+are reported by the scheduler without restarting the Gateway.
+
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
 Before replacing a Git checkout's build or an installed package, the updater
