@@ -119,10 +119,15 @@ function AppSidebarContent(
   const snapshotProjection = projectOwner(snapshot, (current) => current.read());
   const snapshotPending = createMemo(() => snapshotProjection.read().pending);
   const snapshotModel = createMemo(() => snapshotProjection.read().model);
-  const people = (owner.peopleView = createSidebarPeople(owner, owner.people, () => {
-    Object.values(props);
-    return projection.read();
-  }));
+  const people = (owner.peopleView = createSidebarPeople(
+    owner,
+    owner.people,
+    () => {
+      Object.values(props);
+      return projection.read();
+    },
+    context,
+  ));
   const prepared = createMemo(
     () => {
       projection.revision();

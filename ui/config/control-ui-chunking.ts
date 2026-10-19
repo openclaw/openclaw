@@ -56,6 +56,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/lib/device-pair-setup.ts":
+      // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
+      return "device-pair-setup-runtime";
     case "ui/src/app/app-root-focus.ts":
     case "ui/src/app/app-root-focus-view.tsx":
       return "focus-dashboard-runtime";

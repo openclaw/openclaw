@@ -315,6 +315,13 @@ read-after-write certification. An owner without complete receipt coverage must
 use its canonical reader until that coverage exists. Other processes route
 writes through the Gateway or hold exclusive ownership while it is stopped.
 
+Remote model catalog reads retain the last worker result, including absence,
+until a committed write to the current or released legacy catalog slots publishes
+a new receipt. Unrelated machine-state writes leave it reusable. The receipt
+exchange carries no catalog payload; retained rows remain local to their selected
+database engine. Maintenance and artifact-preserving inspections read their own
+selected store directly.
+
 Idle maintenance uses the same ownership rule. Secret and device-setup expiry,
 GitHub OAuth inventory, ingress health, placement inventory, and cron history
 rebuild their facts on startup and invalidate them from their own writes. Empty

@@ -15,6 +15,13 @@ import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { page, type ModelProvidersRouteData } from "./route.ts";
 
 const modelMethods = ["models.authStatus", "models.list"];
+const modelsHello = {
+  ...GATEWAY_STORE_TEST_HELLO,
+  auth: { role: "operator", scopes: ["operator.read"] },
+  snapshot: {
+    presence: [{ ts: 1, instanceId: "models-route-client", user: { id: "models-route-user" } }],
+  },
+};
 const authStatus = { ts: 1, providers: [{ provider: "openai", status: "ok", profiles: [] }] };
 const catalog = { models: [{ id: "fixture", provider: "openai", name: "Fixture" }] };
 const roster = {
@@ -34,12 +41,14 @@ const responses: Record<string, unknown> = {
 const responseFor = async (method: string) => structuredClone(responses[method] ?? {});
 
 function createModelsRouter(selectedId: string | null = "main") {
-  const store = createGatewayStoreTestStore();
+  const store = createGatewayStoreTestStore({
+    clientOptions: { instanceId: "models-route-client" },
+  });
   store.gateway.start();
   const request = vi
     .spyOn(store.gateway.snapshot.client!, "request")
     .mockImplementation(responseFor);
-  store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  store.current().opts.onHello?.({ ...modelsHello });
   // Match bootstrap's subscription order; the roster publishes before selection reconciles.
   const agents = createAgentCapability(store.gateway);
   const chatSelection = createAgentSelectionCapability(store.gateway, agents);
@@ -82,7 +91,7 @@ function createModelsRouter(selectedId: string | null = "main") {
     data: () => router.getState().matches[0]?.data,
     catalog: () =>
       peekModelCatalog(store.gateway.snapshot.client!, { agentId: selection.state.selectedId! }),
-    hello: () => store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO }),
+    hello: () => store.current().opts.onHello?.({ ...modelsHello }),
     disconnect: () =>
       store.current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true }),
   };

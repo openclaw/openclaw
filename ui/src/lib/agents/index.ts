@@ -8,6 +8,9 @@ import type {
   AgentsListResult,
   ToolsCatalogResult,
 } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../format-error.ts";
 import type { GatewayConnectionSnapshot } from "../gateway-connection-lifecycle.ts";
 import {
@@ -48,8 +51,10 @@ type AgentsConfigCapability = {
 };
 
 type AgentGateway = {
-  readonly snapshot: GatewayConnectionSnapshot;
-  subscribe: (listener: (snapshot: GatewayConnectionSnapshot) => void) => () => void;
+  readonly snapshot: GatewayConnectionSnapshot &
+    Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
+  readonly connectionRevision?: number;
+  subscribe: (listener: (snapshot: AgentGateway["snapshot"]) => void) => () => void;
 };
 
 type AgentFilesStatus = {
@@ -175,6 +180,7 @@ function emptyAgentFilesStatus(): AgentFilesStatus {
 }
 
 export function createAgentCapability(gateway: AgentGateway) {
+  let presentationKey = gatewayPresentationScope(gateway).key;
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
@@ -219,7 +225,7 @@ export function createAgentCapability(gateway: AgentGateway) {
     if (agentsRequest && !force) {
       return agentsRequest;
     }
-    if (state.agentsList && !force) {
+    if (state.agentsList && !state.agentsError && !force) {
       return state.agentsList;
     }
     state.agentsLoading = true;
@@ -238,7 +244,10 @@ export function createAgentCapability(gateway: AgentGateway) {
       })
       .catch((err: unknown) => {
         if (state.client === client && agentsRequest === request) {
-          state.agentsList = null;
+          if (isMissingOperatorReadScopeError(err)) {
+            state.agentsList = null;
+            files.clear();
+          }
           state.agentsError = resolveAgentReadErrorMessage(err, "agent list");
         }
         return null;
@@ -308,23 +317,48 @@ export function createAgentCapability(gateway: AgentGateway) {
   };
 
   const stopGateway = gateway.subscribe((snapshot) => {
+    const hadList = state.agentsList !== null;
     const clientChanged = state.client !== snapshot.client;
+    const nextPresentationKey = gatewayPresentationScope(gateway).key;
+    const identityChanged = clientChanged || presentationKey !== nextPresentationKey;
+    presentationKey = nextPresentationKey;
     const connected = snapshot.phase === "connected";
-    const connectionChanged = clientChanged || state.connected !== connected;
+    const connectionChanged = identityChanged || state.connected !== connected;
+    const accessLost = connected && !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
+    const filesAccessLost =
+      connected && files.size > 0 && !hasOperatorReadAccess(snapshot.hello?.auth ?? null);
     state.client = snapshot.client;
     state.connected = connected;
-    if (connectionChanged && (clientChanged || !connected)) {
+    if ((connectionChanged && (identityChanged || !connected)) || accessLost) {
       retireAgentsRequest();
       fileRequests.clear();
       for (const status of files.values()) {
         status.loading = false;
       }
-      files.clear();
-      state.agentsList = null;
-      state.agentsError = null;
+      if (identityChanged || accessLost) {
+        files.clear();
+        state.agentsList = null;
+        state.agentsError = null;
+      }
     }
-    if (connectionChanged) {
+    if (filesAccessLost) {
+      fileRequests.clear();
+      files.clear();
+    }
+    if (connectionChanged || accessLost || filesAccessLost) {
       publish();
+      if (connectionChanged && connected && !accessLost) {
+        if (!agentsRequest && (hadList || (identityChanged && listeners.size > 0))) {
+          void loadList(true);
+        }
+        if (!identityChanged) {
+          for (const [agentId, status] of files) {
+            if (status.list && !fileRequests.has(agentId)) {
+              void loadFiles(agentId, true);
+            }
+          }
+        }
+      }
     }
   });
 

@@ -80,6 +80,8 @@ const repositoryScriptEntries = [
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
+  // The history/diff benchmark guide invokes this measurement CLI by path.
+  "scripts/perf/history-diff-measure.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
   "scripts/bundle-a2ui.mts!",

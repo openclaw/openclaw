@@ -38,7 +38,6 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
 
 export {
   GatewayStateOwnerContentionError,
-  StateDatabaseAccessError,
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
   StateDatabaseOfflineMaintenanceError,

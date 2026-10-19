@@ -150,6 +150,29 @@ it("persists one exact plan and rejects a different plan for the same queue part
   );
 });
 
+it.each([{ queueId: "different-queue" }, { partIndex: 1 }])(
+  "rejects a stored plan whose identity differs from its lookup key: %j",
+  async (changedIdentity) => {
+    const plan = await persist({ partCount: 2 });
+    const store = getMatrixRuntime().state.openBlobStore<Record<string, never>>({
+      namespace: "outbound-delivery-plans",
+      maxEntries: 10_000,
+      maxBytesPerEntry: 8 * 1024 * 1024,
+      maxBytesPerNamespace: 256 * 1024 * 1024,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: 24 * 60 * 60 * 1000,
+    });
+    await store.register(
+      `${createHash("sha256").update(plan.queueId).digest("hex")}.0`,
+      new TextEncoder().encode(JSON.stringify({ ...plan, ...changedIdentity })),
+      {},
+    );
+    await expect(loadMatrixDeliveryPlan(planTarget(identity("queue-1", 0, 2)))).rejects.toThrow(
+      "Matrix durable delivery plan",
+    );
+  },
+);
+
 it("fails closed when a persisted plan contains invalid UTF-8", async () => {
   const queueId = "queue-invalid-utf8";
   const deliveryIdentity = identity(queueId);

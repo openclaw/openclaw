@@ -175,8 +175,8 @@ function harness(
 }
 
 describe("session capability warm roster", () => {
-  it.each(["profile", "credentials", "gateway", "stop"])(
-    "retains canonical display identity through transport/client replacement, then retires it on %s",
+  it.each(["client", "profile", "credentials", "gateway", "stop"])(
+    "retains canonical display identity through transport loss, then retires it on %s",
     async (retirement) => {
       const h = harness({ withBootRecord: false });
       h.connect();
@@ -191,11 +191,10 @@ describe("session capability warm roster", () => {
       expect(h.sessions.state.result).toBeNull();
       expect(h.sessions.presentation.result).toEqual(live);
       expect(h.sessions.presentation.profileId).toBe("profile-one");
-      h.publish({ client: createTestGatewayClient(h.request) });
-      expect(h.sessions.presentation.result).toEqual(live);
-      expect(h.sessions.presentation.profileId).toBe("profile-one");
       expect(h.request).toHaveBeenCalledTimes(requestCount);
-      if (retirement === "profile") {
+      if (retirement === "client") {
+        h.publish({ client: createTestGatewayClient(h.request) });
+      } else if (retirement === "profile") {
         h.connect("profile-two");
       } else if (retirement === "stop") {
         h.publish({ client: null, phase: "stopped" });

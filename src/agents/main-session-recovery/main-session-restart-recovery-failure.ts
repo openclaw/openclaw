@@ -64,7 +64,7 @@ export async function prepareRequesterRestartRecovery(params: {
 }
 
 /** Publish one local interruption notice and retire the exact input without replay or delivery. */
-export async function settleInterruptedRestartRecovery(params: {
+async function settleInterruptedRestartRecovery(params: {
   agentId: string;
   entry: SessionEntry;
   observation: MainSessionRecoveryObservation;

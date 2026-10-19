@@ -717,6 +717,11 @@ preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
 
+Operator `send` requests check admission before delivery even when they specify
+only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
+startup refusal. Failed inspection keeps refusing delivery with the recorded
+repair guidance after startup work settles.
+
 Startup deletion-journal checks use at most eight concurrent reads, so releasing
 more than 128 agents from preparation readiness does not exhaust the shared
 state-read pool. If other readers saturate that pool, startup retries only the
@@ -1144,19 +1149,25 @@ repair automatically.
 FTS5-only `malformed inverted index` findings on canonical agent search tables
 are also repairable. A Node upgrade or downgrade can change SQLite's `unicode61`
 tokenization (for example, U+FFFE in SQLite 3.54), leaving intact content with an
-incompatible derived index. Stop the Gateway and run `openclaw doctor --fix` with
-the Node version that will run the Gateway, then restart it. Doctor preserves a
-backup and rebuilds only the affected, schema-validated FTS tables in one
+incompatible derived index. Doctor preserves a backup and rebuilds only the
+affected, schema-validated FTS tables in one
 transaction. It verifies integrity and foreign keys before clearing quarantine;
 session recovery uses this same repair instead of moving the database aside.
 Unknown or changed FTS definitions and findings mixed with structural damage
 are not eligible for this repair.
 
-Startup does not rebuild FTS indexes automatically: the offline maintenance
-owner supplies the exclusive custody needed for backup and quarantine recovery.
-The admission error gives the `openclaw doctor --fix` command. Switching SQLite
-versions again may require another rebuild, without changing stored content or
-the database schema.
+Gateway startup makes one automatic repair attempt per database per process when
+every finding names a canonical, schema-validated FTS table. Under exclusive
+writer custody, it uses the same pre-repair backup and transactional rebuild as
+Doctor, then requires clean integrity and foreign-key checks before admission.
+One warning names the agent, affected tables and row counts, SQLite version, and
+backup. Status and Doctor retain this startup outcome. A failed backup or rebuild,
+live foreign writer, unknown FTS definition, or mixed damage keeps the database
+quarantined with the precise Doctor command. Ordinary runtime opens do not attempt
+this repair. If startup cannot repair the indexes, stop the Gateway and run
+`openclaw doctor --fix` with the Node version that will run the Gateway, then
+restart it. Switching SQLite versions again may require another rebuild,
+without changing stored content or the database schema.
 
 <a id="downgrades-are-unsupported" />
 

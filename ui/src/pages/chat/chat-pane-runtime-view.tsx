@@ -257,6 +257,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const frame = createParkedProjection(
       () => {
         relativeTime();
+        gateway.read();
         publication()?.read();
         repository()?.read();
         parentSession.read();

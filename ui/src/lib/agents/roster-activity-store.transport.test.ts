@@ -6,6 +6,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createTestSessionCapability } from "../sessions/session-capability.test-support.ts";
 import { rosterActivityStore } from "./roster-activity-store.ts";
 
@@ -129,6 +130,91 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+it.each(["client", "account", "recovery scope"])(
+  "keeps loaded roster activity through a blip and retires it with %s identity",
+  async (change) => {
+    const f = fixture();
+    const hello = gatewayHelloForMethods(
+      ["sessions.list", "sessions.subscribe", "sessions.groups.list"],
+      ["operator.read"],
+    );
+    hello.auth!.recoveryScope = "alice-scope";
+    f.source.publish({
+      ...f.source.gateway.snapshot,
+      hello,
+      selfUser: { id: "alice", name: "Alice" },
+    });
+    f.subscribe();
+    await vi.advanceTimersByTimeAsync(0);
+    f.respond(0, "Retained work");
+    await vi.advanceTimersByTimeAsync(0);
+    f.source.publish({ ...f.source.gateway.snapshot, phase: "reconnecting" });
+    expect(f.store.snapshot.cards[0]?.preview).toBe("Retained work");
+    f.source.publish({ ...f.source.gateway.snapshot, phase: "connected" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.snapshot.cards[0]?.preview).toBe("Retained work");
+    f.respond(1, "Fresh work");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.snapshot.cards[0]?.preview).toBe("Fresh work");
+    f.source.publish({
+      ...f.source.gateway.snapshot,
+      ...(change === "client"
+        ? { phase: "reconnecting" as const, client: createTestGatewayClient(async () => ({})) }
+        : change === "account"
+          ? { selfUser: { id: "bob", name: "Bob" } }
+          : {
+              selfUser: undefined,
+              hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+            }),
+    });
+    expect(f.store.snapshot.result).toBeNull();
+    expect(f.store.snapshot.membershipReady).toBe(false);
+    if (change === "client") {
+      expect(f.store.snapshot.cards).toEqual([]);
+    } else {
+      expect(f.store.snapshot.cards).toMatchObject([
+        { id: "main", preview: undefined, activeNow: false, unreadCount: 0, lastActiveAt: 0 },
+      ]);
+    }
+  },
+);
+
+it.each(["operator.sessions.read", "operator.sessions.write"])(
+  "loads and retains roster activity with %s until fresh access loss",
+  async (scope) => {
+    const f = fixture();
+    const hello = gatewayHelloForMethods(
+      ["sessions.list", "sessions.subscribe", "sessions.groups.list"],
+      [scope],
+    );
+    f.source.publish({ ...f.source.gateway.snapshot, hello });
+    f.subscribe();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.requests).toHaveLength(1);
+    f.respond(0, "Permitted activity");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.snapshot.cards[0]?.preview).toBe("Permitted activity");
+
+    f.source.publish({ ...f.source.gateway.snapshot, phase: "reconnecting", hello: null });
+    expect(f.store.snapshot.cards[0]?.preview).toBe("Permitted activity");
+    f.source.publish({ ...f.source.gateway.snapshot, phase: "connected", hello });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.requests).toHaveLength(2);
+    expect(f.store.snapshot.cards[0]?.preview).toBe("Permitted activity");
+    f.respond(1, "Fresh permitted activity");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.store.snapshot.cards[0]?.preview).toBe("Fresh permitted activity");
+
+    f.source.publish({
+      ...f.source.gateway.snapshot,
+      hello: { ...hello, auth: { ...hello.auth!, scopes: [] } },
+    });
+    expect(f.store.snapshot.result).toBeNull();
+    expect(f.store.snapshot.cards).toEqual([]);
+    expect(f.store.snapshot.membershipReady).toBe(false);
+  },
+);
 
 it.each(["pending", "settled"] as const)(
   "keeps the %s roster window through recap-only updates",
