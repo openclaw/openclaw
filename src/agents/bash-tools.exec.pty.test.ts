@@ -25,10 +25,10 @@ function currentNodeEvalCommand(source: string): string {
   return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
 }
 
-async function startPtySession(command: string) {
-  const processTool = createProcessTool();
-  const run = await runExecProcess({
-    command,
+function startProcess(
+  options: Partial<Parameters<typeof runExecProcess>[0]> & { command: string },
+) {
+  return runExecProcess({
     workdir: process.cwd(),
     env: currentEnv(),
     usePty: true,
@@ -37,9 +37,22 @@ async function startPtySession(command: string) {
     pendingMaxOutput: 20_000,
     notifyOnExit: false,
     timeoutSec: 5,
+    ...options,
   });
+}
+
+async function startPtySession(command: string) {
+  const processTool = createProcessTool();
+  const run = await startProcess({ command });
   markBackgrounded(run.session);
   return { processTool, sessionId: run.session.id, run };
+}
+
+async function stopProcess(run: Awaited<ReturnType<typeof runExecProcess>>) {
+  if (!run.session.exited) {
+    run.kill();
+  }
+  await run.promise;
 }
 
 test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async () => {
@@ -65,10 +78,7 @@ test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async ()
     keys: ["h", "i", "Enter"],
   });
 
-  await processTool.execute("toolcall", {
-    action: "submit",
-    sessionId,
-  });
+  await processTool.execute("toolcall", { action: "submit", sessionId });
 
   await run.promise;
   const poll = await processTool.execute("toolcall", { action: "poll", sessionId });
@@ -113,10 +123,7 @@ test.skipIf(process.platform === "win32")(
         text: `Sent 16 bytes to session ${sessionId}.`,
       });
     } finally {
-      if (!run.session.exited) {
-        run.kill();
-      }
-      await run.promise;
+      await stopProcess(run);
     }
   },
 );
@@ -150,15 +157,10 @@ test("PTY cursor queries and key modes survive output chunk boundaries", async (
     setTimeout(() => process.exit(3), 5000);
   `;
   const warnings: string[] = [];
-  const run = await runExecProcess({
+  const run = await startProcess({
     command: currentNodeEvalCommand(script),
-    workdir: process.cwd(),
     env: { PATH: process.env.PATH ?? "", TERM: "xterm-256color" },
-    usePty: true,
     warnings,
-    maxOutput: 20_000,
-    pendingMaxOutput: 20_000,
-    notifyOnExit: false,
     timeoutSec: 8,
   });
   markBackgrounded(run.session);
@@ -176,10 +178,7 @@ test("PTY cursor queries and key modes survive output chunk boundaries", async (
     expect(outcome.aggregated).toContain("SPLIT=1b5b313b3152");
     expect(outcome.aggregated).toContain("ARROW=1b4f41");
   } finally {
-    if (!run.session.exited) {
-      run.kill();
-      await run.promise;
-    }
+    await stopProcess(run);
     deleteSession(run.session.id);
   }
 });
@@ -198,10 +197,9 @@ test.runIf(process.platform === "linux")(
     const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", ENV: "backend-policy" };
     for (const target of ["child", "pty", "sandbox"] as const) {
       const warnings: string[] = [];
-      const run = await runExecProcess({
+      const run = await startProcess({
         command,
         execCommand: command,
-        workdir: process.cwd(),
         env,
         usePty: target === "pty",
         sandbox:
@@ -220,8 +218,6 @@ test.runIf(process.platform === "linux")(
         warnings,
         maxOutput: 1000,
         pendingMaxOutput: 1000,
-        notifyOnExit: false,
-        timeoutSec: 5,
       });
       expect(await run.promise).toMatchObject({
         status: "completed",

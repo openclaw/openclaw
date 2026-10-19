@@ -4,6 +4,7 @@ import type { RunExit } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import { waitForExecScope } from "./bash-process-registry.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -39,16 +40,14 @@ vi.mock("../process/supervisor/index.js", async (importOriginal) => {
             return;
           }
           settled = true;
-          completion.resolve({
-            reason,
-            exitCode: reason === "exit" ? 0 : null,
-            exitSignal: null,
-            durationMs: input.timeoutMs ?? 0,
-            stdout: "",
-            stderr: "",
-            timedOut,
-            noOutputTimedOut: false,
-          });
+          completion.resolve(
+            createRunExit({
+              reason,
+              exitCode: reason === "exit" ? 0 : null,
+              durationMs: input.timeoutMs ?? 0,
+              timedOut,
+            }),
+          );
         };
         supervisorMockState.finish.set(runId, () => settle("exit", false));
         if (input.timeoutMs !== undefined) {
@@ -101,7 +100,30 @@ const TEST_EXEC_DEFAULTS = {
   host: "gateway" as const,
   security: "full" as const,
   ask: "off" as const,
+  allowBackground: true,
+  notifyOnExit: false,
 };
+const command = { command: BACKGROUND_HOLD_CMD, timeoutSeconds: 60 };
+const identity = (runId: string, sessionKey: string, sessionId: string) => ({
+  runId,
+  sessionKey,
+  sessionId,
+  agentId: "main",
+});
+
+async function finishProcesses() {
+  for (const finish of supervisorMockState.finish.values()) {
+    finish();
+  }
+  await vi.advanceTimersByTimeAsync(60_000);
+}
+
+function runningSession(details: ReturnType<typeof resultDetails>) {
+  if (details.status !== "running" || typeof details.sessionId !== "string") {
+    throw new Error("Expected a supervised command");
+  }
+  return details.sessionId;
+}
 
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
@@ -133,41 +155,23 @@ test.each([false, true])(
     const returned = createDeferredCore<string>();
     const finishTurn = createDeferredCore();
     supervisorMockState.onSpawn = () => spawned.resolve();
-    const identity = {
-      runId: "yielded-stop",
-      sessionKey: "agent:main:yielded-stop",
-      sessionId: "yielded-session",
-      agentId: "main",
-    };
+    const owner = identity("yielded-stop", "agent:main:yielded-stop", "yielded-session");
     const request = new AbortController();
     const invocation = new AbortController();
     const execute = async () => {
       const tool = createLazyExecTool({
         ...TEST_EXEC_DEFAULTS,
-        ...(owned ? identity : {}),
-        allowBackground: true,
-        scopeKey: identity.sessionKey,
-        notifyOnExit: false,
+        ...(owned ? owner : {}),
+        scopeKey: owner.sessionKey,
       });
       const result = resultDetails(
-        await tool.execute(
-          "ordinary-command",
-          {
-            command: BACKGROUND_HOLD_CMD,
-            yieldMs: 10,
-            timeoutSeconds: 60,
-          },
-          invocation.signal,
-        ),
+        await tool.execute("ordinary-command", { ...command, yieldMs: 10 }, invocation.signal),
       );
-      if (result.status !== "running" || typeof result.sessionId !== "string") {
-        throw new Error("Expected a yielded process");
-      }
-      returned.resolve(result.sessionId);
+      returned.resolve(runningSession(result));
       await finishTurn.promise;
     };
     const running = owned
-      ? withExecRequestTurn({ identity, abortSignal: request.signal }, execute)
+      ? withExecRequestTurn({ identity: owner, abortSignal: request.signal }, execute)
       : execute();
     try {
       await spawned.promise;
@@ -182,7 +186,7 @@ test.each([false, true])(
       }
       finishTurn.resolve();
       await running;
-      await waitForExecScope(identity.sessionKey);
+      await waitForExecScope(owner.sessionKey);
       expect(supervisorMockState.cancelled).toEqual(owned ? [sessionId] : []);
       expect(getFinishedSession(sessionId)).toMatchObject({
         exited: true,
@@ -190,12 +194,9 @@ test.each([false, true])(
       });
     } finally {
       finishTurn.resolve();
-      for (const finish of supervisorMockState.finish.values()) {
-        finish();
-      }
-      await vi.advanceTimersByTimeAsync(60_000);
+      await finishProcesses();
       await running;
-      await waitForExecScope(identity.sessionKey);
+      await waitForExecScope(owner.sessionKey);
     }
   },
 );
@@ -208,9 +209,10 @@ test.each([false, true])(
     const source = new AbortController();
     const toolLifetime = new AbortController();
     async function launch(runId: string, independent = false) {
+      const owner = identity(runId, sessionKey, "request-stop-session");
       return withExecRequestTurn(
         {
-          identity: { runId, sessionKey, sessionId: "request-stop-session", agentId: "main" },
+          identity: owner,
           abortSignal: source.signal,
         },
         async () => {
@@ -218,18 +220,12 @@ test.each([false, true])(
           supervisorMockState.onSpawn = () => spawned.resolve();
           const tool = createLazyExecTool({
             ...TEST_EXEC_DEFAULTS,
-            runId,
-            sessionKey,
-            sessionId: "request-stop-session",
-            agentId: "main",
+            ...owner,
             scopeKey: sessionKey,
-            allowBackground: true,
-            notifyOnExit: false,
           });
           const args = {
-            command: BACKGROUND_HOLD_CMD,
+            ...command,
             ...(independent ? { background: true } : { yieldMs: 10 }),
-            timeoutSeconds: 60,
           };
           const harness = codeMode ? createCodeModeHarness() : undefined;
           if (harness) {
@@ -241,9 +237,7 @@ test.each([false, true])(
           const pending = harness
             ? harness.tools[0]!.execute(
                 runId,
-                {
-                  code: `return await exec(${JSON.stringify(args)});`,
-                },
+                { code: `return await exec(${JSON.stringify(args)});` },
                 toolLifetime.signal,
               )
             : tool.execute(runId, args, toolLifetime.signal);
@@ -259,22 +253,15 @@ test.each([false, true])(
           if (harness) {
             expect(details.status).toBe("completed");
           }
-          const processDetails = harness ? resultDetails({ details: details.value }) : details;
-          if (processDetails.status !== "running" || typeof processDetails.sessionId !== "string") {
-            throw new Error("Expected a supervised command");
-          }
-          return processDetails.sessionId;
+          return runningSession(harness ? resultDetails({ details: details.value }) : details);
         },
       );
     }
     const ordinary = await launch("original");
     const service = await launch("service", true);
-    const cancellation = captureExecRequestCancellation({
-      runId: "original",
-      sessionKey,
-      sessionId: "request-stop-session",
-      agentId: "main",
-    });
+    const cancellation = captureExecRequestCancellation(
+      identity("original", sessionKey, "request-stop-session"),
+    );
     const next = await launch("new-human-request");
     // All foreground calls and the original turn have finished successfully.
     // Disposing their tool generation is not an explicit request cancellation.
@@ -295,10 +282,7 @@ test.each([false, true])(
       await waitForExecScope(sessionKey);
       expect(getFinishedSession(next)).toMatchObject({ exitCode: 0, exitReason: "exit" });
     } finally {
-      for (const finish of supervisorMockState.finish.values()) {
-        finish();
-      }
-      await vi.advanceTimersByTimeAsync(60_000);
+      await finishProcesses();
       await waitForExecScope(sessionKey);
     }
   },
