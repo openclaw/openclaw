@@ -5,10 +5,14 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
 
 function SystemEvent(props: { item: SystemEventItem }) {
-  return props.item.kind === "notice" ? (
-    <ChatNotice item={props.item} />
-  ) : (
-    <ChatDivider item={props.item} />
+  return (
+    <>
+      {props.item.kind === "notice" ? (
+        <ChatNotice item={props.item} />
+      ) : (
+        <ChatDivider item={props.item} />
+      )}
+    </>
   );
 }
 
