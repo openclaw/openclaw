@@ -253,6 +253,8 @@ export class SystemAgentWizardAnswerError extends Error {}
 
 export class ChatWizardHost {
   private bridge: ActiveWizardBridge | null = null;
+  private awaitingSetupChannel = false;
+  private lastSensitiveChannel: string | undefined;
 
   constructor(
     private readonly options: {
@@ -272,6 +274,68 @@ export class ChatWizardHost {
   dispose(): void {
     this.bridge?.session.cancel();
     this.bridge = null;
+  }
+
+  clearHandoff(): void {
+    this.awaitingSetupChannel = false;
+    this.lastSensitiveChannel = undefined;
+  }
+
+  resolveChannelHandoffInput(
+    text: string,
+  ): SystemAgentChatReply | Extract<SystemAgentOperation, { kind: "open-setup" }> | null {
+    if (!this.awaitingSetupChannel) {
+      return null;
+    }
+    if (/^(cancel|abort|stop)$/i.test(text)) {
+      this.awaitingSetupChannel = false;
+      return { text: "Channel wizard handoff cancelled.", action: "none" };
+    }
+    if (!/^[a-z0-9_-]+$/i.test(text)) {
+      return {
+        text: "Reply with one channel id, such as `slack` or `telegram`, or say `cancel`.",
+        action: "none",
+      };
+    }
+    this.awaitingSetupChannel = false;
+    return { kind: "open-setup", target: "channels", channel: text.toLowerCase() };
+  }
+
+  openSetup(
+    operation: Extract<SystemAgentOperation, { kind: "open-setup" }>,
+  ): SystemAgentChatReply {
+    if (this.options.surface === "gateway") {
+      return {
+        text: "Open Settings to change your model or connect a channel. To change providers from a shell, run `openclaw onboard` on the machine running OpenClaw.",
+        action: "none",
+      };
+    }
+    if (!["channels", "search", "gateway"].includes(operation.target)) {
+      return {
+        text: "Setup can replace the inference route powering this session. Exit OpenClaw and run `openclaw onboard`; it saves only a route that passes a live test. Then start OpenClaw again.",
+        action: "none",
+      };
+    }
+    let handoff = operation;
+    if (handoff.target === "channels" && !handoff.channel) {
+      if (!this.lastSensitiveChannel) {
+        this.awaitingSetupChannel = true;
+        return {
+          text: "Which channel should I open in the masked terminal wizard?",
+          action: "none",
+        };
+      }
+      handoff = { ...handoff, channel: this.lastSensitiveChannel };
+      this.lastSensitiveChannel = undefined;
+    }
+    this.awaitingSetupChannel = false;
+    const label =
+      handoff.target === "channels"
+        ? `${handoff.channel ?? "channel"} setup`
+        : handoff.target === "search"
+          ? "web search setup"
+          : "Gateway setup";
+    return { text: `Opening the ${label} wizard.`, action: "open-setup", handoff };
   }
 
   decorateReply(reply: SystemAgentChatReply): SystemAgentChatReply {
@@ -420,6 +484,8 @@ export class ChatWizardHost {
       assertPersistentEffectCurrent: () => void,
     ) => Promise<HostedWizardRunResult>;
   }): Promise<ChatWizardResult> {
+    // A masked channel handoff belongs only to the immediately preceding wizard.
+    this.lastSensitiveChannel = undefined;
     const completion: ActiveWizardBridge["completion"] = {
       status: "applied",
       ...(params.memoryImportProviders
@@ -450,7 +516,11 @@ export class ChatWizardHost {
       completion,
       ...(params.autoSelectChannel ? { autoSelectChannel: params.autoSelectChannel } : {}),
     };
-    return await this.pump();
+    const result = await this.pump();
+    if (result.sensitiveChannel) {
+      this.lastSensitiveChannel = result.sensitiveChannel;
+    }
+    return result;
   }
 
   private tryAutoSelect(step: WizardStep): { value: unknown } | null {
