@@ -4,19 +4,17 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "./app-sidebar.ts";
 import "../components/app-sidebar.tsx";
-export const owner = {
-  type: "human",
-  id: "nora",
-  label: "Nora",
-  identity: { type: "profile", id: "nora" },
-} as const;
-export const other = {
-  type: "human",
-  id: "casey",
-  label: "Casey",
-  identity: { type: "profile", id: "casey" },
-} as const;
+const actor = (id: string, label: string) =>
+  ({
+    type: "human",
+    id,
+    label,
+    identity: { type: "profile", id },
+  }) as const;
+export const owner = actor("nora", "Nora");
+export const other = actor("casey", "Casey");
 const participant = { identity: { type: "profile", id: "casey" }, label: "Casey" } as const;
+const running = { hasActiveRun: true, status: "running" } as const;
 export const key = (id: string) => "agent:main:stress-" + id;
 function placement(
   state: (typeof SESSION_PLACEMENT_STATES)[number],
@@ -26,11 +24,8 @@ function placement(
   const workspace = { workspaceBaseManifestRef: "fixture", remoteWorkspaceDir: "/workspace" };
   switch (state) {
     case "local":
-      return { ...timing, state };
     case "requested":
-      return { ...timing, state };
     case "provisioning":
-      return { ...timing, state };
     case "reclaimed":
       return { ...timing, state };
     case "syncing":
@@ -38,9 +33,7 @@ function placement(
     case "starting":
       return { ...timing, ...worker, ...workspace, state };
     case "active":
-      return { ...timing, ...worker, ...workspace, activeOwnerEpoch: 1, state };
     case "draining":
-      return { ...timing, ...worker, ...workspace, activeOwnerEpoch: 1, state };
     case "reconciling":
       return { ...timing, ...worker, ...workspace, activeOwnerEpoch: 1, state };
     case "failed":
@@ -64,26 +57,24 @@ function fixtures(): GatewaySessionRow[] {
       ...patch,
     });
   add("owner-idle");
-  add("owner-running", { hasActiveRun: true, status: "running" });
+  add("owner-running", running);
   add("group-running", {
-    hasActiveRun: true,
-    status: "running",
+    ...running,
     participants: [participant],
     participantCount: 1,
   });
   add("group-overflow", {
-    hasActiveRun: true,
-    status: "running",
+    ...running,
     participants: [participant],
     participantCount: 3,
   });
   add("group-large-count", { participants: [participant], participantCount: 99 });
   add("queued", { hasActiveRun: true, status: "queued" });
-  add("icon", { hasActiveRun: true, status: "running", icon: "braces" });
-  add("emoji", { hasActiveRun: true, status: "running", icon: "🦞" });
+  add("icon", { ...running, icon: "braces" });
+  add("emoji", { ...running, icon: "🦞" });
   add("unread", { unread: true });
-  add("unread-running", { unread: true, hasActiveRun: true, status: "running" });
-  add("no-owner", { owner: undefined, hasActiveRun: true, status: "running" });
+  add("unread-running", { unread: true, ...running });
+  add("no-owner", { owner: undefined, ...running });
   add("other-owner", { owner: { actor: other } });
   for (const status of ["done", "failed", "killed", "timeout"] as const) {
     add(status, {
@@ -95,17 +86,15 @@ function fixtures(): GatewaySessionRow[] {
     agentStatus: { note: "Needs a decision", attention: "key", expiresAt: Date.now() + 600000 },
   });
   add("agent-note", {
-    hasActiveRun: true,
-    status: "running",
+    ...running,
     agentStatus: { note: "Checking the patch", expiresAt: Date.now() + 600000 },
   });
   add("channel-fallback", {
     channelAvatarUrl: "/__openclaw__/channel-avatar/stress-missing",
-    hasActiveRun: true,
-    status: "running",
+    ...running,
   });
   add("private", { incognito: true });
-  add("approval", { hasActiveRun: true, status: "running" });
+  add("approval", running);
   add("archived", { archived: true, archivedBy: other });
   for (const state of ["open", "draft", "merged", "closed"] as const) {
     add("pr-" + state);
@@ -115,22 +104,12 @@ function fixtures(): GatewaySessionRow[] {
   add("crowded", {
     agentStatus: { note: "Needs a decision", attention: "key", expiresAt: Date.now() + 600000 },
     incognito: true,
-    hasActiveRun: true,
-    status: "running",
+    ...running,
     participants: [participant],
     participantCount: 3,
     worktree: { id: "crowded", repoRoot: "/projects/alpha", branch: "feature/crowded" },
     placement: {
-      state: "active",
-      generation: 1,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      stateChangedAtMs: 1,
-      environmentId: "fixture",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
-      workspaceBaseManifestRef: "fixture",
-      remoteWorkspaceDir: "/workspace",
+      ...placement("active"),
       diskSpace: { status: "critical", availableBytes: 1, totalBytes: 100, observedAtMs: 1 },
       workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef: "fixture" },
     },
@@ -141,17 +120,15 @@ function fixtures(): GatewaySessionRow[] {
   add("fork", { forkSource: { sessionKey: key("owner-idle"), sessionId: "original" } });
   add("pinned", {
     pinned: true,
-    hasActiveRun: true,
-    status: "running",
+    ...running,
     participants: [participant],
     participantCount: 1,
   });
-  add("custom", { category: "Custom review", hasActiveRun: true, status: "running" });
+  add("custom", { category: "Custom review", ...running });
   add("conversation", { kind: "group", channel: "discord" });
   add("project-a", {
     worktree: { id: "a", repoRoot: "/projects/alpha", branch: "feature/a" },
-    hasActiveRun: true,
-    status: "running",
+    ...running,
   });
   add("project-b", { worktree: { id: "b", repoRoot: "/projects/beta", branch: "feature/b" } });
   add("same-project-name", {
@@ -163,15 +140,13 @@ function fixtures(): GatewaySessionRow[] {
     participants: [participant],
     participantCount: 3,
   });
-  add("question", { hasActiveRun: true, status: "running" });
+  add("question", running);
   for (const state of SESSION_PLACEMENT_STATES) {
     add("placement-" + state, { placement: placement(state) });
   }
-  const children = ["queued", "running", "done", "failed", "killed", "timeout"].map((status) =>
-    key("child-" + status),
-  );
-  add("parent", { childSessions: children });
-  for (const status of ["queued", "running", "done", "failed", "killed", "timeout"] as const) {
+  const childStatuses = ["queued", "running", "done", "failed", "killed", "timeout"] as const;
+  add("parent", { childSessions: childStatuses.map((status) => key("child-" + status)) });
+  for (const status of childStatuses) {
     add("child-" + status, {
       spawnedBy: key("parent"),
       status,
@@ -186,8 +161,7 @@ function fixtures(): GatewaySessionRow[] {
     kind: "direct",
     label: "Home",
     updatedAt: 1,
-    hasActiveRun: true,
-    status: "running",
+    ...running,
   });
   return rows;
 }
@@ -195,12 +169,9 @@ export async function settled(sidebar: Awaited<ReturnType<typeof mountSidebar>>[
   await sidebar.updateComplete;
   await vi.dynamicImportSettled();
   await sidebar.updateComplete;
-  await Promise.all(
-    [...sidebar.querySelectorAll("openclaw-session-owner-chip")].map((x) => x.updateComplete),
-  );
-  await Promise.all(
-    [...sidebar.querySelectorAll("openclaw-viewer-avatar")].map((x) => x.updateComplete),
-  );
+  for (const tag of ["openclaw-session-owner-chip", "openclaw-viewer-avatar"] as const) {
+    await Promise.all([...sidebar.querySelectorAll(tag)].map((x) => x.updateComplete));
+  }
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
