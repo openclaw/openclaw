@@ -192,7 +192,10 @@ export function createSessionRowPlacementProjection(
     getProjectionFacts: (id: string) => resident.get(id) ?? exact?.get(id),
     isPrepared: (id: string) => !reader || exact?.has(id) === true || resident.has(id),
     get needsPreparation() {
-      return !disposed && dirty.size > 0;
+      return (
+        !disposed &&
+        (dirty.size > 0 || [...reads].some((read) => read.kind === "resident" && !read.settled))
+      );
     },
     register(id: string) {
       if (!reader || registered.has(id)) {
