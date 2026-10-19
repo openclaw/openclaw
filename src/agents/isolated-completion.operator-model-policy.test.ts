@@ -20,6 +20,7 @@ const cli = vi.hoisted(() => ({
 vi.mock("./cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext: cli.prepare }));
 vi.mock("./cli-runner/execute.runtime.js", () => ({ executePreparedCliRun: cli.execute }));
 
+const { attachProviderAuthAuthority } = await import("../plugins/provider-auth-authority.js");
 const { createAdmittedRunOperatorAuthority, readRunOperatorAuthority } =
   await import("./admitted-run-context.js");
 const { prepareOperatorModelPolicy } = await import("./operator-model-policy.js");
@@ -263,3 +264,30 @@ it("preserves a retired CLI model denial after the model policy is restored", as
     await outcome;
   }
 });
+
+it.each(["before-dispatch", "during-native-preparation"] as const)(
+  "keeps host credential revocation observable to V2 harnesses %s",
+  async (stage) => {
+    let current = stage !== "before-dispatch";
+    const revoked = new Error("Selected credential authority retired");
+    mocks.prepareSimpleCompletionModel.mockResolvedValueOnce({
+      model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
+      auth: attachProviderAuthAuthority(
+        { apiKey: "synthetic-key", mode: "api-key", source: "fixture" },
+        () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      ),
+    });
+    const dispatch = vi.fn(async (params: { assertCurrent?: () => void }) => {
+      current = false;
+      params.assertCurrent?.();
+      throw new Error("Revoked credential reached inference");
+    });
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    await expect(runIsolatedCompletion(isolatedRequest())).rejects.toBe(revoked);
+    expect(dispatch).toHaveBeenCalledTimes(stage === "before-dispatch" ? 0 : 1);
+  },
+);

@@ -101,7 +101,7 @@ export function createCodexAppServerAgentHarness(
     options.pluginConfig;
   const resolveIsolatedCompletionRuntime: NonNullable<
     AgentHarnessV2["resolveIsolatedCompletionRuntime"]
-  > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
+  > = () => "self";
   const assertOwnershipCurrent = (params: { assertCurrent: () => void }) => {
     params.assertCurrent();
     if (disposed) {
@@ -417,21 +417,11 @@ export function createCodexAppServerAgentHarness(
       return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
-      if (
-        resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
-        "openclaw"
-      ) {
-        const { runHostPreparedIsolatedCompletion } =
-          await import("openclaw/plugin-sdk/simple-completion-runtime");
-        return runHostPreparedIsolatedCompletion(params);
-      }
       const { runCodexIsolatedCompletion } =
         await import("./src/app-server/isolated-completion.js");
       const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
       return runCodexIsolatedCompletion(params, {
-        pluginConfig: readCodexPluginConfig(
-          options.resolvePluginConfig?.() ?? options.pluginConfig,
-        ),
+        pluginConfig: readCodexPluginConfig(resolveAttemptPluginConfig(params.config)),
       });
     },
     runIsolatedCompletion: async (params) => {

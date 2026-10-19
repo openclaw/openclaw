@@ -14,7 +14,8 @@ import {
 import type * as RuntimeAuth from "./runtime-plan/prepare-auth.js";
 
 // The shared fixture must register mocks before other runtime modules load.
-const { resolveIsolatedCompletionRuntime } = await import("./isolated-completion-route.js");
+const { resolveIsolatedCompletionRuntime, resolveIsolatedCompletionAuthorizationOwner } =
+  await import("./isolated-completion-route.js");
 
 beforeEach(resetIsolatedCompletionTestState);
 
@@ -91,3 +92,29 @@ it.each([false, true])(
     expect(dispatch).toHaveBeenCalledOnce();
   },
 );
+
+it("retains OAuth ownership on an API destination without converting the grant to an API key", () => {
+  const plan = {
+    providerForAuth: "openai",
+    authProfileProviderForAuth: "openai",
+    harnessAuthProvider: "openai",
+    modelRoute: {
+      provider: "openai",
+      modelId: "gpt-test",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+      authRequirement: "api-key" as const,
+      requestTransportOverrides: "none" as const,
+    },
+  };
+  expect(
+    resolveIsolatedCompletionAuthorizationOwner({
+      ...plan,
+      selectedAuthMode: "oauth",
+      selectedAuthFlow: "chatgpt-token-sharing",
+    }),
+  ).toBe("harness");
+  expect(
+    resolveIsolatedCompletionAuthorizationOwner({ ...plan, selectedAuthMode: "api-key" }),
+  ).toBe("host");
+});

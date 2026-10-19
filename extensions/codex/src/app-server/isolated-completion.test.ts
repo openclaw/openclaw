@@ -90,7 +90,10 @@ describe("runCodexIsolatedCompletion", () => {
       developerInstructions: "Name the conversation.",
       input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
     });
-    expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
+    expectCall(mocks.runBoundedTurn, {
+      modelProvider: "openai",
+      threadConfig: { openai_base_url: "https://chatgpt.com/backend-api/codex" },
+    });
   });
 
   it("forwards prepared profile auth without also selecting a profile", async () => {
@@ -172,7 +175,7 @@ describe("runCodexIsolatedCompletion", () => {
     );
   });
 
-  it("rejects host authorization at the native-only boundary", async () => {
+  it("rejects incomplete host authorization before native dispatch", async () => {
     const params = createParams();
     params.authorization = {
       owner: "host",
@@ -180,7 +183,67 @@ describe("runCodexIsolatedCompletion", () => {
       auth: { mode: "api-key", source: "test" },
     } as IsolatedParams["authorization"];
 
-    await expect(run(params)).rejects.toThrow("harness-owned");
+    await expect(run(params)).rejects.toThrow("prepared Responses API-key");
     expect(mocks.runBoundedTurn).not.toHaveBeenCalled();
+  });
+  it("preserves a host API key, exact model and endpoint on native dispatch", async () => {
+    const params = createParams();
+    params.authorization = {
+      owner: "host",
+      model: {
+        provider: "openai",
+        id: "selected-model",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+      auth: {
+        mode: "api-key",
+        apiKey: "synthetic-selected-key",
+        source: "profile:openai:selected",
+        profileId: "openai:selected",
+      },
+    } as IsolatedParams["authorization"];
+    await expect(run(params)).resolves.toMatchObject({
+      assistant: { api: "openai-responses", provider: "openai" },
+    });
+    expect(mocks.resolveAuthHandoff).not.toHaveBeenCalled();
+    expectCall(mocks.runBoundedTurn, {
+      model: { mode: "required", id: "selected-model" },
+      modelProvider: "openai",
+      preparedAuth: { kind: "api-key", apiKey: "synthetic-selected-key" },
+      threadConfig: { openai_base_url: "https://api.openai.com/v1" },
+      requireInferenceRoute: true,
+      requireNoExternalCapabilities: true,
+      isolation: "private-stdio",
+    });
+  });
+
+  it("keeps SIWC OAuth on the selected public endpoint with its profile refresh owner", async () => {
+    const params = createParams();
+    if (params.authorization.owner !== "harness") {
+      throw new Error("fixture");
+    }
+    params.authorization.plan.modelRoute!.authRequirement = "api-key";
+    params.authorization.plan.modelRoute!.api = "openai-responses";
+    params.authorization.plan.modelRoute!.baseUrl = "https://api.openai.com/v1";
+    params.authorization.plan.selectedAuthMode = "oauth";
+    params.authorization.plan.selectedAuthFlow = "chatgpt-token-sharing";
+    const preparedAuth = {
+      kind: "profile",
+      profileId: "openai:test",
+      store: authProfileStore,
+      snapshot: {
+        inferenceAuth: "host-oauth",
+        loginParams: { type: "apiKey", apiKey: "synthetic-placeholder" },
+        secretFreeCacheKey: "account",
+      },
+    };
+    mocks.resolveAuthHandoff.mockResolvedValue({ preparedAuth });
+    await expect(run(params)).resolves.toMatchObject({ assistant: { api: "openai-responses" } });
+    expectCall(mocks.runBoundedTurn, {
+      preparedAuth,
+      requireInferenceRoute: true,
+      threadConfig: { openai_base_url: "https://api.openai.com/v1" },
+    });
   });
 });

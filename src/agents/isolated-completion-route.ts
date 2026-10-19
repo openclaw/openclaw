@@ -150,7 +150,8 @@ export function selectIsolatedHarnessAuthAttempt(
 export function resolveIsolatedCompletionAuthorizationOwner(
   plan: AgentRuntimeAuthPlan | undefined,
 ) {
-  return plan?.harnessAuthProvider && plan.modelRoute?.authRequirement !== "api-key"
+  return plan?.harnessAuthProvider &&
+    (plan.modelRoute?.authRequirement !== "api-key" || plan.selectedAuthMode === "oauth")
     ? ("harness" as const)
     : ("host" as const);
 }

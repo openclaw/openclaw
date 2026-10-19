@@ -10,7 +10,10 @@ import {
   runBoundedCodexAppServerTurn,
   type CodexBoundedTurnOptions,
 } from "./app-server/bounded-turn.js";
-import { projectCodexWebSearchItem } from "./app-server/web-search-item.js";
+import {
+  projectCodexWebSearchItem,
+  readCodexWebSearchResults,
+} from "./app-server/web-search-item.js";
 import { buildCodexNativeWebSearchThreadConfig } from "./app-server/web-search.js";
 
 type WebSearchProviderContext = Parameters<WebSearchProviderPlugin["createTool"]>[0];
@@ -46,7 +49,16 @@ export async function executeCodexWebSearchProviderTool(
   if (searches.length === 0) {
     throw new Error("Codex hosted search completed without invoking web search.");
   }
+  const citations = [
+    ...new Map(
+      result.items
+        .filter((item) => item.type === "webSearch")
+        .flatMap(readCodexWebSearchResults)
+        .map((citation) => [citation.url, citation]),
+    ).values(),
+  ];
   return {
+    kind: "answer",
     query,
     provider: "codex",
     model: result.model,
@@ -59,5 +71,6 @@ export async function executeCodexWebSearchProviderTool(
     },
     content: wrapWebContent(result.text, "web_search"),
     searches,
+    citations,
   };
 }

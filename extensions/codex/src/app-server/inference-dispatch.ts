@@ -33,6 +33,28 @@ export type CodexInferenceModelRequest = Readonly<{
   signal: AbortSignal;
 }>;
 
+/** An ephemeral caller already holds model authority; it cannot start child/background work. */
+export function createCodexBoundedInferenceModelBinding(params: {
+  model: string;
+  assertCurrent: () => void;
+}) {
+  return (request: CodexInferenceModelRequest): CodexInferenceModelExecution => {
+    params.assertCurrent();
+    request.signal.throwIfAborted();
+    if (
+      request.path !== "/responses" ||
+      request.body.model !== params.model ||
+      request.metadata.requestKind !== "turn" ||
+      request.metadata.parentThreadId ||
+      request.metadata.subagent ||
+      request.metadata.subagentKind
+    ) {
+      throw new CodexInferenceAuthorizationError("owner");
+    }
+    return { assertCurrent: params.assertCurrent, release: () => {} };
+  };
+}
+
 /** Only host-owned authorization failures may cross the private transport boundary. */
 export class CodexInferenceAuthorizationError extends Error {
   constructor(reason: "model" | "owner") {

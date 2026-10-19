@@ -124,6 +124,8 @@ async function prepareCodexInferenceRoute(params: {
   client: CodexAppServerClient;
   cwd: string;
   modelProvider?: string;
+  /** One isolated caller owns the exact model, without a persistent native session. */
+  boundedModel?: string;
   config?: JsonObject;
   effectiveConfig?: CodexConfigReadResponse;
   modelPolicyEnforced?: boolean;
@@ -314,6 +316,7 @@ async function prepareCodexInferenceRoute(params: {
     preserveAzureUrlFeatures,
     preserveCodexBackendRoutes,
     modelPolicyEnforced,
+    params.boundedModel,
   ]);
   const prepareRoute = () => {
     assertCurrent();
@@ -340,25 +343,37 @@ async function prepareCodexInferenceRoute(params: {
         import("./inference-proxy.js"),
         import("./native-subagent-monitor.js"),
         import("./inference-dispatch.js"),
-      ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
-        assertClient();
-        return createCodexInferenceProxy({
-          upstream: target,
-          assertCurrent: assertClient,
-          oauth: owner.oauth,
-          preserveAzureUrlFeatures,
-          preserveCodexBackendRoutes,
-          bindModelExecution: createCodexInferenceModelBinding({
-            client,
-            provider,
-            modelPolicyEnforced,
+      ]).then(
+        ([
+          { createCodexInferenceProxy },
+          native,
+          { createCodexInferenceModelBinding, createCodexBoundedInferenceModelBinding },
+        ]) => {
+          assertClient();
+          return createCodexInferenceProxy({
+            upstream: target,
             assertCurrent: assertClient,
-            memoryConfigured: () => owner.memoryConfigured,
-            captureModelSource: native.codexNativeSubagentMonitorRuntime.captureModelSource,
-            resolveModelThreadId: native.codexNativeSubagentMonitorRuntime.resolveModelThreadId,
-          }),
-        });
-      });
+            oauth: owner.oauth,
+            preserveAzureUrlFeatures,
+            preserveCodexBackendRoutes,
+            bindModelExecution: params.boundedModel
+              ? createCodexBoundedInferenceModelBinding({
+                  model: params.boundedModel,
+                  assertCurrent,
+                })
+              : createCodexInferenceModelBinding({
+                  client,
+                  provider,
+                  modelPolicyEnforced,
+                  assertCurrent: assertClient,
+                  memoryConfigured: () => owner.memoryConfigured,
+                  captureModelSource: native.codexNativeSubagentMonitorRuntime.captureModelSource,
+                  resolveModelThreadId:
+                    native.codexNativeSubagentMonitorRuntime.resolveModelThreadId,
+                }),
+          });
+        },
+      );
       // Keep a failed route failed for this physical client; never fall back to unmodified inference.
       owner.routes.set(key, pending);
     }
@@ -392,6 +407,8 @@ export async function prepareCodexInferenceThreadConfig(params: {
   cwd: string;
   config?: JsonObject;
   modelProvider?: string;
+  /** One isolated caller owns the exact model, without a persistent native session. */
+  boundedModel?: string;
   effectiveConfig?: CodexConfigReadResponse;
   /** Captured from the issuing host, never from native request metadata. */
   operatorBacked?: boolean;

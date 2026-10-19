@@ -65,6 +65,7 @@ import type {
 } from "./protocol.js";
 import {
   isCodexResponsesOAuthCredential,
+  resolveCodexInferenceCredential,
   resolveCodexResponsesOAuthProfileFingerprint,
 } from "./responses-oauth.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
@@ -259,9 +260,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   // token logins, so a prepared OpenClaw handoff here would rewrite the account that
   // Codex CLI and Desktop share. Native homes are verified, never logged into.
   const usesNativeHome = params.homeScope === "user";
-  const selectedCredential = params.authProfileId
-    ? params.authProfileStore.profiles[params.authProfileId]
-    : undefined;
+  const selectedCredential = resolveCodexInferenceCredential(params);
   if (isCodexResponsesOAuthCredential(selectedCredential)) {
     if (usesNativeHome || params.requirePreparedAuth || params.authRequirement !== "api-key") {
       throw new Error(

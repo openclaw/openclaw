@@ -53,6 +53,17 @@ function createFakeClient(options?: {
             item: {
               id: "search-1",
               type: "webSearch",
+              results: [
+                {
+                  type: "text_result",
+                  url: "https://example.com/source",
+                  title: "Source",
+                  snippet: "Provider prose, not fetched evidence",
+                  future_field: true,
+                },
+                { url: "javascript:alert(1)" },
+                { url: "https://example.com/source", title: "Source" },
+              ],
               query,
               action: { type: "search", query, queries: [query] },
             },
@@ -172,6 +183,8 @@ describe("codex web search provider", () => {
     const result = await tool?.execute({ query });
 
     expect(result).toMatchObject({
+      kind: "answer",
+      citations: [{ url: "https://example.com/source", title: "Source" }],
       query,
       provider: "codex",
       model: "gpt-5.5",
