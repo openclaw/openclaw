@@ -86,6 +86,7 @@ import {
   getThinkingSlider,
   getThinkingSliderValues,
   itemAt,
+  appendMessageActionFixture,
 } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation-view.tsx";
@@ -4756,15 +4757,8 @@ describe("right-click Reply", () => {
       expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
       group.className = "chat-group assistant";
-      const siblingActionOwner = document.createElement("div");
-      siblingActionOwner.dataset.messageActionsFor = "message-0";
-      const copyButton = document.createElement("button");
-      copyButton.className = "chat-copy-btn";
-      copyButton.addEventListener("click", onCopy);
-      const actionOwner = document.createElement("div");
-      actionOwner.dataset.messageActionsFor = "message-1";
-      actionOwner.append(copyButton);
-      group.append(siblingActionOwner, actionOwner);
+      appendMessageActionFixture(group, "message-0");
+      appendMessageActionFixture(group, "message-1", onCopy);
       dispatchContextMenu(bubble);
       expect(
         [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
@@ -4778,6 +4772,7 @@ describe("right-click Reply", () => {
       dispatchContextMenu(bubble);
       getContextMenuAction("Copy as markdown").click();
       expect(onCopy).toHaveBeenCalledOnce();
+      expect(group.isConnected).toBe(true);
     },
   );
 
@@ -4789,9 +4784,7 @@ describe("right-click Reply", () => {
       { onSetReply },
       { messageId: "commentary", text: "Intermediate commentary" },
     );
-    const actionOwner = document.createElement("div");
-    actionOwner.dataset.messageActionsFor = "terminal";
-    group.append(actionOwner);
+    appendMessageActionFixture(group, "terminal");
     group.dataset.chatRowKey = 'agent-run:["run-1","send:send-1"]';
 
     const event = dispatchContextMenu(bubble);

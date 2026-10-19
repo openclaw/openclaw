@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
+import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metrics.js";
 import { encodePngRgba } from "../../src/media/png-encode.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
@@ -16,8 +17,10 @@ import {
 } from "../e2e/lib/mock-inference-facts.ts";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
+import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
   readGatewayCpuUsage,
+  startGatewayDiagnostics,
   readGatewayResources,
   measureGatewayCpuUsage,
   measureGatewayAllocations,
@@ -34,6 +37,7 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
+    diagnostics: { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
     operations: { type: "string" },
@@ -43,11 +47,17 @@ const { values } = parseArgs({
     port: { type: "string", default: "41033" },
     "mock-port": { type: "string", default: "41034" },
     clients: { type: "string", default: "60" },
+    "exact-clients": { type: "string" },
+    "activity-summaries": { type: "boolean", default: false },
     runs: { type: "string", default: "20" },
     rounds: { type: "string", default: "5" },
     chunks: { type: "string", default: "100" },
     "prompt-kib": { type: "string", default: "128" },
     "heap-snapshot": { type: "boolean", default: false },
+    "session-row-deltas": { type: "boolean", default: false },
+    "session-envelope-refs": { type: "boolean", default: false },
+    "start-at": { type: "string" },
+    "list-interval-ms": { type: "string", default: "0" },
   },
 });
 if (!values["state-dir"]) {
@@ -91,9 +101,18 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
 const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
+const exactClients = integer(values["exact-clients"] ?? String(clientCount), "--exact-clients", 0);
+if (exactClients > clientCount) {
+  throw new Error("--exact-clients must not exceed --clients");
+}
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
 const chunkCount = integer(values.chunks, "--chunks");
+const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
+const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
+  throw new Error("--session-envelope-refs requires --session-row-deltas");
+}
 const promptBytes = integer(values["prompt-kib"], "--prompt-kib") * 1024;
 const promptContent = createCipheriv(
   "aes-256-ctr",
@@ -219,6 +238,9 @@ const mock = createServer((req, res) => {
   void (async () => {
     const body: unknown = JSON.parse(await readBody(req));
     const facts = summarizeMockInferenceRequest(body);
+    if (facts.purpose === "activity-recap") {
+      recapRequests++;
+    }
     let input: unknown;
     if (body && typeof body === "object") {
       if ("input" in body) {
@@ -392,12 +414,71 @@ const mock = createServer((req, res) => {
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
 const counters = new Map<string, number>();
+const eventBytes = new Map<string, number>();
+const sessionEventSizes = new Map<string, { frames: number; bytes: number }>();
+type FrameSizes = {
+  frameBytes: number;
+  payloadBytes: number;
+  fields: Record<string, number>;
+  sessionFields?: Record<string, number>;
+  duplicateEnvelopeFields?: number;
+  potentialNumericRefsFrameBytes?: number;
+};
+const representativeFrames = new Map<string, FrameSizes>();
+let initialFullFrame: FrameSizes | undefined;
 const perClientCounters: Map<string, number>[] = [];
 let measuring = false;
 let lastSubscriberEventAt = performance.now();
 let closing = false;
 let subscriberFailure: Error | undefined;
+let recapRequests = 0;
 let gateway: ChildProcess | undefined;
+function fieldBytes(record: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(record).map(([field, value]) => [
+      field,
+      Buffer.byteLength(JSON.stringify({ [field]: value })) - 2,
+    ]),
+  );
+}
+function measureFrameFields(
+  event: { payload?: unknown },
+  payload: Record<string, unknown>,
+  frameBytes: number,
+): FrameSizes {
+  const wire = isRecord(payload.session) ? payload.session : undefined;
+  const full =
+    wire && isRecord(wire.full) ? wire.full : wire && !("base" in wire) ? wire : undefined;
+  const fields = wire && isRecord(wire.set) ? wire.set : full;
+  const result: FrameSizes = {
+    frameBytes,
+    payloadBytes: Buffer.byteLength(JSON.stringify(payload)),
+    fields: fieldBytes(payload),
+    ...(fields ? { sessionFields: fieldBytes(fields) } : {}),
+  };
+  if (full) {
+    const sortedFields = Object.keys(full).toSorted();
+    const duplicateFields = sortedFields.filter(
+      (field) =>
+        field !== "key" &&
+        field !== "agentId" &&
+        Object.hasOwn(payload, field) &&
+        JSON.stringify(payload[field]) === JSON.stringify(full[field]),
+    );
+    const potential: Record<string, unknown> = {
+      ...payload,
+      sessionFieldRefs: duplicateFields.map((field) => sortedFields.indexOf(field)),
+    };
+    for (const field of duplicateFields) {
+      delete potential[field];
+    }
+    result.duplicateEnvelopeFields = duplicateFields.length;
+    result.potentialNumericRefsFrameBytes = Buffer.byteLength(
+      JSON.stringify({ ...event, payload: potential }),
+    );
+  }
+  return result;
+}
 const ownedListeners = new Set<ChildProcess>();
 const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
@@ -481,6 +562,7 @@ async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
   params: unknown,
+  onResponse?: (id: string) => void,
 ) {
   assertGatewayAlive();
   const response = await client.request(method, params, 180_000);
@@ -488,6 +570,7 @@ async function rpc(
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
   }
+  onResponse?.(response.id);
   return response.payload;
 }
 async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
@@ -640,6 +723,7 @@ try {
     const clientCounters = new Map<string, number>();
     perClientCounters.push(clientCounters);
     let previousSeq: number | undefined;
+    let receivedFrameBytes = 0;
     const client = createGatewayWsClient({
       url: `ws://127.0.0.1:${port}`,
       onEvent: (event) => {
@@ -652,11 +736,50 @@ try {
           }
           previousSeq = event.seq;
         }
+        const payload = isRecord(event.payload) ? event.payload : undefined;
+        if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
+          const sizes = measureFrameFields(event, payload, receivedFrameBytes);
+          if (sizes.duplicateEnvelopeFields !== undefined) {
+            initialFullFrame = sizes;
+          }
+        }
         if (measuring) {
           counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
           clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
+          eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
+          const attribution = prepareSessionEventMetrics(event.event, payload, [], undefined)?.("");
+          if (attribution) {
+            const delivery =
+              index < exactClients &&
+              typeof payload?.sessionKey === "string" &&
+              keys.includes(payload.sessionKey)
+                ? "subscribed"
+                : "roster";
+            const bucket = `${event.event}:${attribution.reason}:${delivery}`;
+            const sizes = sessionEventSizes.get(bucket) ?? { frames: 0, bytes: 0 };
+            sizes.frames++;
+            sizes.bytes += receivedFrameBytes;
+            sessionEventSizes.set(bucket, sizes);
+            if (
+              index === 0 &&
+              event.event === "sessions.changed" &&
+              payload &&
+              receivedFrameBytes > (representativeFrames.get(bucket)?.frameBytes ?? 0)
+            ) {
+              representativeFrames.set(
+                bucket,
+                measureFrameFields(event, payload, receivedFrameBytes),
+              );
+            }
+          }
         }
       },
+    });
+    // The helper parses frames before onEvent; capture their exact uncompressed size first.
+    client.ws.prependListener("message", (data: import("ws").RawData) => {
+      receivedFrameBytes = Array.isArray(data)
+        ? data.reduce((sum, part) => sum + part.byteLength, 0)
+        : data.byteLength;
     });
     client.ws.on("close", (code) => {
       if (!closing) {
@@ -682,7 +805,13 @@ try {
       },
       role: "operator",
       scopes: ["operator.read", "operator.admin"],
-      caps: ["session-scoped-events", "chat-only-assistant-text"],
+      caps: [
+        "session-scoped-events",
+        "chat-only-assistant-text",
+        ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
+        ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+        ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
+      ],
     });
     if (index === 0) {
       await rpc(client, "sessions.create", {
@@ -694,8 +823,7 @@ try {
       for (const key of keys) {
         await rpc(client, "sessions.create", {
           key,
-          parentSessionKey: parentKey,
-          spawnDepth: 1,
+          ...(values["activity-summaries"] ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
           visibility: "shared",
           displayName: "Synthetic broadcast child",
@@ -704,7 +832,7 @@ try {
       }
     }
     await rpc(client, "sessions.subscribe", {});
-    for (const key of keys) {
+    for (const key of index < exactClients ? keys : []) {
       await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: key });
     }
   }
@@ -716,6 +844,27 @@ try {
   const runScenario = async () => {
     if (turnScenario) {
       await runRound(sender);
+      if (values["activity-summaries"]) {
+        for (let offset = 0; offset < keys.length; offset += 20) {
+          const batch = keys.slice(offset, offset + 20);
+          const result = await rpc(sender, "sessions.activitySummary.ensure", {
+            sessions: batch.map((key) => ({ key })),
+          });
+          if (
+            !isRecord(result) ||
+            !Array.isArray(result.sessions) ||
+            result.sessions.length !== batch.length ||
+            result.sessions.some(
+              (row: unknown) =>
+                !isRecord(row) ||
+                !isRecord(row.activitySummary) ||
+                row.activitySummary.state === "unavailable",
+            )
+          ) {
+            throw new Error("sessions.activitySummary.ensure did not admit the measured sessions");
+          }
+        }
+      }
       return;
     }
     for (let operation = 0; operation < operations; operation++) {
@@ -761,9 +910,19 @@ try {
   const initialRetainedResources = retentionScenario
     ? await readGatewayResources(gateway, { collectGarbage: true })
     : undefined;
+  if (startAt !== undefined) {
+    if (Date.now() >= startAt) {
+      throw new Error("--start-at passed before fixture readiness and warmup");
+    }
+    await delay(startAt - Date.now());
+  }
+  const measurementStartedAt = Date.now();
   const samples = [];
   for (let round = 0; round < rounds; round++) {
     counters.clear();
+    eventBytes.clear();
+    sessionEventSizes.clear();
+    representativeFrames.clear();
     for (const counts of perClientCounters) {
       counts.clear();
     }
@@ -776,11 +935,100 @@ try {
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
+    recapRequests = 0;
+    const finishGatewayDiagnostics = values.diagnostics
+      ? await startGatewayDiagnostics(gateway)
+      : undefined;
+    const finishControllerDiagnostics = values.diagnostics
+      ? startGatewayBenchDiagnostics()
+      : undefined;
     const before = await readGatewayCpuUsage(gateway);
     measuring = true;
+    const listLatencies: number[] = [];
+    const listRequests: Array<{
+      method: "sessions.list";
+      responseId: string;
+      client: number;
+      round: number;
+      startedAtEpochMs: number;
+      endedAtEpochMs: number;
+      durationMs: number;
+    }> = [];
     const workload = async () => {
-      await runScenario();
-      await drainEvents();
+      let polling = true;
+      let stopPolling!: () => void;
+      const stopped = new Promise<void>((resolve) => {
+        stopPolling = resolve;
+      });
+      const listWork = listIntervalMs
+        ? Promise.all(
+            clients
+              .map(async (client, clientIndex) => {
+                while (true) {
+                  if (!polling) {
+                    break;
+                  }
+                  const started = performance.now();
+                  let responseId = "";
+                  const page = await rpc(
+                    client,
+                    "sessions.list",
+                    { rowMode: "compact", limit, archived: "all" },
+                    values.diagnostics
+                      ? (id) => {
+                          responseId = id;
+                        }
+                      : undefined,
+                  );
+                  if (
+                    !isRecord(page) ||
+                    typeof page.totalCount !== "number" ||
+                    page.count !== Math.min(limit, page.totalCount) ||
+                    !Array.isArray(page.sessions) ||
+                    page.sessions.length !== page.count ||
+                    page.count === 0
+                  ) {
+                    throw new Error("concurrent sessions.list did not return the requested page");
+                  }
+                  const ended = performance.now();
+                  const durationMs = ended - started;
+                  listLatencies.push(durationMs);
+                  if (values.diagnostics) {
+                    listRequests.push({
+                      method: "sessions.list",
+                      responseId,
+                      client: clientIndex,
+                      round,
+                      startedAtEpochMs: performance.timeOrigin + started,
+                      endedAtEpochMs: performance.timeOrigin + ended,
+                      durationMs,
+                    });
+                  }
+                  await Promise.race([
+                    delay(Math.max(0, listIntervalMs - (performance.now() - started)), undefined, {
+                      ref: false,
+                    }),
+                    stopped,
+                  ]);
+                }
+              })
+              .map((work) =>
+                work.catch((error: unknown) => {
+                  subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+                  polling = false;
+                  stopPolling();
+                }),
+              ),
+          )
+        : undefined;
+      try {
+        await runScenario();
+        await drainEvents();
+      } finally {
+        polling = false;
+        stopPolling();
+        await listWork;
+      }
     };
     const allocation = values.allocations
       ? await measureGatewayAllocations(
@@ -794,6 +1042,9 @@ try {
       await workload();
     }
     measuring = false;
+    const diagnostics = finishGatewayDiagnostics
+      ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
+      : undefined;
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
@@ -828,6 +1079,18 @@ try {
         );
       }
     }
+    if (
+      values["activity-summaries"] &&
+      (!recapRequests ||
+        ![...sessionEventSizes].some(
+          ([bucket, counts]) =>
+            bucket.startsWith("sessions.changed:activity-summary:") && counts.frames > 0,
+        ))
+    ) {
+      throw new Error(
+        "activity recap model requests and sessions.changed events were not observed",
+      );
+    }
     const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
     const retainedResources = retentionScenario
       ? await readGatewayResources(gateway, {
@@ -841,17 +1104,42 @@ try {
     const deliveredSessionEvents =
       (counters.get("session.message") ?? 0) + (counters.get("sessions.changed") ?? 0);
     const sourceEvents = deliveredSessionEvents / clientCount;
+    const sortedListLatencies = listLatencies.toSorted((a, b) => a - b);
     const sample = {
       round,
       scenario,
       allocation,
+      diagnostics,
       toolCalls,
       toolResults,
+      recapRequests,
       ...(retentionScenario
         ? { outputLimitResponses, recoveredResponses, imageRequests, retainedResources }
         : {}),
       ...cpu,
       eventCounts: Object.fromEntries(counters),
+      eventBytes: Object.fromEntries(eventBytes),
+      sessionEventSizes: Object.fromEntries(sessionEventSizes),
+      representativeFrames: Object.fromEntries(representativeFrames),
+      ...(listIntervalMs
+        ? {
+            sessionsList: {
+              count: listLatencies.length,
+              p50: sortedListLatencies[Math.ceil(listLatencies.length * 0.5) - 1],
+              p95: sortedListLatencies[Math.ceil(listLatencies.length * 0.95) - 1],
+              p99: sortedListLatencies[Math.ceil(listLatencies.length * 0.99) - 1],
+              latencies: listLatencies,
+              ...(values.diagnostics
+                ? {
+                    requests: listRequests,
+                    p99Request: listRequests.toSorted((a, b) => a.durationMs - b.durationMs)[
+                      Math.ceil(listRequests.length * 0.99) - 1
+                    ],
+                  }
+                : {}),
+            },
+          }
+        : {}),
       perClientEventCounts: perClientCounters.map((counts) => Object.fromEntries(counts)),
       peakStreams,
       peakPrimaryStreams,
@@ -891,7 +1179,15 @@ try {
     operationsPerRound: turnScenario ? runCount : operations,
     limit,
     rowMode,
+    sessionRowDeltas: values["session-row-deltas"],
+    sessionEnvelopeRefs: values["session-envelope-refs"],
+    listIntervalMs,
+    diagnostics: values.diagnostics,
+    measurementStartedAt,
+    initialFullFrame,
     clientCount,
+    exactClients,
+    activitySummaries: values["activity-summaries"],
     runCount,
     chunks: chunkCount,
     peakStreams,

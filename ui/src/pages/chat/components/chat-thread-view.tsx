@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, onCleanup } from "solid-js";
+import { Show, createMemo, onCleanup, onSettled } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -29,7 +29,6 @@ import {
   getExpansionStateVersion,
   subscribeExpansionState,
 } from "../chat-thread.ts";
-import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
@@ -37,6 +36,7 @@ import {
   getTranscriptState,
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
+  registerTranscriptElement,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
@@ -71,6 +71,7 @@ export function ChatThread(input: {
     releaseViewport?.();
   });
   const paneId = createMemo(() => input.props.paneId);
+  onSettled(() => root && registerTranscriptElement(paneId(), root));
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
@@ -133,15 +134,6 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
-  // Hydrate favicon images inserted by the markdown DOM owner.
-  createEffect(
-    () => [current(), input.props.fetchLinkFavicon] as const,
-    ([, fetchLinkFavicon]) => {
-      if (root) {
-        hydrateLinkFavicons(root, fetchLinkFavicon);
-      }
-    },
-  );
   const historyHeader = () =>
     input.props.historyPagination
       ? {
@@ -248,8 +240,20 @@ export function ChatThread(input: {
             input.props.onOpenSessionLink?.(sessionTarget);
           }
         }}
-        onContextMenu={(event) => handleTranscriptContextMenu(event, input.props)}
-        onPointerUp={(event) => handleTranscriptPointerUp(event, input.props)}
+        onContextMenu={(event) =>
+          handleTranscriptContextMenu(
+            event,
+            input.props,
+            presentation().session.messageElements.elements.values(),
+          )
+        }
+        onPointerUp={(event) =>
+          handleTranscriptPointerUp(
+            event,
+            input.props,
+            presentation().session.messageElements.elements.values(),
+          )
+        }
       >
         <span
           class="chat-transcript-announcement sr-only"

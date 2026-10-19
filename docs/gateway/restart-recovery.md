@@ -36,6 +36,11 @@ source under current identity and access policy; a revoked source cannot resume.
 The existing source-authorization and delivery checks still apply; a transcript
 message alone cannot restore missing sender authority.
 
+An accepted child continuation keeps the restored operator's current identity and
+permission checks independently of the parent's recovery claim. Completing the
+parent does not cancel that child. Revoking the operator, replacing the source
+session, or stopping the Gateway still invalidates the child's authority.
+
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
 provider reports an error and the turn settles before shutdown discovers it.

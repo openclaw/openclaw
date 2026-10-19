@@ -163,6 +163,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeGoogleTtsProviderConfig(baseTtsConfig);
+      const baseUrl = normalizeOptionalString(talkProviderConfig.baseUrl);
       return {
         ...base,
         ...(talkProviderConfig.apiKey === undefined
@@ -173,9 +174,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
                 path: "talk.providers.google.apiKey",
               }),
             }),
-        ...(normalizeOptionalString(talkProviderConfig.baseUrl) == null
-          ? {}
-          : { baseUrl: normalizeOptionalString(talkProviderConfig.baseUrl) }),
+        ...(baseUrl ? { baseUrl } : {}),
         ...(normalizeOptionalString(talkProviderConfig.modelId) == null
           ? {}
           : { model: normalizeGoogleTtsModel(talkProviderConfig.modelId) }),
