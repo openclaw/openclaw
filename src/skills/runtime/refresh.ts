@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -104,6 +106,14 @@ function observeSource(source: Source) {
   }
   for (const directory of directories) {
     if (!source.observations.has(directory)) {
+      // Windows cannot rename a workspace while a watch holds a descendant directory.
+      // One recursive workspace handle still reports edits in each selected subtree.
+      const watchRoot =
+        process.platform === "win32"
+          ? ([source.workspaceDir, source.selection.request.executionWorkspaceDir]
+              .filter((root): root is string => Boolean(root && isPathInside(root, directory)))
+              .toSorted((a, b) => a.length - b.length)[0] ?? path.dirname(directory))
+          : undefined;
       source.observations.set(
         directory,
         observeOwnedDirectory(
@@ -119,7 +129,7 @@ function observeSource(source: Source) {
               }, 50).unref(),
             );
           },
-          { recursive: true, reconcileIntervalMs: SAFETY_REFRESH_MS },
+          { recursive: true, reconcileIntervalMs: SAFETY_REFRESH_MS, watchRoot },
         ),
       );
     }
