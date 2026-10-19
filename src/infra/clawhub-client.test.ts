@@ -59,10 +59,11 @@ describe("clawhub client", () => {
 
   it.each([
     ["without a token", JSON.stringify({})],
-    ["with malformed JSON", "{"],
+    ["with malformed JSON", '{"token":"fixture-malformed-secret", invalid}'],
   ])(
     "does not fall back to a legacy token when the canonical config exists %s",
-    async (_, contents) => {
+    async (description, contents) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
         vi.spyOn(process, "platform", "get").mockReturnValue("win32");
         setTestEnvValue("APPDATA", appDataRoot);
@@ -75,6 +76,13 @@ describe("clawhub client", () => {
           ),
         ]);
         await expect(searchAuthorizationHeader()).resolves.toBeNull();
+        if (description === "with malformed JSON") {
+          expect(warn).toHaveBeenCalledExactlyOnceWith(
+            "ClawHub sign-in configuration could not be loaded; repair it or sign in again. Continuing without a saved token.",
+          );
+        } else {
+          expect(warn).not.toHaveBeenCalled();
+        }
       });
     },
   );

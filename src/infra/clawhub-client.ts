@@ -174,6 +174,10 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
       return extractTokenFromClawHubConfig(JSON.parse(raw));
     } catch (error) {
       if (!isErrno(error) || error.code !== "ENOENT") {
+        // Parser errors can include token bytes; keep this warning content-free.
+        console.warn(
+          "ClawHub sign-in configuration could not be loaded; repair it or sign in again. Continuing without a saved token.",
+        );
         return undefined;
       }
     }
