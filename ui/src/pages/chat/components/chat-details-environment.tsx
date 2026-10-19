@@ -7,32 +7,10 @@ import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
-import {
-  ChatPanePlacement,
-  createChatMachinePresentation,
-  type ChatPanePlacementProps,
-} from "./chat-pane-placement.tsx";
+import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
 
 type Props = { details: ChatDetailsProps; presented: boolean };
-
-export type ChatDetailsEnvironmentProps = Props & {
-  /** The parent's in-memory disclosure choice; no second preference store. */
-  expanded?: boolean;
-  onExpandedChange?: (expanded: boolean) => void;
-  onOpenProject?: () => void;
-  onOpenMachine?: () => void;
-  /** The same checkout's Uncommitted result owned by Review, never a new query. */
-  uncommitted?: SessionsDiffResult;
-  /** Demand the checkout owner's result while this environment is presented. */
-  onRequestUncommitted?: () => void;
-  onOpenUncommitted?: () => void;
-};
-
-export type ChatDetailsEnvironmentDesktopProps = ChatDetailsEnvironmentProps & {
-  /** Forward the native header's placement facts/actions; mobile has its own destination. */
-  placement?: ChatPanePlacementProps;
-};
 
 export function EnvironmentChangeCounts(props: { result: SessionsDiffResult; mobile?: boolean }) {
   const binaryFiles = createMemo(() => props.result.files.filter((file) => file.binary).length);
@@ -196,10 +174,7 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       </Show>
       <Show when={workspace()?.branch}>
         {(branch) => (
-          <div
-            class="chat-details__row chat-environment__row"
-            title={[branch(), workspace()?.root].filter(Boolean).join(" · ")}
-          >
+          <div class="chat-details__row chat-environment__row" title={branch()}>
             <Icon name="gitBranch" />
             <span>{branch()}</span>
             <Show when={session()?.worktree}>
