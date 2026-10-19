@@ -25,6 +25,8 @@ import {
 import { RUNTIME_CONTEXT_HEADER } from "../llm/types.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveActiveReplyOperationForSessionId } from "../sessions/session-controller.queries.js";
+import { steerSessionControllerOperation } from "../sessions/session-controller.steer.js";
 import { bindUserTurnPromptReactionSource } from "../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -40,7 +42,6 @@ import {
   type WireApi,
 } from "./embedded-agent-runner.wire.test-support.js";
 import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cache-request-observer.js";
-import { queueEmbeddedAgentMessageWithOutcomeAsync } from "./embedded-agent-runner/runs.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "./internal-runtime-context.js";
@@ -281,11 +282,12 @@ it.for(cases)(
               requests.push({ turn, payload, prefix, userEnvelopes });
               requestsThisTurn++;
               if (turn === 6 && requestsThisTurn === 1) {
-                const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-                  sessionId,
-                  "mid-run steering correction",
-                );
-                expect(outcome.queued, "the active runner accepted steering").toBe(true);
+                const outcome = await steerSessionControllerOperation({
+                  operation: resolveActiveReplyOperationForSessionId(sessionId),
+                  text: "mid-run steering correction",
+                  options: { steeringMode: "all" },
+                });
+                expect(outcome.status, "the active runner accepted steering").toBe("accepted");
               }
               if (requestsThisTurn > 4) {
                 throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);

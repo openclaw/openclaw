@@ -702,7 +702,7 @@ agent databases nested inside an excluded checkout remain included.
 plugin-resource discovery and archives only the active config file path.
 
 OpenClaw first plans resources from configuration. It captures the root SQLite
-database online, then derives and freezes registered-agent ownership from that
+database online, then derives registered-agent ownership from that
 private snapshot for database discovery and archive traversal. Paths are resolved before comparison: config, credentials, workspaces, and agents
 already covered by another included root are not duplicated as top-level
 sources. A custom agent root becomes a distinct `agent` asset only when no
@@ -865,6 +865,8 @@ processes before manually removing their reported scratch directories.
 Published archives and package rollback backups are outside this cleanup.
 Retired scratch is renamed to `openclaw-backup-retired-*` before deletion so a
 later pass can finish partial cleanup even after the lifetime token is gone.
+On Windows, the retirement destination is left absent until a guarded
+no-clobber move, so cleanup does not try to replace an existing directory.
 
 ## Related
 

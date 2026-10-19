@@ -17,6 +17,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { toAgentExecutionConstraints } from "../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabasePreparationExecution } from "../state/openclaw-agent-execution.js";
 import {
   assertClientVoiceSessionSettlementCurrent,
@@ -60,14 +61,7 @@ export async function captureClientVoiceEntrySource(
     const options = { agentId: target.agentId, path: observed.canonicalPath, env: original.env };
     const execution = captureOpenClawAgentDatabasePreparationExecution(
       options,
-      observed.key.startsWith("file:")
-        ? {
-            kind: "file",
-            physicalIdentity: observed.key.slice("file:".length),
-            nativeLocation: observed.canonicalPath,
-            birthtime: observed.birthtime,
-          }
-        : undefined,
+      toAgentExecutionConstraints(observed).expectedIdentity,
       target.path,
     );
     return {
@@ -112,6 +106,28 @@ export function captureClientVoiceSessionSource(agentId: string) {
 }
 
 export type ClientVoiceSessionSource = ReturnType<typeof captureClientVoiceSessionSource>;
+
+export function selectPreparedClientVoiceSource(
+  authority: PreparedSessionSourceAuthority,
+  identities: ReadonlyMap<string, DatabasePathIdentity>,
+) {
+  const preparedSources = [
+    ...authority.checks.map(({ predicate }) => predicate.source),
+    ...(authority.transaction ? [authority.transaction.source] : []),
+  ].filter((source) =>
+    [...identities.values()].some(
+      (identity) =>
+        typeof source.databaseIdentity === "string" &&
+        identity.key === `file:${source.databaseIdentity}` &&
+        identity.birthtime === source.databaseBirthtime,
+    ),
+  );
+  return preparedSources.every(
+    (source) => source.databaseIdentity === preparedSources[0]?.databaseIdentity,
+  )
+    ? preparedSources[0]
+    : undefined;
+}
 
 /** An explicit source qualifies the run's store; an omitted source retains replay custody. */
 export function matchesClientVoiceRunSource(

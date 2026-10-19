@@ -141,12 +141,53 @@ describe("openclaw-modal-dialog", () => {
     }
   });
 
-  it("focuses slotted input once the opening update commits, without waiting for a frame", async () => {
+  it.each([false, true])(
+    "publishes a reentrant close once, including its veto correction (veto=%s)",
+    async (veto) => {
+      const modal = document.createElement("openclaw-modal-dialog");
+      modal.open = false;
+      const changes: boolean[] = [];
+      let closeOnOpen = true;
+      modal.onOpenChange = (open) => {
+        changes.push(open);
+        if (open && closeOnOpen) {
+          closeOnOpen = false;
+          modal.open = false;
+        }
+      };
+      const refuseClose = (event: Event) => event.preventDefault();
+      if (veto) {
+        modal.addEventListener("overlay-hide", refuseClose);
+      }
+      container.append(modal);
+      await commitRender(modal);
+
+      modal.show();
+      expect(modal.open).toBe(veto);
+      expect(changes).toEqual(veto ? [true, true] : [true, false]);
+      if (veto) {
+        modal.removeEventListener("overlay-hide", refuseClose);
+        modal.open = false;
+        expect(changes).toEqual([true, true, false]);
+      }
+      await afterModalHidden(modal);
+      expect(modal.querySelector<HTMLDialogElement>("dialog")!.open).toBe(false);
+    },
+  );
+
+  it("focuses the explicit slotted input at opening commit, without waiting for a frame", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    let input!: HTMLTextAreaElement;
     mountSolid(
       () => (
-        <openclaw-modal-dialog label="Edit">
-          <textarea autofocus></textarea>
+        <openclaw-modal-dialog label="Edit" prop:initialFocus={() => input}>
+          <button autofocus>Other action</button>
+          <textarea
+            ref={(element) => {
+              input = element;
+            }}
+            autofocus
+          ></textarea>
         </openclaw-modal-dialog>
       ),
       { container },
@@ -173,10 +214,18 @@ describe("openclaw-modal-dialog", () => {
         showModal.call(this);
         container.querySelector<HTMLVideoElement>("video")!.focus();
       });
+      let closeButton!: HTMLButtonElement;
       mountSolid(
         () => (
-          <openclaw-modal-dialog label="Media">
-            <button autofocus>Close</button>
+          <openclaw-modal-dialog label="Media" prop:initialFocus={() => closeButton}>
+            <button
+              ref={(element) => {
+                closeButton = element;
+              }}
+              autofocus
+            >
+              Close
+            </button>
             <video controls tabindex="0"></video>
           </openclaw-modal-dialog>
         ),
@@ -225,7 +274,8 @@ describe("openclaw-modal-dialog", () => {
       try {
         const { modal } = await renderModal();
 
-        showToast({ message: "Saved" });
+        // Keep the toast active through a cold lazy import; this test covers layer handoff.
+        showToast({ message: "Saved", durationMs: 60_000 });
         await commitRender(appHost);
         await vi.dynamicImportSettled();
         flush();

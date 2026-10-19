@@ -97,6 +97,8 @@ for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
 writes use the same schema gate before writing (see [Strict validation](/gateway/configuration#strict-validation)
 for the clobber/rollback rules that apply to every write).
+Diagnostics for rejected edits reuse the running Gateway's plugin metadata
+without rebuilding the plugin inventory.
 
 The adapter also watches included files and follows editor rename-replace writes.
 Native file events trigger the usual reload debounce. A background reconciliation
@@ -344,8 +346,10 @@ trusted-proxy policies apply live. Transport policy changes can require a new
 handshake without cancelling accepted runs. Proxy headers, OIDC mapping, device
 auto-approval, and proxy-address changes fence connections but preserve accepted
 work when the owner's grant is unchanged. This includes a requested initial turn
-after `sessions.create` commits its new session. Editing another login's identity scopes
-or reordering the same scopes keeps the connection and its accepted runs active.
+after `sessions.create` commits its new session. Editing another login's identity scopes,
+reordering the same scopes, or removing scopes already implied by another grant
+keeps the connection and its accepted runs active. For example, `operator.admin`
+already includes `operator.read`, so removing that redundant read scope does not reconnect clients.
 Role scope edits recheck each connection and accepted run against its own granted
 scopes. Editing another role, reordering equivalent scopes, or widening a role
 keeps existing connections and runs active without granting them additional scopes.

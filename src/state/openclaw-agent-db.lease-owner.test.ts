@@ -6,10 +6,7 @@ import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../../test/h
 import * as databaseProcessRole from "../infra/database-engine/admission-scope.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
-import {
-  SQLITE_IDLE_HANDLE_TTL_MS,
-  SQLITE_CLI_AGENT_IDLE_HANDLE_TTL_MS,
-} from "../infra/sqlite-handle-lifecycle.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
@@ -399,7 +396,7 @@ describe("openclaw agent database handle cache", () => {
     const idle = openOpenClawAgentDatabase({ agentId: "one-shot-idle", env });
     const borrowed = borrowOpenClawAgentDatabase({ agentId: "one-shot-busy", env });
     try {
-      vi.advanceTimersByTime(SQLITE_CLI_AGENT_IDLE_HANDLE_TTL_MS - 1);
+      vi.advanceTimersByTime(30_000 - 1);
       expect(leasedAgents().toSorted()).toEqual(["one-shot-busy", "one-shot-idle"]);
       vi.advanceTimersByTime(1);
       expect(idle.db.isOpen).toBe(false);
@@ -407,7 +404,7 @@ describe("openclaw agent database handle cache", () => {
     } finally {
       borrowed.release();
     }
-    vi.advanceTimersByTime(SQLITE_CLI_AGENT_IDLE_HANDLE_TTL_MS);
+    vi.advanceTimersByTime(30_000);
     expect(leasedAgents()).toEqual([]);
   });
 

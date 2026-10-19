@@ -15,9 +15,9 @@ import { loadUnfinishedDeliveries } from "../../infra/outbound/delivery-queue-st
 import { createRecoveryLog } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  beginSessionWorkAdmission,
-  interruptSessionWorkAdmissions,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  interruptSessionControllerEffects,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import {
@@ -116,7 +116,7 @@ describe("yielded settle final after requester reset", () => {
       // Same admission wiring as agentCommand: a reset interrupts the run's signal,
       // and post-run delivery checks that signal before provider I/O.
       const controller = new AbortController();
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: target.storePath,
         identities: [key, entry.sessionId],
         assertAllowed: () => {},
@@ -157,7 +157,7 @@ describe("yielded settle final after requester reset", () => {
 
       if (reset) {
         // `/new` drains admitted work, then keeps the session id and rotates its revision.
-        const drained = interruptSessionWorkAdmissions({
+        const drained = interruptSessionControllerEffects({
           scope: target.storePath,
           identities: [key, entry.sessionId],
         });

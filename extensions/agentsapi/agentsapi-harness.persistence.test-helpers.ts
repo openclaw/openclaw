@@ -11,7 +11,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginRuntimeMock,
+  runInHarnessToolAuthorityForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -118,7 +121,10 @@ export function requireExecutorHarness(runtime: PluginRuntime) {
     ) =>
       withNativeSessionMutationForTest({ pluginId: "agentsapi", harness, hook, target, run });
   return {
-    runAttempt: harness.runAttempt.bind(harness),
+    runAttempt: (params: AgentHarnessAttemptParamsV2) =>
+      runInHarnessToolAuthorityForTest(params, "agentsapi", (admitted) =>
+        harness.runAttempt(admitted),
+      ),
     reset: harness.reset.bind(harness),
     withSessionDeletion: mutationHook("withSessionDeletion"),
     withSessionContextReset: mutationHook("withSessionContextReset"),

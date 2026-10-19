@@ -56,7 +56,10 @@ export type OpenClawTerminalPanel = HTMLElement &
   >;
 
 /** Owns synchronous PTY/dock authority; Solid reads its publication projection. */
-export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
+export function createTerminalPanel(
+  element: HTMLElement & TerminalInputs,
+  scheduleAfterRender: (callback: () => void) => void,
+) {
   let context: ApplicationContext | undefined;
   let connected = false;
   let completion: Promise<boolean> = Promise.resolve(true);
@@ -71,13 +74,23 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     if (!connected) {
       return;
     }
-    if (!complete) {
+    const needsCommit = !complete;
+    if (needsCommit) {
       completion = new Promise((resolve) => {
         complete = resolve;
       });
     }
+    const pending = complete;
     for (const listener of listeners) {
       listener();
+    }
+    if (needsCommit) {
+      scheduleAfterRender(() => {
+        // Detach retires this receipt before a retained host starts another render.
+        if (complete === pending) {
+          rendered();
+        }
+      });
     }
   }
   let hostedActionsContent: HTMLElement | undefined;
@@ -239,6 +252,22 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         ?.controller.fit(),
   });
 
+  function rendered(): void {
+    if (!connected) {
+      return;
+    }
+    const resolve = complete;
+    complete = undefined;
+    const changed = changes;
+    changes = new Set();
+    // Ghostty measures its canvas; only the active session may occupy the viewport.
+    for (const tab of terminalSessions.state.tabs) {
+      tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
+    }
+    updated(changed);
+    resolve?.(true);
+  }
+
   const owner = {
     inputs: element,
     get isConnected() {
@@ -304,21 +333,6 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         complete?.(false);
         complete = undefined;
       };
-    },
-    rendered() {
-      if (!connected) {
-        return;
-      }
-      const resolve = complete;
-      complete = undefined;
-      const changed = changes;
-      changes = new Set();
-      // Ghostty measures its canvas; only the active session may occupy the viewport.
-      for (const tab of terminalSessions.state.tabs) {
-        tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
-      }
-      updated(changed);
-      resolve?.(true);
     },
     get terminalPanelUploadController() {
       return terminalPanelUploadController;

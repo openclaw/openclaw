@@ -1,4 +1,5 @@
-// File-era cron shapes are read only by Doctor, before canonical SQLite persistence.
+// Temporary #174343 cron upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

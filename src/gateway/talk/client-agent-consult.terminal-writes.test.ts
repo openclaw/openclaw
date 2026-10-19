@@ -62,7 +62,6 @@ it.each([false, true])(
     const runner = createTalkClientAgentConsultRunner({
       config,
       context: {
-        chatAbortControllers: new Map(),
         logGateway: createSubsystemLogger("test/talk-terminal-writes"),
       },
       sessionTarget: {

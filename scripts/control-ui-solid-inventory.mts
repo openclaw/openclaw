@@ -1,9 +1,9 @@
-// Shared syntax census for the UI inventory and controller retirement guard.
+// On-demand syntax census for the remaining Solid migration work.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
@@ -74,8 +74,6 @@ function emptyMetrics() {
     svgTemplates: 0,
     cssTemplates: 0,
     waTags: 0,
-    requestUpdate: 0,
-    controllerPatterns: 0,
     stateDecorators: 0,
     propertyDecorators: 0,
     tasks: 0,
@@ -322,14 +320,6 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
     const metrics = emptyMetrics();
     const canonicalName = createLitNameResolver(tree);
     const visit = (node: ts.Node): void => {
-      if (
-        (ts.isIdentifier(node) &&
-          /^(?:hostConnected|hostDisconnected|requestUpdate)$/u.test(node.text)) ||
-        ((ts.isClassDeclaration(node) || ts.isClassExpression(node)) &&
-          node.name?.text.endsWith("Controller"))
-      ) {
-        metrics.controllerPatterns++;
-      }
       // Count module references, including side-effect imports, exports, import types,
       // and dynamic imports. Comments and ordinary strings never become imports.
       if (
@@ -356,9 +346,6 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
         const expression = unwrap(node.expression);
         if (isLitLoad(node)) {
           metrics.litImports++;
-        }
-        if (nameOf(node.expression) === "requestUpdate") {
-          metrics.requestUpdate++;
         }
         if (
           ts.isPropertyAccessExpression(expression) &&
@@ -442,7 +429,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
 }
 
 export function isTest(file: string) {
-  return /(?:\.(?:test|spec|fixture|test-support)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
+  return /(?:\.(?:test|spec|fixture|test-support|test-helpers)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
     file,
   );
 }
@@ -531,8 +518,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "litImportFiles",
       "htmlTemplates",
       "waTags",
-      "requestUpdate",
-      "controllerPatterns",
       "stateDecorators",
       "tasks",
       "reactiveControllers",

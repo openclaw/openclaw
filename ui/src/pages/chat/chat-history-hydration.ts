@@ -9,7 +9,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
@@ -204,7 +204,7 @@ export async function hydrateChatHistory(
         throw new Error("chat history delta omitted uncached session metadata");
       }
       const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
-      const runActive = isSessionRunActive(response.sessionInfo);
+      const runActive = isSessionRunStateActive(response.sessionInfo);
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
@@ -314,7 +314,7 @@ export async function hydrateChatHistory(
           res.sessionInfo &&
           (typeof res.sessionInfo.hasActiveRun === "boolean" ||
             res.sessionInfo.status !== undefined)
-            ? isSessionRunActive(res.sessionInfo)
+            ? isSessionRunStateActive(res.sessionInfo)
             : undefined,
       },
     );

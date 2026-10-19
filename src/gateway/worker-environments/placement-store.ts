@@ -209,7 +209,7 @@ export function createWorkerSessionPlacementStore(
           { type: "workers.placementPreservation" },
           { current: true },
         );
-        if (!result || !result.ok || result.type !== "workers.placementPreservation") {
+        if (!result) {
           throw new Error("Worker placement preservation source is unavailable");
         }
         return result.placements;
@@ -247,7 +247,7 @@ export function createWorkerSessionPlacementStore(
           },
           readOptions,
         );
-        if (!result || !result.ok || result.type !== "workers.placementProjection") {
+        if (!result) {
           throw new Error("Worker placement projection source is unavailable");
         }
         publish(result.result.projection.placements.values(), ids);
@@ -318,16 +318,16 @@ export function createWorkerSessionPlacementStore(
       }
     },
 
-    async readEnvironmentOwner(environmentId: string) {
+    async readEnvironmentOwner(environmentId: string, signal?: AbortSignal) {
       const result = await executeExistingOpenClawStateRead(
         { path },
         {
           type: "workers.placementEnvironmentOwner",
           environmentId: required(environmentId, "environment id"),
         },
-        { current: true },
+        { current: true, signal },
       );
-      if (!result || !result.ok || result.type !== "workers.placementEnvironmentOwner") {
+      if (!result) {
         throw new Error("Worker placement environment owner source is unavailable");
       }
       return result.placement;
@@ -340,7 +340,7 @@ export function createWorkerSessionPlacementStore(
           { type: "workers.placementRecoveryCandidates" },
           { current: true },
         );
-        if (!result || !result.ok || result.type !== "workers.placementRecoveryCandidates") {
+        if (!result) {
           throw new Error("Worker placement recovery candidates source is unavailable");
         }
         return result.candidates;
@@ -469,7 +469,7 @@ export function createWorkerSessionPlacementStore(
         },
         { current: true },
       );
-      if (!reply || !reply.ok || reply.type !== "workerPlacements.changeSnapshot") {
+      if (!reply) {
         throw new Error("Worker placement change snapshot is unavailable");
       }
       return reply.placements;

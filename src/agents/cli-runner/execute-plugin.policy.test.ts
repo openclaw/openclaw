@@ -1,10 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { beginReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -26,6 +22,12 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../../plugins/runtime/generation-state.js";
+import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.message-injection.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
@@ -677,7 +679,7 @@ describe("plugin-owned CLI same-turn input", () => {
           throw new Error("CLI run ended before injection became ready");
         }),
       ]);
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
+      const target = captureCurrentReplyMessageInjectionTarget(operation.key);
       if (!target) {
         throw new Error("running CLI backend did not expose a registry injection target");
       }
@@ -706,6 +708,6 @@ describe("plugin-owned CLI same-turn input", () => {
         operation.complete();
       }
     }
-    expect(replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)).toBeUndefined();
+    expect(captureCurrentReplyMessageInjectionTarget(operation.key)).toBeUndefined();
   });
 });

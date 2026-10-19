@@ -15,6 +15,7 @@ import {
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -26,13 +27,11 @@ import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
   admitFollowupRunLifecycle,
   enqueueFollowupRun,
-  FollowupRunDeferredError,
   scheduleFollowupDrain,
   type FollowupRun,
 } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
@@ -119,9 +118,6 @@ describe("followup queue durable input consumption", () => {
       try {
         await consume(run, calls.length - 1);
       } catch (error) {
-        if (error instanceof FollowupRunDeferredError) {
-          throw error;
-        }
         failures.push(error);
       }
     });
@@ -192,9 +188,7 @@ describe("followup queue durable input consumption", () => {
     };
     enqueue(staged.run, unstaged);
     const calls = await drain();
-    expect(calls.map((run) => run.prompt)).toEqual(
-      ["staged approved", "unstaged runtime body"].map((text) => collected(text)),
-    );
+    expect(calls.map((run) => run.prompt)).toEqual(["staged approved", "unstaged runtime body"]);
     expect(calls[1]?.transcriptPrompt).toContain("unstaged transcript body");
   });
 
@@ -223,7 +217,12 @@ describe("followup queue durable input consumption", () => {
         assert(observeRelease, "followup execution must own root admission");
         observeRelease(drainReleased.resolve);
         calls.push(run);
-        const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+        const operation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          resetTriggered: false,
+          mailboxClaim: run.controllerClaim ?? run.controllerInput!.claim,
+        });
         const typing = createTypingController({});
         try {
           pendingTotals.push((await pending()).total);
@@ -247,7 +246,6 @@ describe("followup queue durable input consumption", () => {
                 kind: "detached",
                 current: () => undefined,
                 publish: () => {},
-                adopt: () => {},
               },
               sendPolicy: "allow",
               preflightCompactionApplied: false,
@@ -283,7 +281,7 @@ describe("followup queue durable input consumption", () => {
     },
   );
 
-  it("retains elided and retried overflow sources until their summary commits", async () => {
+  it("retains elided overflow sources until their summary commits", async () => {
     const sources = await Promise.all(["first", "second", "third"].map(createStagedRun));
     const settings = { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" } as const;
     for (const source of sources) {
@@ -291,21 +289,35 @@ describe("followup queue durable input consumption", () => {
       expect(enqueueFollowupRun(sessionKey, source.run, settings)).toBe(true);
     }
     const pendingRunIds: string[][] = [];
-    const calls = await drain(async (run, index) => {
-      if (index === 0) {
-        throw new FollowupRunDeferredError();
+    const calls: FollowupRun[] = [];
+    const failures: unknown[] = [];
+    scheduleFollowupDrain(sessionKey, async (run) => {
+      calls.push(run);
+      try {
+        await admitFollowupRunLifecycle(run);
+        await persistQueuedRun(run);
+        pendingRunIds.push((await pending()).items.map((input) => input.runId));
+      } catch (error) {
+        failures.push(error);
       }
-      await admitFollowupRunLifecycle(run);
-      await persistQueuedRun(run);
-      pendingRunIds.push((await pending()).items.map((input) => input.runId));
     });
-    expect(calls).toHaveLength(3);
-    expect(calls[1]?.prompt).toBe(
+    // Durable append owns real worker I/O; a polling deadline is not its receipt.
+    await Promise.all(sources.map(({ run }) => run.controllerInput!.settlement.promise));
+    await Promise.all(
+      sources.flatMap(({ run }) => {
+        const claim = run.controllerInput!.claim;
+        return claim ? [claim.settlement.promise] : [];
+      }),
+    );
+    expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
+    expect(failures).toEqual([]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe(
       "[Queue overflow] Dropped 2 messages due to cap.\nSummary:\n- second approved",
     );
     expect(pendingRunIds).toEqual([["third"], []]);
     expect(await loadMessages()).toMatchObject([
-      { message: { content: calls[1]?.prompt } },
+      { message: { content: calls[0]?.prompt } },
       { message: { content: "third approved" } },
     ]);
     expectWrites(...sources);

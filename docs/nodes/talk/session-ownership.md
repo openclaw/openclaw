@@ -26,6 +26,8 @@ its recorded owner for unqualified keys, and conflicting explicit ownership is r
 even when a main alias becomes `global`. If routing or access changes during
 startup, creation fails rather than switching sessions; retry the request.
 
+When a human starts realtime Talk from a connected client, the Gateway restores an archived backing session in place, preserving its session ID and history; if restart recovery or worker placement prevents restoration, creation fails with restore guidance before the voice provider connects.
+
 Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
 resolved session key, and store. Agent replies stay in the same session as voice
 transcripts, including under global scope, while the original key continues to

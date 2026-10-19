@@ -12,6 +12,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -239,17 +240,12 @@ export function withPersonalCredentialPublication(
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       publication.committed(isRecord(facts) ? facts.personalCredentials : undefined);
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (admission.settlement) {
-          const confirmed = admission.settlement.kind === "completed";
-          publication.finish(confirmed, confirmed && !admission.committed);
-        }
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      if (admission.settlement) {
+        const confirmed = admission.settlement.kind === "completed";
+        publication.finish(confirmed, confirmed && !admission.committed);
       }
-    };
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       publication.finish(known, known && !admission.committed);
@@ -387,7 +383,6 @@ export function withAuthProfileCredentialWrite<T>(
     const publication = authProfileCredentialPublication.begin({ identity, assertCurrent() {} });
     let failed = false;
     const managed = stageSqliteTransactionState(sqlPublicationAnchor(db), {
-      stage() {},
       commit() {
         if (failed) {
           publication.finish(false);
@@ -436,17 +431,12 @@ export function createAuthProfileCredentialWriteAdmission(
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       publication.committed(isRecord(facts) ? facts.authCredentials : undefined);
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (admission.settlement) {
-          const confirmed = admission.settlement.kind === "completed";
-          publication.finish(confirmed, confirmed && !admission.committed);
-        }
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      if (admission.settlement) {
+        const confirmed = admission.settlement.kind === "completed";
+        publication.finish(confirmed, confirmed && !admission.committed);
       }
-    };
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       publication.finish(known, known && !admission.committed);

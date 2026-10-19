@@ -16,7 +16,10 @@ import {
 } from "../plugins/plugin-source-capture-context.js";
 import { artifactPreservingReads } from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import { withDisposableOpenClawStateReads } from "../state/openclaw-state-db-readonly.js";
+import {
+  forkActiveOpenClawStateDatabaseReadSnapshot,
+  withDisposableOpenClawStateReads,
+} from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export type DoctorLintPluginStateRunner = <T>(
@@ -90,7 +93,9 @@ async function prepareReadOnlyPluginStateSnapshot(
   let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
     if (fs.existsSync(sourceDatabasePath)) {
-      prepared = prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
+      prepared =
+        (await forkActiveOpenClawStateDatabaseReadSnapshot({ env: sourceEnv })) ??
+        prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
       privateRoot = path.dirname(prepared.location);
       cleanup = prepared.cleanupAsync;
     } else {

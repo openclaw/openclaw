@@ -3,9 +3,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import { sendLengthFramedJson as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import type { GeolocationLookup } from "./lookup.js";
+import type { createGeolocationLookup } from "./lookup.js";
 
-export function createGeolocationLookupHandler(lookup: GeolocationLookup) {
+export function createGeolocationLookupHandler(lookup: ReturnType<typeof createGeolocationLookup>) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.endsWith("/lookup")) {

@@ -4,7 +4,7 @@ import { getDatabaseProcessRole } from "./database-engine/admission-scope.js";
 export const SQLITE_IDLE_HANDLE_TTL_MS = 30 * 60_000;
 
 /** Reuses a handle across one command's bursts, well inside Doctor's lease wait. */
-export const SQLITE_CLI_AGENT_IDLE_HANDLE_TTL_MS = 30_000;
+const SQLITE_CLI_AGENT_IDLE_HANDLE_TTL_MS = 30_000;
 
 /**
  * An idle agent database handle keeps its lease, and Doctor maintenance waits for

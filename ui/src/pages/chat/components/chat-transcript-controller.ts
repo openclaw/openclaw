@@ -85,6 +85,9 @@ export function createChatTranscript(
     get scrollElement(): HTMLDivElement | null {
       return sessionVirtualizer?.scrollElement ?? null;
     },
+    get messageElements() {
+      return sessionVirtualizer?.messageElements;
+    },
     syncViewportGeometry(): void {
       sessionVirtualizer?.syncViewportGeometry();
     },

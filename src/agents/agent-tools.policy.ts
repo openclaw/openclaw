@@ -37,8 +37,8 @@ import {
   resolveProviderToolPolicyEntry,
 } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   isVisibleSpawnedSession,
   resolveSubagentCapabilityStore,

@@ -789,6 +789,31 @@ outcomes fence affected rows until restoration from the store; they never author
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
 
+Private requester-settle wakes retain `privateInput` (the dispatch run ID and raw
+prompt) inside their existing `subagent_runs.payload_json` wake state before
+Gateway dispatch. The same row transition owns retries; this adds no table,
+column, index, schema version, or scheduler. Accepted input can be transformed by
+transcript hooks or reduced to a hash/outcome receipt, so it cannot reconstruct
+the original raw request. Later descendant delivery and findings updates must
+not change that request under its existing idempotency key.
+
+The field is optional and needs no backfill. Wakes already dispatched by an older
+build retain their existing strict input comparison: if the original raw prompt
+cannot be reconstructed, a mismatch remains a refusal, never permission to
+replace accepted input. Older builds ignore the field and may discard it when
+writing wake state; rollback therefore loses this retry guarantee without
+changing transcript bytes or requiring reverse migration. Upgrading again
+cannot recover raw bytes already discarded by an older writer.
+
+The prompt has the same private scope as the existing child findings. It is
+retained only with the pending wake, removed when the wake settles or is
+cancelled, and cleared when its retry identity resets. New yield generations
+replace the wake. Each member of a frozen batch retains the shared wake value,
+so temporary storage grows with prompt size times the number of batch members;
+there is no extra payload read or write transaction. Registry deletion removes
+it with the row. Current requester, cohort, store, and execution authority still
+revalidate before dispatch; the saved prompt grants no authority.
+
 An ordinary follow-up to a completed child creates a new task and execution while
 retaining the completed row's pending parent delivery and receipt. The same row
 transaction fences the predecessor's session effects; its exact execution and

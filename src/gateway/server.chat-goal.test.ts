@@ -23,7 +23,13 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
-import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
+import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
+import {
+  resetSessionControllerStateForTest,
+  rpcSourceTesting,
+} from "../sessions/session-lifecycle-admission.test-support.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import * as skillLibrarySelection from "../skills/library/selection.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -46,6 +52,7 @@ import {
   installReplyDispatchHook,
   readGoalChatUserMessages,
   registerGoalChatRestartSettlementCase,
+  registerGoalChatOperationCollisionCases,
 } from "./server.chat-goal.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
@@ -66,7 +73,7 @@ import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resour
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-const { getSessionWorkAdmissionRelease } = sessionLifecycle;
+const { captureSessionControllerSettlement } = sessionLifecycle;
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
 installGatewayTestHooks({ scope: "suite" });
@@ -139,6 +146,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const released = await waitForGatewayActiveWork(30_000);
   expect(released.drained, JSON.stringify(released.snapshot.blockers)).toBe(true);
+  resetSessionControllerStateForTest();
   getSessionRowProjection(context)?.dispose();
   for (const dir of temporaryDirs.dirs) {
     await releaseGatewaySessionStoreFixture(dir);
@@ -191,8 +199,17 @@ async function rpc(
 }
 
 async function waitForDispatchEnd() {
-  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
-  expect(context.chatAbortControllers.size).toBe(0);
+  await captureSessionControllerSettlement({
+    scope: storePath,
+    identities: [sessionKey, sessionId],
+  });
+  expectNoChatSources();
+}
+
+function expectNoChatSources() {
+  expect(
+    listRpcSourceEntries().some(([, source]) => source.input.target?.storeScope === storePath),
+  ).toBe(false);
 }
 
 async function withHeldModel(run: () => Promise<void>) {
@@ -213,16 +230,16 @@ function profileClient(profileId: string): GatewayClient {
   };
 }
 
-function expectNoDispatch() {
+async function expectNoDispatch() {
   expect(userMessages()).toEqual([]);
   expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  expect(context.chatAbortControllers.size).toBe(0);
+  expectNoChatSources();
 }
 
 async function waitForModelRun(count = 1) {
   await Promise.race([
     modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
+    captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
   expect(context.logGateway.error).not.toHaveBeenCalled();
   let failureDiagnostic: string | undefined;
@@ -230,8 +247,8 @@ async function waitForModelRun(count = 1) {
     const entry = loadSessionEntry(scope());
     failureDiagnostic = JSON.stringify({
       warningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
-      abortControllers: context.chatAbortControllers.size,
-      admissionScopes: [...sessionLifecycle.collectActiveSessionWorkAdmissions()]
+      rpcSources: rpcSourceTesting.size,
+      admissionScopes: [...sessionLifecycle.collectSessionControllerTargets()]
         .filter(([, identities]) => identities.has(sessionKey))
         .slice(0, 5)
         .map(([activeScope, identities]) => ({
@@ -377,7 +394,7 @@ describe("Goal chat admission and continuation", () => {
       message: expect.stringContaining("recoverable history"),
     });
     expect(loadSessionEntry(scope())).toBeUndefined();
-    expectNoDispatch();
+    await expectNoDispatch();
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -416,7 +433,7 @@ describe("Goal chat admission and continuation", () => {
     expect(response.mock.calls[0]?.[0]).toBe(false);
     expect(response.mock.calls[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
     expect(loadSessionEntry(scope())).toBeUndefined();
-    expectNoDispatch();
+    await expectNoDispatch();
   });
 
   it.each(["creation revoked", "sandbox now required"] as const)(
@@ -464,7 +481,7 @@ describe("Goal chat admission and continuation", () => {
         change === "creation revoked" ? /cannot create sessions/ : /creation policy changed/,
       );
       expect(loadSessionEntry(scope())).toBeUndefined();
-      expectNoDispatch();
+      await expectNoDispatch();
     },
   );
 
@@ -514,43 +531,14 @@ describe("Goal chat admission and continuation", () => {
 
   registerWorkerGoalChatCases(scope, runEmbeddedAgent, rpc, () => context, client);
 
-  it.each(["objective", "issuedAtMs"] as const)(
-    "rejects a concurrent operation ID collision on %s",
-    async (collision) => {
-      const firstRequest = goalStart("Finish the release checklist", `goal-collision-${collision}`);
-      const secondRequest = {
-        ...firstRequest,
-        ...(collision === "objective"
-          ? { message: "Review the migration plan" }
-          : { intent: { ...firstRequest.intent, issuedAtMs: firstRequest.intent.issuedAtMs + 1 } }),
-      };
-      await withHeldModel(async () => {
-        const responses = await Promise.all([
-          rpc("chat.send", firstRequest),
-          rpc("chat.send", secondRequest),
-        ]);
-        const accepted = responses.flatMap((response, index) =>
-          response.mock.calls[0]?.[0] ? [index] : [],
-        );
-        expect(accepted).toHaveLength(1);
-        const rejected = responses[accepted[0] === 0 ? 1 : 0];
-        expect(rejected?.mock.calls[0]).toEqual([
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            details: expect.objectContaining({ reason: "goal-operation-conflict" }),
-          }),
-        ]);
-        const acceptedRequest = [firstRequest, secondRequest][accepted[0]!];
-        expect(loadSessionEntry(scope())?.goal?.objective).toBe(acceptedRequest?.message);
-        expect(userMessages()).toEqual([
-          expect.objectContaining({ content: acceptedRequest?.message }),
-        ]);
-        await waitForModelRun();
-      });
-    },
-  );
+  registerGoalChatOperationCollisionCases({
+    scope,
+    goalStart,
+    rpc,
+    withHeldModel,
+    userMessages,
+    waitForModelRun,
+  });
 
   it("releases rejected admission and accepts an unchanged retry", async () => {
     const params = goalStart("Finish the release checklist");
@@ -565,7 +553,7 @@ describe("Goal chat admission and continuation", () => {
     };
     await handleChatSend(options, async () => false);
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-    expectNoDispatch();
+    await expectNoDispatch();
     const retried = await rpc("chat.send", params);
     expect(retried.mock.calls[0]?.[0]).toBe(true);
     await waitForModelRun();
@@ -618,7 +606,7 @@ describe("Goal chat admission and continuation", () => {
         expect(loadSessionEntry(scope())?.goal).toBeUndefined();
         expect(context.dedupe.size).toBe(0);
         expect(respond).not.toHaveBeenCalled();
-        expectNoDispatch();
+        await expectNoDispatch();
       } finally {
         release.resolve();
         await pending.catch(() => undefined);
@@ -671,8 +659,8 @@ describe("Goal chat admission and continuation", () => {
             : { status: "in_flight" },
         );
         expect(loadSessionEntry(scope())).toBeUndefined();
-        expectNoDispatch();
-        expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
+        await expectNoDispatch();
+        expect(sessionLifecycle.isSessionControllerWorkActive(storePath, [sessionKey])).toBe(false);
         if (change === "replaced") {
           expect(context.dedupe.get(key)?.payload).toMatchObject({
             attemptId: "successor-attempt",
@@ -726,7 +714,7 @@ describe("Goal chat admission and continuation", () => {
         }),
       );
       expect(loadSessionEntry(scope())?.sessionId).toBe(reboundSessionId);
-      expect(context.chatAbortControllers.size).toBe(0);
+      expectNoChatSources();
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
@@ -804,20 +792,22 @@ describe("Goal chat admission and continuation", () => {
   it("keeps a Goal aborted before persistence definitively rejected on retry", async () => {
     const params = goalStart("Cancel this Goal before its durable receipt exists");
     const respond = vi.fn<RespondFn>();
-    await handleChatSend(
-      {
-        req: { type: "req", id: "goal-precommit-abort", method: "chat.send", params },
-        params,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => true,
-      },
-      async () => {
-        const aborted = await rpc("chat.abort", { sessionKey, runId: params.idempotencyKey });
-        expect(aborted.mock.calls[0]?.[1]).toMatchObject({ aborted: true });
-        return true;
-      },
+    await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+      handleChatSend(
+        {
+          req: { type: "req", id: "goal-precommit-abort", method: "chat.send", params },
+          params,
+          client,
+          context,
+          respond,
+          isWebchatConnect: () => true,
+        },
+        async () => {
+          const aborted = await rpc("chat.abort", { sessionKey, runId: params.idempotencyKey });
+          expect(aborted.mock.calls[0]?.[1]).toMatchObject({ aborted: true });
+          return true;
+        },
+      ),
     );
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "timeout", summary: "aborted" });
     const retry = await rpc("chat.send", params);
@@ -826,7 +816,7 @@ describe("Goal chat admission and continuation", () => {
       details: { reason: "goal-operation-conflict" },
     });
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-    expectNoDispatch();
+    await expectNoDispatch();
   });
 
   it("does not let ordinary chat displace a Goal reservation with the same run ID", async ({
@@ -834,28 +824,26 @@ describe("Goal chat admission and continuation", () => {
   }) => {
     const releaseWriter = createDeferred();
     const entered = createDeferred();
-    const beginAdmission = sessionLifecycle.beginSessionWorkAdmission;
-    using _ = vi
-      .spyOn(sessionLifecycle, "beginSessionWorkAdmission")
-      .mockImplementationOnce((params) => {
-        const revalidate = params.revalidateAllowed;
-        if (!revalidate) {
-          throw new Error("Expected writer-ordered chat admission validation");
-        }
-        return beginAdmission({
-          ...params,
-          revalidateAllowed: () => {
-            entered.resolve();
-            return releaseWriter.promise.then(revalidate);
-          },
-        });
+    const beginAdmission = sessionLifecycle.beginSessionEffect;
+    using _ = vi.spyOn(sessionLifecycle, "beginSessionEffect").mockImplementationOnce((params) => {
+      const revalidate = params.revalidateAllowed;
+      if (!revalidate) {
+        throw new Error("Expected writer-ordered chat admission validation");
+      }
+      return beginAdmission({
+        ...params,
+        revalidateAllowed: () => {
+          entered.resolve();
+          return releaseWriter.promise.then(revalidate);
+        },
       });
+    });
     const request = goalStart("Finish the release checklist", "goal-chat-collision");
     const goal = rpc("chat.send", request);
     try {
       const waiting = awaitGateBeforeSettlement(entered.promise, goal, "Goal skipped admission");
       await withinTest(waiting, signal);
-      expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [sessionId])).toBe(true);
+      expect(sessionLifecycle.isSessionControllerWorkActive(storePath, [sessionId])).toBe(true);
       await withinTest(
         rpc("chat.send", {
           sessionKey,

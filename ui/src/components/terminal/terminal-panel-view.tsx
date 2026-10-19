@@ -1,6 +1,7 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import type { DockLayout } from "../dock-layout.ts";
@@ -86,24 +87,14 @@ export function TerminalPanelHostedActions(props: {
   // Header content moves outside the panel's delegated event root.
   const toggle = nativeListener("click", () => props.view().picker.onToggle());
   const focusOut = nativeListener("focusout", (event) => props.view().picker.onFocusOut(event));
-  let trigger!: HTMLButtonElement;
-  createEffect(
-    () => props.view().hosted,
-    (hosted) => {
-      if (hosted) {
-        props.view().picker.triggerRef(trigger);
-      }
-    },
-  );
   return (
     <span ref={props.ref} style={{ display: "contents" }}>
       <openclaw-tooltip prop:content={t("terminal.sessions")}>
         <button
           ref={(element) => {
-            trigger = element;
             toggle(element);
             focusOut(element);
-            props.view().picker.triggerRef(element);
+            props.view().picker.hostedTriggerRef(element);
           }}
           class="rail-header__action"
           type="button"
@@ -403,6 +394,7 @@ function UploadLayer(props: { state: TerminalPanelViewState }) {
 }
 
 export function TerminalPanelView(props: { view: () => TerminalPanelViewState }) {
+  const tabFocus = createTabFocus();
   const idPrefix = `terminal-${generateUUID()}`;
   const viewportId = `${idPrefix}-panel`;
   const dialogId = `${idPrefix}-session-picker-dialog`;
@@ -435,6 +427,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
         >
           <header class="rail-header tp-header">
             <PanelTabStrip
+              focusOwner={tabFocus}
               tabs={tabs()}
               activeId={props.view().activeId}
               ariaControls={viewportId}

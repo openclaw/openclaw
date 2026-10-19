@@ -3,17 +3,17 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AgentTurnContext } from "../agent-turn/types.js";
 import { updateChatRunProvider } from "../chat-abort.js";
+import type { GatewayContextResolver } from "./types.js";
 
 export function createAgentRunModelSelectionHandler(params: {
-  context: Pick<AgentTurnContext, "chatAbortControllers">;
   runId: string;
+  resolveGatewayContext?: GatewayContextResolver;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
   restoredCronContinuationLifecycleRevision?: string;
   resolvedSessionKey?: string;
-  lifecycleStorePath: string;
+  lifecycleStorePath?: string;
   activeSessionAgentId: string;
   trustedInternalHandoff?: { provider: string; model: string };
 }): (selection: { provider: string; model: string }) => Promise<void> {
@@ -23,8 +23,9 @@ export function createAgentRunModelSelectionHandler(params: {
       params.trustedInternalHandoff.provider = provider.trim().toLowerCase();
       params.trustedInternalHandoff.model = model.trim();
     }
-    updateChatRunProvider(params.context.chatAbortControllers, {
+    updateChatRunProvider({
       runId: params.runId,
+      resolveGatewayContext: params.resolveGatewayContext,
       providerId: provider,
       authProviderId: resolveProviderIdForAuth(provider, {
         config: params.cfgForAgent ?? params.cfg,
@@ -32,6 +33,9 @@ export function createAgentRunModelSelectionHandler(params: {
     });
     if (!params.restoredCronContinuationLifecycleRevision || !params.resolvedSessionKey) {
       return;
+    }
+    if (!params.lifecycleStorePath) {
+      throw new Error("cron continuation physical store is unavailable");
     }
     const persistedSelectedModel = await applySessionEntryReplacements({
       activeSessionKey: params.resolvedSessionKey,

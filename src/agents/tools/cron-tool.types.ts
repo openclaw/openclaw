@@ -76,10 +76,6 @@ export type CronToolOptions = {
 
 export type GatewayToolCaller = typeof callGatewayTool;
 
-export type CronToolDeps = {
-  callGatewayTool?: GatewayToolCaller;
-};
-
 export type ChatMessage = {
   role?: unknown;
   content?: unknown;

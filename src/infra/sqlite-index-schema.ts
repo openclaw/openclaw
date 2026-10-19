@@ -154,7 +154,6 @@ export function repairCanonicalSqliteIndexes(
       db.exec("SAVEPOINT repair_canonical_index;");
       try {
         db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
-        assertSqliteIdentifier(index.name);
         const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
         db.exec(`${create} main.${index.name} ${index.definition};`);
       } catch (error) {
@@ -202,7 +201,12 @@ export function repairCanonicalSqliteIndexes(
 export function repairSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: { backup: () => void; assertCurrent: () => void; ftsSchemas?: readonly string[] },
+  options: {
+    backup: () => void;
+    assertCurrent: () => void;
+    ftsSchemas?: readonly string[];
+    ftsOnly?: boolean;
+  },
 ): string[] {
   let repaired: string[] = [];
   return runSqliteImmediateTransactionSync(
@@ -216,6 +220,9 @@ export function repairSqliteIndexCorruption(
         findings,
         options.ftsSchemas ?? [],
       );
+      if (options.ftsOnly && !ftsTables) {
+        throw new Error("Startup repair requires only canonical FTS integrity findings");
+      }
       for (const finding of ftsTables ? [] : findings) {
         if (finding === "ok") {
           continue;

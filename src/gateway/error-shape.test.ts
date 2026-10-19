@@ -18,3 +18,22 @@ it("reports ended incognito sessions as typed nonretryable client failures throu
     details: { code: "INCOGNITO_SESSION_ENDED" },
   });
 });
+
+it.each([
+  Object.assign(new Error("write failed"), { code: "SQLITE_FULL" }),
+  Object.assign(new Error("write failed"), { code: "ERR_SQLITE_ERROR", errcode: 13 }),
+  new Error("database or disk is full"),
+  new Error("cleanup failed", {
+    cause: Object.assign(new Error("write failed"), { code: "ENOSPC" }),
+  }),
+])("classifies a disk-full failure without exposing internal text: %s", (error) => {
+  expect(
+    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: "internal handler failure" }),
+  ).toMatchObject({
+    code: ErrorCodes.UNAVAILABLE,
+    message:
+      "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+    retryable: true,
+    details: { code: "SQLITE_FULL" },
+  });
+});

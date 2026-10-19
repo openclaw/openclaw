@@ -1,4 +1,3 @@
-// Tests invocation rejection outcomes through shared dispatch and the diagnostic bus.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
@@ -10,13 +9,12 @@ import {
   diagnosticMocks,
   hookMocks,
   mocks,
-  parseGenericThreadSessionInfo,
   resetPluginTtsAndThreadMocks,
   sessionBindingMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
-  threadInfoMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -25,9 +23,18 @@ import {
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+type Resolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
+const telegramContext = {
+  From: "user1",
+  To: "telegram:2000",
+  Provider: "telegram",
+  Surface: "telegram",
+  ChatType: "direct",
+} as const;
+
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: () => void;
+let resetSessionControllerForTest: () => void;
 
 const REJECTED_MODEL = "openai/REJECTED_PRIVATE_TOKEN";
 const SESSION_KEY = "agent:main:session";
@@ -39,33 +46,38 @@ const cfg: OpenClawConfig = {
   messages: { visibleReplies: "automatic" },
 };
 
+async function dispatch(
+  replyResolver: Resolver,
+  overrides: Partial<DispatchFromConfigParams> = {},
+) {
+  const dispatcher = overrides.dispatcher ?? createDispatcher();
+  await dispatchReplyFromConfig({
+    ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
+    cfg,
+    dispatcher,
+    replyResolver,
+    ...overrides,
+  });
+  return dispatcher;
+}
+
 async function dispatchReplyFixture(params: {
   body: string;
   messageId: string;
   reply: ReplyPayload;
   rejection?: ReplyPreRunRejectionCode;
 }) {
-  const runState: ReplyOperationRunState = { preRunRejection: params.rejection };
-  const dispatcher = createDispatcher();
-  await dispatchReplyFromConfig({
+  return dispatch(async () => params.reply, {
     ctx: buildTestCtx({
       Body: params.body,
       CommandBody: params.body,
       CommandAuthorized: true,
-      From: "user1",
-      To: "telegram:2000",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
+      ...telegramContext,
       SessionKey: SESSION_KEY,
       MessageSid: params.messageId,
     }),
-    cfg,
-    dispatcher,
-    replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
-    replyResolver: async () => params.reply,
+    replyOptions: { [REPLY_OPERATION_RUN_STATE]: { preRunRejection: params.rejection } },
   });
-  return dispatcher;
 }
 
 describe("dispatchReplyFromConfig pre-run directive rejection", () => {
@@ -75,22 +87,19 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    const { testing } = await import("./reply-run-registry.test-support.js");
-    resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
+    const { testing } = await import("../../sessions/session-controller.test-support.js");
+    resetSessionControllerForTest = () => testing.resetSessionControllerForTest();
   });
 
   beforeEach(() => {
     clearAgentHarnesses();
-    resetReplyRunRegistry();
+    resetSessionControllerForTest();
     setDiscordTestRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
     mocks.routeReply
       .mockReset()
       .mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
-    threadInfoMocks.parseSessionThreadInfo
-      .mockReset()
-      .mockImplementation(parseGenericThreadSessionInfo);
     sessionBindingMocks.listBySession.mockReset().mockReturnValue([]);
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionStoreMocks.currentEntry = undefined;
@@ -124,24 +133,18 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     const deliveryGate = createDeferred();
     const dispatcher = createReplyDispatcher({ deliver: () => deliveryGate.promise });
     try {
-      const dispatch = dispatchReplyFromConfig({
+      const pending = dispatch(async () => undefined, {
         ctx: buildTestCtx({
           Body: "hello",
-          From: "user1",
-          To: "telegram:2000",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "direct",
+          ...telegramContext,
           SessionKey: SESSION_KEY,
           MessageSid: "handled-1",
         }),
-        cfg,
         dispatcher,
-        replyResolver: async () => undefined,
       });
       // Capture must never hold completion open for a pending delivery: the gate
       // stays closed until finally, so a regression never settles and times out.
-      await dispatch;
+      await pending;
       expect(processedEvents).toEqual([
         expect.objectContaining({ outcome: "completed", reason: "before_dispatch_handled" }),
       ]);
@@ -156,7 +159,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     }
   });
 
-  it.each<ReplyPreRunRejectionCode>(["model-selection-rejected"])(
+  it.each<ReplyPreRunRejectionCode>(["model-selection-rejected", "session-directive-rejected"])(
     "emits one safe skipped event for %s without changing the reply",
     async (reason) => {
       const reply = { text: `Model "${REJECTED_MODEL}" is not allowed.`, isError: true };
@@ -185,154 +188,96 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         diagnosticMocks.logMessageProcessed,
         diagnosticMocks.logMessageDispatchCompleted,
       ]) {
-        expect(diagnostic).toHaveBeenCalledOnce();
-        expect(diagnostic).toHaveBeenCalledWith(
+        expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ outcome: "skipped", reason }),
         );
         expect(diagnostic.mock.calls[0]?.[0].error).toBeUndefined();
       }
+      if (reason !== "session-directive-rejected") {
+        return;
+      }
+      const nextReply = { text: "Agent reply." };
+      const nextDispatcher = await dispatchReplyFixture({
+        body: "hello again",
+        messageId: "2",
+        reply: nextReply,
+      });
+
+      expect(nextDispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(nextReply);
+      expect(processedEvents).toMatchObject([
+        { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
+        { messageId: "2", outcome: "completed" },
+      ]);
+      expect(processedEvents[1]?.reason).toBeUndefined();
     },
   );
 
-  it("completes an ordinary turn after a rejection in the same session", async () => {
-    await dispatchReplyFixture({
-      body: `/model ${REJECTED_MODEL} -s`,
-      messageId: "1",
-      reply: { text: `Model "${REJECTED_MODEL}" is not allowed.`, isError: true },
-      rejection: "session-directive-rejected",
-    });
-    const reply = { text: "Agent reply." };
-    const dispatcher = await dispatchReplyFixture({
-      body: "hello again",
-      messageId: "2",
-      reply,
-    });
-
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(reply);
-    expect(
-      processedEvents.map(({ messageId, outcome, reason }) => ({ messageId, outcome, reason })),
-    ).toEqual([
-      { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
-      { messageId: "2", outcome: "completed", reason: undefined },
-    ]);
-  });
-
-  it("never captures delivered reply text without a model response", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () =>
-        [
-          { text: "internal reasoning trace", isReasoning: true },
-          { text: "Agent reply." },
-        ] satisfies ReplyPayload[],
-    });
-
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.not.objectContaining({ finalResponse: expect.anything() }),
-    );
-  });
-
-  it("excludes the delivered fallback notice from the captured response for an empty turn", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () => undefined,
-    });
-
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.not.objectContaining({ finalResponse: expect.anything() }),
-    );
-  });
-
-  it("captures the raw LLM response for a sentinel turn instead of delivered facts", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async (_ctx, opts) => {
-        opts?.onRawLlmResponse?.("NO_REPLY");
-        return undefined;
-      },
-    });
-
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ finalResponse: "NO_REPLY" }),
-    );
-  });
-
-  it("keeps the captured model response when dispatch fails after the model answered", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async (_ctx, opts) => {
-        opts?.onRawLlmResponse?.("model answer");
+  it.each<[string, ReplyPayload[] | undefined, string?, boolean?]>([
+    [
+      "delivered reply",
+      [{ text: "internal reasoning trace", isReasoning: true }, { text: "Agent reply." }],
+    ],
+    ["empty-turn fallback", undefined],
+    [
+      "host error",
+      [{ text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true }],
+    ],
+    ["sentinel", undefined, "NO_REPLY"],
+    ["delivery failure", undefined, "model answer", true],
+  ])("captures only model output for %s", async (_label, replies, raw, failed) => {
+    const pending = dispatch(async (_ctx, options) => {
+      if (raw !== undefined) {
+        options?.onRawLlmResponse?.(raw);
+      }
+      if (failed) {
         throw new Error("final delivery failed");
-      },
-    }).catch(() => undefined);
-
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "error", finalResponse: "model answer" }),
-    );
-  });
-
-  it("excludes delivered host error notices from the captured response", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () => [
-        { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
-      ],
+      }
+      return replies;
     });
-
+    if (failed) {
+      await pending.catch(() => undefined);
+    } else {
+      await pending;
+    }
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.not.objectContaining({ finalResponse: expect.anything() }),
+      raw === undefined
+        ? expect.not.objectContaining({ finalResponse: expect.anything() })
+        : expect.objectContaining({ finalResponse: raw, ...(failed ? { outcome: "error" } : {}) }),
     );
   });
 
-  it.each<{
-    label: string;
-    state: ReplyOperationRunState;
-    failed?: true;
-    outcome: string;
-    reason?: string;
-  }>([
-    { label: "agent failure", state: {}, failed: true, outcome: "error" },
-    {
-      label: "queue cap",
-      state: { admission: { status: "skipped", reason: "queue-cap" } },
-      outcome: "skipped",
-      reason: "queue-cap",
-    },
-    {
-      label: "injection abort",
-      state: { messageInjectionAborted: true },
-      outcome: "skipped",
-      reason: "reply_operation_aborted",
-    },
-    {
-      label: "question refusal",
-      state: { admission: { status: "skipped", reason: "question-response-refused" } },
-      outcome: "error",
-      reason: "question-response-refused",
-    },
+  it.each<[string, ReplyOperationRunState, boolean, string, string?]>([
+    ["agent failure", {}, true, "error"],
+    [
+      "queue cap",
+      { admission: { status: "skipped", reason: "queue-cap" } },
+      false,
+      "skipped",
+      "queue-cap",
+    ],
+    [
+      "injection abort",
+      { messageInjectionAborted: true },
+      false,
+      "skipped",
+      "reply_operation_aborted",
+    ],
+    [
+      "question refusal",
+      { admission: { status: "skipped", reason: "question-response-refused" } },
+      false,
+      "error",
+      "question-response-refused",
+    ],
   ])(
-    "preserves the terminal $label over a rejection fact",
-    async ({ state, failed, outcome, reason }) => {
+    "preserves the terminal %s over a rejection fact",
+    async (_label, state, failed, outcome, reason) => {
       const runState: ReplyOperationRunState = {
         ...state,
         preRunRejection: "session-directive-rejected",
       };
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-        cfg,
-        dispatcher: createDispatcher(),
-        replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
-        replyResolver: async (_ctx, opts) => {
+      await dispatch(
+        async (_ctx, opts) => {
           // Queue and question owners publish their decisions after outer operation admission.
           Object.assign(runState, state);
           if (failed) {
@@ -340,10 +285,10 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
           }
           return { text: "Existing terminal reply." };
         },
-      });
+        { replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState } },
+      );
 
-      expect(processedEvents).toHaveLength(1);
-      expect(processedEvents[0]).toMatchObject({ outcome });
+      expect(processedEvents).toMatchObject([{ outcome }]);
       expect(processedEvents[0]?.reason).toBe(reason);
       expect(processedEvents[0]?.error).toBeUndefined();
     },

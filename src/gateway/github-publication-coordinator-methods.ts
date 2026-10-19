@@ -349,7 +349,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
             assertCurrent: assertCaptureAuthority,
           });
     assertCaptureAuthority();
-    worktreeOwner.assertCurrent();
     const row = await insertSessionRequest(snapshot);
     return await processDuringRun(row, validateLocalExecution);
   };

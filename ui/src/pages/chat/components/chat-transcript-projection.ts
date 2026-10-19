@@ -282,7 +282,6 @@ export function projectChatTranscript(
     recapAttached && key === tailStatusOwner?.key ? (turnRecap ?? undefined) : undefined;
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
-    entryRefFor: transcript.entryAnimations.refFor,
     presented,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
@@ -331,6 +330,7 @@ export function projectChatTranscript(
     subagentActivity: subagents.activity.length
       ? {
           rows: subagents.activity,
+          presented,
           turnStartedAt: subagents.wait ? workingIndicator?.request?.askedAt : undefined,
           onOpenSubagent: props.onOpenSubagent,
           onOpenSession: props.onOpenSession,

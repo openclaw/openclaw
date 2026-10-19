@@ -1,5 +1,5 @@
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import type { RestartRecoveryOperatorSource } from "../gateway/operator-run-recovery-source.js";
+import type { RestartRecoveryOperatorSource } from "../gateway/operator-run-recovery-source.codec.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -9,6 +9,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
+import type { RequesterOrigin } from "./requester-origin.js";
 
 /** Admission writes this with its source claim, never by reconstructing session attribution. */
 export function createRestartRecoveryOperatorSource(params: {
@@ -18,6 +19,7 @@ export function createRestartRecoveryOperatorSource(params: {
   sessionKey: string;
   sourceRunId: string;
   inputProvenance?: InputProvenance;
+  requesterOrigin?: RequesterOrigin;
 }): RestartRecoveryOperatorSource | undefined {
   const { authority, entry, sessionKey } = params;
   if (!authority) {
@@ -46,7 +48,12 @@ export function createRestartRecoveryOperatorSource(params: {
     entry.cronRunContinuation ||
     (params.inputProvenance &&
       params.inputProvenance.kind !== "external_user" &&
-      !requesterSettle) ||
+      !(
+        params.inputProvenance.kind === "inter_session" &&
+        (params.requesterOrigin
+          ? params.requesterOrigin.operatorProfileId === authority.profileId
+          : requesterSettle)
+      )) ||
     isCronSessionKey(sessionKey) ||
     isSubagentSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey) ||

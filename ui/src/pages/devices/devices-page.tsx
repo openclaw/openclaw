@@ -3,7 +3,7 @@ import type {
   EnvironmentsListResult,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -37,6 +37,7 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
@@ -45,7 +46,6 @@ import { projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import { createDevicesDialogs } from "./devices-dialogs.ts";
-import { createPageRequest } from "./page-request.ts";
 import { DevicesView } from "./view.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -92,6 +92,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let execApprovalsTarget: "gateway" | "node" = "gateway";
   let execApprovalsTargetNodeId: string | null = null;
   let routeDataInitialized = false;
+  let stopGatewayEvents: (() => void) | undefined;
   let publishData = () => {};
   // Request admission and policy drafts retain their synchronous mutation contract.
   const pageData = projectSource(() => dataState, {
@@ -116,24 +117,31 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       publishData();
     },
   });
-  const presenceTask = createPageRequest({
-    task: (signal) =>
+  const presenceTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.connected && canRead && gatewayBinding.gateway
         ? gatewayBinding.client?.request<PresenceEntry[]>("system-presence", {}, { signal })
         : undefined,
-    onComplete: updatePresence,
+    onComplete: (entries) => {
+      if (entries !== undefined) {
+        updatePresence(entries);
+      }
+    },
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         updatePresence([]);
       }
     },
   });
-  const systemInfoTask = createPageRequest({
-    task: (signal) =>
+  const systemInfoTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.gateway && canLoadSystemInfo() && gatewayBinding.client
         ? readSystemInfo(gatewayBinding.gateway, signal).then((sample) => sample.value)
         : undefined,
     onComplete: (result) => {
+      if (result === undefined) {
+        return;
+      }
       setGatewaySystemInfo(result);
       // Quiet node reloads also fetch stats; a fresh snapshot restarts the periodic deadline.
       systemInfoPolling.stop();
@@ -147,8 +155,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       }
     },
   });
-  const environmentsTask = createPageRequest({
-    task: (signal) =>
+  const environmentsTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.gateway && canLoadDesktopEnvironments()
         ? gatewayBinding.client?.request<EnvironmentsListResult>(
             "environments.list",
@@ -156,7 +164,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
             { signal },
           )
         : undefined,
-    onComplete: (result) => setDesktopEnvironments(result.environments),
+    onComplete: (result) => {
+      if (result !== undefined) {
+        setDesktopEnvironments(result.environments);
+      }
+    },
     onError: () => setDesktopEnvironments([]),
   });
   const systemInfoPolling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, refreshSystemInfo);
@@ -177,26 +189,48 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     onSnapshot: handleGatewaySnapshot,
     ensureInitialData,
   });
-  // Gateway events refresh pairing and presence inventory within the bound request generation.
-  createEffect(
-    () =>
-      [
-        currentConfigObject(configProjection.read().state),
-        gatewayBinding.gateway,
-        gatewayBinding.client,
-      ] as const,
-    ([current, gateway, client]) => {
-      if (current) {
-        configGateway = gateway;
-        configClient = client;
-        publishData();
-      }
-    },
-  );
-  createEffect(
-    () => context.gateway,
-    (gateway) =>
-      gateway.subscribeEvents((event) => {
+  onSettled(() => {
+    syncConfigCustody();
+    return configProjection.subscribe(syncConfigCustody);
+  });
+  onCleanup(() => {
+    stopGatewayEvents?.();
+    dialogs.cancel();
+    presenceTask.cancel();
+    systemInfoTask.cancel();
+    environmentsTask.cancel();
+    canManagePairing = false;
+    canAdmin = false;
+  });
+
+  function setRouteData(data: DevicesRouteData | undefined) {
+    applyRouteData(data);
+    ensureInitialData();
+    publishData();
+  }
+
+  function syncConfigCustody() {
+    if (currentConfigObject(context.runtimeConfig.state)) {
+      configGateway = gatewayBinding.gateway;
+      configClient = gatewayBinding.client;
+    }
+  }
+
+  function handleGatewaySnapshot(change: GatewayPageChange) {
+    const snapshot = change.snapshot;
+    dataState.client = snapshot.client;
+    dataState.connected = snapshot.phase === "connected";
+    dataState.requestGeneration = gatewayBinding.epoch;
+    const connected = snapshot.phase === "connected";
+    if (change.becameConnected) {
+      systemInfoUnavailable = false;
+    }
+    syncAccess(snapshot);
+    syncConfigCustody();
+    if (change.initial || change.sourceChanged) {
+      stopGatewayEvents?.();
+      const gateway = context.gateway;
+      stopGatewayEvents = gateway.subscribeEvents((event) => {
         if (gatewayBinding.gateway !== gateway || context.gateway !== gateway) {
           return;
         }
@@ -227,33 +261,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         ) {
           refreshNodeInventory(true);
         }
-      }),
-  );
-  onCleanup(() => {
-    dialogs.cancel();
-    presenceTask.cancel();
-    systemInfoTask.cancel();
-    environmentsTask.cancel();
-    canManagePairing = false;
-    canAdmin = false;
-  });
-
-  function setRouteData(data: DevicesRouteData | undefined) {
-    applyRouteData(data);
-    ensureInitialData();
-    publishData();
-  }
-
-  function handleGatewaySnapshot(change: GatewayPageChange) {
-    const snapshot = change.snapshot;
-    dataState.client = snapshot.client;
-    dataState.connected = snapshot.phase === "connected";
-    dataState.requestGeneration = gatewayBinding.epoch;
-    const connected = snapshot.phase === "connected";
-    if (change.becameConnected) {
-      systemInfoUnavailable = false;
+      });
     }
-    syncAccess(snapshot);
     if (change.identityChanged) {
       clearInventorySamples();
     }
@@ -663,7 +672,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   createEffect(
     createMemo(() => props.routeData),
     // Receipt adoption samples live admission; useGatewayPage owns Gateway observation.
-    (data) => untrack(() => setRouteData(data)),
+    setRouteData,
   );
   return (
     <openclaw-devices-page>

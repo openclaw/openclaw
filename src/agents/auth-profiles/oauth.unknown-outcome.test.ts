@@ -29,8 +29,6 @@ beforeEach(async () => {
   resetFileLockStateForTest();
   resetOAuthProviderRuntimeMocks(mocks);
   clearRuntimeAuthProfileStoreSnapshots();
-  const { resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js");
-  resetOAuthRefreshQueuesForTest();
 });
 afterEach(() => {
   resetFileLockStateForTest();

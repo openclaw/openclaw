@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
@@ -124,6 +126,27 @@ describe("installEmbeddedAttemptContextGuards", () => {
     hoisted.installToolResultContextGuard.mockReturnValue(vi.fn());
     hoisted.isCacheTtlEligibleProvider.mockReturnValue(false);
     hoisted.readLastCacheTtlTimestamp.mockReturnValue(null);
+  });
+
+  it("retained cache-touch callbacks do not keep completed attempt continuations", async () => {
+    const completed = Array.from({ length: 20 }, () => {
+      const input = createInput();
+      const continuation = { prompt: "continue", messages: prunableHistory() };
+      const guards = installEmbeddedAttemptContextGuards({
+        ...input,
+        attempt: { ...input.attempt, continuation },
+      } as never);
+      guards.remove();
+      return { callback: guards.recordCacheTouch, continuation: new WeakRef(continuation) };
+    });
+    const control = new WeakRef({});
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(completed.filter(({ continuation }) => continuation.deref())).toHaveLength(0);
+    for (const { callback } of completed) {
+      callback(1);
+    }
   });
 
   it("tracks mid-turn requests and restores attempt-local transforms", async () => {

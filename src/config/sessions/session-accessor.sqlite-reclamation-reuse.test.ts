@@ -10,10 +10,7 @@ import {
   readSqliteDatabaseIntegrityVerification,
   readSqliteDatabaseCleanClose,
 } from "../../infra/sqlite-database-admission.js";
-import {
-  SQLITE_IDLE_HANDLE_TTL_MS,
-  SQLITE_CLI_AGENT_IDLE_HANDLE_TTL_MS,
-} from "../../infra/sqlite-handle-lifecycle.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -669,7 +666,7 @@ test.each(["idle", "active"] as const)(
 
 test.each([
   ["gateway", SQLITE_IDLE_HANDLE_TTL_MS],
-  ["cli-oneshot", SQLITE_CLI_AGENT_IDLE_HANDLE_TTL_MS],
+  ["cli-oneshot", 30_000],
 ] as const)(
   "retires a %s Worker after its idle window and opens a new one",
   async (role, idleMs) => {

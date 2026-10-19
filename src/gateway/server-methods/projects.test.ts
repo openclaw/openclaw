@@ -799,6 +799,8 @@ test("projects.add returns a typed invalid-url failure", async () => {
 test.each([
   ["managed", "Managed", "live-worktree"],
   ["workspace-project", "Workspace project", "agent workspace"],
+  ["session-root", "Session root", "session"],
+  ["session-child", "Session child", "session"],
 ])(
   "projects.remove preserves a checkout referenced by %s",
   async (name, displayName, reference) => {
@@ -821,6 +823,16 @@ test.each([
             lastActiveAt: 1,
           },
           { provisionedPaths: [] },
+        );
+      }
+      if (reference === "session") {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:checkout" },
+          {
+            sessionId: "checkout",
+            updatedAt: 1,
+            spawnedCwd: name === "session-child" ? path.join(repo, "src") : repo,
+          },
         );
       }
       const cfg =

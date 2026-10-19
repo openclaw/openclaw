@@ -38,7 +38,7 @@ vi.mock("../agents/subagents/announce/subagent-announce.requester-settle-wake.js
 installGatewayTestHooks({ scope: "suite" });
 
 describe("subagent completion blocked Gateway E2E", () => {
-  it("suspends native completion delivery after ordinary delivery exhaustion", async () => {
+  it("suspends native completion delivery after its one recorded failure", async () => {
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     const configPath = process.env.OPENCLAW_CONFIG_PATH;

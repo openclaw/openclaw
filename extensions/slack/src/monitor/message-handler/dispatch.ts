@@ -70,7 +70,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     onSettled: () => {
       releaseDeferred?.();
-      upstreamLifecycle.onSettled?.();
+      return upstreamLifecycle.onSettled?.();
     },
   };
   const release = beginSessionRun();

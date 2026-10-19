@@ -11,9 +11,7 @@ import type {
   SourceRuntime,
   SourceStatus,
 } from "../../types.js";
-import { checkAbort } from "../http.js";
 import {
-  ABORT_LABEL,
   GithubClient,
   GithubHttpError,
   GithubSourceError,
@@ -260,7 +258,6 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           });
         }
       }
-      checkAbort(runtime.signal, ABORT_LABEL);
       runtime.logger.info(`team-reports: GitHub roster loaded: ${people.size} people`);
       return {
         people: [...people]
@@ -273,7 +270,6 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
     async collect(cfg, window, roster, emit) {
       const status = newStatus();
       const client = new GithubClient(cfg, runtime, status);
-      checkAbort(runtime.signal, ABORT_LABEL);
       if (window.untilMs <= window.sinceMs) {
         throw new Error("Invalid GitHub activity window");
       }
@@ -299,7 +295,6 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       };
       const seenIssues = new Set<string>();
       const add = async (item: GithubItem) => {
-        checkAbort(runtime.signal, ABORT_LABEL);
         if (item.atMs >= window.sinceMs && item.atMs < window.untilMs) {
           pending.push({
             key: JSON.stringify([item.kind, item.url, item.actor.toLowerCase(), item.atMs]),
@@ -592,7 +587,6 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               }
             }
           } catch (error) {
-            checkAbort(runtime.signal, ABORT_LABEL);
             if (
               error instanceof GithubHttpError &&
               (error.status === 403 || error.status === 404)
@@ -605,7 +599,6 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         });
         await flush();
       }
-      checkAbort(runtime.signal, ABORT_LABEL);
       runtime.logger.info(
         `team-reports: GitHub comments scanned: ${status.stats.reposScanned} repos; advisories scanned: ${advisoryReposScanned} repos`,
       );

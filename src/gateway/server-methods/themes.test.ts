@@ -659,7 +659,7 @@ it("keeps every personal theme action scoped to the selected accepted turn parti
     { action: "import", id: "personal", definition: themeDefinition(), apply: true },
   ];
 
-  await withPersonalToolTurn({ owner }, async (turn) => {
+  await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
     synthetic.internal = { syntheticClient: true, agentRuntimeIdentity: turn.runtimeIdentity };
     const current = { mode: "dark" };
     expect(await execute({ action: "set", mode: "dark" })).toMatchObject({ current });
@@ -722,7 +722,7 @@ it("keeps every personal theme action scoped to the selected accepted turn parti
     expect(await execute({ action: "get" }, owner.profileId)).toMatchObject({
       current: { id: "rose" },
     });
-    turn.complete();
+    await turn.complete();
     expect(turn.releaseCounts.get(steerer.profileId)).toBe(1);
     await expect(execute({ action: "get" }, owner.profileId)).rejects.toThrow();
   });

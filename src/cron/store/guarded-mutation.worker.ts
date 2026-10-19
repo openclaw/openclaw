@@ -11,8 +11,7 @@ import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
-import { planCronJobMutation, resolveCronJobMutationSnapshot } from "./job-mutations.worker.js";
-import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
+import { planCronJobMutation } from "./job-mutations.js";
 import { updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import {
@@ -29,6 +28,10 @@ import {
   prepareCronStoreChanges,
 } from "./save.kernel.js";
 import type { PreparedCronStoreChanges } from "./save.types.js";
+import {
+  getCronSchedulerSnapshot,
+  installCronSchedulerSnapshot,
+} from "./scheduler-config.worker.js";
 import { projectCronJobStateThroughStorageCodec } from "./state-codec.js";
 import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.types.js";
 
@@ -159,11 +162,10 @@ export function mutateCronJobsInWorker(
   database: OpenClawStateDatabase,
   input: MutationInput,
 ): CronRuntimeWorkerOperations["cron.mutateJobs"]["output"] {
-  const mutationSnapshot = resolveCronJobMutationSnapshot(
-    input.storeKey,
-    input.snapshot,
-    database.path,
-  );
+  const scheduler = input.snapshot.scheduler
+    ? installCronSchedulerSnapshot(input.storeKey, input.snapshot.scheduler, database.path)
+    : getCronSchedulerSnapshot(input.storeKey, database.path);
+  const mutationSnapshot = { ...scheduler?.config, nowMs: input.snapshot.nowMs };
   // Runtime postimages retain cleared fields as undefined; compare their persisted
   // state without normalizing the observed definition or private authority.
   const preconditionJob = input.preconditionJob
@@ -234,7 +236,7 @@ export function mutateCronJobsInWorker(
           return {
             outcome: {
               store,
-              names: readCronJobNamesInDatabase(db, undefined, input.storeKey),
+              names: inventory.names,
               changed: changes.changedIds.size > 0,
               notifications: plan.notifications,
               logs: plan.logs,

@@ -260,6 +260,12 @@ recorded rollback outcome. Failed steps use stable identifiers such as
 `candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
 the report body and issue title; command arguments and private paths remain redacted.
 Snapshot errors identify the active database, execution approvals, or plugin phase.
+Snapshot watchdog failures also retain the last progress event, its age, and the
+last database's page count, copied bytes, and copy time in saved stderr and
+`openclaw update status`. The watchdog's byte estimate describes the total snapshot
+input, including plugins; it is not the size of the database active at timeout.
+Phase-only progress, such as plugin inventory after the shared database copy,
+replaces the active phase without losing the last database's copy counters.
 Schema inspection failures put recognized worker error codes and causes before private
 source context, including causes after warning lines, so they survive redaction. Saved
 diagnostic lines omit a path and its trailing text, including quoted paths whose filenames
@@ -324,7 +330,7 @@ budget per attempt. Interrupted pack transfers restart the missing pack, not the
 installed history. Before building, preparation copies the reused objects into
 its own store; the prepared release retains independent Git objects.
 
-Immutable preparation requires a separately adopted build account and toolchain.
+When a separate build account and toolchain are adopted, immutable preparation uses them.
 The build account must differ from the runtime account, have no supplementary
 groups, and match the recorded numeric identity. The updater runs dependency
 installation and builds in a restricted systemd service with a private home,
@@ -337,10 +343,26 @@ Build storage admission and the runtime account's write/quota probe run
 separately. A failed admission, installation, build, or process-settlement check
 leaves the existing service and `current` pointer unchanged. Uncertain process
 settlement retains the build scratch for inspection. Installations without an
-adopted build identity can still inspect status, reuse an already prepared
-generation, and detect an already-current target; preparing a new target reports
-the missing adoption. Build-identity adoption is staged for the native immutable
-update rollout and is not exposed as an `openclaw.json` setting or CLI flag yet.
+adopted build identity use a non-root operator account in the same private staging
+area and restricted systemd service. A non-root caller uses its own account and
+toolchain search path. A root updater resolves the installation's non-root service
+account or recorded directory owner and uses the verified service toolchain path.
+It never runs candidate dependency installation or build scripts as root. If no
+non-root owner can be resolved, preparation refuses before changing the installation;
+run `openclaw update` as the service user or provision the isolated build account.
+
+At account selection, each fallback build warns that the isolated build account is
+missing and names the account, UID, and GID it will use. The sealed
+`dist/build-info.json` records `immutableBuild` with `builtBy: "operator"`,
+`isolation: "none"`, `account`, `uid`, and `gid`; status and Doctor report these
+recorded facts. The build uses a clean environment and private home and temporary
+directories. Exact-SHA verification, process settlement, materialization, and
+sealing still apply. Malformed or unreadable build-account descriptors refuse
+preparation rather than silently selecting the fallback.
+
+Build-account provisioning remains staged and has no supported CLI command or
+`openclaw.json` setting yet. Updates can use the non-root fallback; this section will carry
+provisioning instructions when that workflow becomes available.
 
 `--drain-timeout <seconds>` sets the immutable drain budget independently of
 `--timeout`, which retains the canary/readiness phase budget. The default drain

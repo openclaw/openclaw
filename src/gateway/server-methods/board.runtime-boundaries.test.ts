@@ -237,28 +237,33 @@ describe("board gateway runtime boundaries", () => {
         responded = true;
         return response;
       });
-    await gate.entered;
-    expect(responded).toBe(false);
-    expect(harness.broadcast).not.toHaveBeenCalled();
-    if (outcome === "retired") {
-      harness.context.resolveGatewayContext = () => undefined;
-    }
-    gate.release();
-    const response = await pending;
-    const snapshot = await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" });
-    expect(response.mock.calls[0]?.[0]).toBe(outcome === "commit");
-    expect(snapshot.tabs).toHaveLength(outcome === "commit" ? 1 : 0);
-    if (outcome === "commit") {
-      expect(harness.broadcast).toHaveBeenCalledWith(
-        "board.changed",
-        { sessionKey: "agent:main:session", revision: snapshot.revision },
-        { sessionKeys: ["agent:main:session"], agentId: "main" },
-      );
-    } else {
+    try {
+      await gate.entered;
+      expect(responded).toBe(false);
       expect(harness.broadcast).not.toHaveBeenCalled();
-      if (method === "board.get") {
-        expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+      if (outcome === "retired") {
+        harness.context.resolveGatewayContext = () => undefined;
       }
+      gate.release();
+      const response = await pending;
+      const snapshot = await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" });
+      expect(response.mock.calls[0]?.[0]).toBe(outcome === "commit");
+      expect(snapshot.tabs).toHaveLength(outcome === "commit" ? 1 : 0);
+      if (outcome === "commit") {
+        expect(harness.broadcast).toHaveBeenCalledWith(
+          "board.changed",
+          { sessionKey: "agent:main:session", revision: snapshot.revision },
+          { sessionKeys: ["agent:main:session"], agentId: "main" },
+        );
+      } else {
+        expect(harness.broadcast).not.toHaveBeenCalled();
+        if (method === "board.get") {
+          expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+        }
+      }
+    } finally {
+      gate.release();
+      await Promise.allSettled([pending]);
     }
   });
 
@@ -341,6 +346,7 @@ describe("board gateway runtime boundaries", () => {
       onHelloOk: () => connected.resolve(),
       onConnectError: (error) => connected.reject(error),
     });
+    let requestOutcome: Promise<unknown> | undefined;
     try {
       client.start();
       await connected.promise;
@@ -355,7 +361,7 @@ describe("board gateway runtime boundaries", () => {
           unbounded ? { timeoutMs: null } : undefined,
         );
       const request = putCanvas("canvas", true);
-      const requestOutcome = request.catch((error: unknown) => error);
+      requestOutcome = request.catch((error: unknown) => error);
       await documentStarted.promise;
 
       resetGatewayWorkAdmission();
@@ -371,6 +377,8 @@ describe("board gateway runtime boundaries", () => {
       expect(await widgets(harness.store)).toMatchObject([{ name: "live" }]);
       expect(events).toContain("board.changed");
     } finally {
+      releaseDocument.resolve({ html: "<p>canvas</p>", cspSandbox: "scripts" });
+      await Promise.allSettled(requestOutcome ? [requestOutcome] : []);
       client.stop();
       gatewayClients.clear();
       await closeMinimalGatewayServer(server);

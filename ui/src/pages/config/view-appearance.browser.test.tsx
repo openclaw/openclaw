@@ -201,7 +201,6 @@ describe("config appearance preferences", () => {
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
     renderConfigInto(props, container);
     const importButton = findButtonByText(container, "Import theme", false);
 
@@ -257,6 +256,11 @@ describe("config appearance preferences", () => {
     document.body.append(otherInput);
     const { container, props } = renderAppearance({ customThemeImportUrl: "amethyst-haze" });
     document.body.append(container);
+    props.onOpenCustomThemeImport = () => {
+      props.customThemeImportExpanded = true;
+      renderConfigInto(props, container);
+    };
+    renderConfigInto(props, container);
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
     const requestFrame = vi
@@ -276,8 +280,7 @@ describe("config appearance preferences", () => {
       container.remove();
     });
 
-    props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     props.textScale = 110;
     renderConfigInto(props, container);
@@ -291,7 +294,7 @@ describe("config appearance preferences", () => {
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("amethyst-haze".length);
 
-    props.customThemeImportFocusToken = 2;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     expect(frames.size).toBe(1);
     cleanupSolid();

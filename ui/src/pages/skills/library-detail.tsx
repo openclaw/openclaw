@@ -1,7 +1,8 @@
 import { createMemo, For, Show } from "solid-js";
 import type { SkillsLibraryReadResult } from "../../../../packages/gateway-protocol/src/index.ts";
-import "../../components/modal-dialog.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import "../../components/modal-dialog.ts";
+import { registerSessionSkillLibraryEnglish } from "../../i18n/locales/en-session-skill-library.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { libraryFileText } from "./library-file-text.ts";
 
@@ -101,3 +102,5 @@ export function LibraryPinRead(props: LibraryPinReadProps) {
     </openclaw-modal-dialog>
   );
 }
+
+registerSessionSkillLibraryEnglish();

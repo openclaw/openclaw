@@ -1,5 +1,6 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
@@ -10,26 +11,41 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  retireSessionControllerInput,
+  trackSessionControllerSourceWork,
+} from "../sessions/session-controller.mailbox.js";
+import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import type { HealthSummary } from "./health/types.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS, TICK_INTERVAL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
+import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
-const cleanOldMediaMock = vi.fn(async () => {});
-const pruneOutboundMediaMock = vi.fn(async () => {});
-const prunePlaybackTranscodeCacheMock = vi.fn(async () => {});
-const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
-  deletedRecordCount: 0,
-  deletedFileCount: 0,
-  retainedCount: 0,
+const {
+  cleanOldMediaMock,
+  pruneOutboundMediaMock,
+  prunePlaybackTranscodeCacheMock,
+  cleanupManagedOutgoingMediaRecordsMock,
+  startDevicePairSetupMaintenanceMock,
+} = vi.hoisted(() => ({
+  cleanOldMediaMock: vi.fn(async () => {}),
+  pruneOutboundMediaMock: vi.fn(async () => {}),
+  prunePlaybackTranscodeCacheMock: vi.fn(async () => {}),
+  cleanupManagedOutgoingMediaRecordsMock: vi.fn(async () => ({
+    deletedRecordCount: 0,
+    deletedFileCount: 0,
+    retainedCount: 0,
+  })),
+  startDevicePairSetupMaintenanceMock: vi.fn(async () => 0),
 }));
-const startDevicePairSetupMaintenanceMock = vi.fn(async () => 0);
 
 // mock-isolation: In-memory maintenance timers must not start the device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -47,21 +63,12 @@ vi.mock("../media/store.js", async () => {
 });
 
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
-const ABORTED_RUN_TTL_MS = 60 * 60_000;
+const fixtureSources: RpcSourceRef[] = [];
 
-function createActiveRun(
-  sessionKey: string,
-  kind?: ChatAbortControllerEntry["kind"],
-): ChatAbortControllerEntry {
-  const now = Date.now();
-  return {
-    controller: new AbortController(),
-    sessionId: "sess-1",
-    sessionKey,
-    startedAtMs: now,
-    expiresAtMs: now + ABORTED_RUN_TTL_MS,
-    kind,
-  };
+function createActiveRun(sessionKey: string, kind?: RpcSourceRef["adapter"]["kind"]): RpcSourceRef {
+  const ref = createRpcSourceForTest({ kind }, { sessionKey, sessionId: "sess-1" });
+  fixtureSources.push(ref);
+  return ref;
 }
 
 function createMaintenanceTimerDeps() {
@@ -99,6 +106,9 @@ async function stopMaintenanceTimers(
 
 describe("startGatewayMaintenanceTimers", () => {
   afterEach(() => {
+    for (const ref of fixtureSources.splice(0)) {
+      retireSessionControllerInput(ref.input);
+    }
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -696,39 +706,58 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("aborts active runs with invalid expiry timestamps", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-invalid-expiry";
-    const activeRun = createActiveRun("main");
-    activeRun.expiresAtMs = Number.POSITIVE_INFINITY;
-    deps.chatAbortControllers.set(runId, activeRun);
+  it("evicts pending accepted agent dedupe entries with invalid run expiry", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    deps.dedupe.set("agent:invalid-expiry-pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "invalid-expiry-pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: Number.POSITIVE_INFINITY,
+      },
+    });
 
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(activeRun.controller.signal.aborted).toBe(true);
-    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    expect(deps.dedupe.has("agent:invalid-expiry-pending-agent")).toBe(false);
 
     await stopMaintenanceTimers(timers);
   });
 
-  it("recovers a wedged terminal-pending run whose projection clear never ran", async () => {
+  it("does not independently expire a controller-owned source", async () => {
+    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
+    const runId = "run-invalid-expiry";
+    const activeRun = createActiveRun("main");
+    rpcSourceTesting.set(runId, activeRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(activeRun.input.abortSignal.aborted).toBe(false);
+    expect(rpcSourceTesting.get(runId)).toBe(activeRun);
+
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("leaves a wedged terminal-pending source to its controller watchdog", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const runId = "run-wedged-terminal-pending";
     const wedgedRun = createActiveRun("main");
-    wedgedRun.expiresAtMs = Date.now() - 1;
-    wedgedRun.projectSessionActive = false;
-    wedgedRun.projectSessionTerminalPending = true;
+    wedgedRun.adapter.projectSessionTerminalPending = true;
     // Stamped by the synchronous lifecycle listener; the async clear was lost.
-    wedgedRun.projectSessionTerminalObservedAt = Date.now() - 120_000;
-    deps.chatAbortControllers.set(runId, wedgedRun);
+    wedgedRun.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
+    rpcSourceTesting.set(runId, wedgedRun);
 
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(wedgedRun.controller.signal.aborted).toBe(false);
-    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    expect(wedgedRun.input.abortSignal.aborted).toBe(false);
+    expect(rpcSourceTesting.get(runId)).toBe(wedgedRun);
     await stopMaintenanceTimers(timers);
   });
 
@@ -736,70 +765,98 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const runId = "run-fresh-terminal-pending";
     const freshRun = createActiveRun("main");
-    freshRun.expiresAtMs = Date.now() - 1;
-    freshRun.projectSessionTerminalPending = true;
+    freshRun.adapter.projectSessionTerminalPending = true;
     // Abort owner reserves terminal ownership without a stamped observation;
     // the sweeper must never race that owner.
-    freshRun.projectSessionTerminalObservedAt = undefined;
-    deps.chatAbortControllers.set(runId, freshRun);
+    freshRun.adapter.projectSessionTerminalObservedAt = undefined;
+    rpcSourceTesting.set(runId, freshRun);
 
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(deps.chatAbortControllers.has(runId)).toBe(true);
+    expect(rpcSourceTesting.has(runId)).toBe(true);
     await stopMaintenanceTimers(timers);
   });
 
-  it("preserves captured recovery custody when stalled terminal persistence expires", async () => {
+  it("leaves stalled terminal persistence and recovery ownership with the controller", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
-    terminalRun.expiresAtMs = Date.now() - 1;
-    terminalRun.projectSessionActive = false;
-    terminalRun.lifecycleGeneration = "generation-1";
-    terminalRun.projectSessionTerminalObservedAt = Date.now() - 500;
-    terminalRun.projectSessionTerminalPersistence = new Promise<void>(() => {});
-    deps.chatAbortControllers.set(runId, terminalRun);
+    terminalRun.input.retirementRequested = true;
+    terminalRun.adapter.lifecycleGeneration = "generation-1";
+    terminalRun.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
+    terminalRun.adapter.projectSessionTerminalPersistence = new Promise<void>(() => {});
+    rpcSourceTesting.set(runId, terminalRun);
+    const target = expectDefined(terminalRun.input.target, "Expected captured fixture target");
     const recoveryCandidate = {
+      storePath: target.storeScope,
+      agentId: target.agentId,
       runId,
       sourceRunId: "source-terminal-persistence",
       lifecycleGeneration: "generation-1",
       sessionKey: "main",
       sessionId: "sess-1",
-      observedAt: terminalRun.projectSessionTerminalObservedAt,
+      observedAt: terminalRun.adapter.projectSessionTerminalObservedAt,
     };
     deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
 
     const timers = startGatewayMaintenanceTimers(deps);
-    await vi.advanceTimersByTimeAsync(59_000);
-    const drain = waitForChatAbortControllerRemoval({
-      entries: deps.chatAbortControllers,
-      targets: [{ runId, entry: terminalRun }],
-      timeoutMs: 15_000,
-    });
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(terminalRun.controller.signal.aborted).toBe(false);
-    expect([await drain, deps.chatAbortControllers.has(runId)]).toEqual([false, false]);
+    expect(terminalRun.input.abortSignal.aborted).toBe(false);
+    expect(rpcSourceTesting.get(runId)).toBe(terminalRun);
     expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 
-  it("evicts an expired non-abortable active run instead of retrying forever", async () => {
+  it("leaves expired inactive registrations to controller cleanup", async () => {
     const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-unabortable";
-    const wedged = createActiveRun("main");
-    wedged.expiresAtMs = Date.now() - 1;
-    // Owner cleanup lost after a direct controller.abort: the entry is no
-    // longer abortable, so the timeout abort returns { aborted: false } and
-    // pre-fix the entry survived every sweep as a phantom active run.
-    wedged.controller.abort();
-    deps.chatAbortControllers.set(runId, wedged);
+    const runId = "run-terminal-persisted";
+    const terminalRun = createActiveRun("main");
+    terminalRun.adapter.projectSessionTerminalPersisted = true;
+    terminalRun.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
+    rpcSourceTesting.set(runId, terminalRun);
 
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    expect(terminalRun.input.abortSignal.aborted).toBe(false);
+    expect(rpcSourceTesting.get(runId)).toBe(terminalRun);
     await stopMaintenanceTimers(timers);
+  });
+
+  it("retains an expired terminal projection until raw source publication finishes", async () => {
+    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
+    const registration = registerChatAbortController({
+      runId: "private-timeout",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      target: captureSessionTarget({
+        storeScope: "/synthetic/maintenance-source",
+        sessionKey: "main",
+        incarnation: "sess-1",
+      }),
+      timeoutMs: 60_000,
+    });
+    const source = registration.entry;
+    if (!source) {
+      throw new Error("Expected registered maintenance source");
+    }
+    const publication = createDeferred();
+    trackSessionControllerSourceWork(source.input, publication.promise);
+    source.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
+    const timers = startGatewayMaintenanceTimers(deps);
+    try {
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(rpcSourceTesting.get("private-timeout")).toBe(source);
+      expect(source.input.abortSignal.aborted).toBe(false);
+      publication.resolve();
+      registration.cleanup();
+      await source.input.settlement.promise;
+      expect(rpcSourceTesting.has("private-timeout")).toBe(false);
+    } finally {
+      publication.resolve();
+      await stopMaintenanceTimers(timers);
+    }
   });
 });

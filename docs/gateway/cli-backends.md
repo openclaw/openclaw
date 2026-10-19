@@ -14,6 +14,10 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Sessions are supported, so follow-up turns stay coherent.
 - Images pass through if the CLI accepts image paths.
 
+With Claude CLI, a successful `sessions_yield` ends the current turn through the
+native interrupt control, suppresses later reply text, and keeps the Claude session
+available for the next child-completion turn.
+
 A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
 <Tip>
@@ -138,7 +142,9 @@ call. The execution-start event still waits for complete arguments; input
 progress does not mean the tool has begun executing. If input generation is
 interrupted, a later text block does not mark the abandoned tool as started.
 
-Direct agent calls and child-completion updates share the same session reply policy.
+Direct agent calls, child-completion updates, and cron wakes targeting an existing
+chat share the same session reply policy. Announce wakes still require an explicit
+message target for that turn; isolated cron runs keep their own delivery policy.
 A completion turn's delivery override does not by itself start a fresh CLI session;
 authentication, workspace, and tool compatibility checks still apply.
 Each turn receives delivery instructions for its current mode and available tools,
@@ -173,6 +179,9 @@ of holding the tool call until it finishes. When completion notifications are
 enabled, the result wakes the originating conversation; a busy conversation handles
 it after its current turn. The continuation retains the originating turn’s tool
 policy, including native and other MCP tools, subject to current session policy.
+Session bookkeeping updates that preserve identity and permissions do not interrupt
+completion wakes. If session storage is unavailable, the Gateway records the failed
+wake with retry guidance; use `process poll` to collect the command result.
 Restricted turns keep their original limits. If only waiting remains, the agent
 reports that the job is running and ends its turn instead of repeatedly polling. Exec policy, configured
 yield windows, command deadlines, and explicit notification settings still apply.
@@ -214,9 +223,11 @@ executable over its structured stdio protocol. Claude Code owns its existing loc
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
 refreshes, or forwards native tokens, or sends synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
-A changed model, system prompt, or tool policy starts a
+A changed model, system prompt, or configured tool surface starts a
 new subprocess. Persisted Claude session IDs still provide
 conversation continuity when the Gateway or subprocess restarts.
+Per-turn owner-only and completion requester restrictions gate bridged tool calls
+without removing their definitions from the session's MCP catalog.
 
 For local plugin-managed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
@@ -440,6 +451,13 @@ The notice prefixes only that native user turn. OpenClaw keeps the original user
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes. A changed auth profile id, static API key, static token, or OAuth account identity all count, when the CLI exposes one. OAuth access and refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
+When the resolved MCP tool names change, OpenClaw starts a fresh native CLI session
+and logs `cli session reset: provider=<backend> reason=prompt-tools`. This refreshes
+the CLI's cached tool catalog; resending prompt text alone cannot refresh it.
+The OpenClaw chat remains intact, and saved-history recovery follows the
+[history account boundaries](#history-account-boundaries) above. System-prompt-only
+changes continue to reuse the native session when the backend can resend the prompt.
+
 ## Fallback prelude from claude-cli sessions
 
 A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults.model.fallbacks`](/concepts/model-failover). OpenClaw then seeds the next attempt with a context prelude harvested from Claude Code's local JSONL transcript. That transcript lives under `~/.claude/projects/`, keyed per workspace. This supplies CLI-owned context that may not be present in OpenClaw's SQLite session transcript.
@@ -459,6 +477,8 @@ imageMode: "repeat"
 ```
 
 OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths are passed as CLI args. If not, OpenClaw appends the file paths to the prompt (path injection), which works for CLIs that auto-load local files from plain paths.
+
+Images come from the current turn's attachments and explicit image references, including reply-to media supplied by the channel. Image paths in injected conversation history or runtime context do not become new attachments on later text-only turns. Starting a new session with `/new` still clears the native conversation binding.
 
 ## Inputs and outputs
 
@@ -628,6 +648,11 @@ permitted tools and supported native capabilities. When a run retains native `Ba
 the saved automation retains its Gateway host target, including with an explicit
 `toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
 still apply; capturing the target does not grant broader execution permission.
+Exec calls that request another host or a node fail with an error naming the
+Gateway pin before the command runs. Calls without an explicit target keep using
+the pin. To change a scheduled job's target, an operator can set an explicit tool
+list with `openclaw cron edit <id> --tools exec`; this replaces the job's tool list
+and clears the captured pin, while current exec policy still applies.
 
 Backends that retain their native shell can also receive a node-only `exec` tool,
 offered only when policy permits it and a connected

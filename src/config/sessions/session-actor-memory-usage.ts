@@ -227,6 +227,7 @@ export function readSessionActorMemoryUsage(
         agentId: context.agentId,
         sessionKey,
         sessionId: entry.sessionId,
+        ...(entry.pluginOwnerId ? { pluginOwnerId: entry.pluginOwnerId } : {}),
         sessionFile: sessionKey,
         storePath: context.path,
         transcriptSource: "sqlite",

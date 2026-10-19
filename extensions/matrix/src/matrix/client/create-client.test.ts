@@ -7,7 +7,7 @@ const maybeMigrateLegacyStorageMock = vi.hoisted(() => vi.fn(async () => undefin
 const resolveMatrixStoragePathsMock = vi.hoisted(() => vi.fn());
 const writeStorageMetaMock = vi.hoisted(() => vi.fn());
 const createSyncStoreMock = vi.hoisted(() => vi.fn());
-const preparedSyncStore = vi.hoisted(() => ({ hasSavedSyncFromCleanShutdown: () => true }));
+const preparedSyncStore = vi.hoisted(() => ({}));
 const MatrixClientMock = vi.hoisted(() => vi.fn());
 const stateRuntimeMock = vi.hoisted(() => ({
   resolveStateDir: vi.fn(),
@@ -112,7 +112,7 @@ describe("createMatrixClient", () => {
     });
   });
 
-  it("loads the persisted replay decision before constructing or returning the client", async () => {
+  it("loads persisted sync state before constructing or returning the client", async () => {
     const hydration = createDeferred<typeof preparedSyncStore>();
     createSyncStoreMock.mockReturnValue(hydration.promise);
     const pending = createMatrixClient({

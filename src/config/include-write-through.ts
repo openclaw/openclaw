@@ -140,7 +140,7 @@ export function setPathValue(
   createParents = false,
 ): unknown {
   if (keyPath.length === 0) {
-    return structuredClone(nextValue);
+    return nextValue;
   }
   const head = expectDefined(keyPath[0], "config path head");
   const tail = keyPath.slice(1);
@@ -478,6 +478,7 @@ export async function publishStagedIncludeWrites(params: {
   configPath: string;
   env?: NodeJS.ProcessEnv;
   assertConfigPathForWrite?: () => void;
+  assertBeforePublish?: () => void;
   skipOutputLogs?: boolean;
   // This write's own copy of the load-time graph. Each published leaf advances
   // its key here, so later leaves and the caller's root guard expect the bytes
@@ -586,6 +587,7 @@ export async function publishStagedIncludeWrites(params: {
         // The rename callback registers compensation before descriptor cleanup can throw;
         // copy fallback damage instead uses the bytes left by its failed write.
         try {
+          params.assertBeforePublish?.();
           preparedFile.publish();
         } catch (error) {
           if (publication.phase === "removed") {

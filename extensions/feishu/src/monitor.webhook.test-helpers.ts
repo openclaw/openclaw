@@ -1,7 +1,8 @@
-// Feishu helper module supports monitor.webhook helpers behavior.
 import crypto from "node:crypto";
 import { createServer } from "node:http";
 import { createConnection, type AddressInfo } from "node:net";
+import { text } from "node:stream/consumers";
+import { promisify } from "node:util";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -17,6 +18,14 @@ import { FeishuConfigSchema } from "./config-schema.js";
 import type { FeishuStatusSink, monitorFeishuProvider } from "./monitor.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+type WebhookConfigParams = {
+  accountId: string;
+  path: string;
+  verificationToken?: string;
+  encryptKey?: string;
+};
+const webhookAuth = { encryptKey: "encrypt_key", verificationToken: "verify_token" };
+const webhookDefaults = { enabled: true, connectionMode: "webhook" } as const;
 const registry = createEmptyPluginRegistry();
 const pendingRoutes = new Map<string, Set<() => void>>();
 const routeSplice = registry.httpRoutes.splice.bind(registry.httpRoutes);
@@ -39,8 +48,7 @@ const gatewayServer = createServer((req, res) => {
     (entry) => entry.path === canonicalizeWebhookRouteKey(req.url ?? "/"),
   );
   if (!route) {
-    res.statusCode = 404;
-    res.end("Not Found");
+    res.writeHead(404).end("Not Found");
     return;
   }
   Promise.resolve(route.handler(req, res)).catch((err: unknown) => {
@@ -69,9 +77,7 @@ export function getGatewayPort(): Promise<number> {
 afterAll(async () => {
   gatewayServer.closeAllConnections();
   if (gatewayServer.listening) {
-    await new Promise<void>((resolve, reject) => {
-      gatewayServer.close((err) => (err ? reject(err) : resolve()));
-    });
+    await promisify(gatewayServer.close.bind(gatewayServer))();
   }
 });
 
@@ -97,14 +103,11 @@ export function createFeishuWebhookTestAccount(
     enabled: true,
     configured: true,
     domain: "feishu",
-    encryptKey: "encrypt_key",
-    verificationToken: "verify_token",
+    ...webhookAuth,
     config: FeishuConfigSchema.parse({
-      enabled: true,
-      connectionMode: "webhook",
+      ...webhookDefaults,
       webhookPath,
-      encryptKey: "encrypt_key",
-      verificationToken: "verify_token",
+      ...webhookAuth,
     }),
   };
 }
@@ -156,56 +159,32 @@ export async function sendRawSignedFeishuRequest(params: {
     .map(([name, value]) => `${name}: ${value}`)
     .join("\r\n");
 
-  return await new Promise<string>((resolve, reject) => {
-    let response = "";
-    const socket = createConnection({ host: "127.0.0.1", port: params.port }, () => {
-      socket.end(
-        `${params.method ?? "POST"} ${params.target} HTTP/1.1\r\nHost: localhost\r\n` +
-          `${rawHeaders}\r\nContent-Length: ${Buffer.byteLength(params.rawBody)}\r\n` +
-          `Connection: close\r\n\r\n${params.rawBody}`,
-      );
-    });
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk) => {
-      response += chunk.toString();
-    });
-    socket.on("end", () => resolve(response));
-    socket.on("error", reject);
+  const socket = createConnection({ host: "127.0.0.1", port: params.port }, () => {
+    socket.end(
+      `${params.method ?? "POST"} ${params.target} HTTP/1.1\r\nHost: localhost\r\n` +
+        `${rawHeaders}\r\nContent-Length: ${Buffer.byteLength(params.rawBody)}\r\n` +
+        `Connection: close\r\n\r\n${params.rawBody}`,
+    );
   });
+  return text(socket);
 }
 
-export function buildWebhookConfig(params: {
-  accountId: string;
-  path: string;
-  verificationToken?: string;
-  encryptKey?: string;
-}): ClawdbotConfig {
-  return {
-    channels: {
-      feishu: {
-        enabled: true,
-        accounts: {
-          [params.accountId]: {
-            enabled: true,
-            appId: "cli_test",
-            appSecret: "secret_test", // pragma: allowlist secret
-            connectionMode: "webhook",
-            webhookPath: params.path,
-            encryptKey: params.encryptKey,
-            verificationToken: params.verificationToken,
-          },
-        },
-      },
+export function buildWebhookConfig(params: WebhookConfigParams): ClawdbotConfig {
+  const accounts = {
+    [params.accountId]: {
+      ...webhookDefaults,
+      appId: "cli_test",
+      appSecret: "secret_test", // pragma: allowlist secret
+      webhookPath: params.path,
+      encryptKey: params.encryptKey,
+      verificationToken: params.verificationToken,
     },
-  } as ClawdbotConfig;
+  };
+  return { channels: { feishu: { enabled: true, accounts } } } as ClawdbotConfig;
 }
 
 export async function withRunningWebhookMonitor(
-  params: {
-    accountId: string;
-    path: string;
-    verificationToken: string;
-    encryptKey: string;
+  params: Required<WebhookConfigParams> & {
     runtime?: RuntimeEnv;
     statusSink?: FeishuStatusSink;
   },
@@ -213,12 +192,10 @@ export async function withRunningWebhookMonitor(
   run: (url: string) => Promise<void>,
 ) {
   const port = await getGatewayPort();
-  const cfg = buildWebhookConfig(params);
   const abortController = new AbortController();
-  const runtime = params.runtime ?? { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const monitorPromise = monitor({
-    config: cfg,
-    runtime,
+    config: buildWebhookConfig(params),
+    runtime: params.runtime ?? { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     abortSignal: abortController.signal,
     accountId: params.accountId,
     statusSink: params.statusSink,

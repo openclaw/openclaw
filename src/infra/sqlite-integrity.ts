@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
@@ -36,7 +37,7 @@ export type SqliteIntegrityDiagnostics = {
     | "stale-lease-full"
     | "process-death"
     | "dirty-receipt"
-    | "no-proof"
+    | SqliteCleanCloseSealRefusal
     | "lease-class";
   integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;
@@ -123,6 +124,7 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
 export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
+  repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
 ): T {
   beforeResume?.();
   let step = operation.next();
@@ -135,6 +137,19 @@ export function runSqliteIntegrityOperationSync<T>(
     }
     // A blocking check can outlive its caller; both success and failure resume schema work.
     beforeResume?.();
+    if (failure && repairIntegrityError) {
+      const original = failure.error;
+      try {
+        if (repairIntegrityError(step.value, original)) {
+          failure = undefined;
+        }
+      } catch (repairError) {
+        // Keep the original corruption verdict so failed repair retains quarantine policy.
+        if (original instanceof Error) {
+          original.message += ` Startup FTS repair failed: ${String(repairError)}`;
+        }
+      }
+    }
     step = failure ? operation.throw(failure.error) : operation.next();
   }
   return step.value;

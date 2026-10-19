@@ -272,14 +272,7 @@ export async function preparePluginCacheFact<T>(
   signal.throwIfAborted();
   let current = facts.get(key);
   if (!current) {
-    const release = retainPluginCache(owner);
-    let reading: Promise<T>;
-    try {
-      reading = read();
-    } catch (error) {
-      release();
-      throw error;
-    }
+    const reading = read();
     const pending: { pending: Promise<{ value: T }> } = {
       pending: reading
         .then((value) => {
@@ -299,8 +292,7 @@ export async function preparePluginCacheFact<T>(
             facts.delete(key);
           }
           throw error;
-        })
-        .finally(release),
+        }),
     };
     facts.set(key, pending);
     current = pending;

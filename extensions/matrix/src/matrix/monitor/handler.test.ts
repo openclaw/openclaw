@@ -329,17 +329,6 @@ async function createDmNoticeHarness(
   return { ...harness, storePath, sendNotice, receive };
 }
 
-function createReplayClaim() {
-  const commit = vi.fn(async () => true);
-  const release = vi.fn();
-  const inboundDeduper = {
-    claim: vi.fn(async () => ({
-      kind: "claimed" as const,
-      handle: { keys: ["test"] as const, commit, release },
-    })),
-  };
-  return { commit, release, inboundDeduper };
-}
 describe("matrix monitor handler pairing account scope", () => {
   it("logs inbound UTF-16 length without a message preview", async () => {
     const logVerboseMessage = vi.fn();
@@ -682,75 +671,13 @@ describe("matrix monitor handler pairing account scope", () => {
       expect(upsertPairingRequest).not.toHaveBeenCalled();
     }
   });
-
-  it("drops pre-startup dm messages on cold start", async () => {
-    const resolveAgentRoute = vi.fn(() => agentRoute());
-    const { handler } = createHarness({
-      resolveAgentRoute,
-      isDirectMessage: true,
-      startupMs: 1_000,
-      dropPreStartupMessages: true,
-    });
-    await receiveText(handler, { eventId: "$old-cold-start", body: "hello", originServerTs: 999 });
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
-  });
 });
 
 registerMatrixLiveAllowlistTests();
 
-describe("matrix monitor handler durable inbound dedupe", () => {
-  it("skips replayed inbound events before session recording", async () => {
-    const inboundDeduper = { claim: vi.fn(async () => ({ kind: "duplicate" as const })) };
-    const { handler, recordInboundSession } = createHarness({
-      inboundDeduper,
-      dispatchInboundMessage: vi.fn(async () => dispatchResult(1, 0)),
-    });
-    await receiveText(handler, { eventId: "$dup", body: "hello" });
-    expect(inboundDeduper.claim).toHaveBeenCalledWith({ roomId: ROOM, eventId: "$dup" });
-    expect(recordInboundSession).not.toHaveBeenCalled();
-  });
-
-  it("commits a claimed event when bot loop protection suppresses dispatch", async () => {
-    const { commit, release, inboundDeduper } = createReplayClaim();
-    const runPrepared = vi.fn(
-      async (turn: { ctxPayload: Record<string, unknown>; routeSessionKey: string }) => ({
-        admission: { kind: "drop" as const, reason: "bot-loop-protection" as const },
-        dispatched: false as const,
-        ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.routeSessionKey,
-      }),
-    );
-    const { handler, recordInboundSession } = createHarness({
-      accountAllowBots: true,
-      configuredBotUserIds: new Set(["@ops:example.org"]),
-      inboundDeduper,
-      isDirectMessage: false,
-      roomsConfig: { [ROOM]: { requireMention: false } },
-      runPrepared,
-    });
-    await receiveText(handler, {
-      eventId: "$bot-loop-drop",
-      sender: "@ops:example.org",
-      body: "hello from bot",
-    });
-    expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(commit).toHaveBeenCalledOnce();
-    expect(release).not.toHaveBeenCalled();
-  });
-
-  it("sends one durable threaded notice and commits replay after restart tombstone rejection", async () => {
+describe("matrix monitor handler failure handling", () => {
+  it("sends a durable threaded notice after restart tombstone rejection", async () => {
     const callOrder: string[] = [];
-    const commit = vi.fn(async () => {
-      callOrder.push("commit");
-      return true;
-    });
-    const release = vi.fn();
-    const inboundDeduper = {
-      claim: vi.fn(async () => {
-        callOrder.push("claim");
-        return { kind: "claimed" as const, handle: { keys: ["test"] as const, commit, release } };
-      }),
-    };
     const runtime = { error: vi.fn() };
     const dispatchInboundMessage = vi.fn(async () => {
       callOrder.push("dispatch");
@@ -763,7 +690,6 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       return { messageId: "$notice", roomId: ROOM };
     });
     const { handler } = createHarness({
-      inboundDeduper,
       runtime: runtime as never,
       recordInboundSession: vi.fn(async () => {
         callOrder.push("record");
@@ -796,18 +722,14 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       deliveryPartCount: 1,
       extraContent: { msgtype: "m.notice" },
     });
-    expect(commit).toHaveBeenCalledOnce();
-    expect(release).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
-    expect(callOrder).toEqual(["claim", "record", "dispatch", "notice", "commit"]);
+    expect(callOrder).toEqual(["record", "dispatch", "notice"]);
   });
 
-  it("releases replay for retry when the restart tombstone notice cannot be sent", async () => {
-    const { commit, release, inboundDeduper } = createReplayClaim();
+  it("propagates a failed restart tombstone notice for ingress retry", async () => {
     const runtime = { error: vi.fn() };
     sendMessageMatrixMock.mockRejectedValueOnce(new Error("homeserver unavailable"));
     const { handler } = createHarness({
-      inboundDeduper,
       runtime: runtime as never,
       dispatchInboundMessage: vi.fn(async () => {
         throw Object.assign(new Error("session ended during restart recovery"), {
@@ -815,22 +737,20 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         });
       }),
     });
-    await receiveText(handler, { eventId: "$tombstone-notice-failed", body: "continue" });
+    await expect(
+      receiveText(handler, { eventId: "$tombstone-notice-failed", body: "continue" }),
+    ).rejects.toThrow("homeserver unavailable");
     expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
-    expect(commit).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
     expectRuntimeErrorContaining(
       runtime.error,
       "failed completing restart-recovery tombstone notice",
     );
   });
 
-  it("keeps replay committed when queued block delivery fails after a generic error", async () => {
+  it("reports a queued block delivery failure after dispatch", async () => {
     const kind = "block";
-    const { commit, release, inboundDeduper } = createReplayClaim();
     const runtime = { error: vi.fn() };
     const { handler } = createHarness({
-      inboundDeduper,
       runtime: runtime as never,
       dispatchInboundMessage: vi.fn(async () => dispatchResult(0, 1)),
       createReplyDispatcherWithTyping: (params) =>
@@ -839,8 +759,6 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         }),
     });
     await receiveText(handler, { eventId: `$release-on-${kind}-delivery-error`, body: "hello" });
-    expect(commit).toHaveBeenCalledOnce();
-    expect(release).not.toHaveBeenCalled();
     expectRuntimeErrorContaining(runtime.error, `matrix ${kind} reply failed`);
   });
 });
@@ -1291,7 +1209,9 @@ describe("matrix monitor handler draft streaming", () => {
           throw new Error("model timeout");
         }) as never,
       });
-      const handlerDone = receiveText(handler, { eventId: "$msg1", body: "hello" });
+      const handlerDone = expect(
+        receiveText(handler, { eventId: "$msg1", body: "hello" }),
+      ).rejects.toThrow("model timeout");
       if (streaming === "quiet") {
         await waitForDrafts();
         pendingDraft.resolve({ messageId: "$draft1", roomId: "!room" });

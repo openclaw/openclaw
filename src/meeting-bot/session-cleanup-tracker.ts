@@ -1,3 +1,5 @@
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+
 type MeetingSessionCleanupProgress = {
   browserLeft?: boolean;
   browserSettled: boolean;
@@ -72,15 +74,7 @@ export class MeetingSessionCleanupTracker {
             state.stops.delete(stop);
           }),
         );
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "Meeting runtime cleanup failed");
-        }
+        throwIfSettledRejected(results, "Meeting runtime cleanup failed");
       })
       .finally(() => {
         if (state.stopping === stopping) {

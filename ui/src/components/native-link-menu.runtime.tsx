@@ -1,8 +1,9 @@
-import { createMemo, createUniqueId, onCleanup } from "solid-js";
+import { createMemo, createUniqueId } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { activateMenuShortcut } from "./menu-shortcuts.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
+import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
@@ -22,11 +23,14 @@ export type NativeLinkMenu = SolidBridgeElement<Props>;
 
 export const NativeLinkMenu = defineSolidBridge<Props>(
   "openclaw-native-link-menu",
-  (props, host) => {
+  (props) => {
     const id = createUniqueId();
     let menu: MenuHandle | undefined;
-    const shortcut = (event: KeyboardEvent) => activateMenuShortcut(host, event);
-    onCleanup(() => menu?.overlay.surface.removeEventListener("keydown", shortcut, true));
+    const shortcut = nativeListener(
+      "keydown",
+      (event) => activateMenuShortcut(menu?.overlay.surface, event),
+      true,
+    );
     const actions = [
       ["inline", "s", "openInline", "panelRightOpen"],
       ["external", "b", "openExternal", "externalLink"],
@@ -80,7 +84,7 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
           if (props.trigger) {
             handle.overlay.setReturnTarget(props.trigger);
           }
-          handle.overlay.surface.addEventListener("keydown", shortcut, true);
+          shortcut(handle.overlay.surface);
           handle.open();
         }}
         onSelect={(item, event) => {

@@ -28,7 +28,7 @@ import {
   retainGatewayRootWorkAdmissionContinuationScope,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import * as agentDatabaseLifecycle from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -266,7 +266,7 @@ describe("Gateway RPC fixture session writes", () => {
       await seed();
       const admission =
         owner === "session"
-          ? await beginSessionWorkAdmission({
+          ? await beginSessionEffect({
               scope: storePath,
               identities: [scope.sessionKey, "admitted-write"],
               assertAllowed: () => {},

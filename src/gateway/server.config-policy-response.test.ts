@@ -54,7 +54,7 @@ describe("config writer policy-close ordering", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["root", "include"] as const)(
+  it.each(["root", "include", "mixed"] as const)(
     "refuses a revoked requester before publishing its prepared %s config",
     async (target) => {
       const token = "config-publication-admin-token";
@@ -66,13 +66,38 @@ describe("config writer policy-close ordering", () => {
         reload: { mode: "hybrid" },
       };
       const includePath = state.statePath("gateway.json5");
+      const agentPath = state.statePath("agent.json5");
+      const catalogPath = state.statePath("models.json5");
       if (target === "include") {
         await state.writeJson("gateway.json5", gateway);
+      }
+      if (target === "mixed") {
+        await state.writeJson("agent.json5", {
+          name: "Original agent",
+          workspace: state.workspaceDir,
+        });
+        await state.writeJson("models.json5", [{ id: "llama3", name: "llama3" }]);
       }
       await state.writeConfig({
         gateway: target === "include" ? { $include: "./gateway.json5" } : gateway,
         logging: { level: "silent", consoleLevel: "silent" },
-        agents: { defaults: { workspace: state.workspaceDir } },
+        agents:
+          target === "mixed"
+            ? { ownership: "explicit", entries: { main: { $include: "./agent.json5" } } }
+            : { defaults: { workspace: state.workspaceDir } },
+        ...(target === "mixed"
+          ? {
+              models: {
+                providers: {
+                  ollama: {
+                    baseUrl: "http://127.0.0.1:11434",
+                    api: "ollama",
+                    models: { $include: "./models.json5" },
+                  },
+                },
+              },
+            }
+          : {}),
       });
       const port = await getFreePort();
       server = await startGatewayServerCore(port, { controlUiEnabled: false });
@@ -127,11 +152,18 @@ describe("config writer policy-close ordering", () => {
       const writer = await connect(true);
       const admin = await connect(false);
       const before = await writer.client.request<ConfigSnapshot>("config.get");
-      const writtenPath = target === "include" ? includePath : state.configPath;
-      await fs.writeFile(`${writtenPath}.bak`, "retained latest backup\n");
-      await fs.writeFile(`${writtenPath}.bak.1`, "retained previous backup\n");
+      const writtenPath =
+        target === "include" ? includePath : target === "mixed" ? agentPath : state.configPath;
+      const sourcePaths =
+        target === "mixed" ? [state.configPath, agentPath, catalogPath] : [writtenPath];
+      for (const sourcePath of sourcePaths) {
+        await fs.writeFile(`${sourcePath}.bak`, "retained latest backup\n");
+        await fs.writeFile(`${sourcePath}.bak.1`, "retained previous backup\n");
+      }
       const captureFiles = async () => {
-        const basenames = [path.basename(state.configPath), path.basename(includePath)];
+        const basenames = [state.configPath, includePath, agentPath, catalogPath].map((file) =>
+          path.basename(file),
+        );
         const names = (await fs.readdir(path.dirname(state.configPath)))
           .filter((name) =>
             basenames.some((base) => name === base || name.startsWith(`${base}.bak`)),
@@ -168,6 +200,21 @@ describe("config writer policy-close ordering", () => {
           baseHash: before.hash,
           raw: JSON.stringify({
             gateway: { controlUi: { allowedOrigins: ["https://next.example.test"] } },
+            ...(target === "mixed"
+              ? {
+                  agents: { entries: { main: { name: "Changed agent" } } },
+                  models: {
+                    providers: {
+                      ollama: {
+                        models: [
+                          { id: "llama3", name: "llama3" },
+                          { id: "qwen3", name: "qwen3" },
+                        ],
+                      },
+                    },
+                  },
+                }
+              : {}),
           }),
         })
         .then(

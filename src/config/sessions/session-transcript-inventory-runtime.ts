@@ -4,16 +4,14 @@ import type {
   SessionTranscriptCorpusScope,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
-import {
-  readSessionEntryInWorker,
-  withSessionStoreReaderInWorker,
-} from "./session-entry-read-runtime.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import {
   resolveMemorySessionSince,
   unresolvedMemorySessionTarget,
@@ -104,21 +102,12 @@ export async function readSessionTranscriptCorpusInWorker(
   }
   return withSessionStoreReaderInWorker(
     input,
-    async ({ reader, database, continuation, assertCurrent, onRegistryChange }) => {
+    async ({ reader, database, continuation, assertCurrent }) => {
       const artifacts = await prepareArtifacts();
       assertCurrent();
       if (options.readOnly !== true && !continuation) {
         // Default corpus discovery retains its historical writable-open admission.
-        await readSessionEntryInWorker(
-          {
-            agentId: database.agentId,
-            storePath: database.path,
-            env: database.env,
-            sessionKey: "",
-          },
-          assertCurrent,
-          onRegistryChange,
-        );
+        await prepareOpenClawAgentDatabaseExecution(database, assertCurrent);
       }
       const entries = await reader.readCorpusInventory({ scope, options, artifacts, continuation });
       assertCurrent();

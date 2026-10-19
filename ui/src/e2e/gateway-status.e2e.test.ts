@@ -5,7 +5,11 @@ import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -191,7 +195,11 @@ suite.define(() => {
         .poll(async () => (await composer.boundingBox())!.x - (await flagRight()))
         .toBeGreaterThanOrEqual(0);
       await page.clock.install();
+      // Keep the four-second reveal window independent of assertion time on slow runners.
+      await pauseVirtualClock(page);
       await gateway.setOnline(false);
+      // Offline presentation waits for the gateway's two-second grace period.
+      await page.clock.runFor(2_001);
       const retainedStatus = page.locator(
         ".sidebar-identity-card[data-connection-status=reconnecting]",
       );
@@ -211,6 +219,7 @@ suite.define(() => {
       expect(await retainedStatus.getAttribute("title")).toBe("");
       await page.clock.runFor(4_001);
       await flag.waitFor({ state: "hidden" });
+      await page.clock.resume();
       await retainedStatus.hover();
       await retry.waitFor({ state: "visible" });
       await page.clock.runFor(200);
@@ -256,7 +265,6 @@ suite.define(() => {
       await page.clock.runFor(200);
       expect(await flag.isVisible()).toBe(false);
       await identityTooltip.waitFor({ state: "visible" });
-      await page.clock.resume();
     });
   });
 

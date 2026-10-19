@@ -15,6 +15,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import {
   adoptPreparedLocation,
   removeTempDirectory,
@@ -27,6 +28,7 @@ import type {
   PreparedSqliteReadOnlyLocation,
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
+  SqlitePrivateSnapshotFamily,
 } from "./sqlite-readonly-location.types.js";
 import {
   resolveSqliteInspectionSignal,
@@ -169,7 +171,13 @@ export function startSqliteReadOnlyLocationAsync(
                 "SQLite snapshot producer returned an allocation without its prepared location",
               );
             }
-            return adoptPreparedLocation(reply.location, reply.directory, requireCleanup);
+            const prepared = adoptPreparedLocation(reply.location, reply.directory, requireCleanup);
+            // This producer lends only read-only images. Capture before flight publication:
+            // another reader's last close can remove the WAL before a later borrower arrives.
+            prepared.privateFamily = preserveSourceArtifacts
+              ? captureSqlitePrivateSnapshotFamily(reply.location, reply.directory)
+              : undefined;
+            return prepared;
           }),
           startClose: () => task.startClose(),
         };
@@ -312,6 +320,29 @@ async function useAwaitedSnapshotWorker<T>(
     }
     throw error;
   }
+}
+
+/** The retained read owner supplies the family before any native consumer can change its WAL. */
+export async function forkSqlitePrivateSnapshot(
+  pathname: string,
+  family: SqlitePrivateSnapshotFamily,
+  signal: AbortSignal,
+  assertCurrent: () => void,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  return useAwaitedSnapshotWorker(signal, undefined, async (worker, directory) => {
+    const location = await worker.run(pathname, {
+      mode: "private-fork",
+      family,
+      stagingRoot: directory,
+      signal,
+    });
+    if (typeof location !== "string") {
+      throw new Error("SQLite private fork returned an invalid location");
+    }
+    signal.throwIfAborted();
+    assertCurrent();
+    return adoptPreparedLocation(location, directory);
+  });
 }
 
 function prepareWorkerSnapshot(

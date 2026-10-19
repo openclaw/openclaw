@@ -20,6 +20,10 @@ async function swipe(
 ) {
   const before = await thread.evaluate((element) => element.scrollTop);
   const timestamp = Date.now() / 1000;
+  // A 160px native text drag can commit only 105px before release on CI.
+  // Travel 240px at the same velocity without relaxing the scroll assertions.
+  const moveCount = 12;
+  const moveSeconds = 0.016;
   const moves: number[] = [];
   await cdp.send("Input.dispatchTouchEvent", {
     type: "touchStart",
@@ -35,12 +39,12 @@ async function swipe(
     return { done, dispose: () => element.removeEventListener("scrollend", finish) };
   });
   try {
-    for (let step = 1; step <= 8; step++) {
+    for (let step = 1; step <= moveCount; step++) {
       await cdp.send("Input.dispatchTouchEvent", {
         type: "touchMove",
         touchPoints: [{ ...point, y: point.y + direction * step * 20, id: 1 }],
         // Preserve physical gesture velocity independently of CDP round-trip latency.
-        timestamp: timestamp + step * 0.016,
+        timestamp: timestamp + step * moveSeconds,
       });
       // CDP acknowledgment can precede the renderer's scroll offset update.
       moves.push(
@@ -63,7 +67,7 @@ async function swipe(
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchEnd",
       touchPoints: [],
-      timestamp: timestamp + 0.13,
+      timestamp: timestamp + moveCount * moveSeconds + 0.002,
     });
     // A quiet timer window can occur during native inertia; wait for its actual end.
     const completed = await page.waitForFunction(

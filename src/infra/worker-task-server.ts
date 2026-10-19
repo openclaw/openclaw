@@ -15,7 +15,7 @@ import {
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
-import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,

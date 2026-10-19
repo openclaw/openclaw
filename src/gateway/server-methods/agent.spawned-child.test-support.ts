@@ -1,5 +1,4 @@
 import path from "node:path";
-import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
@@ -16,6 +15,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveAgentTestConfig } from "./agent.mocks.test-utils.js";
+import { settleAgentSubagentWakeRoots } from "./agent.subagent-registry.mocks.test-support.js";
 import {
   type AgentHandlerArgs,
   getAgentTestMocks,
@@ -82,6 +82,7 @@ export function createPluginSubagentTestLifetime(params: {
       cleanup[Symbol.dispose]();
       await work.drain();
       await resetSubagentRegistryForTests({ persist: false });
+      await settleSubagentRegistryPersistenceWork(settleAgentSubagentWakeRoots);
       await cleanupSessionStateForTest({ stateDir: params.root });
     },
   };
@@ -123,10 +124,9 @@ export async function withPluginSubagentTestState(
   } finally {
     // Stop producers, then join admitted work before deleting storage. A failed join retains it.
     await resetSubagentRegistryForTests({ persist: false });
-    await vi.dynamicImportSettled();
-    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-    await settleSubagentRegistryPersistenceWork();
+    await settleSubagentRegistryPersistenceWork(settleAgentSubagentWakeRoots);
     await resetSubagentRegistryForTests({ persist: false });
+    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
     await state.cleanup();
   }
 }

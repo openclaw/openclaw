@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, createSignal, onCleanup } from "solid-js";
 import {
   validateApprovalHistoryResult,
   type ApprovalHistoryResult,
@@ -17,6 +17,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import {
   SettingsPage,
@@ -29,6 +30,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
@@ -130,6 +132,7 @@ export function ApprovalsPage() {
   const state: {
     items: TerminalApprovalSnapshot[];
     grants: ExecApprovalStandingGrant[];
+    grantsLoaded: boolean;
     grantsError: string | null;
     revokingGrantId: string | null;
     nextCursor: string | null;
@@ -139,6 +142,7 @@ export function ApprovalsPage() {
     approvalsAccess: boolean;
     client: GatewayBrowserClient | null;
     gatewaySource: ApplicationContext["gateway"] | null;
+    presentationScopeKey: number | null;
     requestGeneration: number;
     grantsGeneration: number;
     hasLoaded: boolean;
@@ -146,6 +150,7 @@ export function ApprovalsPage() {
   } = {
     items: [],
     grants: [],
+    grantsLoaded: false,
     grantsError: null,
     revokingGrantId: null,
     nextCursor: null,
@@ -155,6 +160,7 @@ export function ApprovalsPage() {
     approvalsAccess: true,
     client: null,
     gatewaySource: null,
+    presentationScopeKey: null,
     requestGeneration: 0,
     grantsGeneration: 0,
     hasLoaded: false,
@@ -164,44 +170,39 @@ export function ApprovalsPage() {
     revision();
     return state;
   };
-  createEffect(
-    () => context.gateway,
-    (gateway) => {
-      resetHistory(true);
-      state.gatewaySource = gateway;
-      applyGatewaySnapshot(gateway.snapshot);
-      // Gateway receipts retire history and grant reads before reconnect or access changes settle them.
-      const stopSnapshots = gateway.subscribe((snapshot) => {
-        if (state.gatewaySource === gateway && context.gateway === gateway) {
-          applyGatewaySnapshot(snapshot);
-        }
-      });
-      const stopEvents = gateway.subscribeEvents((event) => {
-        if (
-          state.gatewaySource !== gateway ||
-          context.gateway !== gateway ||
-          !state.approvalsAccess ||
-          !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
-          !parseApprovalResolvedEvent(event.event, event.payload)
-        ) {
-          return;
-        }
-        state.historyRefreshPending = true;
-        if (state.loadKind === null) {
-          void loadPage(true);
-        }
-      });
-      return () => {
-        stopSnapshots();
-        stopEvents();
-        resetHistory(false);
-        state.gatewaySource = null;
-      };
+  let stopEvents: (() => void) | undefined;
+  useGatewayPage({
+    getGateway: () => context.gateway,
+    onSnapshot: ({ snapshot, initial, sourceChanged }) => {
+      if (initial || sourceChanged) {
+        stopEvents?.();
+        resetHistory(true);
+        const gateway = context.gateway;
+        state.gatewaySource = gateway;
+        stopEvents = gateway.subscribeEvents((event) => {
+          if (
+            state.gatewaySource !== gateway ||
+            context.gateway !== gateway ||
+            !state.approvalsAccess ||
+            !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
+            !parseApprovalResolvedEvent(event.event, event.payload)
+          ) {
+            return;
+          }
+          state.historyRefreshPending = true;
+          if (state.loadKind === null) {
+            void loadPage(true);
+          }
+        });
+      }
+      applyGatewaySnapshot(snapshot);
     },
-  );
+  });
   onCleanup(() => {
     disposed = true;
+    stopEvents?.();
     resetHistory(false);
+    state.gatewaySource = null;
   });
 
   function resetHistory(clearData: boolean) {
@@ -211,6 +212,7 @@ export function ApprovalsPage() {
     state.revokingGrantId = null;
     if (clearData) {
       state.grants = [];
+      state.grantsLoaded = false;
       state.grantsError = null;
       state.hasLoaded = false;
       state.items = [];
@@ -220,13 +222,19 @@ export function ApprovalsPage() {
   }
 
   function applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const clientChanged = snapshot.client !== state.client;
+    const scopeKey = state.gatewaySource ? gatewayPresentationScope(state.gatewaySource).key : null;
+    const identityChanged =
+      snapshot.client !== state.client || scopeKey !== state.presentationScopeKey;
+    state.presentationScopeKey = scopeKey;
     const connectionChanged = (snapshot.phase === "connected") !== state.connected;
-    const nextApprovalsAccess = readGatewayOperatorAccess(snapshot).canReviewApprovals;
+    const nextApprovalsAccess =
+      snapshot.phase === "connected"
+        ? readGatewayOperatorAccess(snapshot).canReviewApprovals
+        : state.approvalsAccess;
     const approvalAccessChanged = nextApprovalsAccess !== state.approvalsAccess;
     state.connected = snapshot.phase === "connected";
     state.approvalsAccess = nextApprovalsAccess;
-    if (clientChanged || approvalAccessChanged) {
+    if (identityChanged || approvalAccessChanged) {
       state.client = snapshot.client;
       resetHistory(true);
     } else if (connectionChanged) {
@@ -317,6 +325,7 @@ export function ApprovalsPage() {
         return;
       }
       state.grants = result.grants;
+      state.grantsLoaded = true;
       state.grantsError = null;
       publish();
     } catch (error) {
@@ -408,7 +417,7 @@ export function ApprovalsPage() {
             <button
               class="btn btn--sm"
               aria-label={`${revokeLabel()}: ${props.grant.cronJobName ?? props.grant.cronJobId} — ${props.grant.command}`}
-              disabled={view().revokingGrantId !== null}
+              disabled={!view().connected || view().revokingGrantId !== null}
               onClick={() => void revokeGrant(props.grant.grantId)}
             >
               {revokeLabel()}
@@ -480,7 +489,11 @@ export function ApprovalsPage() {
           {view().approvalsAccess && view().error ? (
             <div class="callout danger" role="alert">
               {view().error}
-              <button class="btn btn--sm" onClick={() => void loadPage(true)}>
+              <button
+                class="btn btn--sm"
+                disabled={!view().connected}
+                onClick={() => void loadPage(true)}
+              >
                 {t("common.retry")}
               </button>
             </div>
@@ -517,7 +530,14 @@ export function ApprovalsPage() {
                     </thead>
                     <tbody>
                       {view().grants.length === 0 ? (
-                        <EmptyRow columns={5} label={t("standingGrants.empty")} />
+                        <EmptyRow
+                          columns={5}
+                          label={t(
+                            view().grantsLoaded
+                              ? "standingGrants.empty"
+                              : "approvalHistory.unknown",
+                          )}
+                        />
                       ) : (
                         <For each={view().grants} keyed={(grant) => grant.grantId}>
                           {(grant) => <GrantRow grant={grant()} />}
@@ -585,7 +605,7 @@ export function ApprovalsPage() {
                       <div class="data-table-pagination__controls">
                         {view().nextCursor ? (
                           <button
-                            disabled={view().loadKind === "more"}
+                            disabled={!view().connected || view().loadKind === "more"}
                             onClick={() => void loadPage(false)}
                           >
                             {t(

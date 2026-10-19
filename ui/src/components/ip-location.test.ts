@@ -77,6 +77,27 @@ describe("openclaw-ip-location", () => {
     expect(element.textContent?.trim()).toBe("");
   });
 
+  it("clears the previous location while a replacement address is pending", async () => {
+    const replacement = createDeferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ found: true, city: "Vienna", country: "Austria" }))
+      .mockReturnValueOnce(replacement.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const element = document.createElement("openclaw-ip-location");
+    element.ip = "203.0.113.24";
+    document.body.append(element);
+    await settleUntil(element, () => element.textContent?.trim() === "Vienna, Austria");
+
+    element.ip = "203.0.113.25";
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(element.textContent?.trim()).toBe("");
+
+    replacement.resolve(jsonResponse({ found: true, city: "Berlin", country: "Germany" }));
+    await settleUntil(element, () => element.textContent?.trim() === "Berlin, Germany");
+  });
+
   it("does not request anything without an address", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

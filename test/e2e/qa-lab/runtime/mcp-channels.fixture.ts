@@ -4,9 +4,18 @@
 import crypto from "node:crypto";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { z } from "zod";
+import { resolveGatewaySuccessPayload } from "../../../../scripts/e2e/lib/gateway-frame-payload.mjs";
+import { readMcpChannelLimits } from "../../../../scripts/e2e/mcp-channel-limits.ts";
+import { createGatewayWsClient } from "../../../../scripts/lib/gateway-ws-client.ts";
+import {
+  connectMcpWithTimeout,
+  createMcpClientTempState,
+  type McpClientTempState,
+} from "./mcp-client-temp-state.fixture.ts";
+
 const protocolModulePath = "../../../../dist/gateway/protocol/index.js" as string;
 const errorsModulePath = "../../../../dist/infra/errors.js" as string;
 const stringCoerceModulePath = "../../../../dist/normalization-core/string-coerce.js" as string;
@@ -19,15 +28,6 @@ const [{ PROTOCOL_VERSION }, { formatErrorMessage }, { readStringValue }] = awai
     typeof import("../../../../packages/normalization-core/src/string-coerce.js")
   >,
 ]);
-import { resolveGatewaySuccessPayload } from "../../../../scripts/e2e/lib/gateway-frame-payload.mjs";
-import { readMcpChannelLimits } from "../../../../scripts/e2e/mcp-channel-limits.ts";
-import { createGatewayWsClient } from "../../../../scripts/lib/gateway-ws-client.ts";
-import {
-  connectMcpWithTimeout,
-  createMcpClientTempState,
-  type McpClientTempState,
-} from "./mcp-client-temp-state.fixture.ts";
-
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
   params: z.object({
@@ -455,7 +455,10 @@ export async function connectMcpClient(params: {
     pushBounded(rawMessages, message, MCP_RAW_MESSAGE_RETAIN_LIMIT);
   });
 
-  const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });
+  const client = new Client(
+    { name: "docker-mcp-channels", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   try {
     await connectMcpWithTimeout(client, transport, MCP_CONNECT_TIMEOUT_MS);
     return {

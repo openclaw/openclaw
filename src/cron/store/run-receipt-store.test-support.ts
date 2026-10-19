@@ -53,7 +53,6 @@ export function makeCronReceiptJob(id: string, agentId = "alpha"): CronJob {
 
 export function claimCronRunReceiptForTest(storePath: string, job: CronJob, startedAtMs: number) {
   const prepared = prepareCronRunReceiptClaim({
-    observed: inspectActiveCronRunReceipt({ storePath, jobId: job.id }),
     storePath,
     job,
     agentId: job.agentId!,
@@ -109,9 +108,6 @@ export function prepareCronRunReceiptClaim(params: {
   agentId: string;
   startedAtMs: number;
   requestRunId?: string;
-  observed:
-    | Pick<CronRunReceiptHandle, "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs">
-    | undefined;
 }) {
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   const storeKey = cronStoreKey(params.storePath);

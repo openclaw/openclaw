@@ -68,8 +68,20 @@ describe("migrateScheduledToolPolicy", () => {
   });
 
   it("rejects malformed and owner-inconsistent provenance", () => {
-    const malformed = job({ scheduledToolPolicy: { version: 2, mode: "trusted" } });
-    expect(normalizeStoredCronJobs([malformed]).invalidScheduledToolPolicyJobs).toEqual(["Legacy"]);
+    const malformed = job({
+      name: " Legacy ",
+      payload: {
+        kind: "agentTurn",
+        message: "Command to run:\n- command: python3 scripts/check_mail.py",
+        toolsAllow: ["read", "gateway_exec"],
+      },
+      scheduledToolPolicy: { version: 2, mode: "trusted" },
+    });
+    const result = normalizeStoredCronJobs([malformed]);
+    expect(result.invalidScheduledToolPolicyJobs).toEqual(["Legacy"]);
+    expect(result.legacyGatewayExecJobs).toEqual(["Legacy"]);
+    expect(result.unresolvedAgentTurnCommandPromptJobs).toEqual(["Legacy"]);
+    expect(malformed.name).toBe("Legacy");
 
     const inconsistent = job({
       scheduledToolPolicy: {

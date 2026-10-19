@@ -1,9 +1,10 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { createChatAttachmentInputHandle } from "../pages/chat/components/chat-attachment-inputs.ts";
 import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
-import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "../pages/chat/components/browser-tab-card.tsx";
+import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -356,11 +357,13 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const host = document.createElement("div");
       host.style.padding = "400px 40px 0";
       document.body.append(host);
+      const inputHandle = createChatAttachmentInputHandle();
       mountSolid(
         () => (
           <ChatComposerPlusMenu
             menu={{
               attachments: {},
+              inputHandle,
               disabled: false,
               open: false,
               view: "root",
@@ -392,6 +395,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       );
       const { page } = await import("vitest/browser");
       await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
+      await expect.poll(() => host.querySelector('[data-value="photo"]')).not.toBeNull();
       const photo = host.querySelector<HTMLElement>('[data-value="photo"]')!;
       const skills = host.querySelector<HTMLElement>('[data-value="open-skills"]')!;
       await hoverBackground(photo, highlight);
