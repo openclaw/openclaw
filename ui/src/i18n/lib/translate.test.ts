@@ -15,23 +15,29 @@ import type { TranslationMap } from "./types.ts";
 const german = { common: { health: "Gesundheit" } } satisfies TranslationMap;
 const spanish = { common: { health: "Salud" } } satisfies TranslationMap;
 
-function createManager() {
-  const loadTranslation = vi.fn<(locale: Locale) => Promise<TranslationMap | null>>();
-  const manager = createI18nManagerForTesting(loadTranslation);
-  return {
-    loadTranslation,
-    manager,
-    retryPendingLocale: async () => {
-      manager.retryPendingLocale();
-      await Promise.allSettled(loadTranslation.mock.results.map((result) => result.value));
-    },
-  };
+const loadTranslation = vi.fn<(locale: Locale) => Promise<TranslationMap | null>>();
+let manager: ReturnType<typeof createI18nManagerForTesting>;
+
+async function retryPendingLocale() {
+  manager.retryPendingLocale();
+  await Promise.allSettled(loadTranslation.mock.results.map((result) => result.value));
+}
+
+function beginLocaleRace() {
+  const germanLoad = deferred<TranslationMap | null>();
+  const spanishLoad = deferred<TranslationMap | null>();
+  loadTranslation.mockReturnValueOnce(germanLoad.promise).mockReturnValueOnce(spanishLoad.promise);
+  const setGerman = manager.setLocale("de");
+  const setSpanish = manager.setLocale("es");
+  return { germanLoad, spanishLoad, setGerman, setSpanish };
 }
 
 describe("I18nManager pending locale retry", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    loadTranslation.mockReset();
+    manager = createI18nManagerForTesting(loadTranslation);
   });
 
   afterEach(() => {
@@ -56,13 +62,12 @@ describe("I18nManager pending locale retry", () => {
     expect(descriptor?.value).toBe(storage);
     expect(getSafeLocalStorage()).toBe(storage);
 
-    const { manager } = createManager();
+    manager = createI18nManagerForTesting(loadTranslation);
     await manager.setLocale("en");
     expect(storage.getItem("openclaw.i18n.locale")).toBe("en");
   });
 
   it("looks up only the active locale when a caller owns its fallback", async () => {
-    const { loadTranslation, manager } = createManager();
     manager.registerTranslation("de", german);
     await manager.setLocale("de");
 
@@ -72,7 +77,6 @@ describe("I18nManager pending locale retry", () => {
   });
 
   it("uses lazy English as fallback without replacing the active language", async () => {
-    const { manager } = createManager();
     manager.registerTranslation("de", {
       commandPalette: { newSessionSettings: "Neue Sitzung" },
     });
@@ -85,7 +89,6 @@ describe("I18nManager pending locale retry", () => {
   });
 
   it("deduplicates an in-flight target and permits retry after the shared load settles", async () => {
-    const { loadTranslation, manager, retryPendingLocale } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     const firstLoad = deferred<TranslationMap | null>();
     loadTranslation.mockReturnValueOnce(firstLoad.promise).mockResolvedValueOnce(german);
@@ -114,8 +117,7 @@ describe("I18nManager pending locale retry", () => {
   it.each(["explicit", "system"] as const)(
     "lets the latest %s request own persistence during a shared load",
     async (mode) => {
-      const { loadTranslation, manager } = createManager();
-      vi.stubGlobal("navigator", { language: "de-DE" } as Navigator);
+      vi.stubGlobal("navigator", { language: "de-DE" });
       localStorage.setItem("openclaw.i18n.locale", "es");
       const localeLoad = deferred<TranslationMap | null>();
       loadTranslation.mockReturnValueOnce(localeLoad.promise);
@@ -137,7 +139,6 @@ describe("I18nManager pending locale retry", () => {
   );
 
   it("clears an abandoned pending target after another locale succeeds", async () => {
-    const { loadTranslation, manager, retryPendingLocale } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
     loadTranslation.mockRejectedValueOnce(new Error("gateway unavailable"));
     loadTranslation.mockResolvedValueOnce(spanish);
@@ -154,7 +155,6 @@ describe("I18nManager pending locale retry", () => {
   it.each(["explicit", "system"] as const)(
     "preserves %s persistence when reporting a repeated module-import failure",
     async (mode) => {
-      const { loadTranslation, manager, retryPendingLocale } = createManager();
       vi.spyOn(console, "error").mockImplementation(() => {});
       vi.stubGlobal("navigator", { language: "de-DE" });
       localStorage.setItem("openclaw.i18n.locale", "es");
@@ -195,16 +195,8 @@ describe("I18nManager pending locale retry", () => {
   );
 
   it("ignores an older failure after a newer locale succeeds", async () => {
-    const { loadTranslation, manager, retryPendingLocale } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const germanLoad = deferred<TranslationMap | null>();
-    const spanishLoad = deferred<TranslationMap | null>();
-    loadTranslation
-      .mockReturnValueOnce(germanLoad.promise)
-      .mockReturnValueOnce(spanishLoad.promise);
-
-    const setGerman = manager.setLocale("de");
-    const setSpanish = manager.setLocale("es");
+    const { germanLoad, spanishLoad, setGerman, setSpanish } = beginLocaleRace();
     spanishLoad.resolve(spanish);
     await setSpanish;
     germanLoad.reject(new Error("late German failure"));
@@ -216,17 +208,9 @@ describe("I18nManager pending locale retry", () => {
   });
 
   it("preserves a newer failed target when an older load succeeds late", async () => {
-    const { loadTranslation, manager, retryPendingLocale } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const germanLoad = deferred<TranslationMap | null>();
-    const spanishLoad = deferred<TranslationMap | null>();
-    loadTranslation
-      .mockReturnValueOnce(germanLoad.promise)
-      .mockReturnValueOnce(spanishLoad.promise)
-      .mockResolvedValueOnce(spanish);
-
-    const setGerman = manager.setLocale("de");
-    const setSpanish = manager.setLocale("es");
+    const { germanLoad, spanishLoad, setGerman, setSpanish } = beginLocaleRace();
+    loadTranslation.mockResolvedValueOnce(spanish);
     spanishLoad.reject(new Error("Spanish load failed"));
     await setSpanish;
     germanLoad.resolve(german);
