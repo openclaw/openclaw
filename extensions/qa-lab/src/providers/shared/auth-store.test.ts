@@ -1,4 +1,3 @@
-// Qa Lab tests cover the SQLite-backed auth store plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -17,15 +16,34 @@ import { readQaAuthProfiles, writeQaAuthProfiles } from "./auth-store.js";
 import { stageQaMockAuthProfiles } from "./mock-auth.js";
 
 const tempDirs = createTempDirHarness();
+const apiKey = (provider = "openai", key = "qa-mock-not-a-real-key") => ({
+  type: "api_key" as const,
+  provider,
+  key,
+});
+const mockProfiles = { "qa-mock-openai": apiKey() };
 
-async function createQaAuthState(prefix = "openclaw-qa-auth-store-") {
-  const stateDir = await tempDirs.makeTempDir(prefix);
+async function writeUnreadableDatabase(databasePath: string, kind: "future" | "invalid") {
+  await fs.mkdir(path.dirname(databasePath), { recursive: true });
+  if (kind === "future") {
+    const database = new DatabaseSync(databasePath);
+    database.exec("PRAGMA user_version = 999");
+    database.close();
+  } else {
+    await fs.writeFile(databasePath, "not a SQLite database");
+  }
+}
+
+async function createQaAuthState() {
+  const stateDir = await tempDirs.makeTempDir("openclaw-qa-auth-store-");
   const agentId = "main";
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return {
     agentDir: path.join(stateDir, "agents", agentId, "agent"),
-    agentId,
-    stateDir,
+    write: (
+      profiles: Parameters<typeof writeQaAuthProfiles>[0]["profiles"] = mockProfiles,
+      replace = false,
+    ) => writeQaAuthProfiles({ agentId, stateDir, profiles, replace }),
   };
 }
 
@@ -55,13 +73,7 @@ describe("QA auth profile store", () => {
 
     await writeQaAuthProfiles({
       agentId: "main",
-      profiles: {
-        "qa-mock-openai": {
-          type: "api_key",
-          provider: "openai",
-          key: "qa-mock-not-a-real-key",
-        },
-      },
+      profiles: mockProfiles,
       stateDir: qaStateDir,
     });
 
@@ -89,14 +101,7 @@ describe("QA auth profile store", () => {
     async (outerKind) => {
       const hostStateDir = await tempDirs.makeTempDir("openclaw-qa-auth-unreadable-host-");
       const hostDatabasePath = path.join(hostStateDir, "state", "openclaw.sqlite");
-      await fs.mkdir(path.dirname(hostDatabasePath), { recursive: true });
-      if (outerKind === "future") {
-        const database = new DatabaseSync(hostDatabasePath);
-        database.exec("PRAGMA user_version = 999");
-        database.close();
-      } else {
-        await fs.writeFile(hostDatabasePath, "not a SQLite database");
-      }
+      await writeUnreadableDatabase(hostDatabasePath, outerKind);
       const hostBefore = await fs.readFile(hostDatabasePath);
       const qaRoots = await Promise.all([
         tempDirs.makeTempDir("openclaw-qa-auth-first-"),
@@ -140,93 +145,48 @@ describe("QA auth profile store", () => {
   it.each(["future", "invalid"] as const)(
     "still refuses an explicit %s target auth database",
     async (targetKind) => {
-      const { agentDir, agentId, stateDir } = await createQaAuthState();
-      await fs.mkdir(agentDir, { recursive: true });
+      const { agentDir, write } = await createQaAuthState();
       const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-      if (targetKind === "future") {
-        const database = new DatabaseSync(databasePath);
-        database.exec("PRAGMA user_version = 999");
-        database.close();
-      } else {
-        await fs.writeFile(databasePath, "not a SQLite database");
-      }
+      await writeUnreadableDatabase(databasePath, targetKind);
       const before = await fs.readFile(databasePath);
-      await expect(
-        writeQaAuthProfiles({
-          agentId,
-          stateDir,
-          profiles: {
-            "qa-mock-openai": {
-              type: "api_key",
-              provider: "openai",
-              key: "qa-mock-not-a-real-key",
-            },
-          },
-        }),
-      ).rejects.toThrow("unreadable");
+      await expect(write()).rejects.toThrow("unreadable");
       expect(await fs.readFile(databasePath)).toEqual(before);
     },
   );
 
   it("refuses to bypass a pending legacy auth source", async () => {
-    const { agentDir, agentId, stateDir } = await createQaAuthState();
+    const { agentDir, write } = await createQaAuthState();
     const authPath = path.join(agentDir, "auth-profiles.json");
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(authPath, "{not-json", "utf8");
 
-    await expect(
-      writeQaAuthProfiles({
-        agentId,
-        profiles: {
-          "qa-mock-openai": {
-            type: "api_key",
-            provider: "openai",
-            key: "qa-mock-not-a-real-key",
-          },
-        },
-        stateDir,
-      }),
-    ).rejects.toThrow("requires legacy credential migration");
+    await expect(write()).rejects.toThrow("requires legacy credential migration");
     await expect(fs.readFile(authPath, "utf8")).resolves.toBe("{not-json");
   });
 
   it("merges canonical API-key, token, and OAuth profile shapes", async () => {
-    const { agentDir, agentId, stateDir } = await createQaAuthState();
-    await writeQaAuthProfiles({
-      agentId,
-      profiles: {
-        existing: {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-        tokenProfile: {
-          type: "token",
-          provider: "github",
-          tokenRef: { source: "file", provider: "vault", id: "github/token" },
-        },
-        oauthProfile: {
-          type: "oauth",
-          provider: "chatgpt",
-          access: "qa-access-token",
-          refresh: "qa-refresh-token",
-          expires: 1_900_000_000_000,
-        },
+    const { agentDir, write } = await createQaAuthState();
+    await write({
+      existing: {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       },
-      stateDir,
+      tokenProfile: {
+        type: "token",
+        provider: "github",
+        tokenRef: { source: "file", provider: "vault", id: "github/token" },
+      },
+      oauthProfile: {
+        type: "oauth",
+        provider: "chatgpt",
+        access: "qa-access-token",
+        refresh: "qa-refresh-token",
+        expires: 1_900_000_000_000,
+      },
     });
 
-    await writeQaAuthProfiles({
-      agentId,
-      profiles: {
-        "qa-mock-anthropic": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "qa-mock-not-a-real-key",
-        },
-      },
-      stateDir,
-    });
+    await write({ "qa-mock-anthropic": apiKey("anthropic") });
 
     expect((await readQaAuthProfiles(agentDir)).profiles).toMatchObject({
       existing: { type: "api_key", provider: "openai" },
@@ -240,13 +200,12 @@ describe("QA auth profile store", () => {
   });
 
   it("can replace an existing profile set for deterministic fixture seeding", async () => {
-    const { agentDir, agentId, stateDir } = await createQaAuthState();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const { agentDir, write } = await createQaAuthState();
     saveAuthProfileStore(
       {
         version: 1,
         profiles: {
-          stale: { type: "api_key", provider: "openai", key: "qa-stale-not-a-real-key" },
+          stale: apiKey("openai", "qa-stale-not-a-real-key"),
         },
         order: { openai: ["stale"] },
         lastGood: { openai: "stale" },
@@ -256,14 +215,7 @@ describe("QA auth profile store", () => {
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
 
-    await writeQaAuthProfiles({
-      agentId,
-      profiles: {
-        current: { type: "api_key", provider: "anthropic", key: "qa-current-not-a-real-key" },
-      },
-      replace: true,
-      stateDir,
-    });
+    await write({ current: apiKey("anthropic", "qa-current-not-a-real-key") }, true);
 
     expect(Object.keys((await readQaAuthProfiles(agentDir)).profiles)).toEqual(["current"]);
     const replaced = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
