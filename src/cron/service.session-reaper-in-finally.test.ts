@@ -5,7 +5,7 @@ import {
   listSessionEntriesCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as sessionEntryReadRuntime from "../config/sessions/session-entry-read-maintenance.js";
+import * as maintenance from "../config/sessions/session-entry-read-maintenance.js";
 import { cronTestDeps, cronTestJob } from "./service.fixture-builders.test-support.js";
 import { createSessionReaperTimerHarness } from "./service.session-reaper.test-support.js";
 import {
@@ -51,10 +51,17 @@ async function fixture(jobs: CronJob[] = [], deps: Partial<CronServiceDeps> = {}
       ...deps,
     }),
   );
+  const readExpired = vi.spyOn(maintenance, "readExpiredCronRunEntriesInWorker");
   return {
     ...store,
     sessionStorePath,
     state,
+    readExpired,
+    async tick(reads: number, sessions: number) {
+      await onTimer(state);
+      expect(readExpired).toHaveBeenCalledTimes(reads);
+      expect(entries(sessionStorePath)).toHaveLength(sessions);
+    },
     [Symbol.asyncDispose]: () => withCronServiceStateForTest(state, async () => {}),
   };
 }
@@ -109,27 +116,19 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
     const { state, sessionStorePath } = context;
     await seedSessions(sessionStorePath);
-    const readExpired = vi.spyOn(sessionEntryReadRuntime, "readExpiredCronRunEntriesInWorker");
     await onTimer(state);
-    await onTimer(state);
+    await context.tick(0, 2);
     expect(isAgentAvailable).not.toHaveBeenCalled();
-    expect(readExpired).not.toHaveBeenCalled();
     state.deps.cronConfig = { sessionRetention: "24h" };
-    await onTimer(state);
+    await context.tick(1, 1);
     expect(isAgentAvailable).toHaveBeenCalledExactlyOnceWith("main", { deletionBlocked: false });
-    expect(readExpired).toHaveBeenCalledOnce();
-    expect(entries(sessionStorePath)).toHaveLength(1);
     await seedSessions(sessionStorePath, now - 3_600_000);
     now += 1_000;
-    await onTimer(state);
+    await context.tick(1, 2);
     expect(isAgentAvailable).toHaveBeenCalledOnce();
-    expect(readExpired).toHaveBeenCalledOnce();
-    expect(entries(sessionStorePath)).toHaveLength(2);
     now -= 3_600_000;
-    await onTimer(state);
+    await context.tick(2, 1);
     expect(isAgentAvailable).toHaveBeenCalledTimes(2);
-    expect(readExpired).toHaveBeenCalledTimes(2);
-    expect(entries(sessionStorePath)).toHaveLength(1);
   });
 
   it("runs a recovered agent's scheduled job while its maintenance attempt is throttled", async () => {
@@ -140,22 +139,16 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       [{ ...dueJob("recovered-agent"), agentId: "main", state: { nextRunAtMs: now + 1_000 } }],
       { nowMs: () => now, isAgentAvailable: () => available, runIsolatedAgentJob },
     );
-    const { state, sessionStorePath } = context;
+    const { sessionStorePath } = context;
     await seedSessions(sessionStorePath);
-    const readExpired = vi.spyOn(sessionEntryReadRuntime, "readExpiredCronRunEntriesInWorker");
-    await onTimer(state);
-    expect(readExpired).not.toHaveBeenCalled();
+    await context.tick(0, 2);
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     available = true;
     now += 1_000;
-    await onTimer(state);
+    await context.tick(0, 2);
     expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-    expect(readExpired).not.toHaveBeenCalled();
-    expect(entries(sessionStorePath)).toHaveLength(2);
     now += 5 * 60_000 - 1_000;
-    await onTimer(state);
-    expect(readExpired).toHaveBeenCalledOnce();
-    expect(entries(sessionStorePath)).toHaveLength(1);
+    await context.tick(1, 1);
   });
 
   it.each(["owner discovery", "store path"])(
@@ -266,14 +259,13 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const { state, sessionStorePath } = context;
     state.deps.resolveSessionStorePath = () => sessionStorePath;
     await seedExpired(sessionStorePath, "live");
-    const readExpired = vi.spyOn(sessionEntryReadRuntime, "readExpiredCronRunEntriesInWorker");
     await onTimer(state);
     await onTimer(state);
     expect(isAgentAvailable.mock.calls).toEqual([
       ["live", { deletionBlocked: false }],
       ["blocked", { deletionBlocked: false }],
     ]);
-    expect(readExpired).toHaveBeenCalledExactlyOnceWith({
+    expect(context.readExpired).toHaveBeenCalledExactlyOnceWith({
       agentId: "live",
       env: { OPENCLAW_STATE_DIR: resolveStateDir() },
       storePath: sessionStorePath,

@@ -36,10 +36,16 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
 }
 
 const durableTables = ["cron_jobs", "cron_job_scratch", "cron_job_runtime_authorities"];
-const readDurableRows = (db: EngineConnection) =>
+const readDurableRows = (db: EngineConnection = openOpenClawStateDatabase().db) =>
   durableTables.map((table) =>
     db.prepare(`SELECT * FROM ${table} ORDER BY store_key, job_id`).all(),
   );
+
+async function expectPersisted(expected: ReturnType<typeof readDurableRows>) {
+  expect(readDurableRows()).toEqual(expected);
+  await closeOpenClawStateDatabaseAsync();
+  expect(readDurableRows()).toEqual(expected);
+}
 
 async function withFamilyStore(
   workload: { unrelatedCount: number; descriptionBytes: number },
@@ -116,19 +122,6 @@ function withoutJobs(before: ReturnType<typeof readDurableRows>, store: string, 
 
 const ordinary = { unrelatedCount: 3, descriptionBytes: 32 };
 
-async function withAuthorizer<T>(
-  db: DatabaseSync,
-  authorizer: Parameters<DatabaseSync["setAuthorizer"]>[0],
-  run: () => Promise<T>,
-) {
-  try {
-    db.setAuthorizer(authorizer);
-    return await run();
-  } finally {
-    db.setAuthorizer(null);
-  }
-}
-
 describe("Cron stale-family cleanup", () => {
   it("preserves unrelated description-rich jobs without fetching their descriptions", async () => {
     await withFamilyStore(
@@ -143,11 +136,9 @@ describe("Cron stale-family cleanup", () => {
         } finally {
           counter.restore();
         }
-        expect(readDurableRows(db)).toEqual(expected);
-        await closeOpenClawStateDatabaseAsync();
-        expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
+        await expectPersisted(expected);
         await expect(removeFamilyNative(family)).resolves.toBe(0);
-        expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
+        expect(readDurableRows()).toEqual(expected);
         expect(counter.counts.familyRows).toBeGreaterThan(0);
         expect(counter.rowCounts.familyRows).toBeGreaterThan(0);
         expect(counter.textBytes.familyRows).toBeLessThan(16 * 1024);
@@ -185,28 +176,29 @@ describe("Cron stale-family cleanup", () => {
         "unrelated-0",
         "unrelated-1",
       ]);
-      expect(readDurableRows(db)).toEqual(expected);
-      await closeOpenClawStateDatabaseAsync();
-      expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
+      await expectPersisted(expected);
     });
   });
 
   it("retains column authorization and needs no SQL function authorization", async () => {
     await withFamilyStore(ordinary, async ({ removeFamilyNative, db, staleStore }) => {
       const before = readDurableRows(db);
-      const restrictedRemove = (column: string | undefined, policy = constants.SQLITE_DENY) =>
-        withAuthorizer(
-          db,
-          (action, table, readColumn) =>
-            (
-              column
-                ? action === constants.SQLITE_READ && table === "cron_jobs" && readColumn === column
-                : action === constants.SQLITE_FUNCTION
-            )
-              ? policy
-              : constants.SQLITE_OK,
-          () => removeFamilyNative(family),
+      const restrictedRemove = async (column?: string, policy = constants.SQLITE_DENY) => {
+        db.setAuthorizer((action, table, readColumn) =>
+          (
+            column
+              ? action === constants.SQLITE_READ && table === "cron_jobs" && readColumn === column
+              : action === constants.SQLITE_FUNCTION
+          )
+            ? policy
+            : constants.SQLITE_OK,
         );
+        try {
+          return await removeFamilyNative(family);
+        } finally {
+          db.setAuthorizer(null);
+        }
+      };
       for (const column of ["store_key", "job_id", "declaration_key", "name", "description"]) {
         await expect(restrictedRemove(column)).rejects.toThrow(/prohibited|not authorized/i);
         expect(readDurableRows(db)).toEqual(before);

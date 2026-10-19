@@ -52,6 +52,13 @@ const session = await vi.importActual<typeof import("./isolated-agent/session.js
 const accessor = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
   "../config/sessions/session-accessor.js",
 );
+const addCron = expectDefined(cronHandlers["cron.add"], "cron.add");
+const patchSession = expectDefined(sessionMutationHandlers["sessions.patch"], "sessions.patch");
+const replacementSession = "replacement-session";
+const agentResult = () => ({
+  payloads: [{ text: "Synthetic request settled" }],
+  meta: { agentMeta: {} },
+});
 installRequesterCronAuthorityTestHooks();
 beforeEach(() => {
   resetRunCronIsolatedAgentTurnHarness();
@@ -136,10 +143,7 @@ async function createFixture(option: CiAutomationOption) {
   const add = async (selected: CiAutomationTarget) => {
     const definition = { ...ciAutomationJobSpec(selected, option), enabled: false };
     const respond = vi.fn();
-    await expectDefined(
-      cronHandlers["cron.add"],
-      "cron.add",
-    )({ ...rpc("cron.add", definition), respond });
+    await addCron({ ...rpc("cron.add", definition), respond });
     expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
     return expectDefined(
       (await creator.read()).find((job) => job.declarationKey === definition.declarationKey),
@@ -177,7 +181,7 @@ async function createFixture(option: CiAutomationOption) {
         ),
     }),
   );
-  // Reload through a distinct scheduler owner rather than reuse cron.add's memory.
+  // The executing scheduler must reload cron.add's persisted state.
   await execution.start();
   expect((await execution.list({ includeDisabled: true })).map((job) => job.id).toSorted()).toEqual(
     [selected.id, other.id].toSorted(),
@@ -229,25 +233,24 @@ it("transports autoFix for only the selected PR across session replacement and d
       { owner: target.owner, repo: target.repo, number: target.number },
       params.sessionId,
     );
-    return { payloads: [{ text: "Synthetic endpoint accepted" }], meta: { agentMeta: {} } };
+    return agentResult();
   });
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
   expect(finalEffect.mock.calls).toEqual([[effect41, SESSION_ID]]);
-  await fixture.seed("replacement-session");
+  await fixture.seed(replacementSession);
   expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
-  expect(finalEffect.mock.calls[1]).toEqual([effect41, "replacement-session"]);
+  expect(finalEffect.mock.calls[1]).toEqual([effect41, replacementSession]);
   await fixture.execution.update(fixture.selected.id, { enabled: false });
   await fixture.execution.update(fixture.other.id, { enabled: true });
-  // Completing the other job proves the disabled job stayed silent.
   expect(await fixture.tick()).toMatchObject({ jobId: fixture.other.id, status: "ok" });
   expect(finalEffect.mock.calls).toEqual([
     [effect41, SESSION_ID],
-    [effect41, "replacement-session"],
-    [effectTarget(42), "replacement-session"],
+    [effect41, replacementSession],
+    [effectTarget(42), replacementSession],
   ]);
   expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(false);
-  expect((await fixture.add({ ...fixture.target, sessionId: "replacement-session" })).id).toBe(
+  expect((await fixture.add({ ...fixture.target, sessionId: replacementSession })).id).toBe(
     fixture.selected.id,
   );
 });
@@ -277,25 +280,18 @@ it.each([false, true])(
         expectedSessionId: expectDefined(target.sessionId, "archive incarnation"),
         archived: true,
       };
-      // Native archive handler and exact-ID precondition; no GitHub lookup or merge.
       archiveRequest = Promise.resolve(
-        expectDefined(
-          sessionMutationHandlers["sessions.patch"],
-          "sessions.patch",
-        )({
-          ...fixture.rpc("sessions.patch", patch),
-          respond,
-        }),
+        patchSession({ ...fixture.rpc("sessions.patch", patch), respond }),
       );
       await archiveRequest;
       if (!replaced) {
         await releaseCore.promise;
       }
-      return { payloads: [{ text: "Synthetic archive request settled" }], meta: { agentMeta: {} } };
+      return agentResult();
     });
     try {
       if (replaced) {
-        await fixture.seed("replacement-session");
+        await fixture.seed(replacementSession);
       }
       await fixture.execution.update(fixture.selected.id, { enabled: true });
       const event = await fixture.tick();
@@ -316,21 +312,18 @@ it.each([false, true])(
           undefined,
           expect.objectContaining({ details: { reason: "session-changed" } }),
         );
-        expect(stored).toMatchObject({ sessionId: "replacement-session" });
+        expect(stored).toMatchObject({ sessionId: replacementSession });
         expect(stored?.archivedAt).toBeUndefined();
       } else {
         expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
         expect(stored).toMatchObject({ sessionId: SESSION_ID, archivedAt: expect.any(Number) });
         const stopped = vi.fn();
         const teardown = fixture.stop().then(stopped);
-        try {
-          // Keep the core held across a worker round-trip before checking teardown.
-          expect((await fixture.creator.read()).every((job) => !job.enabled)).toBe(true);
-          expect(stopped).not.toHaveBeenCalled();
-        } finally {
-          releaseCore.resolve();
-          await teardown;
-        }
+        // Keep the core held across a worker round-trip before checking teardown.
+        expect((await fixture.creator.read()).every((job) => !job.enabled)).toBe(true);
+        expect(stopped).not.toHaveBeenCalled();
+        releaseCore.resolve();
+        await teardown;
         expect(stopped).toHaveBeenCalledOnce();
       }
     } finally {

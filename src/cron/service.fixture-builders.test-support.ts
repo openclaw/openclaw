@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronJobCreate } from "./types.js";
 
 export function cronTestDeps(
   overrides: Pick<CronServiceDeps, "storePath"> & Partial<CronServiceDeps>,
@@ -19,16 +19,23 @@ export function cronTestDeps(
   };
 }
 
-export function cronTestJob(overrides: Pick<CronJob, "id"> & Partial<CronJob>): CronJob {
+export function cronTestInput(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
   return {
-    name: overrides.id,
+    name: "test",
     enabled: true,
-    createdAtMs: Date.now(),
-    updatedAtMs: Date.now(),
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "test" },
+    ...overrides,
+  };
+}
+
+export function cronTestJob(overrides: Pick<CronJob, "id"> & Partial<CronJob>): CronJob {
+  return {
+    ...cronTestInput({ name: overrides.id }),
+    createdAtMs: Date.now(),
+    updatedAtMs: Date.now(),
     state: {},
     ...overrides,
   };

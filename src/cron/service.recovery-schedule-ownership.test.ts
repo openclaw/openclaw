@@ -8,7 +8,7 @@ import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
 } from "./run-history.test-support.js";
-import { cronTestDeps } from "./service.fixture-builders.test-support.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -51,18 +51,16 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
   const cron = new CronService(deps);
   cron.pauseScheduling();
   await cron.start();
-  const job = await cron.add({
-    name: "cadence recovery",
-    agentId: "main",
-    enabled: true,
-    schedule: HOURLY,
-    trigger: { script: "json({ fire: true })" },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "Check the scheduled condition." },
-    delivery: { mode: "none" },
-    ...input,
-  });
+  const job = await cron.add(
+    cronTestInput({
+      agentId: "main",
+      schedule: HOURLY,
+      trigger: { script: "json({ fire: true })" },
+      wakeMode: "now",
+      delivery: { mode: "none" },
+      ...input,
+    }),
+  );
   return {
     cron,
     deps,
@@ -249,7 +247,6 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
       {
         schedule: { kind: "stream", command: ["echo"] },
         trigger: { script: "json({ fire: true })", once: true },
-        historicalNextRunAtMs: undefined,
       },
     ],
     [

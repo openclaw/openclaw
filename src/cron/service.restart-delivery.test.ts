@@ -9,7 +9,7 @@ import {
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
 import { sendCronAnnouncePayloadStrict } from "./delivery.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
-import { cronTestDeps } from "./service.fixture-builders.test-support.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
@@ -39,10 +39,12 @@ vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: transports.deliverOutboundPayloads,
 }));
 
-const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-restart-delivery-" });
+const { makeStorePath } = setupCronServiceSuite({ prefix: "cron-restart-delivery-" });
 
 afterEach(() => vi.unstubAllGlobals());
 
+const result = "scheduled result";
+const interruptedError = "cron: job interrupted by gateway restart";
 it.each([
   ["announce", "after-acceptance"],
   ["webhook", "after-acceptance"],
@@ -99,7 +101,7 @@ it.each([
           agentId: "main",
           jobId: job.id,
           target: { channel: "telegram", to: "123" },
-          payload: { text: "scheduled result" },
+          payload: { text: result },
           abortSignal: abortSignal!,
           completion: {
             job,
@@ -108,13 +110,10 @@ it.each([
           },
         });
       }
-      return { status: "ok", summary: "scheduled result", delivered: mode === "announce" };
+      return { status: "ok", summary: result, delivered: mode === "announce" };
     };
     const deps = cronTestDeps({
       storePath,
-      scheduler: createTestGatewayScheduler(clock.clock),
-      nowMs: clock.clock.now,
-      log: logger,
       runIsolatedAgentJob,
       sendCronWebhook: async (params) =>
         await sendGatewayCronWebhook({
@@ -140,7 +139,7 @@ it.each([
       await next.clock.advanceBy(120_000);
       await onTimer(next.state);
     };
-    const expectedDeliveries = interrupted === "after-acceptance" ? ["scheduled result"] : [];
+    const expectedDeliveries = interrupted === "after-acceptance" ? [result] : [];
     const expectNoReplay = () => {
       expect(received).toEqual(expectedDeliveries);
       expect(executionCount).toBe(1);
@@ -148,19 +147,16 @@ it.each([
     let tick: Promise<void> | undefined;
     try {
       await first.cron.start();
-      const job = await first.cron.add({
-        name: "one completion across restart",
-        enabled: true,
-        ...(interrupted === "before-delivery" ? { deleteAfterRun: false } : {}),
-        schedule: { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "produce the scheduled result" },
-        delivery:
-          mode === "announce"
-            ? { mode, channel: "telegram", to: "123" }
-            : { mode, to: "http://127.0.0.1/completion" },
-      });
+      const job = await first.cron.add(
+        cronTestInput({
+          ...(interrupted === "before-delivery" ? { deleteAfterRun: false } : {}),
+          schedule: { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() },
+          delivery:
+            mode === "announce"
+              ? { mode, channel: "telegram", to: "123" }
+              : { mode, to: "http://127.0.0.1/completion" },
+        }),
+      );
       clock.setTime(job.state.nextRunAtMs!);
       tick = onTimer(first.state);
       await reachedInterruption.promise;
@@ -169,8 +165,6 @@ it.each([
       expect(receipt).toBeDefined();
       expect((await first.cron.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
 
-      // Retire the old launcher while its payload remains unresolved; startup
-      // recovery consumes the real persisted request without replaying its effect.
       await restart(first, replacement);
       expectNoReplay();
       const recovered = await replacement.cron.readJob(job.id);
@@ -178,7 +172,7 @@ it.each([
         enabled: false,
         state: {
           lastRunStatus: "error",
-          lastError: "cron: job interrupted by gateway restart",
+          lastError: interruptedError,
           lastDeliveryStatus: "unknown",
         },
       });
@@ -195,7 +189,7 @@ it.each([
       expect(history).toEqual([
         expect.objectContaining({
           status: "error",
-          error: "cron: job interrupted by gateway restart",
+          error: interruptedError,
           runAtMs: receipt?.startedAtMs,
           deliveryStatus: "unknown",
         }),
@@ -235,22 +229,17 @@ it("records a rejected durable attempt as not delivered before webhook dispatch"
   const cron = new CronService(
     cronTestDeps({
       storePath,
-      log: logger,
-      runIsolatedAgentJob: async () => ({ status: "ok", summary: "scheduled result" }),
+      runIsolatedAgentJob: async () => ({ status: "ok", summary: result }),
       sendCronWebhook,
     }),
   );
   try {
     await cron.start();
-    const job = await cron.add({
-      name: "webhook admission refusal",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "produce the scheduled result" },
-      delivery: { mode: "webhook", to: "https://example.invalid/completion" },
-    });
+    const job = await cron.add(
+      cronTestInput({
+        delivery: { mode: "webhook", to: "https://example.invalid/completion" },
+      }),
+    );
     await cron.run(job.id, "force");
     expect(sendCronWebhook).not.toHaveBeenCalled();
     expect((await cron.readJob(job.id))?.state).toMatchObject({
