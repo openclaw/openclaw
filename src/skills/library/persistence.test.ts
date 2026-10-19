@@ -32,7 +32,9 @@ async function fixture(signal: AbortSignal) {
 
 it("reopens original pins after replacement, rename, and removal", async ({ signal }) => {
   const { root, run, before } = await fixture(signal);
-  const owners = before.pins.map((pin) => pin.ownerProfileId === null).toSorted();
+  const owners = before.pins
+    .map((pin) => pin.ownerProfileId === null)
+    .toSorted((a, b) => Number(a) - Number(b));
   expect(owners).toEqual([false, true]);
   for (const pin of before.pins) {
     await assertBundle(root, pin, "old");
