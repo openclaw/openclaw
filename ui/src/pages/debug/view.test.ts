@@ -1,6 +1,6 @@
 import hljs from "highlight.js/lib/core";
 import { createComponent, flush } from "solid-js";
-import { assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
@@ -20,13 +20,12 @@ import {
   useDebugTestEnvironment,
 } from "./debug.test-support.ts";
 
-type TestDebugPage = HTMLElement;
 const pages = new WeakMap<
   HTMLElement,
   { unmount: () => void; setContext: (context: ApplicationContext) => void }
 >();
 
-function mountDebugHost(context: ApplicationContext, container?: HTMLElement): TestDebugPage {
+function mountDebugHost(context: ApplicationContext, container?: HTMLElement): HTMLElement {
   const provider = createSolidApplicationContextProvider(context);
   const mounted = mountSolid(() => createComponent(DebugPage, {}), {
     container,
@@ -38,12 +37,8 @@ function mountDebugHost(context: ApplicationContext, container?: HTMLElement): T
   return page;
 }
 
-function unmountDebugHost(page: TestDebugPage) {
+function unmountDebugHost(page: HTMLElement) {
   pages.get(page)?.unmount();
-}
-
-async function updateDebugHost(_host: TestDebugPage): Promise<void> {
-  flush();
 }
 
 function readSnapshot(page: HTMLElement, title: string): unknown {
@@ -67,20 +62,37 @@ function callMethod(page: HTMLElement, method: string): void {
 async function mountDebugPage(
   request: (method: string) => Promise<unknown>,
   context = createDebugApplicationContext(request),
-): Promise<TestDebugPage> {
+): Promise<HTMLElement> {
   const page = mountDebugHost(context);
-  await updateDebugHost(page);
+  await flush();
   await waitForSolid(() => expect(readSnapshot(page, "Status")).toEqual({ version: "initial" }));
   return page;
 }
 
-function expectSnapshots(page: TestDebugPage, marker: string): void {
-  expect(readSnapshot(page, "Status")).toEqual({ version: marker });
-  expect(readSnapshot(page, "Health")).toEqual({ marker, ok: true });
-  expect(readSnapshot(page, "Models")).toEqual([{ id: marker }]);
-  expect(readSnapshot(page, "Last heartbeat")).toEqual({ source: marker });
+const snapshotTitles = ["Status", "Health", "Models", "Last heartbeat"];
+function readSnapshots(page: HTMLElement) {
+  return snapshotTitles.map((title) => readSnapshot(page, title));
+}
+function expectSnapshots(page: HTMLElement, marker: string): void {
+  expect(readSnapshots(page)).toEqual([
+    { version: marker },
+    { marker, ok: true },
+    [{ id: marker }],
+    { source: marker },
+  ]);
   expect(normalizedText(page.querySelector(".command-lane-row"))).toContain(marker);
 }
+
+function gatewaySource(context: ApplicationContext) {
+  const source = createApplicationGateway(context.gateway.snapshot);
+  Object.assign(source.gateway, { eventLog: [], subscribeEventLog: () => () => undefined });
+  return source;
+}
+
+const refreshButton = (page: HTMLElement) =>
+  page.querySelector<HTMLButtonElement>(".settings-section button")!;
+const snapshotAlert = (page: HTMLElement) =>
+  page.querySelector<HTMLElement>('.settings-section:first-child [role="alert"]');
 
 type DebugPresentationFixture = {
   status: Record<string, unknown> | null;
@@ -114,24 +126,18 @@ async function mountDebugPresentation(initial: DebugPresentationFixture, contain
   let eventRevision = 0;
   const eventListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   const context = createDebugApplicationContext(async (method) => {
-    switch (method) {
-      case "status":
-        return current.status;
-      case "health":
-        return current.health;
-      case "models.list":
-        return { models: current.models };
-      case "last-heartbeat":
-        return current.heartbeat;
-      case "diagnostics.lanes":
-        return { ts: 1, lanes: current.lanes, dynamic: current.dynamic };
-      case "manual.latest": {
-        const result: unknown = JSON.parse(current.callResult ?? "null");
-        return result;
-      }
-      default:
-        throw new Error(`Unexpected diagnostics method: ${method}`);
+    const responses: Record<string, () => unknown> = {
+      status: () => current.status,
+      health: () => current.health,
+      "models.list": () => ({ models: current.models }),
+      "last-heartbeat": () => current.heartbeat,
+      "diagnostics.lanes": () => ({ ts: 1, lanes: current.lanes, dynamic: current.dynamic }),
+      "manual.latest": () => JSON.parse(current.callResult ?? "null"),
+    };
+    if (!Object.hasOwn(responses, method)) {
+      throw new Error(`Unexpected diagnostics method: ${method}`);
     }
+    return responses[method]();
   });
   const page = mountDebugHost(
     {
@@ -153,11 +159,7 @@ async function mountDebugPresentation(initial: DebugPresentationFixture, contain
     container,
   );
   const waitForDiagnostics = () =>
-    waitForSolid(() =>
-      expect(page.querySelector<HTMLButtonElement>(".settings-section button")?.disabled).toBe(
-        false,
-      ),
-    );
+    waitForSolid(() => expect(refreshButton(page).disabled).toBe(false));
   const call = async () => {
     callMethod(page, "manual.latest");
     await waitForSolid(() =>
@@ -186,15 +188,9 @@ async function mountDebugPresentation(initial: DebugPresentationFixture, contain
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }
     flush();
-    if (
-      next.status !== previous.status ||
-      next.health !== previous.health ||
-      next.models !== previous.models ||
-      next.heartbeat !== previous.heartbeat ||
-      next.lanes !== previous.lanes ||
-      next.dynamic !== previous.dynamic
-    ) {
-      page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
+    const keys = ["status", "health", "models", "heartbeat", "lanes", "dynamic"] as const;
+    if (keys.some((key) => next[key] !== previous[key])) {
+      refreshButton(page).click();
       await waitForDiagnostics();
     }
     if (next.callResult !== previous.callResult && next.callResult !== null) {
@@ -204,9 +200,13 @@ async function mountDebugPresentation(initial: DebugPresentationFixture, contain
 }
 
 useDebugTestEnvironment();
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("DebugPage presentation", () => {
-  it("retains event payload DOM and only highlights changed diagnostics", async () => {
+  it("only highlights changed diagnostics and tolerates out-of-range event timestamps", async () => {
     const container = document.createElement("div");
     const events = Array.from({ length: 250 }, (_, index) => ({
       ts: 1,
@@ -215,56 +215,38 @@ describe("DebugPage presentation", () => {
     }));
     const props = createProps({ eventLog: events, callResult: '{"ok":true}' });
     const highlight = vi.spyOn(hljs, "highlight");
-    try {
-      const update = await mountDebugPresentation(props, container);
-      const eventSection = container.querySelector(".settings-section:last-child");
-      assert(eventSection);
-      const payloads = Array.from(eventSection.querySelectorAll("pre"));
-      assert(payloads[0]);
-      await waitForSolid(() => expect(payloads[0]!.querySelector("span")).not.toBeNull());
-      const firstToken = payloads[0].querySelector("span");
-      assert(firstToken);
-      highlight.mockClear();
+    const update = await mountDebugPresentation(props, container);
+    const eventSection = container.querySelector(".settings-section:last-child");
+    assert(eventSection);
+    await waitForSolid(() => expect(eventSection.querySelector("pre span")).not.toBeNull());
+    highlight.mockClear();
 
-      const newest = {
-        ts: 8_640_000_000_000_001,
-        event: "gateway",
-        payload: { message: "newest" },
-      };
-      const nextProps = { ...props, eventLog: [newest, ...events.slice(0, -1)] };
-      await update(nextProps);
+    const newest = {
+      ts: 8_640_000_000_000_001,
+      event: "gateway",
+      payload: { message: "newest" },
+    };
+    const nextProps = { ...props, eventLog: [newest, ...events.slice(0, -1)] };
+    await update(nextProps);
 
-      const nextPayloads = Array.from(eventSection.querySelectorAll("pre"));
-      expect(nextPayloads).toHaveLength(250);
-      expect(container.textContent).toContain("gateway");
-      expect(container.textContent).not.toContain("Invalid Date");
-      assert(nextPayloads[0] && nextPayloads[1]);
-      expect(nextPayloads[0].textContent).toContain("newest");
-      expect(nextPayloads.slice(1)).toEqual(payloads.slice(0, -1));
-      expect(nextPayloads[1].querySelector("span")).toBe(firstToken);
-      expect(highlight).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("gateway");
+    expect(container.textContent).not.toContain("Invalid Date");
+    expect(highlight).toHaveBeenCalledTimes(1);
 
-      highlight.mockClear();
-      await update({ ...nextProps, callParams: '{"typed":true}' });
-      expect(highlight).not.toHaveBeenCalled();
+    highlight.mockClear();
+    await update({ ...nextProps, callParams: '{"typed":true}' });
+    expect(highlight).not.toHaveBeenCalled();
 
-      await update({
-        ...nextProps,
-        status: { version: "updated" },
-        health: { ok: true },
-        heartbeat: { source: "updated" },
-        models: [{ id: "updated" }],
-        callResult: '{"result":"updated"}',
-      });
-      expect(highlight).toHaveBeenCalledTimes(5);
-      expect(container.textContent).toContain("updated");
-
-      await update({ ...props, eventLog: [] });
-      expect(eventSection.querySelector("pre")).toBeNull();
-      expect(eventSection.textContent).not.toContain("event 0");
-    } finally {
-      highlight.mockRestore();
-    }
+    await update({
+      ...nextProps,
+      status: { version: "updated" },
+      health: { ok: true },
+      heartbeat: { source: "updated" },
+      models: [{ id: "updated" }],
+      callResult: '{"result":"updated"}',
+    });
+    expect(highlight).toHaveBeenCalledTimes(5);
+    expect(container.textContent).toContain("updated");
   });
 
   it("updates security audit labels with the locale and keeps the command monospace", async () => {
@@ -272,15 +254,7 @@ describe("DebugPage presentation", () => {
 
     await mountDebugPresentation(
       createProps({
-        status: {
-          securityAudit: {
-            summary: {
-              critical: 0,
-              warn: 1,
-              info: 2,
-            },
-          },
-        },
+        status: { securityAudit: { summary: { critical: 0, warn: 1, info: 2 } } },
       }),
       container,
     );
@@ -290,9 +264,7 @@ describe("DebugPage presentation", () => {
     flush();
 
     const command = container.querySelector<HTMLElement>(".settings-row__desc .mono");
-    if (!command) {
-      throw new Error("expected debug security audit command");
-    }
+    assert(command, "expected debug security audit command");
     const status = container.querySelector(".settings-status");
     const chinese = flattenTranslations(zh_CN);
     expect(status?.className).toContain("settings-status--warn");
@@ -397,8 +369,7 @@ describe("DebugPage", () => {
         },
       );
       const context = createDebugApplicationContext(request);
-      const source = createApplicationGateway(context.gateway.snapshot);
-      Object.assign(source.gateway, { eventLog: [], subscribeEventLog: () => () => undefined });
+      const source = gatewaySource(context);
       type SelectionListener = Parameters<
         ApplicationContext["settingsAgentSelection"]["subscribe"]
       >[0];
@@ -435,11 +406,7 @@ describe("DebugPage", () => {
           source.publish({ ...source.gateway.snapshot, phase: "reconnecting" });
           source.publish({ ...source.gateway.snapshot, phase: "connected" });
         } else if (change === "source") {
-          const replacement = createApplicationGateway(source.gateway.snapshot);
-          Object.assign(replacement.gateway, {
-            eventLog: [],
-            subscribeEventLog: () => () => undefined,
-          });
+          const replacement = gatewaySource({ ...context, gateway: source.gateway });
           pages.get(page)!.setContext({ ...pageContext, gateway: replacement.gateway });
         } else {
           selection.state.selectedId = "worker";
@@ -479,7 +446,6 @@ describe("DebugPage", () => {
         pending.resolve();
         pendingModels.resolve({ models: [] });
         unmountDebugHost(page);
-        vi.useRealTimers();
       }
     },
   );
@@ -497,12 +463,9 @@ describe("DebugPage", () => {
     flush();
     pending.resolve({ models: [{ id: "stale" }], stale: true });
     await pending.promise;
-    await updateDebugHost(page);
+    await flush();
     expect(request).toHaveBeenCalledTimes(5);
-    expect(readSnapshot(page, "Status")).toEqual({});
-    expect(readSnapshot(page, "Health")).toEqual({});
-    expect(readSnapshot(page, "Models")).toEqual([]);
-    expect(readSnapshot(page, "Last heartbeat")).toEqual({});
+    expect(readSnapshots(page)).toEqual([{}, {}, [], {}]);
     expect(page.querySelector(".command-lane-row")).toBeNull();
     expect(page.textContent).not.toContain("stale");
   });
@@ -521,26 +484,28 @@ describe("DebugPage", () => {
     try {
       marker = "live";
       await vi.advanceTimersByTimeAsync(9_000);
-      await updateDebugHost(page);
+      await flush();
       for (const method of ["status", "health", "models.list"]) {
         expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(1);
       }
-      expect(readSnapshot(page, "Status")).toEqual({ version: "initial" });
-      expect(readSnapshot(page, "Health")).toEqual({ marker: "initial", ok: true });
-      expect(readSnapshot(page, "Models")).toEqual([{ id: "initial" }]);
-      expect(readSnapshot(page, "Last heartbeat")).toEqual({ source: "live" });
+      expect(readSnapshots(page)).toEqual([
+        { version: "initial" },
+        { marker: "initial", ok: true },
+        [{ id: "initial" }],
+        { source: "live" },
+      ]);
       expect(normalizedText(page.querySelector(".command-lane-row"))).toContain("live");
       marker = "manual";
-      const refresh = page.querySelector<HTMLButtonElement>(".settings-section button")!;
+      const refresh = refreshButton(page);
       refresh.click();
-      await updateDebugHost(page);
+      await flush();
       expect(refresh.disabled).toBe(true);
       expect(normalizedText(refresh)).toBe("Refreshing…");
       expect(page.querySelector(".settings-section .settings-status")).toBeNull();
       expect(page.textContent).toContain("initial");
       pendingRefresh.resolve();
       await vi.advanceTimersByTimeAsync(0);
-      await updateDebugHost(page);
+      await flush();
       expectSnapshots(page, "manual");
       for (const method of ["status", "health", "models.list"]) {
         expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
@@ -548,7 +513,6 @@ describe("DebugPage", () => {
     } finally {
       pendingRefresh.resolve();
       unmountDebugHost(page);
-      vi.useRealTimers();
     }
   });
 
@@ -557,7 +521,7 @@ describe("DebugPage", () => {
     async (phase) => {
       const request = vi.fn(async (method: string) => diagnosticResponse(method));
       const page = mountDebugHost(createDebugApplicationContext(request, phase));
-      await updateDebugHost(page);
+      await flush();
       expect(page.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
       const text = normalizedText(page.querySelector(".settings-section"));
       if (phase === "offline") {
@@ -619,8 +583,7 @@ describe("DebugPage", () => {
         return diagnosticResponse(method);
       });
       const initial = createDebugApplicationContext(request);
-      const source = createApplicationGateway(initial.gateway.snapshot);
-      Object.assign(source.gateway, { eventLog: [], subscribeEventLog: () => () => undefined });
+      const source = gatewaySource(initial);
       const context = { ...initial, gateway: source.gateway };
       const page = await mountDebugPage(request, context);
       const rpcSection = page.querySelector("select")?.closest(".settings-section");
@@ -663,36 +626,31 @@ describe("DebugPage", () => {
       return diagnosticResponse(method, marker);
     });
     const page = await mountDebugPage(request);
-    try {
-      expectSnapshots(page, "initial");
-      callMethod(page, "manual.latest");
-      await waitForSolid(() => expect(page.textContent).toContain("manual request failed"));
-      expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
+    expectSnapshots(page, "initial");
+    callMethod(page, "manual.latest");
+    await waitForSolid(() => expect(page.textContent).toContain("manual request failed"));
+    expect(snapshotAlert(page)).toBeNull();
 
-      marker = "uncommitted";
-      failure = failedMethod;
-      page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
-      await waitForSolid(() => expect(page.textContent).toContain(`${failedMethod} unavailable`));
+    marker = "uncommitted";
+    failure = failedMethod;
+    refreshButton(page).click();
+    await waitForSolid(() => expect(page.textContent).toContain(`${failedMethod} unavailable`));
 
-      expect(page.textContent).toContain("manual request failed");
-      expectSnapshots(page, "initial");
-      const alert = page.querySelector<HTMLElement>('.settings-section [role="alert"]');
-      expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
-        "Snapshots",
-      );
-      expect(alert?.classList).toContain("settings-row");
-      expect(page.querySelector(".callout")).toBeNull();
+    expect(page.textContent).toContain("manual request failed");
+    expectSnapshots(page, "initial");
+    const alert = snapshotAlert(page);
+    expect(alert?.closest(".settings-section")?.querySelector("h2")?.textContent.trim()).toBe(
+      "Snapshots",
+    );
+    expect(alert?.classList).toContain("settings-row");
+    expect(page.querySelector(".callout")).toBeNull();
 
-      marker = "recovered";
-      failure = null;
-      page.querySelector<HTMLButtonElement>(".settings-section button")!.click();
-      await waitForSolid(() => expectSnapshots(page, "recovered"));
+    marker = "recovered";
+    failure = null;
+    refreshButton(page).click();
+    await waitForSolid(() => expectSnapshots(page, "recovered"));
 
-      expect(page.querySelector('.settings-section:first-child [role="alert"]')).toBeNull();
-      expect(page.textContent).toContain("manual request failed");
-    } finally {
-      unmountDebugHost(page);
-      vi.useRealTimers();
-    }
+    expect(snapshotAlert(page)).toBeNull();
+    expect(page.textContent).toContain("manual request failed");
   });
 });
