@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi, type Mock } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { expect, it, onTestFinished, type Mock } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionEnvelope,
@@ -41,7 +41,15 @@ import {
   type createSpawnBoundaryParent,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
-type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
+export type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
+export type SpawnBoundaryOptions = {
+  createBoundParent: (authority?: AdmittedRunOperatorAuthority) => Promise<BoundParent>;
+  createBoundGateway: (bound: BoundParent) => Promise<{
+    context: GatewayRequestContext;
+    runtime: ReturnType<typeof createGatewayInstanceRuntime>;
+  }>;
+  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
+};
 type ChildExecution = {
   admitted: AdmittedRunContext;
   signal: AbortSignal;
@@ -56,16 +64,12 @@ function participant(profileId: string, name: string) {
   };
 }
 
-export function registerParticipantSpawnCases(options: {
-  createBoundParent: (authority?: AdmittedRunOperatorAuthority) => Promise<BoundParent>;
-  createBoundGateway: (bound: BoundParent) => Promise<{
-    context: GatewayRequestContext;
-    runtime: ReturnType<typeof createGatewayInstanceRuntime>;
-  }>;
-  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
-  parentSessionKey: string;
-  parentRunId: string;
-}) {
+export function registerParticipantSpawnCases(
+  options: SpawnBoundaryOptions & {
+    parentSessionKey: string;
+    parentRunId: string;
+  },
+) {
   const { createBoundParent, createBoundGateway, runEmbeddedAgent, parentSessionKey, parentRunId } =
     options;
   const closeParent = (bound: BoundParent) => {
@@ -239,9 +243,7 @@ export function registerParticipantSpawnCases(options: {
               const spawn = async (user: string | undefined, profileId: string) => {
                 entered = createDeferred<ChildExecution>();
                 const result = await invoke(user);
-                expect(result.details, JSON.stringify(result)).toMatchObject({
-                  status: "accepted",
-                });
+                expect(result.details).toMatchObject({ status: "accepted" });
                 const details = result.details as {
                   childSessionKey: string;
                   runId: string;
@@ -273,18 +275,13 @@ export function registerParticipantSpawnCases(options: {
                   await closeTurn(turn);
                   expect(releaseSwarmRun("participant-capacity")).toBe(true);
                 }
-                const child = await Promise.race([
-                  entered.promise,
-                  ...(settled
-                    ? [
-                        settled.then(() => {
-                          throw new Error(
-                            `Spawn execution finished before model entry: ${JSON.stringify({ warnings: vi.mocked(context.logGateway.warn).mock.calls, receipt: context.dedupe.get(`chat:${details.runId}`) })}`,
-                          );
-                        }),
-                      ]
-                    : []),
-                ]);
+                const child = await (settled
+                  ? awaitGateBeforeSettlement(
+                      entered.promise,
+                      settled,
+                      "Spawn execution finished before model entry",
+                    )
+                  : entered.promise);
                 const { admitted, requesterOrigin, tools } = child;
                 const authority = expectDefined(
                   readAdmittedRunOperatorAuthority(admitted),

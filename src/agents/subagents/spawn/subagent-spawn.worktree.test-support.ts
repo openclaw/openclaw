@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureMethodCall } from "../../../../test/helpers/capture-method-call.js";
 import {
   awaitGateBeforeSettlement,
@@ -10,8 +10,6 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -20,27 +18,23 @@ import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { managedWorktrees, ManagedWorktreeService } from "../../worktrees/service.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
-import {
-  createBoundSpawnInvocation,
-  type createSpawnBoundaryParent,
-} from "./subagent-spawn.production-boundary.test-support.js";
+import type {
+  BoundParent,
+  SpawnBoundaryOptions,
+} from "./subagent-spawn.participants.test-support.js";
+import { createBoundSpawnInvocation } from "./subagent-spawn.production-boundary.test-support.js";
 
-type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 const whenIdle = (bound: BoundParent, run: () => void | Promise<void> = () => {}) =>
   AsyncWorkScope.runWhenAllIdle(() => [bound.execution], run);
 const gitAt = (repository: string, ...args: string[]) =>
   execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" }).trim();
 
-export function registerManagedWorktreeSpawnCases(options: {
-  stateDir: () => string;
-  createBoundParent: () => Promise<BoundParent>;
-  createBoundGateway: (bound: BoundParent) => Promise<{
-    context: GatewayRequestContext;
-    runtime: ReturnType<typeof createGatewayInstanceRuntime>;
-  }>;
-  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
-  settleRegistry: () => Promise<void>;
-}) {
+export function registerManagedWorktreeSpawnCases(
+  options: SpawnBoundaryOptions & {
+    stateDir: () => string;
+    settleRegistry: () => Promise<void>;
+  },
+) {
   const { createBoundParent, createBoundGateway, runEmbeddedAgent } = options;
   describe("managed worktrees", () => {
     let dispose = async () => {};
@@ -78,40 +72,36 @@ export function registerManagedWorktreeSpawnCases(options: {
           const settledSpawn = await spawn?.catch(() => undefined);
           childSessionKey ??= normalizeAcceptedSessionSpawnResult(settledSpawn)?.childSessionKey;
           const bound = ownedBound;
-          const gateway = ownedGateway;
+          if (!bound) {
+            return;
+          }
           try {
-            if (bound) {
-              await whenIdle(bound);
-            }
-            if (bound && gateway && childSessionKey) {
-              const entry = loadSessionEntry({
-                storePath: bound.storePath,
-                sessionKey: childSessionKey,
-              });
-              if (entry) {
-                const cleanupKey = childSessionKey;
-                const deleted = await withPluginRuntimeGatewayRequestScope(
-                  { context: gateway.context, isWebchatConnect: () => false },
-                  () =>
-                    cleanupProvisionalSession(cleanupKey, {
-                      expectedSessionId: entry.sessionId,
-                      expectedLifecycleRevision: entry.lifecycleRevision,
-                    }),
-                );
-                expect(deleted, "retained child cleanup through the fixture Gateway").toBe(true);
-              }
+            await whenIdle(bound);
+            const entry = childSessionKey
+              ? loadSessionEntry({
+                  storePath: bound.storePath,
+                  sessionKey: childSessionKey,
+                })
+              : undefined;
+            if (entry && ownedGateway && childSessionKey) {
+              const cleanupKey = childSessionKey;
+              const deleted = await withPluginRuntimeGatewayRequestScope(
+                { context: ownedGateway.context, isWebchatConnect: () => false },
+                () =>
+                  cleanupProvisionalSession(cleanupKey, {
+                    expectedSessionId: entry.sessionId,
+                    expectedLifecycleRevision: entry.lifecycleRevision,
+                  }),
+              );
+              expect(deleted, "retained child cleanup through the fixture Gateway").toBe(true);
             }
           } finally {
-            try {
-              if (bound) {
-                await whenIdle(bound, () => bound.execution.drain());
-              }
-            } finally {
+            await whenIdle(bound, () => bound.execution.drain()).finally(() => {
               restoreAllocation?.();
-              gateway?.runtime.close();
-              bound?.admission.close();
-              bound?.parent.cleanup();
-            }
+              ownedGateway?.runtime.close();
+              bound.admission.close();
+              bound.parent.cleanup();
+            });
           }
         };
 

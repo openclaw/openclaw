@@ -111,51 +111,20 @@ const patchMemory = (owner: MemoryOwner, sessionKey: string, patch: Partial<Sess
     patchSessionEntryCore({ storePath: owner.path, sessionKey }, () => patch),
   );
 
-it.each([false, true])(
-  "resolves current capability envelopes and cross-agent depth (bound=%s)",
-  async (bound) => {
-    const parentKey = await create(parent, "capability-parent", { spawnDepth: 2 });
-    const childKey = await create(sibling, "capability-child", {
-      spawnedBy: parentKey,
-      spawnDepth: 3,
-      inheritedToolPolicyVersion: 1,
-      inheritedToolAllow: ["read"],
-      inheritedToolDeny: ["exec"],
+it.each([
+  { bound: false, crossAgent: false },
+  { bound: false, crossAgent: true },
+  { bound: true, crossAgent: false },
+  { bound: true, crossAgent: true },
+])(
+  "inherits current memory capabilities (bound=$bound, crossAgent=$crossAgent)",
+  async ({ bound, crossAgent }) => {
+    const parentKey = await create(parent, "capability-parent", {
+      spawnDepth: 2,
+      skillLibrarySelections,
     });
-    const read = async () => {
-      const store = resolveSubagentCapabilityStore(childKey, { cfg: {} });
-      const policy = () => resolvePersistedSubagentToolPolicyEnvelope(childKey, { cfg: {}, store });
-      expect(resolveStoredSubagentCapabilities(childKey, { cfg: {}, store }).depth).toBe(3);
-      expect(policy()).toMatchObject({
-        spawnedBy: parentKey,
-        inheritedToolAllow: ["read"],
-        inheritedToolDeny: ["exec"],
-      });
-      await patchMemory(sibling, childKey, { inheritedToolDeny: ["exec", "write"] });
-      expect(policy()).toMatchObject({ inheritedToolDeny: ["exec", "write"] });
-      await patchMemory(sibling, childKey, { spawnDepth: undefined });
-      expect(policy()).toBeUndefined();
-      expect(getSubagentDepthFromSessionStore(childKey, { cfg: {} })).toBe(3);
-      const explicitStore = createSubagentSessionStore(sibling.path, "research");
-      expect(explicitStore.getById("capability-child")).toMatchObject({
-        sessionId: "capability-child",
-        inheritedToolAllow: ["read"],
-      });
-      expect(explicitStore.getById("capability-parent")).toBeUndefined();
-      expect(explicitStore.getById("missing-id")).toBeUndefined();
-      expect(explicitStore.get("agent:research:dashboard:incognito-missing")).toBeUndefined();
-    };
-    await (bound ? withMemorySource(sibling, childKey, read) : read());
-  },
-);
-
-it.each([false, true])(
-  "inherits pinned parent skills into an incognito child (crossAgent=%s)",
-  async (crossAgent) => {
-    const name = `skills-${crossAgent}`;
-    const parentKey = await create(parent, name, { skillLibrarySelections });
     const childOwner = crossAgent ? sibling : parent;
-    const childKey = `agent:${childOwner.agentId}:dashboard:incognito-child-${name}`;
+    const childKey = `agent:${childOwner.agentId}:dashboard:incognito-child`;
     const parentEntry = expectDefined(
       parent.readSession(parentKey, authority)?.entry,
       "parent entry",
@@ -175,7 +144,7 @@ it.each([false, true])(
         },
         childSessionKey: childKey,
         incognito: true,
-        expectedParentSessionId: name,
+        expectedParentSessionId: "capability-parent",
         senderIsOwner: true,
         creationPolicy: { actor: { type: "agent", id: parent.agentId } },
         completionOwnerSessionKey: parentKey,
@@ -186,15 +155,39 @@ it.each([false, true])(
       }),
     );
     expect(result).toMatchObject({ status: "ok" });
-    const child = childOwner.readSession(childKey, authority)?.entry;
+    await patchMemory(childOwner, childKey, { spawnDepth: 3 });
+    const child = expectDefined(childOwner.readSession(childKey, authority)?.entry, "child entry");
     expect(child).toMatchObject({
-      spawnedBy: parentKey,
-      spawnedBySessionId: name,
+      spawnedBySessionId: "capability-parent",
       parentSessionLifecycleRevision: "original",
       skillLibrarySelections,
-      inheritedToolAllow: ["read"],
-      inheritedToolDeny: ["exec"],
     });
+    const read = async () => {
+      const store = resolveSubagentCapabilityStore(childKey, { cfg: {} });
+      const policy = () => resolvePersistedSubagentToolPolicyEnvelope(childKey, { cfg: {}, store });
+      expect(resolveStoredSubagentCapabilities(childKey, { cfg: {}, store }).depth).toBe(3);
+      expect(policy()).toMatchObject({
+        spawnedBy: parentKey,
+        inheritedToolAllow: ["read"],
+        inheritedToolDeny: ["exec"],
+      });
+      await patchMemory(childOwner, childKey, { inheritedToolDeny: ["exec", "write"] });
+      expect(policy()).toMatchObject({ inheritedToolDeny: ["exec", "write"] });
+      await patchMemory(childOwner, childKey, { spawnDepth: undefined });
+      expect(policy()).toBeUndefined();
+      expect(getSubagentDepthFromSessionStore(childKey, { cfg: {} })).toBe(3);
+      const explicitStore = createSubagentSessionStore(childOwner.path, childOwner.agentId);
+      expect(explicitStore.getById(child.sessionId)).toMatchObject({
+        sessionId: child.sessionId,
+        inheritedToolAllow: ["read"],
+      });
+      if (crossAgent) {
+        expect(explicitStore.getById("capability-parent")).toBeUndefined();
+      }
+      expect(explicitStore.getById("missing-id")).toBeUndefined();
+      expect(explicitStore.get("agent:research:dashboard:incognito-missing")).toBeUndefined();
+    };
+    await (bound ? withMemorySource(childOwner, childKey, read) : read());
   },
 );
 
