@@ -3,7 +3,7 @@ import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi, type TestContext } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -23,11 +23,8 @@ const mocks = vi.hoisted(() => ({
   releaseAfterCancel: vi.fn(),
   runCommandWithTimeout: vi.fn(),
 }));
-
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
   return {
     ...actual,
     fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
@@ -54,9 +51,8 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
     },
   };
 });
-
-vi.mock("../process/exec.js", async () => {
-  const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
     ...actual,
     runCommandWithTimeout: mocks.runCommandWithTimeout.mockImplementation(
@@ -65,7 +61,7 @@ vi.mock("../process/exec.js", async () => {
   };
 });
 
-async function withServer(handler: RequestListener, run: (base: string) => Promise<void>) {
+async function serve(handler: RequestListener, onTestFinished: TestContext["onTestFinished"]) {
   const sockets = new Set<Socket>();
   const server = createServer(handler);
   server.on("connection", (socket) => {
@@ -75,30 +71,37 @@ async function withServer(handler: RequestListener, run: (base: string) => Promi
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
-  try {
-    await run(`http://loopback.test:${(server.address() as AddressInfo).port}`);
-  } finally {
+  onTestFinished(async () => {
     for (const socket of sockets) {
       socket.destroy();
     }
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-  }
+  });
+  return `http://loopback.test:${(server.address() as AddressInfo).port}`;
 }
 
-function config(args: string[], timeoutSeconds = 10): OpenClawConfig {
-  return {
+function startLink(
+  Body: string,
+  args = ["-e", "process.stdin.pipe(process.stdout)"],
+  timeoutSeconds = 10,
+) {
+  const ctx: MsgContext = { Body };
+  const original = { ...ctx };
+  const controller = new AbortController();
+  const cfg: OpenClawConfig = {
     tools: {
       links: { models: [{ command: process.execPath, args, timeoutSeconds: 10 }], timeoutSeconds },
     },
   };
+  const result = applyLinkUnderstanding({ ctx, cfg, signal: controller.signal });
+  return { ctx, original, controller, result };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
-
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
@@ -107,127 +110,89 @@ afterAll(async () => {
   await receipts?.close();
 });
 
-it("cancels a non-OK response body before releasing its guarded transport", async ({ signal }) => {
+it("cancels a non-OK response body before releasing its guarded transport", async ({
+  signal,
+  onTestFinished,
+}) => {
   const requestSocketClosed = deferred();
-  await withServer(
-    (request, response) => {
-      request.socket.once("close", requestSocketClosed.resolve);
-      response.writeHead(500, {
-        "content-length": "1000000",
-        "content-type": "text/plain",
-      });
-      // Leave the declared body unfinished so cleanup must actively cancel it.
-      response.write("error");
-    },
-    async (base) => {
-      const context: MsgContext = { Body: `see ${base}/error` };
-      const before = { ...context };
-      const resultPromise = applyLinkUnderstanding({
-        cfg: {
-          tools: {
-            links: {
-              enabled: true,
-              models: [{ type: "cli", command: "summarize" }],
-            },
-          },
-        },
-        ctx: context,
-      });
-
-      await withinTest(resultPromise, signal);
-      expect(context).toEqual(before);
-      expect(context.LinkUnderstanding).toBeUndefined();
-      await withinTest(requestSocketClosed.promise, signal);
-
-      expect(mocks.bodyCancel).toHaveBeenCalledOnce();
-      expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
-      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    },
-  );
+  const base = await serve((request, response) => {
+    request.socket.once("close", requestSocketClosed.resolve);
+    response.writeHead(500, { "content-length": "1000000", "content-type": "text/plain" });
+    // Leave the declared body unfinished so cleanup must actively cancel it.
+    response.write("error");
+  }, onTestFinished);
+  const { ctx, original, result } = startLink(`see ${base}/error`);
+  await withinTest(result, signal);
+  expect(ctx).toEqual(original);
+  await withinTest(requestSocketClosed.promise, signal);
+  expect(mocks.bodyCancel).toHaveBeenCalledOnce();
+  expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
+  expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
 });
 
-it("cancels a streaming response and preserves the unmodified inbound context", async () => {
+it("cancels a streaming response and preserves the unmodified inbound context", async ({
+  onTestFinished,
+}) => {
   const requestStarted = deferred();
   const socketClosed = deferred();
   const requests: string[] = [];
-  await withServer(
-    (req, res) => {
-      requests.push(req.url ?? "");
-      req.socket.once("close", socketClosed.resolve);
-      res.writeHead(200, { "content-type": "text/plain" });
-      res.write("partial page");
-      requestStarted.resolve();
-    },
-    async (base) => {
-      const controller = new AbortController();
-      const ctx: MsgContext = { Body: `${base}/first ${base}/second` };
-      const original = { ...ctx };
-      const result = applyLinkUnderstanding({
-        cfg: config(["-e", "throw new Error('processor must not start')"]),
-        ctx,
-        signal: controller.signal,
-      });
-      const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
-      await requestStarted.promise;
-      controller.abort(new Error("operator stopped the reply"));
-      await rejected;
-      await socketClosed.promise;
-      expect(ctx).toEqual(original);
-      expect(requests).toEqual(["/first"]);
-    },
-  );
+  const base = await serve((req, res) => {
+    requests.push(req.url ?? "");
+    req.socket.once("close", socketClosed.resolve);
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.write("partial page");
+    requestStarted.resolve();
+  }, onTestFinished);
+  const { ctx, original, controller, result } = startLink(`${base}/first ${base}/second`, [
+    "-e",
+    "throw new Error('processor must not start')",
+  ]);
+  const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+  await requestStarted.promise;
+  controller.abort(new Error("operator stopped the reply"));
+  await rejected;
+  await socketClosed.promise;
+  expect(ctx).toEqual(original);
+  expect(requests).toEqual(["/first"]);
 });
 
-it("skips a timed-out streaming link and processes the next link", async () => {
-  await withServer(
-    (req, res) => {
-      res.writeHead(200, { "content-type": "text/plain" });
-      if (req.url === "/slow") {
-        res.write("unfinished");
-      } else {
-        res.end("complete page");
-      }
-    },
-    async (base) => {
-      const ctx: MsgContext = { Body: `${base}/slow ${base}/good` };
-      await applyLinkUnderstanding({
-        cfg: config(["-e", "process.stdin.pipe(process.stdout)"], 0.5),
-        ctx,
-        signal: new AbortController().signal,
-      });
-      expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
-    },
-  );
+it("skips a timed-out streaming link and processes the next link", async ({ onTestFinished }) => {
+  const base = await serve((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    if (req.url === "/slow") {
+      res.write("unfinished");
+    } else {
+      res.end("complete page");
+    }
+  }, onTestFinished);
+  const { ctx, result } = startLink(`${base}/slow ${base}/good`, undefined, 0.5);
+  await result;
+  expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
 });
 
-it("fetches bare URLs in order while ignoring titled markdown links", async () => {
+it("fetches bare URLs in order while ignoring titled markdown links", async ({
+  onTestFinished,
+}) => {
   const requests: string[] = [];
-  await withServer(
-    (req, res) => {
-      const requestPath = req.url ?? "";
-      requests.push(requestPath);
-      res.end(requestPath);
-    },
-    async (base) => {
-      const ctx: MsgContext = {
-        Body: [
-          `[quoted](${base}/quoted "Docs")`,
-          `${base}/bare-one`,
-          `[angle](<${base}/angle> 'Docs')`,
-          `${base}/bare-two`,
-        ].join(" "),
-      };
-      await applyLinkUnderstanding({
-        cfg: config(["-e", "process.stdin.pipe(process.stdout)"]),
-        ctx,
-      });
-      expect(requests).toEqual(["/bare-one", "/bare-two"]);
-      expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
-    },
+  const base = await serve((req, res) => {
+    const requestPath = req.url ?? "";
+    requests.push(requestPath);
+    res.end(requestPath);
+  }, onTestFinished);
+  const { ctx, result } = startLink(
+    [
+      `[quoted](${base}/quoted "Docs")`,
+      `${base}/bare-one`,
+      `[angle](<${base}/angle> 'Docs')`,
+      `${base}/bare-two`,
+    ].join(" "),
   );
+  await result;
+  expect(requests).toEqual(["/bare-one", "/bare-two"]);
+  expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
 });
 
-it("stops processor descendants after caller cancellation", async ({ signal }) => {
+it("stops processor descendants after caller cancellation", async ({ signal, onTestFinished }) => {
   await withTempDir("openclaw-link-cancel-", async (dir) => {
     const pidPath = path.join(dir, "worker.pid");
     const workerSource = "setInterval(() => {}, 1000); process.send('ready')";
@@ -239,52 +204,45 @@ it("stops processor descendants after caller cancellation", async ({ signal }) =
       `worker.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)); sendReceipt(${JSON.stringify(pidPath)}, 'ready'); })`,
       "process.stdin.resume()",
     ].join(";");
-    await withServer(
-      (_req, res) => res.end("page body"),
-      async (base) => {
-        const controller = new AbortController();
-        const ctx: MsgContext = { Body: `${base}/page` };
-        const original = { ...ctx };
-        let workerPid: number | undefined;
-        const result = applyLinkUnderstanding({
-          cfg: config(["--input-type=module", "-e", wrapperSource]),
-          ctx,
-          signal: controller.signal,
-        });
-        const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
-        try {
-          // IPC readiness is recorded before the socket receipt, which can arrive after settlement.
-          const settled = result.then(
-            () => {
-              if (!existsSync(pidPath)) {
-                throw new Error(`Timed out waiting for pid file: ${pidPath}`);
-              }
-            },
-            (error: unknown) => {
-              if (!existsSync(pidPath)) {
-                throw error;
-              }
-            },
-          );
-          await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
-          workerPid = await readPidFile(pidPath);
-          expect(isPidAlive(workerPid)).toBe(true);
-          controller.abort();
-          await withinTest(rejected, signal);
-          expect(ctx).toEqual(original);
-          // Caller rejection does not expose the adopted worker's native reap event.
-          while (isPidAlive(workerPid)) {
-            await delay(25, undefined, { signal }).catch((error: unknown) => {
-              throw new Error(`Processor descendant ${workerPid} stayed alive`, { cause: error });
-            });
+    const base = await serve((_req, res) => res.end("page body"), onTestFinished);
+    let workerPid: number | undefined;
+    const { ctx, original, controller, result } = startLink(`${base}/page`, [
+      "--input-type=module",
+      "-e",
+      wrapperSource,
+    ]);
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    try {
+      // IPC readiness is recorded before the socket receipt, which can arrive after settlement.
+      const settled = result.then(
+        () => {
+          if (!existsSync(pidPath)) {
+            throw new Error(`Timed out waiting for pid file: ${pidPath}`);
           }
-          expect(isPidAlive(workerPid)).toBe(false);
-        } finally {
-          controller.abort();
-          killPidIfAlive(workerPid);
-          await rejected;
-        }
-      },
-    );
+        },
+        (error: unknown) => {
+          if (!existsSync(pidPath)) {
+            throw error;
+          }
+        },
+      );
+      await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+      workerPid = await readPidFile(pidPath);
+      expect(isPidAlive(workerPid)).toBe(true);
+      controller.abort();
+      await withinTest(rejected, signal);
+      expect(ctx).toEqual(original);
+      // Caller rejection does not expose the adopted worker's native reap event.
+      while (isPidAlive(workerPid)) {
+        await delay(25, undefined, { signal }).catch((error: unknown) => {
+          throw new Error(`Processor descendant ${workerPid} stayed alive`, { cause: error });
+        });
+      }
+      expect(isPidAlive(workerPid)).toBe(false);
+    } finally {
+      controller.abort();
+      killPidIfAlive(workerPid);
+      await rejected;
+    }
   });
 });

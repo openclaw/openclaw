@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
@@ -26,19 +26,27 @@ function cfg(
   entry: LinkModelConfig | LinkModelConfig[] = { type: "cli", command: "summarize" },
   options: Omit<LinkToolsConfig, "models"> = {},
 ): OpenClawConfig {
-  return {
-    tools: {
-      links: {
-        enabled: true,
-        ...options,
-        models: Array.isArray(entry) ? entry : [entry],
-      },
-    },
-  };
+  const models = Array.isArray(entry) ? entry : [entry];
+  return { tools: { links: { enabled: true, ...options, models } } };
 }
 
 function ctx(body = "see https://example.com/page"): MsgContext {
   return { Body: body };
+}
+
+function apply(context = ctx(), config = cfg(), signal?: AbortSignal) {
+  return applyLinkUnderstanding({ ctx: context, cfg: config, signal });
+}
+
+async function withLogs(run: (log: MockInstance<typeof globals.logVerbose>) => Promise<void>) {
+  const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+  const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+  try {
+    await run(log);
+  } finally {
+    log.mockRestore();
+    verbose.mockRestore();
+  }
 }
 
 function mockGuardedFetch(body = "guarded content", finalUrl = "https://example.com/final") {
@@ -51,15 +59,9 @@ function mockGuardedFetch(body = "guarded content", finalUrl = "https://example.
   return release;
 }
 
+const commandResult = { code: 0, killed: false, signal: null, stderr: "", termination: "exit" };
 function mockCommand(stdout = "summary") {
-  mocks.runCommandWithTimeout.mockResolvedValueOnce({
-    code: 0,
-    killed: false,
-    signal: null,
-    stderr: "",
-    stdout,
-    termination: "exit",
-  });
+  mocks.runCommandWithTimeout.mockResolvedValueOnce({ ...commandResult, stdout });
 }
 
 describe("applyLinkUnderstanding", () => {
@@ -77,46 +79,36 @@ describe("applyLinkUnderstanding", () => {
       Surface: "slack",
     };
     const before = structuredClone(context);
-    await applyLinkUnderstanding({
-      cfg: cfg(undefined, {
-        scope: {
-          default: "allow",
-          rules: [
-            {
-              action: "deny",
-              match: { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
-            },
-          ],
-        },
+    const match = { channel: "slack", chatType: "channel" as const, keyPrefix: "agent:main:" };
+    await apply(
+      context,
+      cfg(undefined, {
+        scope: { default: "allow", rules: [{ action: "deny", match }] },
       }),
-      ctx: context,
-    });
+    );
 
     expect(context).toEqual(before);
-    expect(context.LinkUnderstanding).toBeUndefined();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
-    const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
-    const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
     const body = "synthetic private link context https://example.com/page";
-    try {
+    await withLogs(async (log) => {
       const controller = new AbortController();
       const release = mockGuardedFetch("page body", "https://example.com/final");
       mockCommand("summarized page");
 
       const context = ctx(body);
-      await applyLinkUnderstanding({
-        cfg: cfg({
+      await apply(
+        context,
+        cfg({
           type: "cli",
           command: "summarize",
           args: ["--source", "{{LinkUrl}}", "--context", "{{Body}}"],
         }),
-        ctx: context,
-        signal: controller.signal,
-      });
+        controller.signal,
+      );
 
       expect(context.LinkUnderstanding).toEqual(["summarized page"]);
       expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
@@ -142,43 +134,37 @@ describe("applyLinkUnderstanding", () => {
       );
       expect(release).toHaveBeenCalledOnce();
       expect(JSON.stringify(log.mock.calls)).not.toContain(body);
-    } finally {
-      log.mockRestore();
-      verbose.mockRestore();
-    }
+    });
   });
 
   it.each(["fetch", "cli"])(
     "keeps %s failures content-free without changing fallback",
     async (stage) => {
-      const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
-      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
       const privateText = "synthetic-private-link-content";
-      try {
+      await withLogs(async (log) => {
         if (stage === "fetch") {
           mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error(privateText));
         } else {
           mockGuardedFetch("fallback page body");
           mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error(privateText));
         }
-        const context = ctx(`https://example.com/${privateText}`);
+        const context: MsgContext = {
+          Body: "transport envelope",
+          agentText: "prepared transcript",
+          BodyForAgent: "SDK transcript",
+          CommandBody: `https://example.com/${privateText}`,
+        };
         const before = structuredClone(context);
-        await applyLinkUnderstanding({
-          cfg: cfg(),
-          ctx: context,
-        });
+        await apply(context);
         if (stage === "fetch") {
           expect(context).toEqual(before);
-          expect(context.LinkUnderstanding).toBeUndefined();
+          expect(runCommandWithTimeout).not.toHaveBeenCalled();
         } else {
           expect(context.LinkUnderstanding).toEqual(["fallback page body"]);
         }
         expect(log).toHaveBeenCalled();
         expect(JSON.stringify(log.mock.calls)).not.toContain(privateText);
-      } finally {
-        log.mockRestore();
-        verbose.mockRestore();
-      }
+      });
     },
   );
 
@@ -203,14 +189,13 @@ describe("applyLinkUnderstanding", () => {
         ...text,
       };
 
-      await applyLinkUnderstanding({ cfg: cfg(), ctx: context });
+      await apply(context);
 
-      expect(context.Body).toBe("transport envelope\n\nsummarized page");
-      expect(context.agentText).toBe(
-        expected ? `${expected}\n\nsummarized page` : "summarized page",
-      );
-      expect(context.BodyForAgent).toBe(context.agentText);
+      const agentText = expected ? `${expected}\n\nsummarized page` : "summarized page";
       expect(context).toMatchObject({
+        Body: "transport envelope\n\nsummarized page",
+        agentText,
+        BodyForAgent: agentText,
         RawBody: "see https://example.com/page",
         CommandBody: "see https://example.com/page",
         rawText: "see https://example.com/page",
@@ -220,34 +205,18 @@ describe("applyLinkUnderstanding", () => {
     },
   );
 
-  it("leaves context untouched when guarded link fetch produces no output", async () => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error("blocked by DNS policy"));
-    const context: MsgContext = {
-      Body: "transport envelope",
-      agentText: "prepared transcript",
-      BodyForAgent: "SDK transcript",
-      CommandBody: "see https://example.com/page",
-    };
-    const before = structuredClone(context);
-
-    await applyLinkUnderstanding({ cfg: cfg(), ctx: context });
-
-    expect(context).toEqual(before);
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-  });
-
   it("does not run configured curl fetchers against attacker-controlled URLs", async () => {
     mockGuardedFetch("guarded page body");
 
     const context = ctx("see http://192.168.1.64.nip.io:8888/aws-iam-credentials");
-    await applyLinkUnderstanding({
-      cfg: cfg({
+    await apply(
+      context,
+      cfg({
         type: "cli",
         command: "curl",
         args: ["-s", "-L", "{{LinkUrl}}"],
       }),
-      ctx: context,
-    });
+    );
 
     expect(context.LinkUnderstanding).toEqual(["guarded page body"]);
     expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
@@ -255,34 +224,33 @@ describe("applyLinkUnderstanding", () => {
   });
 
   it.each([
-    [
-      "uses the global link-tools timeout for fetches when configured",
-      { timeoutSeconds: 15 },
-      15000,
-    ],
-    ["falls back to the largest model timeout for fetches when no global timeout is set", {}, 9000],
-  ] as const)("%s", async (_name, timeoutConfig, timeoutMs) => {
-    mockGuardedFetch("page body", "https://example.com/final");
-    mockCommand("summarized page");
+    [15, 15000],
+    [undefined, 9000],
+  ] as const)(
+    "resolves global timeout %s to %s ms, otherwise using the largest model timeout",
+    async (timeoutSeconds, timeoutMs) => {
+      mockGuardedFetch("page body", "https://example.com/final");
+      mockCommand("summarized page");
 
-    await applyLinkUnderstanding({
-      cfg: cfg(
-        [
-          { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
-          { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
-        ],
-        timeoutConfig,
-      ),
-      ctx: ctx(),
-    });
+      await apply(
+        ctx(),
+        cfg(
+          [
+            { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
+            { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
+          ],
+          { timeoutSeconds },
+        ),
+      );
 
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs,
-        url: "https://example.com/page",
-      }),
-    );
-  });
+      expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs,
+          url: "https://example.com/page",
+        }),
+      );
+    },
+  );
 
   it("skips pre-aborted work without changing inbound context", async () => {
     const controller = new AbortController();
@@ -290,13 +258,7 @@ describe("applyLinkUnderstanding", () => {
     const context = ctx();
     const original = { ...context };
 
-    await expect(
-      applyLinkUnderstanding({
-        ctx: context,
-        cfg: cfg(),
-        signal: controller.signal,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(apply(context, cfg(), controller.signal)).resolves.toBeUndefined();
 
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
@@ -310,11 +272,8 @@ describe("applyLinkUnderstanding", () => {
     mockCommand("second summary");
 
     const context = ctx();
-    await applyLinkUnderstanding({
-      cfg: cfg([{ command: "summarize-a" }, { command: "summarize-b" }]),
-      ctx: context,
-      signal: controller.signal,
-    });
+    const config = cfg([{ command: "summarize-a" }, { command: "summarize-b" }]);
+    await apply(context, config, controller.signal);
 
     expect(context.LinkUnderstanding).toEqual(["second summary"]);
     for (const [index, command] of ["summarize-a", "summarize-b"].entries()) {
@@ -332,24 +291,17 @@ describe("applyLinkUnderstanding", () => {
     mockGuardedFetch("first body", "https://example.com/first");
     mocks.runCommandWithTimeout.mockImplementationOnce(async () => {
       controller.abort(reason);
-      return {
-        code: 0,
-        stdout: "late summary",
-        termination: "exit",
-        killed: false,
-        signal: null,
-        stderr: "",
-      };
+      return { ...commandResult, stdout: "late summary" };
     });
     const context = ctx("see https://example.com/first and https://example.com/second");
     const original = { ...context };
 
     await expect(
-      applyLinkUnderstanding({
-        cfg: cfg([{ command: "summarize-a" }, { command: "summarize-b" }]),
-        ctx: context,
-        signal: controller.signal,
-      }),
+      apply(
+        context,
+        cfg([{ command: "summarize-a" }, { command: "summarize-b" }]),
+        controller.signal,
+      ),
     ).rejects.toMatchObject({ name: "AbortError", cause: reason });
 
     expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
@@ -363,13 +315,7 @@ describe("applyLinkUnderstanding", () => {
     });
     mocks.fetchWithSsrFGuard.mockRejectedValueOnce(abortError);
 
-    await expect(
-      applyLinkUnderstanding({
-        cfg: cfg(),
-        ctx: ctx(),
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toBe(abortError);
+    await expect(apply(ctx(), cfg(), new AbortController().signal)).rejects.toBe(abortError);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
@@ -381,13 +327,10 @@ describe("applyLinkUnderstanding", () => {
       throw new Error("connect ECONNREFUSED");
     });
 
-    await expect(
-      applyLinkUnderstanding({
-        cfg: cfg(),
-        ctx: ctx(),
-        signal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError", cause: reason });
+    await expect(apply(ctx(), cfg(), controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: reason,
+    });
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 });
