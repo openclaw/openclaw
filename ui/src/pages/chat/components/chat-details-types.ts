@@ -21,13 +21,13 @@ export type ChatDetailsDesktopSectionId =
   | "processes"
   | "outputs";
 
-export type ChatDetailsDesktopDisclosures = {
+type ChatDetailsDesktopDisclosures = {
   /** Restored by the preference owner before the first render, scoped to this session. */
   expanded: Partial<Record<ChatDetailsDesktopSectionId, boolean>>;
   onExpandedChange: (section: ChatDetailsDesktopSectionId, expanded: boolean) => void;
 };
 
-export type ChatDetailsDesktopPresentation = {
+type ChatDetailsDesktopPresentation = {
   /** Localized section labels supplied by the host's copy owner. */
   peopleLabel: string;
   outputsLabel: string;
