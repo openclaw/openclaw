@@ -465,7 +465,8 @@ function assertCurrentChatSendSession(
   if (
     latest.agentId !== session.sessionTarget.agentId ||
     (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
-    !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource)
+    (session.sessionTarget.readSource &&
+      !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource))
   ) {
     throw new Error("Session storage changed while starting work. Retry.");
   }

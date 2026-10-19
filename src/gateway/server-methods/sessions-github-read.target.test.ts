@@ -47,8 +47,12 @@ function expectFailure(
 async function withWorktree(
   run: (fixture: ReadFixture, worktree: Worktree) => Promise<void>,
   origin: string | undefined = githubOrigin,
+  bare = false,
 ) {
-  await withReadFixture(async (fixture) => run(fixture, await registerWorktree(origin)), guest);
+  await withReadFixture(
+    async (fixture) => run(fixture, await registerWorktree(origin, bare)),
+    guest,
+  );
 }
 
 async function git(root: string, ...args: string[]) {
@@ -62,13 +66,21 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function registerWorktree(origin?: string) {
-  const root = await fs.realpath(temporary.make("publication-read-target-"));
+async function registerWorktree(origin?: string, bare = false) {
+  let root = await fs.realpath(temporary.make("publication-read-target-"));
   await git(root, "init", "--initial-branch=feature");
   await git(root, "config", "user.name", "Publication Fixture");
   await git(root, "config", "user.email", "publication@example.invalid");
   await git(root, "config", "commit.gpgsign", "false");
   await git(root, "commit", "--allow-empty", "-m", "fixture");
+  if (bare) {
+    const repository = `${root}/bare.git`;
+    const checkout = `${root}/checkout`;
+    await git(root, "clone", "--bare", root, repository);
+    await git(repository, "remote", "remove", "origin");
+    await git(repository, "worktree", "add", checkout, "feature");
+    root = checkout;
+  }
   if (origin) {
     await git(root, "remote", "add", "origin", origin);
   }
@@ -95,6 +107,66 @@ async function registerWorktree(origin?: string) {
 }
 
 describe("registered guest publication target discovery", () => {
+  it.each([false, true])(
+    "shares repository discovery across linked sessions (bare root: %s)",
+    async (bare) => {
+      await withWorktree(
+        async (fixture, worktree) => {
+          const keys = [sessionKey];
+          for (let index = 1; index <= 2; index++) {
+            const key = `${sessionKey}-${index}`;
+            const linked = {
+              ...worktree,
+              id: `${worktree.id}-${index}`,
+              path: `${worktree.path}/linked-${index}`,
+              branch: `feature-${index}`,
+              ownerId: key,
+            };
+            await git(worktree.path, "worktree", "add", "-b", linked.branch, linked.path);
+            await insertRegistryWorktree(process.env, linked);
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              {
+                sessionId: `linked-session-${index}`,
+                updatedAt: 1,
+                worktree: { id: linked.id, branch: linked.branch, repoRoot: linked.repoRoot },
+              },
+            );
+            keys.push(key);
+          }
+          try {
+            const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+            const responses = await Promise.all(
+              keys.map((key) => fixture.invoke("sessions.github.options", { sessionKey: key })),
+            );
+            for (const response of responses) {
+              expect(response).toHaveBeenCalledWith(true, sharedOptions);
+            }
+            expect(lookup).toHaveBeenCalledOnce();
+
+            // A revised registry identity cannot borrow the previous repository's positive facts.
+            await updateRegistryWorktree(process.env, `${worktree.id}-1`, {
+              repositoryIdentity: { repoRoot: worktree.repoRoot, repoFingerprint: "changed" },
+            });
+            expectFailure(
+              await fixture.invoke("sessions.github.options", { sessionKey: keys[1] }),
+              {
+                message: repositoryChanged,
+              },
+            );
+            expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
+          } finally {
+            for (let index = 1; index <= 2; index++) {
+              await git(worktree.path, "worktree", "remove", `${worktree.path}/linked-${index}`);
+            }
+          }
+        },
+        githubOrigin,
+        bare,
+      );
+    },
+  );
+
   it("shares Git discovery across concurrent options readers", async () => {
     await withWorktree(async (fixture) => {
       const readers = 8;

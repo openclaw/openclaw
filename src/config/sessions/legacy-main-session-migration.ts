@@ -2,7 +2,9 @@ import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -310,16 +312,6 @@ function writeLedger(params: {
   );
 }
 
-function groupLegacyClaims<Claim extends SessionComparisonClaim>(claims: Claim[]) {
-  const grouped = new Map<string, Claim[]>();
-  for (const claim of claims) {
-    const group = grouped.get(claim.canonicalKey) ?? [];
-    group.push(claim);
-    grouped.set(claim.canonicalKey, group);
-  }
-  return grouped;
-}
-
 function compareClaimGroup<Claim extends SessionComparisonClaim>(
   aliases: Claim[],
   canonicalClaims: Claim[],
@@ -375,6 +367,7 @@ function isBlockingOutcome(outcome: LegacyMainSessionMigrationOutcome): boolean 
 async function migrateLegacyMainSessionKeysInternal(
   params: Parameters<typeof migrateLegacyMainSessionKeys>[0],
 ): Promise<LegacyMainSessionMigrationResult> {
+  const { cfg, mode } = params;
   const env = params.env ?? process.env;
   const legacyAgentId = normalizeAgentId(params.legacyAgentId ?? "main");
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
@@ -391,12 +384,9 @@ async function migrateLegacyMainSessionKeysInternal(
       // candidates fail open because they cannot prove the fleet is clean.
       let rowsMayExist: boolean;
       try {
-        const resolved = resolvePhysicalStores({
-          cfg: params.cfg,
-          env,
-          legacyAgentId,
-          mode: params.mode,
-        });
+        const resolved = withEngineStoreAdmission(() =>
+          resolvePhysicalStores({ cfg, env, legacyAgentId, mode }),
+        );
         base.warnings.push(...resolved.warnings);
         rowsMayExist =
           resolved.unreadable.length > 0 ||
@@ -431,13 +421,9 @@ async function migrateLegacyMainSessionKeysInternal(
     };
   }
   const ownerAgentId = arming.ownerAgentId;
-  const resolved = resolvePhysicalStores({
-    cfg: params.cfg,
-    env,
-    legacyAgentId,
-    mode: params.mode,
-    ownerAgentId,
-  });
+  const resolved = withEngineStoreAdmission(() =>
+    resolvePhysicalStores({ cfg, env, legacyAgentId, mode, ownerAgentId }),
+  );
   const outcomes: LegacyMainSessionMigrationOutcome[] = [
     ...resolved.jsonPaths.map((pathname) => ({
       kind: "legacy-json-store" as const,
@@ -536,7 +522,7 @@ async function migrateLegacyMainSessionKeysInternal(
         `session: ${legacy.length} retained legacy ${legacyAgentId} session claim(s) require Doctor repair; run openclaw doctor --fix`,
       );
     }
-    for (const [canonicalKey, aliases] of groupLegacyClaims(legacy)) {
+    for (const [canonicalKey, aliases] of groupRecords(legacy, (claim) => claim.canonicalKey)) {
       const compared = compareClaimGroup(
         aliases,
         canonical.filter((claim) => claim.key === canonicalKey),
@@ -582,7 +568,7 @@ async function migrateLegacyMainSessionKeysInternal(
           path.join(resolveSessionArtifactDirectory(destinationResolved.path), "cold"),
         );
 
-  for (const [canonicalKey, aliases] of groupLegacyClaims(allLegacy)) {
+  for (const [canonicalKey, aliases] of groupRecords(allLegacy, (claim) => claim.canonicalKey)) {
     const canonicalClaims = allCanonical.filter((claim) => claim.key === canonicalKey);
     if (
       params.mode === "doctor-fix" &&

@@ -462,16 +462,12 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       row,
       storePath: loaded.storePath,
       accountId: identity.account.accountId,
+      host: githubHost,
       assertCurrent: assertPublicationAction,
-      description: (
-        row.body?.trim() || "Published by the Gateway after authoritative workspace reconciliation."
-      )
-        .replace(/(?:\s*---\s*\n\[View the OpenClaw team session\]\([^\r\n)]*\)\s*)+$/u, "")
-        .replace(
-          /(?:^|\n\n)## Worked on by\n\n(?:- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\n)*- @[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?=\n\n|$)/gu,
-          "",
-        )
-        .trimEnd(),
+      readCurrentEntry: () => currentWorktree().loaded.entry,
+      description:
+        row.body?.trim() ||
+        "Published by the Gateway after authoritative workspace reconciliation.",
     });
     const { assertAction } = content;
     const completePublished = async (url: string, publishedHead: string) =>
@@ -621,7 +617,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
 
     let pullRequestUrl = await findPullRequest();
     if (!pullRequestUrl) {
-      const body = content.pullRequestBody();
       identity = await refreshIdentity();
       assertAction();
       await params.recordEffect?.("pull_request");
@@ -632,13 +627,15 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         {
           env: identity.env,
           beforeRun: assertAction,
-          input: JSON.stringify({
-            title: content.title,
-            body,
-            head: `${pushOwner}:${branch}`,
-            base: baseBranch,
-            draft: true,
-          }),
+          input: () =>
+            JSON.stringify({
+              title: content.title,
+              body: content.pullRequestBody(),
+              head: `${pushOwner}:${branch}`,
+              base: baseBranch,
+              // Requests accepted before the choice was introduced created drafts.
+              draft: row.draft !== 0,
+            }),
         },
       );
       if (created.code === 0) {

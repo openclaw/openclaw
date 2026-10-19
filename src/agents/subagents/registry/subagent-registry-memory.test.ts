@@ -8,6 +8,7 @@ import {
   findAuthorizedSwarmCollectorRequest,
   compactSubagentRunForMemory,
   getSubagentChildSessionCandidates,
+  getSubagentActivationRuns,
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
   getSubagentSessionReadLookup,
@@ -43,6 +44,7 @@ describe("completed subagent payload residency", () => {
       task: "Assigned task ".repeat(100),
       execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
       cleanupCompletedAt: 3,
+      expectsCompletionMessage: true,
       delivery: { status: "delivered" },
       completion: {
         required: true,
@@ -86,6 +88,25 @@ describe("completed subagent payload residency", () => {
     expect(getGatewayContextResolver(resident)).toBe(resolver);
   });
 
+  it("keeps settled collector payloads cold while retaining their spawning turn identity", () => {
+    const entry = {
+      ...completedRun(),
+      collect: true,
+      requesterTurnRunId: "parent-turn",
+      expectsCompletionMessage: false,
+      completion: { required: false, resultText: "collected result", capturedAt: 2 },
+      delivery: { status: "not_required" as const },
+    };
+    const resident = compactSubagentRunForMemory(entry);
+    subagentRuns.set(entry.runId, resident);
+    expect(resident.requesterTurnRunId).toBe("parent-turn");
+    expect(isSubagentRunPayloadEvicted(resident)).toBe(true);
+    expect([...getSubagentActivationRuns(subagentRuns)]).toEqual([]);
+    expect(restoreSubagentRunPayload(resident, entry).completion?.resultText).toBe(
+      "collected result",
+    );
+  });
+
   it.each<[string, Partial<SubagentRunRecord>]>([
     ["running", { execution: { status: "running" } }],
     ["unfinished cleanup", { cleanupCompletedAt: undefined }],
@@ -106,6 +127,37 @@ describe("completed subagent payload residency", () => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("tracks activation obligations across settlement, reactivation, deletion, and reset", () => {
+    const finished: SubagentRunRecord = {
+      ...createRun("history", "agent:main:subagent:history"),
+      execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
+      cleanupCompletedAt: 3,
+    };
+    const running = createRun("running", "agent:main:subagent:running");
+    const cleanup = { ...finished, runId: "cleanup", cleanupCompletedAt: undefined };
+    const wake: SubagentRunRecord = {
+      ...finished,
+      runId: "wake",
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    };
+    for (const entry of [finished, running, cleanup, wake]) {
+      subagentRuns.set(entry.runId, entry);
+    }
+    const candidates = () => [...getSubagentActivationRuns(subagentRuns)].map((run) => run.runId);
+    expect(candidates()).toEqual(["running", "cleanup", "wake"]);
+    subagentRuns.set(running.runId, {
+      ...running,
+      execution: finished.execution,
+      cleanupCompletedAt: 3,
+    });
+    subagentRuns.set(wake.runId, { ...wake, requesterSettleWake: undefined });
+    subagentRuns.delete(cleanup.runId);
+    subagentRuns.set(finished.runId, { ...finished, execution: { status: "running" } });
+    expect(candidates()).toEqual(["history"]);
+    subagentRuns.clear();
+    expect(candidates()).toEqual([]);
+  });
+
   it.each(["global", "agent:main:subagent:shared"])(
     "retains collector authorization beside unresolved rows (%s)",
     (childSessionKey) => {
@@ -202,31 +254,22 @@ describe("subagent run memory indexes", () => {
     ).toEqual([]);
   });
 
-  it("retains a selected registration through its own ACK but rejects a committed replacement ABA", () => {
+  it("retains a selected registration through its own ACK but rejects a current replacement", () => {
     const entry = createRun("selected", "agent:main:subagent:selected");
     subagentRuns.set(entry.runId, entry);
     const selected = subagentRuns.captureRegistrationOwnership(entry.childSessionKey, entry);
-    const preparing = subagentRuns.captureRegistrationOwnership(entry.childSessionKey);
     try {
       selected.accept(entry);
       expect(selected.assertCurrent).not.toThrow();
       expect(selected.superseded).toBe(false);
-      expect(preparing.assertCurrent).toThrow("owner changed");
-      expect(() => preparing.accept(entry)).toThrow("owner changed");
       const replacement = createRun(entry.runId, entry.childSessionKey);
       replacement.generation = 1;
       subagentRuns.set(entry.runId, replacement);
       subagentRuns.commitOwnership(replacement);
       expect(selected.assertCurrent).toThrow("owner changed");
       expect(selected.superseded).toBe(true);
-      subagentRuns.delete(replacement.runId);
-      subagentRuns.confirmRetirement(replacement);
-      subagentRuns.set(entry.runId, entry);
-      subagentRuns.commitOwnership(entry);
-      expect(selected.assertCurrent).toThrow("owner changed");
     } finally {
       selected.release();
-      preparing.release();
     }
   });
 

@@ -33,7 +33,6 @@ import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
 /** Canonical provider id for OpenAI-hosted model routes. */
 export const OPENAI_PROVIDER_ID = "openai";
-export const OPENAI_CODEX_PROVIDER_ID = OPENAI_PROVIDER_ID;
 
 /** Returns true for provider ids that normalize to OpenAI. */
 export function isOpenAIProvider(provider: string | undefined): boolean {
@@ -175,52 +174,4 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
       agentId: params.agentId,
     }) === "codex"
   );
-}
-
-/** Lists auth-profile providers for an OpenAI runtime route. */
-export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  config?: OpenClawConfig;
-}): string[] {
-  if (!isOpenAIProvider(params.provider)) {
-    return [params.provider];
-  }
-  return [OPENAI_PROVIDER_ID];
-}
-
-/** Resolves the provider id passed to OpenAI runtime auth/execution paths. */
-export function resolveOpenAIRuntimeProvider(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  authProfileProvider?: string;
-  authProfileId?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
-}
-
-/** Resolves the selected provider id displayed for OpenAI runtime routes. */
-export function resolveSelectedOpenAIRuntimeProvider(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  authProfileProvider?: string;
-  authProfileId?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
-}
-
-/** Resolves the config provider used for context-window lookup. */
-export function resolveContextConfigProviderForRuntime(params: {
-  provider: string;
-  runtimeId?: string;
-  config?: OpenClawConfig;
-}): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
 }

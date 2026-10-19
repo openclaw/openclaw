@@ -24,13 +24,8 @@ export function createGatewayDiagnosticsConfigurator(params: {
     if (params.isClosing()) {
       return;
     }
-    const enabled = isDiagnosticsEnabled(config);
-    setDiagnosticsEnabledForProcess(enabled);
+    setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(config));
     notifyGatewayWorkMetricsChanged();
-    if (!enabled) {
-      stopGatewayDiagnosticHeartbeat();
-      return;
-    }
     startGatewayDiagnosticHeartbeat(params.scheduler, undefined, {
       getConfig: getRuntimeConfig,
       startupGraceMs: 60_000,

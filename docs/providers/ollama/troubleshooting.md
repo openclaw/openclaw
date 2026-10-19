@@ -164,6 +164,28 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Repetitive output stopped">
+    OpenClaw stopped a long repetition-dominated response from a model with a
+    known total size in the 32B class or smaller. It replaced the affected unfinished
+    block in session history with `[Repetitive output stopped]`. Earlier blocks
+    and completed tool work remain; side effects are not retried automatically.
+
+    Try a stronger model, request less output, or split the task into smaller
+    turns. Native Ollama requests also send the resolved model output cap as
+    `num_predict`; lower the model's `maxTokens` if generation runs too long.
+    Discovered local models default to 8,192 output tokens. Ollama Cloud models
+    use their documented output limits, or their context window when a separate
+    output limit is unavailable. Authored `maxTokens` and `params.num_predict`
+    override those defaults. Set `params: { num_predict: -1 }` on a model entry
+    to restore Ollama's unlimited generation default; an explicit request output
+    cap still wins.
+    The detector starts around 16,000 characters and can stop legitimate output
+    with sufficiently dominant repetition. It applies to the 32B class (less than
+    34 billion total parameters) and stays off when total model size is unknown.
+    See [Output budgets and repetition stops](/gateway/local-models#output-budgets-and-repetition-stops).
+
+  </Accordion>
+
   <Accordion title="Kimi or GLM returns garbled symbols">
     Hosted Kimi/GLM responses that are long, non-linguistic symbol runs are
     treated as a failed provider call rather than a successful reply, so
@@ -238,6 +260,13 @@ sidebarTitle: "Troubleshooting"
     Lower the model entry's `contextTokens` if OpenClaw sends too much prompt. Lower
     `params.num_ctx` if Ollama's runtime context is too large for the machine.
     Lower `maxTokens` if generation runs too long.
+
+  </Accordion>
+
+  <Accordion title="Memory embedding rebuild fails">
+    If `openclaw memory index --force` fails against Ollama (for example with
+    `bge-m3`), try [llmman](/providers/llmman#advanced-configuration) as the
+    embedding server. `provider: "ollama"` only needs a new `remote.baseUrl`.
 
   </Accordion>
 

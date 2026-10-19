@@ -21,6 +21,87 @@ const tieredPricing = {
 };
 const latestCall = { state: "available", promptTokens: 600, totalTokens: 610 };
 
+it.each([
+  {
+    name: "trimmed top-level name",
+    message: { toolName: " weather " },
+    toolNames: ["weather"],
+    toolResultCounts: { total: 0, errors: 0 },
+  },
+  {
+    name: "legacy top-level alias",
+    message: { tool_name: "notes" },
+    toolNames: ["notes"],
+    toolResultCounts: { total: 0, errors: 0 },
+  },
+  {
+    name: "canonical, padded and legacy call types",
+    message: {
+      content: [
+        { type: "text", text: "hi" },
+        { type: "tool_use", name: "read" },
+        { type: "toolcall", name: "exec" },
+        { type: "tool_call", name: "write" },
+        { type: " toolCall ", name: "padded" },
+        { type: "toolUse", name: "legacy" },
+      ],
+    },
+    toolNames: ["read", "exec", "write", "padded", "legacy"],
+    toolResultCounts: { total: 0, errors: 0 },
+  },
+  {
+    name: "one legacy mirror and repeated calls",
+    message: {
+      toolName: " write ",
+      tool_name: "ignored",
+      content: [
+        { type: "toolCall", name: "read" },
+        { type: "toolUse", name: "write" },
+        { type: "tooluse", name: "write" },
+        { type: "tool_call", name: "" },
+      ],
+    },
+    toolNames: ["write", "read", "write"],
+    toolResultCounts: { total: 0, errors: 0 },
+  },
+  {
+    name: "blank primary name does not fall back to its alias",
+    message: { toolName: " ", tool_name: "ignored", content: [] },
+    toolNames: [],
+    toolResultCounts: { total: 0, errors: 0 },
+  },
+  {
+    name: "mixed calls and recognized results with explicit errors",
+    message: {
+      content: [
+        null,
+        "ignore",
+        { type: "toolCall", name: "read" },
+        { type: "tool_result" },
+        { type: " TOOL_RESULT ", is_error: true },
+        { type: "tool_result_error" },
+        { type: "toolResult", is_error: true },
+        { type: "text", text: "ignore" },
+      ],
+    },
+    toolNames: ["read"],
+    toolResultCounts: { total: 3, errors: 1 },
+  },
+  {
+    name: "non-array content",
+    message: { content: "nope" },
+    toolNames: [],
+    toolResultCounts: { total: 0, errors: 0 },
+  },
+])("parses tool accounting for $name", ({ message, toolNames, toolResultCounts }) => {
+  expect(
+    parseUsageCostTranscriptRecord({ message: { role: "assistant", ...message } }),
+  ).toMatchObject({
+    toolNames,
+    toolResultCounts,
+  });
+});
+
 function estimate(usage: Record<string, unknown>, cost: typeof flatPricing) {
   const entry = parseUsageCostTranscriptRecord({ message: { role: "assistant", usage } });
   if (!needsUsageCostEstimate(entry)) {

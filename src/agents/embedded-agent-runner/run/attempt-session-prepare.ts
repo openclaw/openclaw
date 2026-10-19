@@ -123,7 +123,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     silentOverflowProneProvider: isSilentOverflowProneModel({
       provider: attempt.provider,
       modelId: attempt.modelId,
-      baseUrl: attempt.model.baseUrl ?? undefined,
+      baseUrl: attempt.model.baseUrl,
     }),
     // The finalizer's result gate rejects any compaction, so never start one.
     compactionForbidden: attempt.operation === "settled-tool-finalization",
@@ -242,6 +242,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+    messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     onDeliveredSourceReply: markSourceReplyDelivered,
     config: attempt.config,
     currentProvider: attempt.messageChannel ?? attempt.messageProvider,
@@ -610,6 +611,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     config: attempt.config,
     contextWindowTokens: attempt.contextTokenBudget,
     inputProvenance: attempt.inputProvenance,
+    privateCompletion: attempt.privateCompletion,
     preparedUserTurnMessage,
     preparedUserTurnTranscriptRecorder: preparedUserTurnMessage
       ? attempt.userTurnTranscriptRecorder

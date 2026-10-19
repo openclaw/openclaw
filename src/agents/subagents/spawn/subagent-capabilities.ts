@@ -37,7 +37,7 @@ export type {
   SessionCapabilityStore,
 } from "./subagent-session-store.js";
 
-export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
+type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 type SubagentControlScope = "children" | "none";
 
 type PersistedSubagentToolPolicyEnvelope = {
@@ -73,12 +73,8 @@ function isDashboardSessionKey(sessionKey: string): boolean {
 }
 
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
-  const leftAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(leftSessionKey)?.agentId,
-  );
-  const rightAgentId = normalizeOptionalLowercaseString(
-    parseAgentSessionKey(rightSessionKey)?.agentId,
-  );
+  const leftAgentId = parseAgentSessionKey(leftSessionKey)?.agentId;
+  const rightAgentId = parseAgentSessionKey(rightSessionKey)?.agentId;
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 

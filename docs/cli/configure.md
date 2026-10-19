@@ -102,6 +102,7 @@ see [Memory configuration](/reference/memory-config).
 
 ## Other notes
 
+- Plugin numeric fields require JSON number syntax; integer fields also require a whole number. Invalid answers show a validation error and stay on the same field so you can correct them.
 - Gateway reconfiguration preserves existing `gateway.auth.allowTailscale`, `gateway.auth.rateLimit`, and `gateway.auth.identityScopes` policies. The selected auth mode replaces its credentials or trusted-proxy settings and removes fields belonging to other auth modes.
 - After local config writes, configure installs selected downloadable plugins when the chosen setup path requires them. Remote gateway config does not install local plugin packages.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs. The wizard resolves names to IDs when possible.

@@ -10,6 +10,8 @@ import {
   SettingsNavRow,
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
@@ -18,15 +20,19 @@ import {
   currentConfigObject,
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
 import type { AgentConfigActions } from "./config-actions.tsx";
+import type { AgentMemoryTarget } from "./memory/memory-panel-state.ts";
 import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
 import { AgentSkills } from "./panels-skills.tsx";
 import { AgentChannels, AgentCron } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
+
+registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
@@ -44,6 +50,7 @@ export type AgentsProps = {
   error: string | null;
   agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
+  memoryTarget: AgentMemoryTarget;
   activePanel: AgentsPanel;
   config: Pick<
     RuntimeConfigState,
@@ -164,15 +171,22 @@ export function Agents(props: AgentsProps) {
               {(agent) => (
                 <>
                   <Show when={agent().id} keyed>
-                    {(id) => (
-                      <button
-                        type="button"
-                        class="btn btn--sm btn--ghost"
-                        onClick={(event) => void handleCopyButton(event, id, t("agents.copyId"))}
-                      >
-                        <span data-copy-label>{t("agents.copyId")}</span>
-                      </button>
-                    )}
+                    {(id) => {
+                      let label!: HTMLSpanElement;
+                      return (
+                        <button
+                          type="button"
+                          class="btn btn--sm btn--ghost"
+                          onClick={(event) =>
+                            void handleCopyButton(event, id, t("agents.copyId"), { label })
+                          }
+                        >
+                          <span ref={(element) => (label = element)} data-copy-label>
+                            {t("agents.copyId")}
+                          </span>
+                        </button>
+                      );
+                    }}
                   </Show>
                   <button
                     type="button"
@@ -325,7 +339,7 @@ export function Agents(props: AgentsProps) {
                         onClick={() => props.onOpenMemoryImport?.()}
                       />
                     </div>
-                    <AgentMemoryPanel agentId={agent().id} />
+                    <AgentMemoryPanel initialAgentTarget={props.memoryTarget} />
                   </Match>
                 </Switch>
               </div>

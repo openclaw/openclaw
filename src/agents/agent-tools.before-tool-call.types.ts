@@ -13,6 +13,7 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import type { SkillInstructionDeliveryMarkers } from "./agent-tools.read.types.js";
 import type { AgentTool } from "./runtime/index.js";
@@ -34,6 +35,7 @@ export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 export type HookContext = {
   /** Host-owned workspace attribution barrier, captured for this exact run. */
   awaitSessionDiffBaseline?: () => Promise<void>;
+  watchdogAttempt?: SessionControllerWatchdogAttempt;
   agentId?: string;
   config?: OpenClawConfig;
   /** Selected tool registration owner; independent of the hook requesting approval. */

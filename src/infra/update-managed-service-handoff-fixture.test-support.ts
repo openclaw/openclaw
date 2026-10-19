@@ -140,5 +140,11 @@ export function useManagedServiceHandoffLifecycleFixture() {
     tempDirs,
     cleanups: managedProcessCleanups,
   });
-  return { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary };
+  return {
+    forceKillChildProcessTreeMock,
+    resolvePreferredOpenClawTmpDirMock,
+    spawnMock,
+    tempDirs,
+    runManagedServiceManagerBoundary,
+  };
 }

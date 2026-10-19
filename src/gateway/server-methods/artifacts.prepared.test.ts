@@ -20,6 +20,7 @@ import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { handleManagedOutgoingMediaHttpRequest } from "../managed-image-attachments.js";
 import { createFixture } from "../managed-image-attachments.test-support.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
@@ -32,12 +33,13 @@ import * as preparation from "../session-sharing-preparation.js";
 import * as artifactReads from "../session-transcript-readers.js";
 import { artifactsHandlers } from "./artifacts.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { fetchSessionFileDownload } from "./sessions-files.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses admitted session facts for artifacts and observes subsequent visibility changes", async () => {
+it("admits session-only artifact readers with current session visibility and prepared facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const scope = {
@@ -65,20 +67,36 @@ it("reuses admitted session facts for artifacts and observes subsequent visibili
     await waitForSessionTranscriptProjection(scope);
     expect(loadSessionEntry(scope)?.visibility).toBe("shared");
     const context = await createHistoryReadContext();
-    const client = identifiedClient("viewer");
+    let client = identifiedClient("viewer");
+    client.connect.scopes = ["operator.sessions.read"];
+    const controller = new AbortController();
+    client.connId = "session-artifact-reader";
+    client.connectionSignal = controller.signal;
+    using _ = { [Symbol.dispose]: () => controller.abort() };
     const request = async (
-      method: "artifacts.list" | "artifacts.download",
+      method: "artifacts.list" | "artifacts.get" | "artifacts.download",
       params: Record<string, unknown> = {},
+      throughDispatcher = true,
     ) => {
       const respond = vi.fn<RespondFn>();
-      await artifactsHandlers[method]!({
-        params: { sessionKey: scope.sessionKey, ...params },
+      const options = {
         context,
         client,
-        req: { type: "req", id: "prepared-artifacts", method },
+        req: {
+          type: "req" as const,
+          id: "prepared-artifacts",
+          method,
+          params: { sessionKey: scope.sessionKey, ...params },
+        },
+        extraHandlers: artifactsHandlers,
         isWebchatConnect: () => false,
         respond,
-      });
+      };
+      if (throughDispatcher) {
+        await handleGatewayRequest(options);
+      } else {
+        await artifactsHandlers[method]!({ ...options, params: options.req.params });
+      }
       return respond.mock.calls[0]!;
     };
     const listed = await request("artifacts.list");
@@ -87,15 +105,55 @@ it("reuses admitted session facts for artifacts and observes subsequent visibili
     expect(payload.artifacts).toHaveLength(1);
     expect(payload.artifacts[0]?.sizeBytes).toBe(912);
     const artifactId = payload.artifacts[0]!.id;
+    const granted = await request("artifacts.download", { artifactId, transport: "http" });
+    expect(granted[0]).toBe(true);
+    const download = granted[1] as { url: string };
+    expect(download.url).toMatch(/^\/api\/artifacts\/download\//);
+    const fetched = await fetchSessionFileDownload(client, download.url);
+    expect(fetched.response.statusCode).toBe(200);
+    expect(fetched.body).toEqual(new Uint8Array(Buffer.from(data, "base64")));
+    for (const method of ["artifacts.get", "artifacts.download"] as const) {
+      const missing = await request(method, { artifactId: "artifact_missing" });
+      expect(missing[0]).toBe(false);
+      expect(missing[2]).toMatchObject({ details: { type: "artifact_not_found" } });
+      const unknown = await request(method, {
+        sessionKey: "agent:main:unknown-artifacts",
+        artifactId,
+      });
+      expect(unknown[0]).toBe(false);
+      expect(unknown[1]).toBeUndefined();
+    }
+    const otherScope = {
+      agentId: "main",
+      sessionKey: "agent:main:other-artifacts",
+      sessionId: "other-artifacts",
+    };
+    await replaceSessionEntry(otherScope, { ...entry, sessionId: otherScope.sessionId });
+    for (const method of ["artifacts.get", "artifacts.download"] as const) {
+      const unrelated = await request(method, { sessionKey: otherScope.sessionKey, artifactId });
+      expect(unrelated[0]).toBe(false);
+      expect(unrelated[2]).toMatchObject({ details: { type: "artifact_not_found" } });
+    }
     const prepare = vi.spyOn(preparation, "prepareSessionMutationFacts");
-    const samples: Record<string, number[]> = { "artifacts.list": [], "artifacts.download": [] };
+    const samples: Record<string, number[]> = {
+      "artifacts.list": [],
+      "artifacts.get": [],
+      "artifacts.download": [],
+    };
     const rounds = process.env.OPENCLAW_DB_WORKER_BENCH === "1" ? 100 : 1;
     for (let round = 0; round < rounds; round++) {
-      for (const method of ["artifacts.list", "artifacts.download"] as const) {
+      for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
         const start = performance.now();
-        const result = await request(method, method === "artifacts.download" ? { artifactId } : {});
+        const result = await request(
+          method,
+          method === "artifacts.list" ? {} : { artifactId },
+          false,
+        );
         samples[method]!.push(performance.now() - start);
         expect(result[0]).toBe(true);
+        if (method !== "artifacts.list") {
+          expect(result[1]).toMatchObject({ artifact: { id: artifactId, sizeBytes: 912 } });
+        }
         if (method === "artifacts.download") {
           expect(result[1]).toMatchObject({ data, encoding: "base64" });
         }
@@ -125,10 +183,20 @@ it("reuses admitted session facts for artifacts and observes subsequent visibili
     const revoked = await request("artifacts.download", { artifactId });
     expect(revoked[0]).toBe(false);
     expect(revoked[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-    for (const method of ["artifacts.list", "artifacts.download"] as const) {
-      const result = await request(method, method === "artifacts.download" ? { artifactId } : {});
+    const revokedDownload = await fetchSessionFileDownload(client, download.url);
+    expect(revokedDownload.response.statusCode).toBe(404);
+    expect(revokedDownload.body).toEqual(new Uint8Array(Buffer.from("Not Found")));
+    for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
+      const result = await request(method, method === "artifacts.list" ? {} : { artifactId });
       expect(result[0]).toBe(false);
-      expect(result[2]).toMatchObject({ details: { type: "artifact_scope_not_found" } });
+      expect(result[1]).toBeUndefined();
+      expect(result[2]).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+    client = identifiedClient("owner");
+    client.connect.scopes = ["operator.sessions.read"];
+    for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
+      const owned = await request(method, method === "artifacts.list" ? {} : { artifactId });
+      expect(owned[0]).toBe(true);
     }
   });
 });
@@ -146,7 +214,7 @@ it("keeps disconnected managed reads current for session visibility and profile 
               reader: {
                 agents: "*" as const,
                 sessions: { others: "view" as const },
-                scopes: ["operator.read"],
+                scopes: ["operator.sessions.read"],
               },
               denied: { agents: "*" as const, sessions: { others: "none" as const }, scopes: [] },
             },
@@ -254,7 +322,7 @@ it("keeps disconnected managed reads current for session visibility and profile 
           connections.push(connection);
           const client = createOperatorWsClient({
             connId: `managed-${change}`,
-            scopes: ["operator.read"],
+            scopes: ["operator.sessions.read"],
             socket: { close: vi.fn() },
           });
           client.connectionSignal = connection.signal;

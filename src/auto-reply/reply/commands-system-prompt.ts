@@ -7,10 +7,8 @@ import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/s
 import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
-import {
-  ensureSandboxWorkspaceForSession,
-  resolveSandboxRuntimeStatusAsync,
-} from "../../agents/sandbox.js";
+import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -169,6 +167,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     cwd: process.cwd(),
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    preparedSessionEntry: targetSessionEntry,
     model: `${params.provider}/${params.model}`,
     channel: params.command.channel,
     accountId,

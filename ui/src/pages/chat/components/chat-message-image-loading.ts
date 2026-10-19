@@ -96,7 +96,7 @@ export function resolveManagedImageResource(
   const resource = observeChatMediaResource<string | null>(
     "managed-image",
     cacheKey,
-    opts?.onRequestUpdate,
+    opts?.onMediaChange,
     subscriberScope,
   );
   if (resource.subscribers.size > 0 && !resource.releaseAuthRecovery) {

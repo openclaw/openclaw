@@ -19,21 +19,22 @@ import { resolveSqliteDatabaseFilePath } from "./sqlite-database-admission.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
-async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitted?: number) {
+async function loadNodeSqliteWithVersion(
+  version: string,
+  extensionLoadingOmitted?: number,
+  storage: { sourceId?: string | null; compileOptions?: string | null } = {},
+) {
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
     this: DatabaseSync,
     sql,
   ) {
-    if (
-      sql ===
-        "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted" ||
-      sql === "SELECT sqlite_version() AS version"
-    ) {
+    if (sql.startsWith("SELECT sqlite_version() AS version")) {
       const statement = originalPrepare.call(this, sql);
       const capabilities = statement.get();
       vi.spyOn(statement, "get").mockReturnValue({
         ...capabilities,
         version,
+        ...storage,
         ...(extensionLoadingOmitted === undefined ? {} : { omitted: extensionLoadingOmitted }),
       });
       return statement;
@@ -252,6 +253,28 @@ describe("node SQLite safety", () => {
   );
 
   it.each([
+    { sourceId: "different source", compileOptions: "different options" },
+    { sourceId: null },
+    { compileOptions: null },
+  ])("binds seal identity to loaded library facts (%j)", async (storage) => {
+    const native = await loadNodeSqliteWithVersion("3.53.4", 0, storage);
+    native.requireNodeSqlite();
+    const identity = native.captureSqliteNativeRuntimeAdmission()?.storageIdentity;
+    if (storage.sourceId === null || storage.compileOptions === null) {
+      expect(identity).toBeUndefined();
+    } else {
+      expect(JSON.parse(identity!)).toEqual([
+        "3.53.4",
+        "different source",
+        "different options",
+        process.versions.node,
+        process.versions.bun ?? null,
+      ]);
+    }
+    expect(native.prepare).toHaveBeenCalledOnce();
+  });
+
+  it.each([
     { version: "3.51.3", jsonb: true },
     { version: "3.52.0", jsonb: true },
     { version: "3.53.0", jsonb: true },
@@ -355,6 +378,14 @@ describe("node SQLite safety", () => {
         changed === "unchanged" ? receipt : undefined,
       );
       native.environment.set(receiptKey, forwarded);
+      if (changed === "unchanged") {
+        vi.resetModules();
+        const reloaded = await loadNodeSqliteWithVersion("3.53.4", 0);
+        expect(reloaded.supportsNodeSqliteJsonb()).toBe(false);
+        expect(reloaded.supportsNodeSqliteExtensionLoading()).toBe(false);
+        expect(reloaded.prepare).not.toHaveBeenCalled();
+        reloaded.prepare.mockRestore();
+      }
       native.mainThread = false;
       vi.resetModules();
       const worker = await loadNodeSqliteWithVersion("3.53.4", 0);

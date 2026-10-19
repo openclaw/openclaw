@@ -58,7 +58,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { closeAgentWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { AgentDeletionPendingError } from "../../sessions/session-agent-work-admission.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
 import {
   readAgentDeletionJournalAsync,
   type AgentDeletionJournalCleanupPath,
@@ -143,7 +144,9 @@ export async function deleteGatewayAgent(
         const deleteFiles = lockedJournal?.deleteFiles ?? requestedDeleteFiles;
         releaseIngress = closeAgentWorkAdmissions({
           agentId,
-          reason: new Error(`Agent ${agentId} deletion is draining active work.`),
+          reason: new AgentDeletionPendingError(
+            `Agent ${agentId} deletion is draining active work.`,
+          ),
         });
         const deletion = await begin(
           lockedJournal ?? {

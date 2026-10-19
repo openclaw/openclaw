@@ -110,10 +110,10 @@ export function renderPublisherIdentity(options: {
   return (
     <div class="plugin-catalog-detail__publisher">
       <span class="plugin-catalog-detail__publisher-name">
-        {name ? <strong>{name}</strong> : renderPluginAuthor(handle, { linked: true })}
+        {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
         {official ? renderPluginOfficialBadge() : undefined}
       </span>
-      {name ? renderPluginAuthor(handle, { linked: true }) : undefined}
+      {name ? renderPluginAuthor(handle) : undefined}
     </div>
   );
 }

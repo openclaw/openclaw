@@ -29,13 +29,28 @@ export type PortDescriptor = PortSchema & {
   fragments?: readonly (PortSchema & { id: string; dependencies: readonly string[] })[];
   /** Populated from the admitted source, never from the configured feature set. */
   activeFragments?: readonly string[];
+  /** Engine-owned derived DDL is rendered for the namespace under verification. */
+  postgresPostData?: (namespace: string) => string;
+  /** Source-only projections are validated against their owner before omission. */
+  postgresSourcePostData?: (
+    source: Extract<PortEndpoint, { engine: "postgres" }>,
+  ) => Promise<((namespace: string) => string) | undefined>;
+  postgresDerivedTables?: readonly string[];
+  /** Canonical logical values may have a different physical SQLite encoding. */
+  decodeSqlite?: Readonly<Record<string, (row: PortRow) => PortRow>>;
+  /** Optional triggers owned by omitted SQLite projections are not installed on the target. */
+  omittedSqliteTriggers?: readonly { name: string; table: string; sql: string }[];
   inspectSqliteSource?: (db: DatabaseSync) => {
     version: number;
     migrationRequired: boolean;
     pendingColumns: Readonly<Record<string, readonly string[]>>;
   };
   /** Caller supplies an exclusively owned private copy, never the live source. */
-  migrateSqliteSource?: (path: string, sourceVersion: number) => void | Promise<void>;
+  migrateSqliteSource?: (
+    path: string,
+    sourceVersion: number,
+    assertCurrent: () => void,
+  ) => void | Promise<void>;
   admit?: (path: string, input?: DatabaseEngineInput) => void | Promise<void>;
   derive?: Readonly<Record<string, (row: PortRow) => PortRow>>;
 };

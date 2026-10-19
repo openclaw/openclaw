@@ -1,5 +1,3 @@
-import type { Selectable } from "kysely";
-import type { WorkerEnvironments } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type {
   WorkerEnvironmentIntentInput,
@@ -34,21 +32,6 @@ export type WorkerEnvironmentCommitAdmission = Array<{
   transferAuthority: string;
   attachmentAuthority: string;
 }>;
-export type WorkerEnvironmentPruneCursor = { changedAtMs: number; environmentId: string };
-export type WorkerEnvironmentPruneObservation = Selectable<WorkerEnvironments>;
-export type WorkerEnvironmentPruneReadInput = {
-  nowMs: number;
-  limit?: number;
-  cursor?: WorkerEnvironmentPruneCursor;
-};
-export type WorkerEnvironmentPrunePage = {
-  candidates: Array<{
-    observed: WorkerEnvironmentPruneObservation;
-    record: WorkerEnvironmentRecord;
-  }>;
-  nextCursor?: WorkerEnvironmentPruneCursor;
-  limit: number;
-};
 
 /** Native mutation signatures own the host callbacks and the worker's serializable contract. */
 export type WorkerEnvironmentMutationMethods = {
@@ -123,7 +106,11 @@ export type WorkerEnvironmentMutationMethods = {
     record: WorkerEnvironmentAttachmentRecord,
     assertCurrent: () => void,
   ): void;
-  pruneTerminalEnvironments(input: { approved: WorkerEnvironmentPruneObservation[] }): number;
+  pruneTerminalEnvironments(input: {
+    environmentIds: string[];
+    cutoffMs: number;
+    limit: number;
+  }): number;
 };
 type WorkerEnvironmentMutationMethod = keyof WorkerEnvironmentMutationMethods;
 

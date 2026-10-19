@@ -11,7 +11,7 @@ import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { hasErrnoCode } from "./errno.js";
-import { migrationFileExists } from "./state-migrations.fs.js";
+import { safeStatSync } from "./path-guards.js";
 import {
   prepareAgentDatabaseMigrationDiscovery,
   type PreparedAgentDatabaseMigrationDiscovery,
@@ -52,7 +52,7 @@ export async function detectManagedWorktreeStateMigration(params: {
 }): Promise<LegacyStateDetection["worktrees"]> {
   const rawRoot = path.join(params.stateDir, "worktrees");
   const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
-  const databaseExists = migrationFileExists(resolveOpenClawStateSqlitePath(stateEnv));
+  const databaseExists = safeStatSync(resolveOpenClawStateSqlitePath(stateEnv))?.isFile() === true;
   const legacyIds =
     params.doctorOnlyStateMigrations === true && databaseExists
       ? listLegacyRegistryWorktreesForMigration(stateEnv, {

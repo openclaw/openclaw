@@ -4,6 +4,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
+  createAdmittedRunOperatorAuthority,
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -38,11 +43,18 @@ await Promise.all([
 ]);
 
 /** Attempts the real managed write tool, as the model would, and reports the final effect. */
-async function attemptRealWrite(params: RunEmbeddedAgentParams, filePath: string) {
+async function attemptRealWrite(
+  params: RunEmbeddedAgentParams,
+  filePath: string,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+) {
   const admittedRunContext = expectDefined(
     await params.preparedRunAdmission?.admit("gateway", params.runId),
     "ordinary reply admission",
   );
+  if (operatorAuthority) {
+    expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe("original-guest");
+  }
   params.onExecutionPhase?.({ phase: "model_call_started" });
   await params.onExecutionStarted?.();
   await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
@@ -154,6 +166,25 @@ it.for([
           updatedAt: Date.now(),
           sessionStartedAt: Date.now(),
         });
+        let sourceReferences = 1;
+        const operatorAuthority =
+          scenario === "allow-control"
+            ? createAdmittedRunOperatorAuthority({
+                profileId: "original-guest",
+                scopes: ["operator.write"],
+                assertCurrent() {
+                  if (sourceReferences === 0) {
+                    throw new Error("original source released");
+                  }
+                },
+                retain() {
+                  sourceReferences++;
+                  return () => {
+                    sourceReferences--;
+                  };
+                },
+              })
+            : undefined;
         const filePath = path.join(state.workspaceDir, "readmission.txt");
         const firstStarted = createDeferred();
         const releaseFirst = createDeferred();
@@ -171,11 +202,13 @@ it.for([
               firstStarted.resolve();
               await releaseFirst.promise;
             } else {
-              await attemptRealWrite(params, filePath);
+              await attemptRealWrite(params, filePath, operatorAuthority);
             }
             return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
           });
-        const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
+        const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey, {
+          operatorAuthority,
+        });
         const first = enqueueSessionEventForHost("First admitted work", {
           ...scope,
           source: "task",
@@ -212,6 +245,7 @@ it.for([
               }
             },
           });
+          sourceReferences--;
           // The active turn accepts the completion as a deferred follow-up.
           await expect(completion.accepted).resolves.toEqual({ ok: true });
           setRuntimeConfigSnapshot({
@@ -242,6 +276,7 @@ it.for([
           expect(written).toBe(scenario === "allow-control" ? "written\n" : undefined);
           // Settled either way: nothing is left for a later ordinary turn to drain.
           expect(completion.cancel()).toBe(false);
+          expect(sourceReferences).toBe(0);
           expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
         } finally {
           storming = false;

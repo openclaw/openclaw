@@ -605,6 +605,7 @@ export async function createWorkerGatewayTools(
   const source = capability.sessionTarget;
   const toolOptions = { agentSessionKey: source.sessionKey, workerPlacement: true };
   const portal = createAvailablePortalTools({
+    workerScoped: true,
     sessionPortalTarget: {
       agentId: source.agentId,
       sessionKey: source.sessionKey,

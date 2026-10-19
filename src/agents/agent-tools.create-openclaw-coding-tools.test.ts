@@ -26,13 +26,13 @@ import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-ident
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import {
   createSandboxedReadTool,
-  createSkillInstructionDeliveryCache,
   createSkillInstructionDeliveryMarkers,
   wrapReadToolWithSkillContent,
   type SkillInstructionDeliveryCache,
   type SkillInstructionDeliveryMarkers,
 } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
+import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -347,17 +347,18 @@ describe("createOpenClawCodingTools", () => {
 
     vi.mocked(createOpenClawTools).mockClear();
     const forgedTools = buildTools(undefined, "forged-run");
-    expect(toolNameList(forgedTools)).not.toContain("automations");
+    await expectOwnerGated(forgedTools, "automations");
     expect(lastCoreOptions().resolveCronCreatorToolAuthority).toBeUndefined();
 
     const capability = createCronCreatorAuthorityCapability("admitted-run")!;
     const activeRun = runWithCronCreatorAuthorityCapability(capability, async () => {
       const wrongRunTools = buildTools(capability, "other-run", "admitted-run");
-      expect(toolNameList(wrongRunTools)).not.toContain("automations");
+      await expectOwnerGated(wrongRunTools, "automations");
       expect(lastCoreOptions().resolveCronCreatorToolAuthority).toBeUndefined();
 
       const admittedTools = buildTools(capability, "admitted-run");
-      expectToolNames(admittedTools, ["automations"], ["gateway", "nodes", "openclaw"]);
+      expectToolNames(admittedTools, ["automations"]);
+      await expectOwnerGated(admittedTools, "gateway", "nodes", "openclaw");
       retainedResolver = lastCoreOptions().resolveCronCreatorToolAuthority;
       expect(retainedResolver).toEqual(expect.any(Function));
       await expect(retainedResolver!()).resolves.toMatchObject({
@@ -371,9 +372,8 @@ describe("createOpenClawCodingTools", () => {
     await expect(retainedResolver!()).rejects.toThrow(
       "Configured MCP cron authority is no longer active for this run",
     );
-    expect(
-      toolNameList(createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false })),
-    ).not.toContain("automations");
+    const retired = createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false });
+    await expectOwnerGated(retired, "automations");
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
@@ -392,7 +392,7 @@ describe("createOpenClawCodingTools", () => {
       async () => {
         expect(toolNameList(buildTools(abortedCapability))).toContain("automations");
         abortController.abort(new Error("run cancelled"));
-        expect(toolNameList(buildTools(abortedCapability))).not.toContain("automations");
+        await expectOwnerGated(buildTools(abortedCapability), "automations");
       },
       abortController.signal,
     );
@@ -406,9 +406,8 @@ describe("createOpenClawCodingTools", () => {
       }),
     ).rejects.toThrow("run failed");
     expect(failedCapability.active).toBe(false);
-    expect(
-      toolNameList(createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false })),
-    ).not.toContain("automations");
+    const settled = createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false });
+    await expectOwnerGated(settled, "automations");
   });
 
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {
@@ -1244,7 +1243,7 @@ describe("createOpenClawCodingTools read behavior", () => {
 
   it("keeps per-invocation markers when a failing read races a succeeding read of the same path", async () => {
     const locator = "/skills/pond/SKILL.md";
-    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
     const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
     const instructions = "# Pond\ncomplete instructions";
     const fullResult = {
@@ -1284,7 +1283,7 @@ describe("createOpenClawCodingTools read behavior", () => {
 
   it("retries skill reads after failures, whole-read refusals, and optional misses", async () => {
     const locator = skillLocator;
-    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
     const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
     const truncatedResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "partial" }],
@@ -1355,7 +1354,7 @@ describe("createOpenClawCodingTools read behavior", () => {
 
   it("drops unconsumed invocation markers and settled identities when compaction clears the epoch", async () => {
     const locator = "/skills/pond/SKILL.md";
-    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
     const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
     const instructions = "# Pond\ncomplete instructions";
     const fullResult = {
@@ -1414,7 +1413,7 @@ describe("createOpenClawCodingTools read behavior", () => {
   it("settles a qualifying delivery for empty skill instructions and omits identities for node locators", async () => {
     const emptyLocator = "node://node-1/skills/pond/SKILL.md";
     const plainLocator = "node://node-1/skills/plain/SKILL.md";
-    const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
     const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
     const tool = wrapReadToolWithSkillContent(
       {

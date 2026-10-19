@@ -1,4 +1,8 @@
-import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/transcript-file-names.js";
+import type {
+  SessionCostUsageDeferredMetadata,
+  SessionCostUsageRollupRow,
+} from "./session-cost-usage-cache.kernel.js";
 import {
   decodeUsageCostPartition,
   USAGE_COST_QUARTER_MS,
@@ -12,8 +16,11 @@ import {
 } from "./session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "./session-cost-usage-rollup.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
-import { UsageCostHostEffectError } from "./session-cost-usage-worker.types.js";
-import type { UsageCostTranscriptFile, UsageDailyBucket } from "./session-cost-usage.types.js";
+import type {
+  UsageCacheStatus,
+  UsageCostTranscriptFile,
+  UsageDailyBucket,
+} from "./session-cost-usage.types.js";
 import { WorkerTaskError } from "./worker-task-pool.js";
 
 type RollupScan = Omit<Parameters<typeof scanUsageCostRollupInWorker>[0], "file" | "previous">;
@@ -44,6 +51,76 @@ export function prepareUsageCostReportEntry(params: {
   return { valueJson: params.row.valueJson, blob, envelope, selected };
 }
 
+export function createUsageCostReportSource(
+  params: Omit<Parameters<typeof readUsageCostReportEntry>[0], "prepared" | "file"> & {
+    rows: ReadonlyMap<string, SessionCostUsageRollupRow>;
+    entries: ReadonlyMap<string, ReturnType<typeof prepareUsageCostReportEntry>>;
+    files: ReadonlyMap<string, UsageCostTranscriptFile>;
+    sessions?: ReadonlyArray<{ sessionFile: string }>;
+    deferredPaths: ReadonlySet<string>;
+    deferredMetadata: ReadonlyMap<string, SessionCostUsageDeferredMetadata>;
+  },
+) {
+  const consumed = new Set<string>();
+  const invalidRows = new Map<string, SessionCostUsageRollupRow>();
+  const deferredSessionIndexes = new Set(
+    params.committedOnly
+      ? params.sessions?.flatMap((session, index) =>
+          session.sessionFile.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX) ? [index] : [],
+        )
+      : [],
+  );
+  let requiresExactDetails = deferredSessionIndexes.size > 0;
+  return {
+    invalidRows,
+    partialStatus(): UsageCacheStatus["partial"] {
+      return requiresExactDetails
+        ? {
+            reason: "aggregate-boundary",
+            message:
+              "Some usage needs transcript details for this date range, time zone, or archived session. Select a session for exact usage.",
+          }
+        : undefined;
+    },
+    source: {
+      deferredPaths: params.deferredPaths,
+      deferredMetadata: params.deferredMetadata,
+      // Skipped archives need exact detail reads, not a background rebuild of their rollups.
+      deferredSessionIndexes,
+      readRow(filePath: string) {
+        consumed.add(filePath);
+        return params.rows.get(filePath);
+      },
+      readBody: (row: SessionCostUsageRollupRow) => params.entries.get(row.key)?.blob ?? null,
+      async readEntry(row: SessionCostUsageRollupRow) {
+        const entry = await readUsageCostReportEntry({
+          ...params,
+          prepared: params.entries.get(row.key)!,
+          file: params.files.get(row.key),
+        });
+        if (entry === "requires-transcript") {
+          requiresExactDetails = true;
+          return null;
+        }
+        return entry;
+      },
+      onInvalidBody(key: string) {
+        const row = params.rows.get(key);
+        if (row) {
+          invalidRows.set(key, row);
+        }
+      },
+      remainingRows: (function* () {
+        for (const row of params.rows.values()) {
+          if (!consumed.has(row.key)) {
+            yield row;
+          }
+        }
+      })(),
+    },
+  };
+}
+
 /** Project captured cache inputs; replay opens its own bounded transcript reads. */
 export async function readUsageCostReportEntry(params: {
   prepared: ReturnType<typeof prepareUsageCostReportEntry>;
@@ -55,7 +132,8 @@ export async function readUsageCostReportEntry(params: {
   throwIfCancelled: () => void;
   replayBudget: { remainingBytes: number; deadline: number };
   cacheBudget: { remainingBytes: number };
-}): Promise<UsageCostRollupEntry | null | undefined> {
+  committedOnly?: boolean;
+}): Promise<UsageCostRollupEntry | "requires-transcript" | null | undefined> {
   const { file, scan } = params;
   params.throwIfCancelled();
   const { valueJson, blob, envelope, selected } = params.prepared;
@@ -115,6 +193,9 @@ export async function readUsageCostReportEntry(params: {
       return { ...cached, rollup };
     }
   }
+  if (params.committedOnly) {
+    return "requires-transcript";
+  }
   const checkpoint = cached.checkpoint;
   const snapshotFile =
     checkpoint.kind === "sqlite"
@@ -153,7 +234,7 @@ export async function readUsageCostReportEntry(params: {
     if (error === exhausted) {
       return null;
     }
-    if (error instanceof UsageCostHostEffectError || error instanceof WorkerTaskError) {
+    if (error instanceof WorkerTaskError) {
       throw error;
     }
     // Omit failed replays so the report stays partial without publishing incomplete usage.

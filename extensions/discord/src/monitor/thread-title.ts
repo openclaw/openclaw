@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
@@ -70,10 +70,7 @@ function buildThreadTitleCompletionUserMessage(params: {
 }
 
 function truncateThreadTitleText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, maxChars)}...`;
+  return truncateWithMarker(text, maxChars, { marker: "...", reserve: 0, trimEnd: false });
 }
 
 function normalizeGeneratedThreadTitle(raw: string): string {

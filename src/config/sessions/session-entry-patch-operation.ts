@@ -25,11 +25,13 @@ import {
   type SessionLifecyclePatchInput,
   type SessionLifecyclePatchEffects,
 } from "./session-run-lifecycle-projection.js";
+import { mergeSessionSnapshotChanges } from "./session-snapshot-merge.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type InternalSessionEntry as SessionEntry,
 } from "./types.js";
+import { createSessionWorkStartChangedError } from "./work-start-error.js";
 
 type ExpectedSession = Pick<SessionEntry, "sessionId"> &
   Partial<Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">>;
@@ -37,6 +39,7 @@ type ExpectedSession = Pick<SessionEntry, "sessionId"> &
 export type SessionEntryBookkeepingReducer =
   | { kind: "activity"; updatedAt: number }
   | { kind: "usage"; update: SessionEntryUsageUpdate; updatedAt: number }
+  | { kind: "goal-continuation"; goalId: string }
   | { kind: "group-intro"; needsSystemIntro: boolean }
   | { kind: "fallback-notice"; notice: SessionEntry["fallbackNotice"] }
   | {
@@ -62,6 +65,23 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | { kind: "writer-revoke"; runId: string; terminalAtMs?: number }
+  | {
+      kind: "cron-session";
+      sessionKey: string;
+      initial?: SessionEntry;
+      next: SessionEntry;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
+  | {
+      kind: "cron-run-continuation";
+      sessionKey: string;
+      source: SessionEntry;
+      continuation: NonNullable<SessionEntry["cronRunContinuation"]>;
+      create: boolean;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+      thinkingLevel?: string;
+    }
   | {
       kind: "inbound-metadata";
       metadata: PreparedSessionMetaPatch;
@@ -119,6 +139,23 @@ export type SessionEntryPatchOperation =
   | SessionEntryPatchStep
   | { kind: "compound"; operations: readonly SessionEntryPatchStep[] };
 
+/** Shared by ordinary cron writes and the atomic reset-boundary owner. */
+export function projectCronSessionEntry(
+  operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>,
+  current: SessionEntry | undefined,
+): SessionEntry {
+  const { initial, next } = operation;
+  // Serialized admission owns the revision; protect only row replacement or deletion here.
+  if (
+    current ? current.sessionId !== (initial?.sessionId ?? next.sessionId) : initial !== undefined
+  ) {
+    throw createSessionWorkStartChangedError(operation.sessionKey);
+  }
+  return current && initial
+    ? mergeSessionSnapshotChanges({ initial, next, current })
+    : { ...next, ...(!current ? operation.creation : {}) };
+}
+
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
 export function projectSessionEntryPatch(
   params: Omit<Parameters<typeof mergeSessionEntryPatch>[0], "patch"> & {
@@ -161,6 +198,11 @@ export function reduceSessionBookkeeping(
         : { updatedAt: Math.max(entry.updatedAt, reducer.updatedAt) };
     case "usage":
       return projectSessionEntryUsageUpdate(entry, reducer.update, reducer.updatedAt);
+    case "goal-continuation":
+      // Completion may already have changed status; only the admitted Goal identity matters.
+      return entry.goal?.id === reducer.goalId
+        ? { goal: { ...entry.goal, continuationTurns: entry.goal.continuationTurns + 1 } }
+        : null;
     case "group-intro":
       return { groupActivationNeedsSystemIntro: reducer.needsSystemIntro };
     case "fallback-notice":
@@ -204,6 +246,60 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "writer-revoke":
+      return {
+        activeWriterRunId: undefined,
+        ...(operation.terminalAtMs !== undefined &&
+        entry.status === undefined &&
+        entry.lifecycleRunId === operation.runId
+          ? {
+              status: "killed",
+              abortedLastRun: true,
+              lifecycleRunId: undefined,
+              endedAt: operation.terminalAtMs,
+              updatedAt: operation.terminalAtMs,
+            }
+          : {}),
+      };
+    case "cron-session":
+      return projectCronSessionEntry(operation, existingEntry);
+    case "cron-run-continuation": {
+      const { source, continuation, sessionKey } = operation;
+      if (
+        existingEntry
+          ? existingEntry.cronRunContinuation?.lifecycleRevision !== continuation.lifecycleRevision
+          : !operation.create
+      ) {
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      // Ready transfers this row to detached continuation turns; the cron owner stops writing.
+      if (existingEntry && existingEntry.cronRunContinuation?.phase !== "running") {
+        if (
+          continuation.phase === "ready" &&
+          existingEntry.cronRunContinuation?.phase === "ready"
+        ) {
+          return null;
+        }
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      return {
+        ...existingEntry,
+        ...(existingEntry
+          ? preserveSqliteSameKeySessionRolloverLineage({
+              next: source,
+              previous: existingEntry,
+              sessionKey,
+            })
+          : source),
+        // Absence clears invalid native handles instead of resurrecting the prior binding.
+        cliSessionBindings: source.cliSessionBindings,
+        cliSessionIds: source.cliSessionIds,
+        claudeCliSessionId: source.claudeCliSessionId,
+        ...(!existingEntry ? operation.creation : {}),
+        ...(operation.thinkingLevel ? { thinkingLevel: operation.thinkingLevel } : {}),
+        cronRunContinuation: continuation,
+      };
+    }
     case "lifecycle": {
       const projection = projectSessionLifecyclePatch(entry, operation.lifecycle);
       onLifecycleProjection?.(projection.patch ? projection.effects : undefined);
@@ -282,6 +378,7 @@ export function reduceSessionEntryPatch(
               restartRecoveryBeforeAgentReplyState: undefined,
               restartRecoverySourceIngress: undefined,
               restartRecoveryOperatorSource: undefined,
+              restartRecoveryRequesterSource: undefined,
               restartRecoveryForceSafeTools: undefined,
             }),
         pendingFinalDelivery: undefined,

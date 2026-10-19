@@ -1,11 +1,9 @@
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -32,7 +30,7 @@ import {
   type WorkshopViewerTarget,
 } from "./view.tsx";
 
-type WorkshopScope = { client: GatewayBrowserClient; agentId: string };
+type WorkshopScope = { client: GatewayBrowserClient; agentId: string; abort: AbortController };
 
 function resolveWorkshopAgentId(context: ApplicationContext): string {
   const snapshot = context.gateway.snapshot;
@@ -66,19 +64,22 @@ class SkillWorkshopPageState {
     private readonly revision: () => number,
     private readonly changed: () => void,
   ) {
-    const gateway = projectGateway(context.gateway);
-    const selection = projectAgentSelection(context.agentSelection);
-    const agents = projectAgents(context.agents);
-    const config = projectRuntimeConfig(context.runtimeConfig);
-    createEffect(
-      () =>
-        [gateway.revision(), selection.revision(), agents.revision(), config.revision()] as const,
-      () => {
+    onSettled(() => {
+      const sync = () => {
         this.syncScope();
         changed();
-      },
-    );
+      };
+      const stops = [
+        context.gateway.subscribe(sync),
+        context.agentSelection.subscribe(sync),
+        context.agents.subscribe(sync),
+        context.runtimeConfig.subscribe(sync),
+      ];
+      sync();
+      return () => stops.forEach((stop) => stop());
+    });
     onCleanup(() => {
+      this.scope?.abort.abort();
       this.scope = null;
     });
   }
@@ -91,7 +92,8 @@ class SkillWorkshopPageState {
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
     }
-    this.scope = client && agentId ? { client, agentId } : null;
+    this.scope?.abort.abort();
+    this.scope = client && agentId ? { client, agentId, abort: new AbortController() } : null;
     this.snapshot = null;
     this.error = null;
     this.viewer = null;
@@ -145,10 +147,14 @@ class SkillWorkshopPageState {
         this.selectFirst();
       }
     } catch (error) {
-      this.error = formatUiError(error);
+      if (this.scope === scope) {
+        this.error = formatUiError(error);
+      }
     } finally {
-      this.loading = false;
-      this.changed();
+      if (this.scope === scope) {
+        this.loading = false;
+        this.changed();
+      }
     }
   }
 
@@ -329,7 +335,10 @@ class SkillWorkshopPageState {
     this.changed();
     const createdAt = Date.now();
     try {
-      const result = await context.sessions.createResult(params, { reconciliation: "background" });
+      const result = await context.sessions.createResult(params, {
+        reconciliation: "background",
+        signal: scope.abort.signal,
+      });
       if (context.gateway.snapshot.client !== client) {
         return;
       }

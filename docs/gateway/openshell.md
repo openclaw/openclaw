@@ -18,6 +18,10 @@ generic [SSH backend](/gateway/sandboxing#ssh-backend), and adds OpenShell
 lifecycle (`sandbox create/get/delete/ssh-config`) plus an optional `mirror`
 workspace sync mode.
 
+For brokered inference inside an OpenShell-hosted node, see
+[OpenShell worker inference](/gateway/openshell-workers). That opt-in flow works
+without OCE or Kubernetes and does not change this sandbox-only backend.
+
 ## Prerequisites
 
 - `openshell` CLI installed and on the OpenClaw Gateway process's `PATH` (or a
@@ -427,6 +431,11 @@ of those types remain intact at every depth, along with their parent directories
 even if the sandbox deletes those directories or replaces them with files.
 Remote replacements that conflict with these preserved host paths are ignored.
 Ordinary files and directories still receive remote changes and deletions.
+
+Local filesystem inspection errors, such as permission or I/O failures, stop the
+affected synchronization instead of treating the path as missing. Fix the reported
+filesystem error before retrying; materialized skills are inspected before the
+existing remote skills view is cleared.
 
 ## Custom image contract
 

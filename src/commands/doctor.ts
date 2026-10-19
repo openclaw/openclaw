@@ -80,6 +80,7 @@ export async function doctorCommand(
       await import("../state/openclaw-state-db-readonly.js");
     const sessionSqliteOptions = {
       mode: sessionSqliteMode,
+      ...(options.fullIntegrityCheck ? { integrityCheck: "full" as const } : {}),
       ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
       ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
       ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),

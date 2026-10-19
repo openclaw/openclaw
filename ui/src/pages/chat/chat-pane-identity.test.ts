@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
+import { createComponent, createMemo } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
@@ -11,6 +12,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
@@ -27,6 +29,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import { ChatView } from "./chat-view.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -322,6 +325,7 @@ describe("chat pane approval requester identity", () => {
       }),
     };
     const state = pane.initialize(context);
+    state.connected = true;
     state.sessionKey = host.key;
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
@@ -362,11 +366,21 @@ describe("chat pane approval requester identity", () => {
     Object.freeze(approval.request);
     Object.freeze(approval);
     const container = document.body.appendChild(createApplicationContextProvider(context));
-    const redraw = vi.fn(() => {
-      pane.render();
-      renderChatPropsInto(container, pane.chatProps!, pane.context);
-    });
-    state.requestUpdate = redraw;
+    const view = mountSolid(
+      () => {
+        const props = createMemo(() => {
+          pane.render();
+          return pane.chatProps!;
+        });
+        return createComponent(ChatView, {
+          get props() {
+            return props();
+          },
+          application: context,
+        });
+      },
+      { container },
+    );
     const publications: Array<[GatewaySessionRow | undefined, string]> = [
       [undefined, "New session"],
       [
@@ -384,7 +398,6 @@ describe("chat pane approval requester identity", () => {
 
     try {
       for (const [row, title] of publications) {
-        redraw.mockClear();
         pane.applySessionsState({
           ...context.sessions.state,
           result: {
@@ -395,22 +408,22 @@ describe("chat pane approval requester identity", () => {
             sessions: row ? [host, row] : [host],
           },
         });
-        await vi.waitFor(() => expect(redraw).toHaveBeenCalled());
-        const approvalElement = container.querySelector<
-          HTMLElement & { updateComplete: Promise<boolean> }
-        >("openclaw-exec-approval-card")!;
-        await approvalElement.updateComplete;
-        const card = container.querySelector(".chat-inline-approval .exec-approval-card");
-        expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
-        expect
-          .soft(card?.querySelector('[role="note"]')?.textContent?.trim())
-          .toBe(t("execApproval.requestedBySession", { session: title }));
+        await waitForSolid(() => {
+          const card = container.querySelector(".chat-inline-approval .exec-approval-card");
+          expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
+          expect(card?.querySelector('[role="note"]')?.textContent?.trim()).toBe(
+            t("execApproval.requestedBySession", { session: title }),
+          );
+        });
       }
-      container.querySelector<HTMLButtonElement>(".exec-approval-actions .primary")!.click();
+      const allow = container.querySelector<HTMLButtonElement>(".exec-approval-actions .primary")!;
+      expect(allow.disabled).toBe(false);
+      allow.click();
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
       cancelChatStreamRenderFrame(state);
-      disposeChatView(container);
+      view.unmount();
+      pane.disconnectedCallback();
       container.remove();
     }
   });
@@ -475,7 +488,6 @@ function createGlobalFeaturePane(
         { key: "global", agentId, sessionId: `${agentId}-parent`, kind: "global", updatedAt: 1 },
       ],
     };
-    pane.requestUpdate();
   };
   select("research");
   connectPaneTestView(pane);
@@ -570,8 +582,10 @@ describe("global chat pane feature ownership", () => {
       };
       const expectStableQuestions = async () => {
         const previous = pane.chatProps?.gatewayQuestionPrompts;
-        pane.requestUpdate();
+        pane.prepareRender();
+        pane.render();
         await draw();
+        pane.commitRender();
         expect(pane.chatProps?.gatewayQuestionPrompts).toBe(previous);
       };
       try {

@@ -1,220 +1,280 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it as test, vi } from "vitest";
 import * as configEnv from "../config/config-env-vars.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTranscriptScope } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventsInTransaction as append } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteTransaction,
+  runOpenClawAgentWriteTransaction as write,
 } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
-import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
-import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
-import { loadSessionCostSummariesFromCache } from "./session-cost-usage.js";
+import { refreshCostUsageCacheForAgent as refresh } from "./session-cost-usage-aggregation.js";
+import { resolveUsageCostPricingFingerprint as fingerprint } from "./session-cost-usage-pricing-context.js";
+import {
+  prepareUsageCostWorker as prepare,
+  runUsageCostWorker as run,
+} from "./session-cost-usage-worker-runtime.js";
+import { loadSessionCostSummariesFromCache as read } from "./session-cost-usage.js";
+import * as operationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
-const usageRecord =
-  JSON.stringify({
-    type: "message",
-    id: "usage",
-    parentId: null,
-    timestamp: "2026-09-18T00:00:00Z",
-    message: {
-      role: "assistant",
-      provider: "test",
-      model: "test",
-      usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-    },
-  }) + "\n";
-
-it("refreshes retained transcript windows whose session IDs contain colons", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = resolveSqliteTranscriptScope({
-      agentId: "main",
-      sessionKey: "agent:main:retained-usage",
-      sessionId: "legacy:session",
-      storePath: database.path,
-      env: state.env,
-    });
-    runOpenClawAgentWriteTransaction(
-      (owner) => {
-        appendTranscriptEventsInTransaction(
-          owner,
-          scope,
-          [{ type: "session", version: 1, id: scope.sessionId }, JSON.parse(usageRecord)],
-          { scheduleProjectionReconcile: false },
-        );
-      },
-      { agentId: "main", path: database.path, env: state.env },
-    );
-    await expect(
-      refreshCostUsageCacheForAgent({ agentId: "main", config: {}, env: state.env }),
-    ).resolves.toBe("refreshed");
-    await expect(
-      loadSessionCostSummariesFromCache({
-        agentId: "main",
-        config: {},
-        sessions: [{ sessionFile: `sqlite:main:legacy:session:${database.path}` }],
-        requestRefresh: false,
-      }),
-    ).resolves.toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
-  });
+const usageEvent = {
+  type: "message",
+  id: "usage",
+  parentId: null,
+  timestamp: "2026-09-18T00:00:00Z",
+  message: {
+    role: "assistant",
+    usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+  },
+};
+const totals = { totalTokens: 10, totalCost: 1 };
+type Scope = { agentId: string; env: NodeJS.ProcessEnv };
+type UsageFixture = { state: OpenClawTestState; scope: Scope };
+const it = test.extend<{ layout: "home" | "split"; usage: UsageFixture }>({
+  layout: "home",
+  usage: async ({ layout }, use) =>
+    withOpenClawTestState({ scenario: "minimal", layout }, (state) =>
+      use({ state, scope: { agentId: "main", env: state.env } }),
+    ),
 });
+function store(state: OpenClawTestState, name: string) {
+  const dir = state.path(name);
+  fs.mkdirSync(dir, { recursive: true });
+  return {
+    storePath: path.join(dir, "sessions.json"),
+    databasePath: path.join(dir, "openclaw-agent.sqlite"),
+    sessionFile: path.join(dir, "recorded.jsonl"),
+  };
+}
+function open(scope: Scope, file: string, agentId = scope.agentId) {
+  return openOpenClawAgentDatabase({ ...scope, agentId, path: file });
+}
+async function refreshed(params: Parameters<typeof refresh>[0]) {
+  await expect(refresh(params)).resolves.toBe("refreshed");
+}
+async function expectSummary(sessionFile: string, config = {}, agentId = "main") {
+  const params = { agentId, config, sessions: [{ sessionFile }], requestRefresh: false };
+  await expect(read(params)).resolves.toMatchObject({ summaries: [totals] });
+}
+function writeUsage(sessionFile: string) {
+  fs.writeFileSync(sessionFile, JSON.stringify(usageEvent) + "\n");
+}
 
-it("retains requested SQLite selectors separately from physical rollup keys", async () => {
+test("refuses a foreign cache file appearing after its creating grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.path("custom", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(path.dirname(storePath), "openclaw-agent.sqlite"),
-      env: state.env,
-    });
-    const sessionFiles = ["first", "second"].map((id) => `sqlite:main:${id}:${storePath}`);
-    const prepared = prepareUsageCostWorker({
-      agentId: "main",
-      storePath,
-      sessionFiles,
-      env: state.env,
-    });
-    await expect(
-      runUsageCostWorker(prepared, { kind: "inventory", sessionFiles }),
-    ).resolves.toMatchObject({
-      kind: "inventory",
-      files: sessionFiles.map((sourcePath) => ({ kind: "sqlite", sourcePath })),
-    });
-  });
-});
-
-it("refreshes a custom store after another database changes its registered owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.path("custom", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    const databasePath = path.join(path.dirname(storePath), "openclaw-agent.sqlite");
-    openOpenClawAgentDatabase({ agentId: "main", path: databasePath, env: state.env });
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(path.dirname(storePath), "openclaw-agent.main.sqlite"),
-      env: state.env,
-    });
-    const warmStore = state.path("warm", "sessions.json");
-    fs.mkdirSync(path.dirname(warmStore), { recursive: true });
-    // Warm discovery on an unrelated store; replacing this database must not retire that worker.
-    await refreshCostUsageCacheForAgent({ agentId: "main", storePath: warmStore, env: state.env });
-    await closeOpenClawAgentDatabaseByPathAsync(databasePath);
-    unregisterOpenClawAgentDatabase({ agentId: "main", path: databasePath, env: state.env });
-    fs.unlinkSync(databasePath);
-    openOpenClawAgentDatabase({ agentId: "other", path: databasePath, env: state.env });
-    const sessionFile = path.join(path.dirname(storePath), "recorded.jsonl");
-    fs.writeFileSync(sessionFile, usageRecord);
-    await expect(
-      refreshCostUsageCacheForAgent({ agentId: "main", storePath, env: state.env, maxFiles: 1 }),
-    ).resolves.toBe("refreshed");
-    await expect(
-      loadSessionCostSummariesFromCache({
-        agentId: "main",
-        config: { session: { store: storePath } },
-        sessions: [{ sessionFile }],
-        requestRefresh: false,
-      }),
-    ).resolves.toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
-  });
-});
-
-it("keeps a usage inventory within its captured sibling database owners", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.path("usage-store", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    const sessionFile = path.join(path.dirname(storePath), "recorded.jsonl");
-    fs.writeFileSync(sessionFile, "{}\n");
-    const prepared = prepareUsageCostWorker({ agentId: "main", storePath, env: state.env });
-    // Another startup refresh creates a sibling after this operation captured its custody.
-    openOpenClawAgentDatabase({
-      agentId: "other",
-      path: path.join(path.dirname(storePath), "openclaw-agent.other.sqlite"),
-      env: state.env,
-    });
-    await expect(runUsageCostWorker(prepared, { kind: "inventory" })).resolves.toMatchObject({
-      kind: "inventory",
-      files: [{ kind: "jsonl", sourcePath: sessionFile }],
-    });
-  });
-});
-
-it("refreshes and reads usage with the captured Windows environment and database", async () => {
-  await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
     const config = {};
-    const agentId = "usage-env";
+    const agentId = "usage-foreign-creation";
     const sessionFile = state.path("usage.jsonl");
-    fs.writeFileSync(sessionFile, usageRecord);
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: state.env });
-    const laterRoot = state.path("later-state");
-    const defaultRoot = path.join(state.home, ".openclaw");
-    const originalEnv = process.env;
-    const hostPlatform = process.platform;
-    const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
-    const clone = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((input) =>
-      // Only the real environment clone sees Windows; paths and SQLite stay host-native.
-      withMockedPlatform("win32", () => cloneEnv(input)),
-    );
-    try {
-      await expect(
-        refreshCostUsageCacheForAgent({ agentId, config, sessionFiles: [sessionFile] }),
-      ).resolves.toBe("refreshed");
-      const env = { ...state.env };
-      for (const key of Object.keys(env)) {
-        if (key.toUpperCase() === "OPENCLAW_STATE_DIR") {
-          delete env[key];
+    writeUsage(sessionFile);
+    const prepared = prepare({ config, agentId, sessionFiles: [sessionFile] });
+    const target = prepared.location.databasePath;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    let injected = false;
+    const observer = probe.admission(operationAdmission, (request, grant, authorize) => {
+      authorize(request, () => {
+        if (
+          !injected &&
+          request.stage === "prepare" &&
+          isRecord(request.facts) &&
+          request.facts.kind === "shared-owner"
+        ) {
+          fs.writeFileSync(target, "foreign file");
+          injected = true;
         }
-      }
-      env.OpenClaw_State_Dir = state.stateDir;
-      const prepared = prepareUsageCostWorker({
-        agentId,
-        config,
-        sessionFiles: [sessionFile],
-        env,
+        return grant();
       });
-      expect(prepared.location.databasePath).toBe(databasePath);
-      const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-        prepared.config,
-        prepared.agentDir,
+    });
+    try {
+      await expect(refresh({ config, agentId, sessionFiles: [sessionFile] })).rejects.toThrow(
+        "Agent database target changed before creating open",
       );
-      env.OpenClaw_State_Dir = laterRoot;
-      process.env = { ...originalEnv, OPENCLAW_STATE_DIR: laterRoot };
-      expect(process.platform).toBe(hostPlatform);
-      expect(
-        await runUsageCostWorker(prepared, {
-          kind: "sessions",
-          pricingFingerprint,
-          sessions: [{ sessionFile }],
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        }),
-      ).toMatchObject({
-        kind: "sessions",
-        summaries: [{ totalTokens: 10, totalCost: 1 }],
-        cacheStatus: { status: "fresh", cachedFiles: 1 },
-      });
-      process.env = originalEnv;
-      expect(
-        await loadSessionCostSummariesFromCache({
-          agentId,
-          config,
-          sessions: [{ sessionFile }],
-          requestRefresh: false,
-        }),
-      ).toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
-      expect(fs.existsSync(databasePath)).toBe(true);
-      expect(fs.existsSync(defaultRoot)).toBe(false);
-      expect(fs.existsSync(laterRoot)).toBe(false);
+      expect(injected).toBe(true);
+      expect(await fs.promises.readFile(target, "utf8")).toBe("foreign file");
     } finally {
-      process.env = originalEnv;
-      clone.mockRestore();
+      observer.mockRestore();
     }
   });
+});
+
+it("refreshes retained colon session IDs", async ({ usage: { scope } }) => {
+  const database = openOpenClawAgentDatabase(scope);
+  const transcript = resolveSqliteTranscriptScope({
+    ...scope,
+    sessionKey: "agent:main:retained-usage",
+    sessionId: "legacy:session",
+    storePath: database.path,
+  });
+  const events = [{ type: "session", version: 1, id: transcript.sessionId }, usageEvent];
+  const options = { scheduleProjectionReconcile: false };
+  write((owner) => append(owner, transcript, events, options), { ...scope, path: database.path });
+  await refreshed({ ...scope, config: {} });
+  await expectSummary(`sqlite:main:legacy:session:${database.path}`);
+});
+
+it("inventories retained usage by transcript recency and logical agent after writes", async ({
+  usage: { state, scope },
+}) => {
+  const storePath = state.path("shared.sqlite");
+  const database = open(scope, storePath);
+  const appendUsage = (
+    agentId: string,
+    sessionId: string,
+    sessionKey: string,
+    updatedAt: number,
+  ) => {
+    const transcript = resolveSqliteTranscriptScope({
+      ...scope,
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(updatedAt);
+    try {
+      write(
+        (owner) =>
+          append(
+            owner,
+            transcript,
+            [{ type: "message", id: `${sessionId}-${updatedAt}`, message: { role: "user" } }],
+            { scheduleProjectionReconcile: false },
+          ),
+        { ...scope, path: database.path },
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  };
+  appendUsage("main", "old", "agent:main:old", 1000);
+  appendUsage("main", "second", "agent:main:second", 2000);
+  appendUsage("main", "first", "agent:main:first", 2000);
+  appendUsage("main", "hidden", "agent:main:internal-session-effects:hidden", 3000);
+  appendUsage("other", "other", "agent:other:other", 3000);
+  write(
+    (owner) => {
+      writeSessionEntry(owner, "agent:main:metadata-only", {
+        sessionId: "metadata-only",
+        updatedAt: 9000,
+      });
+    },
+    { ...scope, path: database.path },
+  );
+  const prepared = prepare({ ...scope, storePath });
+  await expect(run(prepared, { kind: "inventory" })).resolves.toMatchObject({
+    kind: "inventory",
+    files: [
+      { sessionId: "first", mtimeMs: 2000 },
+      { sessionId: "second", mtimeMs: 2000 },
+      { sessionId: "old", mtimeMs: 1000 },
+    ],
+  });
+  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject({
+    kind: "inventory",
+    files: [
+      { sessionId: "first", mtimeMs: 2000 },
+      { sessionId: "second", mtimeMs: 2000 },
+    ],
+  });
+  appendUsage("main", "old", "agent:main:old", 4000);
+  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject({
+    kind: "inventory",
+    files: [
+      { sessionId: "old", mtimeMs: 4000 },
+      { sessionId: "first", mtimeMs: 2000 },
+      { sessionId: "second", mtimeMs: 2000 },
+    ],
+  });
+});
+
+it("keeps SQLite selectors distinct", async ({ usage: { state, scope } }) => {
+  const { storePath, databasePath } = store(state, "custom");
+  open(scope, databasePath);
+  const sessionFiles = ["first", "second"].map((id) => `sqlite:main:${id}:${storePath}`);
+  const prepared = prepare({ ...scope, storePath, sessionFiles });
+  await expect(run(prepared, { kind: "inventory", sessionFiles })).resolves.toMatchObject({
+    kind: "inventory",
+    files: sessionFiles.map((sourcePath) => ({ kind: "sqlite", sourcePath })),
+  });
+});
+
+it("refreshes replaced store owners", async ({ usage: { state, scope } }) => {
+  const { storePath, databasePath, sessionFile } = store(state, "custom");
+  open(scope, databasePath);
+  open(scope, state.path("custom", "openclaw-agent.main.sqlite"));
+  await refresh({ ...scope, storePath: store(state, "warm").storePath });
+  await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+  unregisterOpenClawAgentDatabase({ ...scope, path: databasePath });
+  fs.unlinkSync(databasePath);
+  open(scope, databasePath, "other");
+  writeUsage(sessionFile);
+  await refreshed({ ...scope, storePath, maxFiles: 1 });
+  await expectSummary(sessionFile, { session: { store: storePath } });
+});
+
+it("captures inventory sibling custody", async ({ usage: { state, scope } }) => {
+  const { storePath, sessionFile } = store(state, "usage-store");
+  fs.writeFileSync(sessionFile, "{}\n");
+  const prepared = prepare({ ...scope, storePath });
+  open(scope, state.path("usage-store", "openclaw-agent.other.sqlite"), "other");
+  await expect(run(prepared, { kind: "inventory" })).resolves.toMatchObject({
+    kind: "inventory",
+    files: [{ kind: "jsonl", sourcePath: sessionFile }],
+  });
+});
+
+it.extend({ layout: "split" })("captures Windows state", async ({ usage }) => {
+  const { state } = usage;
+  const scope = { agentId: "usage-env", env: state.env };
+  const sessionFile = state.path("usage.jsonl");
+  writeUsage(sessionFile);
+  const databasePath = resolveOpenClawAgentSqlitePath(scope);
+  const laterRoot = state.path("later-state");
+  const original = { env: process.env, platform: process.platform };
+  const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
+  const clone = vi
+    .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
+    .mockImplementation((input) => withMockedPlatform("win32", () => cloneEnv(input)));
+  try {
+    const params = { agentId: scope.agentId, config: {}, sessionFiles: [sessionFile] };
+    await refreshed(params);
+    const env = Object.fromEntries(
+      Object.entries(state.env).filter(([key]) => key.toUpperCase() !== "OPENCLAW_STATE_DIR"),
+    );
+    env.OpenClaw_State_Dir = state.stateDir;
+    const prepared = prepare({ ...params, env });
+    expect(prepared.location.databasePath).toBe(databasePath);
+    const pricingFingerprint = await fingerprint(prepared.config, prepared.agentDir);
+    env.OpenClaw_State_Dir = laterRoot;
+    process.env = { ...original.env, OPENCLAW_STATE_DIR: laterRoot };
+    expect(process.platform).toBe(original.platform);
+    const result = await run(prepared, {
+      kind: "sessions",
+      pricingFingerprint,
+      sessions: [{ sessionFile }],
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    expect(result).toMatchObject({
+      kind: "sessions",
+      summaries: [totals],
+      cacheStatus: { status: "fresh", cachedFiles: 1 },
+    });
+    process.env = original.env;
+    await expectSummary(sessionFile, {}, scope.agentId);
+    const roots = [databasePath, path.join(state.home, ".openclaw"), laterRoot];
+    expect(roots.map(fs.existsSync)).toEqual([true, false, false]);
+  } finally {
+    process.env = original.env;
+    clone.mockRestore();
+  }
 });

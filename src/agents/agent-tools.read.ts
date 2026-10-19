@@ -101,10 +101,6 @@ type SkillReadContent = {
 
 export type SkillInstructionDeliveryCache = Map<string, Promise<boolean>>;
 
-export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryCache {
-  return new Map();
-}
-
 /**
  * Per-attempt per-invocation emission markers that ride a run's instruction
  * deliveries. This is owner-managed state created alongside each
@@ -145,7 +141,6 @@ export function createSkillInstructionDeliveryMarkers(): SkillInstructionDeliver
     generation: () => epoch,
   };
 }
-
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
 function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,

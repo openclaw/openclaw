@@ -1,9 +1,6 @@
 import { expect, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import {
-  createSkillInstructionDeliveryCache,
-  createSkillInstructionDeliveryMarkers,
-} from "../../agent-tools.read.js";
+import { createSkillInstructionDeliveryMarkers } from "../../agent-tools.read.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import type { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -108,7 +105,7 @@ export async function createFixture(
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
   };
-  const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+  const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
   const skillInstructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
   skillInstructionDeliveryCache.set("skill", Promise.resolve(true));
   const sessionRuntime = {

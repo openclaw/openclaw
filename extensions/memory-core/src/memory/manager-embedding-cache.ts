@@ -1,7 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   decodeMemoryEmbedding,
   encodeMemoryEmbedding,
+  isPostgresSqlConnection,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
@@ -36,7 +37,7 @@ export function isValidMemoryEmbedding(embedding: number[], dimensions?: number)
 }
 
 export function loadMemoryEmbeddingCache(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   providerIdentities: MemoryIndexProviderIdentity[];
   hashes: string[];
 }): Map<string, number[]> {
@@ -88,7 +89,43 @@ export function loadMemoryEmbeddingCache(params: {
   return out;
 }
 
-export function countMemoryEmbeddingCache(database: DatabaseSync): number {
+/** Preserve canonical entries and move the remaining legacy rows without copying vectors. */
+export function rekeyMemoryEmbeddingCache(
+  database: EngineConnection,
+  identity: MemoryIndexProviderIdentity,
+  providerKey: string,
+): void {
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("memory_embedding_cache")
+      .where("provider", "=", identity.provider)
+      .where("model", "=", identity.model)
+      .where("provider_key", "=", identity.providerKey)
+      .where(
+        "hash",
+        "in",
+        db
+          .selectFrom("memory_embedding_cache")
+          .select("hash")
+          .where("provider", "=", identity.provider)
+          .where("model", "=", identity.model)
+          .where("provider_key", "=", providerKey),
+      ),
+  );
+  executeSqliteQuerySync(
+    database,
+    db
+      .updateTable("memory_embedding_cache")
+      .set({ provider_key: providerKey })
+      .where("provider", "=", identity.provider)
+      .where("model", "=", identity.model)
+      .where("provider_key", "=", identity.providerKey),
+  );
+}
+
+export function countMemoryEmbeddingCache(database: EngineConnection): number {
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
   const result = executeSqliteQuerySync(
     database,
@@ -97,23 +134,45 @@ export function countMemoryEmbeddingCache(database: DatabaseSync): number {
   return result.rows[0]!.count;
 }
 
-/** The publication owner supplies its retained count and holds the write transaction. */
+/** The publication owner supplies its retained upper bound and holds the write transaction. */
 export function pruneMemoryEmbeddingCache(
-  database: DatabaseSync,
+  database: EngineConnection,
   cacheSize: number,
   maxEntries: number,
 ): number {
-  const excess = cacheSize - maxEntries;
-  if (excess <= 0) {
+  if (cacheSize <= maxEntries) {
     return cacheSize;
+  }
+  const size = countMemoryEmbeddingCache(database);
+  const excess = size - maxEntries;
+  if (excess <= 0) {
+    return size;
   }
   const limit = Math.min(excess, 100);
   const removed = deleteOldestMemoryEmbeddingCacheRows(database, limit);
-  return removed < limit ? 0 : cacheSize - removed;
+  return size - removed;
 }
 
-function deleteOldestMemoryEmbeddingCacheRows(database: DatabaseSync, limit: number): number {
+function deleteOldestMemoryEmbeddingCacheRows(database: EngineConnection, limit: number): number {
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  if (isPostgresSqlConnection(database)) {
+    const keys = ["provider", "model", "provider_key", "hash"] as const;
+    const oldest = db
+      .selectFrom("memory_embedding_cache")
+      .select(keys)
+      .orderBy("updated_at", "asc")
+      .orderBy("provider", "asc")
+      .orderBy("model", "asc")
+      .orderBy("provider_key", "asc")
+      .orderBy("hash", "asc")
+      .limit(limit)
+      .$asTuple(...keys);
+    const result = executeSqliteQuerySync(
+      database,
+      db.deleteFrom("memory_embedding_cache").where((eb) => eb(eb.refTuple(...keys), "in", oldest)),
+    );
+    return Number(result.numAffectedRows);
+  }
   // SQLite performs eviction without materializing the full cache in JavaScript.
   const result = executeSqliteQuerySync(
     database,
@@ -135,7 +194,7 @@ function deleteOldestMemoryEmbeddingCacheRows(database: DatabaseSync, limit: num
 
 /** Discard ambiguous vector spaces without removing unrelated provider caches or index rows. */
 export function clearMemoryEmbeddingCacheIdentities(
-  database: DatabaseSync,
+  database: EngineConnection,
   identities: MemoryIndexProviderIdentity[],
 ): number {
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
@@ -155,7 +214,7 @@ export function clearMemoryEmbeddingCacheIdentities(
 }
 
 export function upsertMemoryEmbeddingCache(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   cacheSize: number;
   provider: { id: string; model: string };
   providerKey: string;
@@ -182,26 +241,14 @@ export function upsertMemoryEmbeddingCache(params: {
   if (retainedRows.length === 0) {
     return cacheSize;
   }
-  if (maxEntries !== undefined) {
-    const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
-    const hashes = retainedRows.map(([hash]) => hash);
-    // Reserve space before inserting vectors so even a transient overflow is impossible.
-    for (let start = 0; start < hashes.length; start += 400) {
-      const result = executeSqliteQuerySync(
-        params.db,
-        db
-          .deleteFrom("memory_embedding_cache")
-          .where("provider", "=", provider.id)
-          .where("model", "=", provider.model)
-          .where("provider_key", "=", params.providerKey)
-          .where("hash", "in", hashes.slice(start, start + 400)),
-      );
-      cacheSize -= Number(result.numAffectedRows);
-    }
-    const excess = cacheSize - (maxEntries - hashes.length);
-    if (excess > 0) {
-      cacheSize -= deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
-    }
+  if (maxEntries !== undefined && cacheSize + retainedRows.length > maxEntries) {
+    cacheSize = reserveMemoryEmbeddingCacheCapacity({
+      db: params.db,
+      provider,
+      providerKey: params.providerKey,
+      hashes: retainedRows.map(([hash]) => hash),
+      maxEntries,
+    });
   }
   const now = params.now ?? Date.now();
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
@@ -246,8 +293,47 @@ export function upsertMemoryEmbeddingCache(params: {
     }
   }
   flush();
-  // Unbounded upserts may replace a row: the retained count is a safe upper bound.
+  // Replacements make this an upper bound; a reserved write inserts only new rows.
   return cacheSize + retainedRows.length;
+}
+
+/*
+ * Evicts before inserting so even an uncommitted write never holds more rows than the cap;
+ * a forced rebuild otherwise grows the primary file before the excess is deleted. The
+ * retained size is only an upper bound, so count first: below capacity a direct UPSERT
+ * cannot overflow. At capacity, removing replaced rows makes every UPSERT row a true insert.
+ */
+function reserveMemoryEmbeddingCacheCapacity(params: {
+  db: EngineConnection;
+  provider: { id: string; model: string };
+  providerKey: string;
+  hashes: string[];
+  maxEntries: number;
+}): number {
+  const { hashes, maxEntries } = params;
+  let size = countMemoryEmbeddingCache(params.db);
+  if (size + hashes.length <= maxEntries) {
+    return size;
+  }
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
+  // Chunks stay below SQLite's portable binding limit.
+  for (let start = 0; start < hashes.length; start += 400) {
+    const result = executeSqliteQuerySync(
+      params.db,
+      db
+        .deleteFrom("memory_embedding_cache")
+        .where("provider", "=", params.provider.id)
+        .where("model", "=", params.provider.model)
+        .where("provider_key", "=", params.providerKey)
+        .where("hash", "in", hashes.slice(start, start + 400)),
+    );
+    size -= Number(result.numAffectedRows);
+  }
+  const excess = size + hashes.length - maxEntries;
+  if (excess > 0) {
+    size -= deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+  }
+  return size;
 }
 
 export function collectMemoryCachedEmbeddings(params: {

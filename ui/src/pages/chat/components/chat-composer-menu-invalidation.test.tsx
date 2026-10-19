@@ -3,23 +3,17 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import type {
-  ChatComposerPlusMenuProps,
-  ChatComposerPlusMenuView,
-} from "./chat-composer-plus-menu.types.ts";
+import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
 
-it.each<ChatComposerPlusMenuView>([
-  "root",
-  "skills",
-  "connectors",
-  "tools:docs",
-  "library:missing",
-])(
+it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as const)(
   "retains %s menu content on unrelated publications and admits in-place display changes",
   async (view) => {
+    const skillName = vi.fn(() => "Focused skill");
     const menu: ChatComposerPlusMenuProps = {
       attachments: {},
+      inputHandle: createChatAttachmentInputHandle(),
       disabled: false,
       open: false,
       view,
@@ -31,7 +25,19 @@ it.each<ChatComposerPlusMenuView>([
       onViewChange: vi.fn(),
       capabilityMenu: {
         basePath: "/control",
-        skills: [{ key: "focused", name: "Focused skill", enabled: true, baseEnabled: true }],
+        skills: [
+          {
+            key: "focused",
+            get name() {
+              return skillName();
+            },
+            set name(value: string) {
+              skillName.mockImplementation(() => value);
+            },
+            enabled: true,
+            baseEnabled: true,
+          },
+        ],
         skillsLoading: false,
         skillsError: false,
         mcpServers: [
@@ -97,6 +103,7 @@ it.each<ChatComposerPlusMenuView>([
     const [props, setProps] = createSignal(snapshot());
     const mounted = mountSolid(() => <ChatComposerPlusMenu menu={props()} />);
     flush();
+    expect(skillName).not.toHaveBeenCalled();
     mounted.container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!.click();
     await waitForSolid(() =>
       expect(
@@ -104,6 +111,18 @@ it.each<ChatComposerPlusMenuView>([
           .querySelector(".agent-chat__capability-menu-panel")
           ?.matches(":popover-open"),
       ).toBe(true),
+    );
+    const expectedContent = {
+      root: "Web search",
+      skills: "Focused skill",
+      connectors: "docs",
+      "tools:docs": "Search documents",
+      "library:missing": "Library ready",
+    }[view];
+    await waitForSolid(() =>
+      expect(
+        mounted.container.querySelector(".agent-chat__capability-menu-panel")?.textContent,
+      ).toContain(expectedContent),
     );
     const observer = new MutationObserver(() => {});
     observer.observe(mounted.container, { childList: true, subtree: true });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 describe("runGuidedOnboarding quick start", () => {
   const {

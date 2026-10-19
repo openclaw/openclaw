@@ -55,7 +55,11 @@ async function ensureDashboardTargetReady(params: {
 }
 
 function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
-  writeRuntimeJson(runtime, { ...formatCliJsonFailure(reason), reason }, 0);
+  const failure = formatCliJsonFailure(reason);
+  writeRuntimeJson(runtime, { ...failure, reason }, 0);
+  runtime.error(
+    `${failure.error.message}\nRun \`openclaw gateway status --deep\` for details, then retry \`openclaw dashboard --json\`.`,
+  );
   runtime.exit(1);
 }
 

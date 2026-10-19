@@ -8,8 +8,8 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { startPluginServices } from "../plugins/services.test-support.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { fileLogTransport } from "./logger-file-transport.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "./logger.js";
-import { testApi } from "./logger.test-support.js";
 import type { RedactPattern } from "./redact-pattern-runtime.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -25,7 +25,6 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await flushLogger();
-  testApi.resetFileLogTransportForTests();
   resetLogger();
   resetSecretRedactionRegistryForTest();
   loggingState.rawConsole = rawConsole;
@@ -38,7 +37,7 @@ async function logFromPlugin(
   message: string,
   meta?: Record<string, unknown>,
   patterns?: readonly RedactPattern[],
-  write?: (logger: ReturnType<typeof getChildLogger>) => void,
+  write?: (logger: ReturnType<typeof getChildLogger>, file: string) => void,
 ) {
   const file = paths.nextPath();
   applyLoggingConfig({
@@ -70,7 +69,7 @@ async function logFromPlugin(
     id: record.id,
     start() {
       if (write) {
-        write(getChildLogger({ subsystem: record.id }));
+        write(getChildLogger({ subsystem: record.id }), file);
       } else if (meta) {
         logger.info(message, meta);
       } else {
@@ -141,18 +140,21 @@ it("refreshes exact-secret and custom egress policies without rewriting raw file
 });
 
 it("writes valid raw overflow metadata and masks it when tailed", async () => {
-  testApi.setFileLogQueueMaxRecordsForTests(1);
   const hostname = '--token "synthetic-credential-123456"';
   vi.spyOn(os, "hostname").mockReturnValue(hostname);
-  const result = await logFromPlugin("overflow", undefined, undefined, (logger) => {
+  const result = await logFromPlugin("overflow", undefined, undefined, (logger, file) => {
     logger.info("first");
+    for (let index = 0; index < 4_095; index += 1) {
+      fileLogTransport.enqueue({ file, hostname, maxFileBytes: 1024 * 1024, payload: "{}\n" });
+    }
     logger.info("second");
   });
   expect(result.records[0].dropped).toBe(1);
   expect(result.records[0].hostname).toBe(hostname);
-  expect((await readConfiguredLogTail()).lines.join("\n")).not.toContain(
-    "synthetic-credential-123456",
-  );
+  const tail = await readConfiguredLogTail({ limit: 5_000 });
+  assert(tail.lines[0] !== undefined);
+  expect(JSON.parse(tail.lines[0]).dropped).toBe(1);
+  expect(tail.lines.join("\n")).not.toContain("synthetic-credential-123456");
 });
 
 it("materializes native values once and retains cycles, bigints, and diagnostic text", async () => {

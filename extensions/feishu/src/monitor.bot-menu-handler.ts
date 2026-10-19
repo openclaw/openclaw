@@ -69,11 +69,9 @@ export function createFeishuBotMenuHandler(params: {
         return;
       }
       if (claim.kind === "duplicate") {
-        log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
         return;
       }
       if (claim.kind === "inflight") {
-        log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
         return;
       }
       const handleLegacyMenu = () =>

@@ -29,6 +29,12 @@ The two side-question contracts are deliberately separate. BTW is a one-shot que
 
 The main run, if one is active, is left untouched.
 
+On direct-provider runtimes with block streaming, a failed block delivery does
+not prevent attempts to send later blocks. The failure is logged and, after
+pending block callbacks finish, the complete answer is returned for final
+delivery. This can repeat blocks that already arrived; it does not restart the
+model request or affect the main run.
+
 Images attached to the `/btw` message are sent with the side question on
 direct-provider runtimes and on the Codex harness. This includes a photo with a
 `/btw` caption, or media from the replied-to message when the channel supplies

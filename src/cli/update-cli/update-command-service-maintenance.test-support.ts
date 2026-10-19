@@ -149,7 +149,7 @@ beforeEach(() => {
     pids: new Set([process.pid, process.ppid, 1]),
     complete: true,
   });
-  mocks.prepareStop.mockReset().mockResolvedValue(false);
+  mocks.prepareStop.mockReset().mockResolvedValue({ kind: "unchanged" });
   mocks.drain.mockReset().mockImplementation(async (_params, stop) => await stop());
 });
 afterEach(() => vi.restoreAllMocks());

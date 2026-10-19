@@ -6,12 +6,14 @@ import type { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadat
 import { readTableColumns } from "../../state/openclaw-state-db-schema-helpers.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
+import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
 import type { PortDescriptor, PortEndpoint } from "./port-types.js";
 import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
+import { DatabasePortDataError } from "./postgres-store-metadata.js";
 
 export type { PortDescriptor, PortEndpoint, PortRow, PortTable } from "./port-types.js";
 
-export class DatabasePortDataError extends Error {}
+export { DatabasePortDataError };
 
 export type DatabasePortProvider = {
   id: string;
@@ -22,8 +24,8 @@ export type DatabasePortProvider = {
     config: OpenClawConfig;
     stateDir: string;
     env: NodeJS.ProcessEnv;
-    plugins: ReturnType<typeof resolvePluginMetadataSnapshot>;
-  }): readonly string[];
+    plugins: Pick<ReturnType<typeof resolvePluginMetadataSnapshot>, "plugins">;
+  }): readonly string[] | Promise<readonly string[]>;
   matchesSqlite(tables: ReadonlySet<string>): boolean;
   /** Includes the expected catalog from the same generated source as the bundled DDL. */
   loadDescriptor(
@@ -120,21 +122,27 @@ export function inspectSqlitePortSchema(
   admitSqliteSchema(db);
   const facts = getAdmittedSqliteSchemaFacts(db);
   const descriptor = facts ? selectFragments(baseDescriptor, facts.tables) : baseDescriptor;
+  const sourceTriggers = [
+    ...(descriptor.triggers ?? []),
+    ...(descriptor.omittedSqliteTriggers ?? []),
+  ];
   if (
     !facts ||
     facts.views.size ||
     [...facts.triggers].some(
       ([name, trigger]) =>
-        !descriptor.triggers?.some(
+        !sourceTriggers.some(
           (known) =>
             known.name === name &&
             known.table === trigger.table &&
-            known.sql.trim() === trigger.sql?.trim(),
+            normalizeSchemaSql(known.sql) === normalizeSchemaSql(trigger.sql),
         ),
     ) ||
     [...facts.tables].some(
       (name) =>
-        !name.startsWith("sqlite_") && !descriptor.tables.some((table) => table.name === name),
+        !name.startsWith("sqlite_") &&
+        !descriptor.tables.some((table) => table.name === name) &&
+        !descriptor.projections?.some((projection) => projection.tables.includes(name)),
     )
   ) {
     throw new DatabasePortDataError(

@@ -137,7 +137,7 @@ function groupRows<Row, Key extends string | number>(
 }
 
 /** Read one native catalog in five statements, independent of its table count. */
-export function readSqliteSchemaCatalog(
+function readSqliteSchemaCatalog(
   database: DatabaseSync,
   options: { viewNames?: readonly string[]; virtualTableNames?: readonly string[] } = {},
 ): SqliteSchemaCatalog {

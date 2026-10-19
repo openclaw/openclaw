@@ -10,7 +10,7 @@
 //
 // Only repo-owned tags may be dropped. Dependency packages are externalized, so
 // they evaluate once per worker through native ESM and never re-register; dropping
-// their definitions would leave `wa-*` and friends permanently unupgraded.
+// their definitions would leave external custom elements permanently unupgraded.
 
 import {
   isRepoOwnedRegistrationStack,

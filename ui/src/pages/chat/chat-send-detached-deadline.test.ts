@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   getLatestWebSocket,
   MockWebSocket,
@@ -15,6 +16,7 @@ import { getChatAttachmentBlob, getChatAttachmentDataUrl } from "./attachment-pa
 import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
@@ -35,6 +37,25 @@ beforeEach(() => {
 });
 
 type RequestFrame = { id: string; method: string; params: Record<string, unknown> };
+const approvalMessage = "/approve approval-123 allow-once";
+function makeClient(host: ChatHost) {
+  const client = new GatewayBrowserClient({
+    url: "ws://127.0.0.1:18789",
+    onHello: (hello) => {
+      host.hello = hello;
+    },
+  });
+  host.client = client;
+  onTestFinished(() => client.stop());
+  return client;
+}
+function expectComposer(host: ChatHost, message: string, error: string | null) {
+  expect(host).toMatchObject({ chatMessage: message, chatError: error, chatRunId: "active-run" });
+  expect(host.chatSubmitGuards?.size).toBe(0);
+}
+function respond(ws: MockWebSocket, id: string, payload: unknown) {
+  ws.emitMessage({ type: "res", id, ok: true, payload });
+}
 function requests(ws: MockWebSocket, method: string): RequestFrame[] {
   return ws.sent
     .map((frame) => JSON.parse(frame) as RequestFrame)
@@ -52,23 +73,18 @@ async function connect(client: GatewayBrowserClient, recoveryScope = "account-a"
   await vi.advanceTimersByTimeAsync(0);
   const frame = requests(ws, "connect")[0]!;
   expect(frame).toBeDefined();
-  ws.emitMessage({
-    type: "res",
-    id: frame.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: ["operator.admin"], recoveryScope },
-      policy: { tickIntervalMs: 1_000 },
-    },
+  respond(ws, frame.id, {
+    type: "hello-ok",
+    protocol: 4,
+    auth: { role: "operator", scopes: ["operator.admin"], recoveryScope },
+    policy: { tickIntervalMs: 1_000 },
   });
   await vi.advanceTimersByTimeAsync(0);
   expect(client.connected).toBe(true);
   return ws;
 }
 async function heartbeatUntilDeadline(ws: MockWebSocket) {
-  for (let seq = 1; seq < 30; seq += 1) {
+  for (let seq = 1; seq < GATEWAY_STARTUP_ADMISSION_WAIT_MS / 1_000; seq += 1) {
     await vi.advanceTimersByTimeAsync(1_000);
     for (const socket of wsInstances) {
       socket.emitMessage({ type: "event", event: "tick", seq, payload: {} });
@@ -81,21 +97,14 @@ async function heartbeatUntilDeadline(ws: MockWebSocket) {
 async function startApproval() {
   const attachment = createStagedAttachment("approval-ack-document");
   const bytes = getChatAttachmentBlob(attachment);
-  const message = "/approve approval-123 allow-once";
+  const message = approvalMessage;
   const host = makeChatHost({
     chatMessage: message,
     chatAttachments: [attachment],
     chatRunId: "active-run",
     chatStream: "Waiting for approval",
   });
-  const client = new GatewayBrowserClient({
-    url: "ws://127.0.0.1:18789",
-    onHello: (hello) => {
-      host.hello = hello;
-    },
-  });
-  host.client = client;
-  onTestFinished(() => client.stop());
+  const client = makeClient(host);
   const ws = await connect(client);
   const observed = vi.spyOn(client, "request");
   const settled = vi.fn();
@@ -126,16 +135,8 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
     if (change === "navigation") {
       host.sessionKey = "agent:main:other";
     } else if (change === "account") {
-      const replacement = new GatewayBrowserClient({
-        url: "ws://127.0.0.1:18789",
-        onHello: (hello) => {
-          host.hello = hello;
-        },
-      });
-      host.client = replacement;
       host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
-      onTestFinished(() => replacement.stop());
-      await connect(replacement, "account-b");
+      await connect(makeClient(host), "account-b");
     }
     await heartbeatUntilDeadline(ws);
     expect(settled).not.toHaveBeenCalled();
@@ -151,64 +152,47 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
     await expect(result.value).rejects.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
     await expect(result.value).rejects.toMatchObject({
       requestSent: true,
-      timeoutMs: 30_000,
+      timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
       method: "chat.send",
     });
-    expect(host.chatSubmitGuards?.size).toBe(0);
-    expect(host.chatRunId).toBe("active-run");
     const expectedError =
       change === "unchanged" || change === "newer input"
         ? UNCONFIRMED_CHAT_SEND_ERROR
         : "Current context notice";
-    expect(host.chatError).toBe(expectedError);
-    expect(host.chatMessage).toBe(draft);
+    expectComposer(host, draft, expectedError);
     if (change === "unchanged") {
-      expect(host.chatStream).toBe("Waiting for approval");
+      expect(host).toMatchObject({ chatStream: "Waiting for approval", chatQueue: [] });
       expect(host.chatAttachments).toMatchObject([{ id: attachment.id }]);
       expect(getChatAttachmentBlob(host.chatAttachments[0]!)).toBe(bytes);
       expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(
         "data:application/pdf;base64,JVBERi0xLjQK",
       );
-      expect(host.chatQueue).toEqual([]);
     } else {
       expect(host.chatAttachments).toEqual([newerAttachment]);
       expect(getChatAttachmentBlob(newerAttachment)).toBe(newerBytes);
     }
     if (change === "navigation") {
       const saved = Object.values(host.chatComposerFallbackByScope);
-      expect(saved).toEqual([
-        expect.objectContaining({
-          message,
-          attachments: [expect.objectContaining({ id: attachment.id })],
-        }),
-      ]);
+      expect(saved).toMatchObject([{ message, attachments: [{ id: attachment.id }] }]);
       expect(getChatAttachmentBlob(saved[0]!.attachments[0]!)).toBe(bytes);
       expect(Object.keys(host.chatComposerFallbackByScope)[0]).toContain(originalSessionKey);
     } else {
       expect(host.chatComposerFallbackByScope).toEqual({});
     }
     const fallback = structuredClone(host.chatComposerFallbackByScope);
-    ws.emitMessage({
-      type: "res",
-      id: send.id,
-      ok: true,
-      payload: { status: "started", runId: "late-command" },
-    });
+    respond(ws, send.id, { status: "started", runId: "late-command" });
     await vi.advanceTimersByTimeAsync(0);
-    expect(host.chatMessage).toBe(draft);
-    expect(host.chatError).toBe(expectedError);
-    expect(host.chatRunId).toBe("active-run");
+    expectComposer(host, draft, expectedError);
     if (change === "unchanged") {
       client.stop();
       await connect(client);
     }
     await resumeStoredChatOutboxes(host);
-    expect(host.chatMessage).toBe(draft);
+    expect(host).toMatchObject({ chatMessage: draft, chatRunId: "active-run" });
     if (change !== "unchanged") {
       expect(host.chatAttachments).toEqual([newerAttachment]);
     }
     expect(host.chatComposerFallbackByScope).toEqual(fallback);
-    expect(host.chatRunId).toBe("active-run");
     expect(wsInstances.flatMap((socket) => requests(socket, "chat.send"))).toHaveLength(1);
   },
 );
@@ -217,35 +201,31 @@ it.each(["success", "terminal error", "known rejection"] as const)(
   "preserves detached approval %s settlement before the ACK deadline",
   async (outcome) => {
     const { host, ws, settled, sending, send, attachment, message } = await startApproval();
-    ws.emitMessage(
-      outcome === "known rejection"
-        ? {
-            type: "res",
-            id: send.id,
-            ok: false,
-            error: { code: "INVALID_REQUEST", message: "Approval rejected" },
-          }
-        : {
-            type: "res",
-            id: send.id,
-            ok: true,
-            payload: { status: outcome === "success" ? "started" : "error", runId: "command-run" },
-          },
-    );
+    if (outcome === "known rejection") {
+      ws.emitMessage({
+        type: "res",
+        id: send.id,
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "Approval rejected" },
+      });
+    } else {
+      respond(ws, send.id, {
+        status: outcome === "success" ? "started" : "error",
+        runId: "command-run",
+      });
+    }
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toHaveBeenCalledOnce();
     await sending;
-    expect(host.chatSubmitGuards?.size).toBe(0);
-    expect(host.chatRunId).toBe("active-run");
     if (outcome === "success") {
-      expect(host.chatMessage).toBe("");
+      expectComposer(host, "", null);
       expect(host.chatAttachments).toEqual([]);
       expect(getChatAttachmentBlob(attachment)).toBeNull();
-      expect(host.chatError).toBeNull();
     } else {
-      expect(host.chatMessage).toBe(message);
       expect(host.chatAttachments).toMatchObject([{ id: attachment.id }]);
-      expect(host.chatError).toBe(
+      expectComposer(
+        host,
+        message,
         outcome === "known rejection"
           ? "Approval rejected"
           : "Chat failed before the run started; try again.",
@@ -268,7 +248,7 @@ it("does not call a known unsent timeout unconfirmed", async () => {
     requestSent: false,
   });
   const host = makeChatHost({
-    chatMessage: "/approve approval-123 allow-once",
+    chatMessage: approvalMessage,
     chatRunId: "active-run",
     requestHandlers: {
       "chat.send": () => {
@@ -277,8 +257,5 @@ it("does not call a known unsent timeout unconfirmed", async () => {
     },
   });
   await handleSendChat(host);
-  expect(host.chatError).toBe(error.message);
-  expect(host.chatMessage).toBe("/approve approval-123 allow-once");
-  expect(host.chatSubmitGuards?.size).toBe(0);
-  expect(host.chatRunId).toBe("active-run");
+  expectComposer(host, approvalMessage, error.message);
 });

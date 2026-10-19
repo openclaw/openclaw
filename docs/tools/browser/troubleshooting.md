@@ -12,6 +12,19 @@ For Linux-specific issues (especially snap Chromium), see
 For WSL2 Gateway + Windows Chrome split-host setups, see
 [WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
 
+## Slow first browser request
+
+Managed Chrome starts on demand when an operation needs it. The browser control
+service being ready means its routes are available; it does not mean Chrome has
+finished starting. `tabs` checks the current browser without launching it.
+
+Local tool dispatch, Gateway, and node requests wait for shared managed-browser startup before
+spending their action timeout. Startup allows up to two minutes for profile
+bootstrap, decoration, launch, and CDP readiness. A caller that cancels or stops
+waiting does not cancel the shared launch. Stopping or resetting the browser
+does cancel it. If startup exhausts its own budget, the error names the profile
+and startup deadline; inspect the browser startup logs before retrying.
+
 ## Inspection times out but screenshots work
 
 Snapshots and page-text reads use a browser automation connection that can become
@@ -69,7 +82,7 @@ Important behavior details:
 
 - Browser config defaults to an SSRF policy object that blocks disallowed destinations even when you do not configure `browser.ssrfPolicy`.
 - For the local loopback `openclaw` managed profile, CDP health checks intentionally skip browser SSRF reachability enforcement for OpenClaw's own local control plane.
-- After launching a local managed browser, readiness checks allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays. The readiness retry window is eight seconds; checks near its end use shorter timeouts.
+- Local managed Chrome gets up to 60 seconds for launch discovery, followed by up to 30 seconds for CDP readiness. Readiness checks allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays; checks near the deadline use shorter timeouts.
 - Later operations use the same readiness allowance for an owned managed browser before deciding it needs a restart. Stopping a profile aborts its pending discovery and readiness checks; canceling one caller waiting for a shared start does not stop that shared launch.
 - Navigation protection is separate. A successful `start` or `tabs` result does not mean a later `open` or `navigate` target is allowed.
 

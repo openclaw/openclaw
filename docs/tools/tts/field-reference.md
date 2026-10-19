@@ -55,7 +55,7 @@ and resolved values still fail startup or reject the update.
       Hard cap for TTS input characters. `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded.
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
-      Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `tts.timeoutMs` wins over any plugin-authored provider default.
+      Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `tts.timeoutMs` wins over any plugin-authored provider default. When neither is set, DeepInfra and OpenRouter default to `120000` because hosted Kokoro synthesis can exceed 30 seconds.
     </ParamField>
   </Accordion>
   <Accordion title="Azure Speech">

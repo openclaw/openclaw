@@ -8,6 +8,7 @@ import type { ChatDetails } from "./components/chat-details.tsx";
 
 export type PaneDetailsProps = {
   chat: ChatDetails["props"];
+  elements: ChatDetails["elements"];
   mobile: boolean;
   conversationVisible?: boolean;
   externalTrigger?: boolean;
@@ -22,6 +23,7 @@ export function PaneDetails(props: PaneDetailsProps) {
     <openclaw-chat-details
       ref={(element) => props.setRef(element)}
       prop:props={props.chat}
+      prop:elements={props.elements}
       prop:mobile={props.mobile}
       prop:conversationVisible={props.conversationVisible ?? true}
       prop:externalTrigger={props.externalTrigger ?? false}
@@ -72,6 +74,7 @@ export function PaneHeaderSessionMenu(props: SessionMenuProps) {
       prop:onboarding={props.onboarding}
       prop:preferencesBrowserOnly={props.preferencesBrowserOnly}
       prop:compact={props.compact}
+      prop:prewarm={props.prewarm}
       prop:copyMarkdownAllowed={props.copyMarkdownAllowed}
       prop:splitAllowed={props.splitAllowed}
       prop:settings={props.settings}
@@ -104,7 +107,12 @@ declare module "@solidjs/web" {
         ElementProperties<
           Pick<
             ChatDetails,
-            "props" | "presented" | "mobile" | "conversationVisible" | "externalTrigger"
+            | "props"
+            | "elements"
+            | "presented"
+            | "mobile"
+            | "conversationVisible"
+            | "externalTrigger"
           >
         >;
       "openclaw-chat-header-session-menu": HTMLAttributes<

@@ -20,6 +20,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { GATEWAY_ADMISSION_RETRY_DELAY_MS } from "./subagent-registry-helpers.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
@@ -37,8 +38,6 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
-
-const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
 /** Admit terminal evidence before transport-specific grace or deadline reconciliation. */
 export async function prepareSubagentTerminalObservation(params: {
@@ -460,6 +459,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
 
 export function createSubagentResumeReader(params: {
   resumedRuns: Set<object>;
+  runBackgroundWork<T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   resume: (
     runId: string,
@@ -539,7 +539,7 @@ export function createSubagentResumeReader(params: {
           params.retryAfterDrain(runId, entry, stateContext);
         }
       };
-      void runWithGatewayDetachedWorkContinuation(async () => {
+      const readCurrent = async () => {
         try {
           let observed = entry;
           let check: ReturnType<typeof resolveSubagentRunOrphanReason> = orphanCheck;
@@ -578,7 +578,11 @@ export function createSubagentResumeReader(params: {
         } finally {
           release();
         }
-      }, "subagents:resume-session-read").catch((error: unknown) => {
+      };
+      void runWithGatewayDetachedWorkContinuation(
+        () => params.runBackgroundWork(entry, readCurrent),
+        "subagents:resume-session-read",
+      ).catch((error: unknown) => {
         try {
           failed(error);
         } finally {

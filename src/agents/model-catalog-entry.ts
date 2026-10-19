@@ -41,6 +41,7 @@ export function modelCatalogRowToEntry(
       : {}),
     ...(row.contextWindowDefault ? { contextWindowDefault: row.contextWindowDefault } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(row.parameterCount !== undefined ? { parameterCount: row.parameterCount } : {}),
     reasoning: row.reasoning,
     ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
     ...(row.input ? { input: [...row.input] } : {}),

@@ -30,7 +30,6 @@ export type ChatDetailSlotProps = {
   chat: ChatProps;
   content: SidebarSelection;
   host: ChatPageHost;
-  requestUpdate: () => void;
 };
 
 export type SidebarPanelDefinitionParams = {

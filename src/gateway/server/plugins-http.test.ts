@@ -855,8 +855,6 @@ describe("plugin suspension admission", () => {
       trackExecution: trackAsyncWork,
       cron,
       logGateway: { warn: vi.fn() },
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       terminalSessions: new Map(),
     } as unknown as GatewayRequestContext;
     const invokeSuspension = async (method: string, params: Record<string, unknown>) => {

@@ -18,6 +18,7 @@ import {
   requireRecord,
 } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { flushChatQueueForEvent, retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { deliverChatQueueItem } from "./chat-send-delivery.ts";
@@ -244,20 +245,24 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
   expect(
     admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, paused.key, "main"), item),
   ).toBe(true);
-  host.requestUpdate = () => {
+  const stop = subscribeChatOutboxQueue(host, () => {
     if (host.chatQueue[0]?.sendState === "waiting-model") {
       waiting.resolve();
     }
-  };
-  const delivery = deliverChatQueueItem(host, item, { pendingSettings: settings.promise });
-  await waiting.promise;
-  holdProviderReviewQueuedInputs(host);
-  settings.resolve(true);
-  await delivery;
-  await flushChatQueueForEvent(host);
-  expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-  expect(host.chatQueue[0]).toMatchObject({ text: item.text, sendState: "held" });
-  expect(host.chatQueue[0]?.sendRunId).toBe(item.sendRunId);
+  });
+  try {
+    const delivery = deliverChatQueueItem(host, item, { pendingSettings: settings.promise });
+    await waiting.promise;
+    holdProviderReviewQueuedInputs(host);
+    settings.resolve(true);
+    await delivery;
+    await flushChatQueueForEvent(host);
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+    expect(host.chatQueue[0]).toMatchObject({ text: item.text, sendState: "held" });
+    expect(host.chatQueue[0]?.sendRunId).toBe(item.sendRunId);
+  } finally {
+    stop();
+  }
 });
 
 it.each(["lost-ack", "accepted-unconsumed"] as const)(

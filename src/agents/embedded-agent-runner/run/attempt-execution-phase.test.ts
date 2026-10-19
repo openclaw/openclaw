@@ -152,13 +152,18 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           prompt: "reply",
           timeoutMs: 30_000,
         });
-        fixture.input.attempt.sessionTarget = { ...target, ...writer };
+        const selected = {
+          ...target,
+          expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+          expectedWriterRunId: writer?.expectedWriterRunId,
+        };
+        fixture.input.attempt.sessionTarget = selected;
         const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
           attempt: fixture.input.attempt,
           externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
         });
         fixture.input.sessionLock = transcript;
-        const manager = SessionManager.open({ ...target, ...writer });
+        const manager = SessionManager.open(selected);
         const fetchImpl = vi.fn(async () => new Response("ok"));
         fixture.activeSession.prompt.mockImplementation(async () => {
           const requestAuthority = captureGuardedFetchRequestAuthority();
@@ -242,7 +247,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         prompt: "reply",
         timeoutMs: 30_000,
       });
-      const selected = { ...target, ...writer };
+      const selected = {
+        ...target,
+        expectedLifecycleRevision: writer?.expectedLifecycleRevision,
+        expectedWriterRunId: writer?.expectedWriterRunId,
+      };
       fixture.input.attempt.sessionTarget = selected;
       const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: fixture.input.attempt,

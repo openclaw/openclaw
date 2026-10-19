@@ -1,12 +1,12 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { phase } from "../../test-helpers/solid-menu.tsx";
-import { TextareaTokenAnchor } from "../textarea-token-anchor.ts";
+import { createTextareaTokenAnchor } from "../textarea-token-anchor.ts";
 import { Menu, type MenuHandle } from "./menu.tsx";
 import "../../styles/base.css";
 
-let anchor: TextareaTokenAnchor | undefined;
+let anchor: ReturnType<typeof createTextareaTokenAnchor> | undefined;
 const hosts: HTMLElement[] = [];
 afterEach(() => {
   anchor?.close();
@@ -76,7 +76,7 @@ function expectMenuHit(menu: MenuHandle) {
 
 it("positions a native menu at the measured caret and returns focus to the editor", async () => {
   const { menu, textarea } = mountCaret("hello @person");
-  anchor = new TextareaTokenAnchor(() => anchor?.close());
+  anchor = createTextareaTokenAnchor(() => anchor?.close());
   textarea.focus();
   anchor.updateNative(menu.overlay, textarea, 6);
   await expect.poll(() => menu.overlay.open).toBe(true);
@@ -101,7 +101,7 @@ it("retires the native menu when its token scrolls outside the textarea", async 
   const { menu, textarea } = mountCaret(
     Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n"),
   );
-  anchor = new TextareaTokenAnchor(() => anchor?.close());
+  anchor = createTextareaTokenAnchor(() => anchor?.close());
   anchor.updateNative(menu.overlay, textarea, 0);
   await expect.poll(() => menu.overlay.open).toBe(true);
   const point = caretPoint(menu.overlay.surface);
@@ -109,6 +109,39 @@ it("retires the native menu when its token scrolls outside the textarea", async 
   textarea.dispatchEvent(new Event("scroll"));
   await expect.poll(() => menu.overlay.open).toBe(false);
   expect(point.isConnected).toBe(false);
+});
+
+it("rebinds to another editor and can reopen after synchronous retirement", async () => {
+  const { menu, textarea } = mountCaret("hello @person");
+  anchor = createTextareaTokenAnchor(() => anchor?.close());
+  anchor.updateNative(menu.overlay, textarea, 6);
+  await expect.poll(() => menu.overlay.open).toBe(true);
+  const previousPoint = caretPoint(menu.overlay.surface);
+  const nextTextarea = document.createElement("textarea");
+  nextTextarea.value = "next @person";
+  nextTextarea.style.cssText = textarea.style.cssText;
+  document.body.append(nextTextarea);
+  hosts.push(nextTextarea);
+  anchor.updateNative(menu.overlay, nextTextarea, 5);
+  expect(previousPoint.isConnected).toBe(false);
+  await expect.poll(() => menu.overlay.open).toBe(true);
+  expect(menu.overlay.trigger).toBe(nextTextarea);
+  const nextPoint = caretPoint(menu.overlay.surface);
+  expect(nextPoint).not.toBe(previousPoint);
+
+  onTestFinished(
+    menu.overlay.subscribe((open) => {
+      if (!open) {
+        anchor?.close();
+      }
+    }),
+  );
+  anchor.close();
+  expect(menu.overlay.open).toBe(false);
+  expect(nextPoint.isConnected).toBe(false);
+  anchor.updateNative(menu.overlay, nextTextarea, 5);
+  await expect.poll(() => menu.overlay.open).toBe(true);
+  expect(caretPoint(menu.overlay.surface).isConnected).toBe(true);
 });
 
 it.each(["open", "closed"] as const)(
@@ -121,7 +154,7 @@ it.each(["open", "closed"] as const)(
     document.body.append(host);
     hosts.push(host);
     const { menu, textarea } = mountCaret("hello @person", container);
-    anchor = new TextareaTokenAnchor(() => anchor?.close());
+    anchor = createTextareaTokenAnchor(() => anchor?.close());
     textarea.focus();
     anchor.updateNative(menu.overlay, textarea, 6);
     await phase(menu.overlay.surface, "open");

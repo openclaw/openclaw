@@ -8,8 +8,8 @@ import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
-import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import "./test-helpers/schtasks-base-mocks.js";
+import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import { readWindowsStartupFallbackRuntimeForUpdate } from "./schtasks-runtime.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
@@ -146,7 +146,8 @@ const {
 } = await import("./schtasks.js");
 const { removeStartupEntries } = await import("./schtasks-runtime.js");
 const { createMockGatewayService } = await import("./service.test-helpers.js");
-const { readServiceStatusSummary } = await import("../commands/status.service-summary.js");
+const { readGatewayServiceStatusForTest } =
+  await import("../commands/status.service-summary.test-support.ts");
 const { getStatusOverviewRowValue } = await import("../commands/status.test-support.ts");
 
 const STARTUP_GATEWAY_COMMAND =
@@ -440,19 +441,18 @@ describe("Windows startup fallback", () => {
     const detail = "-2147024891";
     taskProbe.mockReturnValue({ status: 1, stdout: "-2147024891" });
 
-    const summary = await readServiceStatusSummary(
+    const summary = await readGatewayServiceStatusForTest(
       createMockGatewayService({
         label: "Scheduled Task",
         loadedText: "registered",
         notLoadedText: "missing",
         readRuntime: () => readScheduledTaskRuntime(env),
       }),
-      "Daemon",
     );
 
     expect(summary.runtime).toEqual({
       status: "unknown",
-      detail: "service runtime inspection failed",
+      detail: "service runtime inspection failed; retry with openclaw status --deep",
       inspectionFailure: {
         code: "service-runtime-inspection-failed",
         detail: "Scheduled Task check failed (exit 1): -2147024891",
@@ -460,7 +460,7 @@ describe("Windows startup fallback", () => {
       missingUnit: false,
     });
     expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).toBe(
-      "Scheduled Task missing (inspection failed: service runtime inspection failed) · unknown",
+      "Scheduled Task missing (inspection failed: service runtime inspection failed; retry with openclaw status --deep) · unknown",
     );
     expect(getStatusOverviewRowValue("Gateway service", { gatewayService: summary })).not.toContain(
       detail,

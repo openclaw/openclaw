@@ -19,6 +19,22 @@ export function compareMcpCatalogTools(left: McpCatalogTool, right: McpCatalogTo
   );
 }
 
+export function mcpCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
+  return JSON.stringify(
+    tools.map((tool) => [
+      tool.serverName,
+      tool.safeServerName,
+      tool.toolName,
+      tool.title ?? "",
+      tool.description ?? "",
+      tool.fallbackDescription,
+      tool.inputSchema,
+      tool.uiResourceUri ?? "",
+      tool.uiVisibility ?? null,
+    ]),
+  );
+}
+
 export function sanitizeNodeIdFragment(value: string): string {
   const fragment = value
     .trim()

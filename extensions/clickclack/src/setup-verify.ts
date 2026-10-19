@@ -29,10 +29,6 @@ function isHttpStatus(error: unknown, status: number): boolean {
   );
 }
 
-function isWorkspaceNotFound(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith("ClickClack workspace not found:");
-}
-
 function usesUnavailableImplicitEnvToken(
   account: ResolvedClickClackAccount,
   tokenOverride: string,
@@ -52,13 +48,11 @@ export async function checkClickClackSetupConnection(params: {
   accountId?: string;
   token?: string;
 }): Promise<ClickClackSetupConnectionResult> {
-  let workspaceInput = "";
   try {
     const account = resolveClickClackAccount({
       cfg: params.cfg,
       accountId: params.accountId,
     });
-    workspaceInput = account.workspace;
     const token = params.token?.trim() || account.token;
     if (usesUnavailableImplicitEnvToken(account, token)) {
       return { status: "skipped-env-token" };
@@ -77,7 +71,7 @@ export async function checkClickClackSetupConnection(params: {
       ? workspaces.find((candidate) => candidate.id === account.workspace)
       : findClickClackWorkspace(workspaces, account.workspace);
     if (!workspace) {
-      throw new Error(`ClickClack workspace not found: ${account.workspace}`);
+      return { status: "workspace-not-found", workspace: account.workspace };
     }
     return {
       status: "connected",
@@ -87,12 +81,6 @@ export async function checkClickClackSetupConnection(params: {
   } catch (error) {
     if (isHttpStatus(error, 401)) {
       return { status: "invalid-token" };
-    }
-    if (isWorkspaceNotFound(error)) {
-      return {
-        status: "workspace-not-found",
-        workspace: workspaceInput,
-      };
     }
     return {
       status: "failed",

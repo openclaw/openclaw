@@ -1,11 +1,9 @@
-// Test Group Report tests cover test group report script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -37,18 +35,17 @@ import {
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createDeferred, withinTest } from "../helpers/promise.js";
-import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 const tempDirs = new Set<string>();
-const cliTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const reportUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.testGroupReport);
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
 afterAll(async () => {
-  await receipts.close();
+  await receipts.close().finally(() => cleanupTempDirs(tempDirs));
 });
 
 function fixtureReadyBeforeSettlement(
@@ -89,15 +86,152 @@ async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<voi
   }
 }
 
-function runReportCli(args: string[]) {
+function runReportCli(args: string[], env = process.env) {
   return spawnSync(
     process.execPath,
     [...resolveRuntimeWorkerArgv(reportUrl, process.execPath), ...args],
     {
       cwd: process.cwd(),
       encoding: "utf8",
+      env,
     },
   );
+}
+
+function runNodeText(source: string[], options: Parameters<typeof spawnText>[2]) {
+  return spawnText(process.execPath, ["--input-type=module", "--eval", source.join("\n")], {
+    cwd: process.cwd(),
+    env: process.env,
+    ...options,
+  });
+}
+
+function runnerArgv(source: string[]) {
+  return [
+    ...resolveRuntimeWorkerArgv(reportUrl, process.execPath).slice(0, -1),
+    "--input-type=module",
+    "--eval",
+    source.join("\n"),
+  ];
+}
+
+const readPid = (file: string) =>
+  fs.existsSync(file) ? Number.parseInt(fs.readFileSync(file, "utf8"), 10) : undefined;
+
+function processFixture() {
+  const root = makeTempDir(tempDirs, "openclaw-test-group-report-");
+  const pidPath = path.join(root, "child.pid");
+  return {
+    pidPath,
+    readyPath: path.join(root, "child.ready"),
+    cleanupPath: path.join(root, "child.cleanup"),
+    childSource(setup: string[]) {
+      return [
+        "import fs from 'node:fs';",
+        fixtureReceiptClientSource(receipts.endpoint),
+        ...setup,
+        "setInterval(() => {}, 1000);",
+        `fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(pidPath)}, "ready");`,
+      ].join("\n");
+    },
+    async cleanup(signal: AbortSignal, settle: () => PromiseLike<unknown> | undefined) {
+      try {
+        await settle();
+      } finally {
+        // Recover ownership even when cancellation interrupted the readiness receipt.
+        const pid = readPid(pidPath);
+        killPidIfAlive(pid);
+        if (pid !== undefined) {
+          await waitForProcessExit(pid, signal);
+        }
+      }
+    },
+  };
+}
+
+function startRunner(source: string[]) {
+  const runner = spawn(process.execPath, runnerArgv(source), {
+    cwd: process.cwd(),
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      runner.once("error", reject);
+      runner.once("close", (code, signal) => resolve({ code, signal }));
+    },
+  );
+  return { runner, closed };
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value)}\n`, "utf8");
+}
+
+function reportPaths() {
+  const root = makeTempDir(tempDirs, "openclaw-test-group-report-");
+  const file = (name: string) => path.join(root, `${name}.json`);
+  return {
+    before: file("before"),
+    after: file("after"),
+    input: file("input"),
+    output: file("output"),
+  };
+}
+
+function emptyGroupedReport() {
+  return {
+    command: "test-group-report",
+    groupBy: "area",
+    totals: counter(0, 0, 0),
+    groups: [],
+    configs: [],
+    topFiles: [],
+    slowTests: [],
+    runs: [],
+  };
+}
+
+function expectCliFailure(args: string[], output: string, ...messages: string[]) {
+  const result = runReportCli([...args, "--output", output]);
+  expect(result.status).toBe(1);
+  for (const message of messages) {
+    expect(result.stderr).toContain(message);
+  }
+  expect(fs.existsSync(output)).toBe(false);
+}
+
+function testResult(file: string, times: [number?, number?], cases: [string, number][]) {
+  return {
+    name: path.join(process.cwd(), file),
+    startTime: times[0],
+    endTime: times[1],
+    assertionResults: cases.map(([fullName, duration]) => ({
+      fullName,
+      duration,
+      status: "passed",
+    })),
+  };
+}
+
+function runPlans(
+  root: string,
+  labels: string[],
+  flags: string[],
+  runVitestJsonReport: Parameters<typeof runReportPlans>[0]["runVitestJsonReport"],
+) {
+  return runReportPlans({
+    args: parseTestGroupReportArgs([
+      ...labels.flatMap((label) => ["--config", `${label}.config.ts`]),
+      ...flags,
+      "--no-rss",
+    ]),
+    logDir: path.join(root, "logs"),
+    reportDir: path.join(root, "reports"),
+    runPlans: labels.map((label) => ({ config: `${label}.config.ts`, forwardedArgs: [], label })),
+    runVitestJsonReport,
+  });
 }
 
 function reportRun(
@@ -115,52 +249,51 @@ function reportRun(
   };
 }
 
-afterAll(() => {
-  cleanupTempDirs(tempDirs);
+const counter = (durationMs: number, fileCount: number, testCount: number) => ({
+  durationMs,
+  fileCount,
+  testCount,
+});
+const keyedCounter = (key: string, durationMs: number, fileCount: number, testCount: number) => ({
+  key,
+  ...counter(durationMs, fileCount, testCount),
+});
+const fileCounter = (file: string, group: string, durationMs: number, testCount: number) => ({
+  config: "commands",
+  file,
+  group,
+  durationMs,
+  testCount,
+});
+const runCounter = (elapsedMs: number, rssMb: number) => ({
+  config: "test/vitest/vitest.commands.config.ts",
+  elapsedMs,
+  maxRssBytes: 1024 * 1024 * rssMb,
+  status: 0,
 });
 
-function writeGroupedReport(filePath: string) {
-  fs.writeFileSync(
-    filePath,
-    `${JSON.stringify({
-      command: "test-group-report",
-      groupBy: "area",
-      totals: { durationMs: 100, fileCount: 1, testCount: 1 },
-      groups: [
-        {
-          configs: ["unit-fast"],
-          durationMs: 100,
-          fileCount: 1,
-          key: "test/scripts",
-          testCount: 1,
-        },
-      ],
-      configs: [
-        {
-          configs: ["unit-fast"],
-          durationMs: 100,
-          fileCount: 1,
-          key: "unit-fast",
-          testCount: 1,
-        },
-      ],
-      topFiles: [
-        {
-          config: "unit-fast",
-          durationMs: 100,
-          file: "test/scripts/test-group-report.test.ts",
-          group: "test/scripts",
-          testCount: 1,
-        },
-      ],
-      slowTests: [],
-      runs: [],
-    })}\n`,
-    "utf8",
-  );
+function expectedArgs(overrides: Partial<ReturnType<typeof parseTestGroupReportArgs>>) {
+  return {
+    allowFailures: false,
+    compare: null,
+    concurrency: null,
+    configs: [],
+    fullSuite: false,
+    groupBy: "area",
+    killGraceMs: 10000,
+    limit: 25,
+    maxTestMs: null,
+    output: null,
+    reports: [],
+    rss: process.platform !== "win32",
+    timeoutMs: 1800000,
+    topFiles: 25,
+    vitestArgs: [],
+    ...overrides,
+  };
 }
 
-describe("scripts/test-group-report grouping", () => {
+describe("scripts/test-group-report", () => {
   it("groups repo files by stable product area", () => {
     expect(resolveTestArea("extensions/discord/src/send.test.ts")).toBe("extensions/discord");
     expect(resolveTestArea("src/commands/agent.test.ts")).toBe("src/commands");
@@ -176,48 +309,20 @@ describe("scripts/test-group-report grouping", () => {
     );
     expect(resolveGroupKey("extensions/browser/src/browser/pw.test.ts", "top")).toBe("extensions");
   });
-});
-
-describe("scripts/test-group-report aggregation", () => {
   it.each([false, true])("reports measured duration limits in Actions mode %s", (actions) => {
-    const root = cliTempDirs.make("openclaw-test-duration-limit-");
+    const root = makeTempDir(tempDirs, "openclaw-test-duration-limit-");
     const input = path.join(root, "input.json");
     const output = path.join(root, "output.json");
     const summary = path.join(root, "summary.md");
-    fs.writeFileSync(
-      input,
-      JSON.stringify({
-        testResults: [
-          {
-            name: path.join(process.cwd(), "src", "slow.test.ts"),
-            startTime: 0,
-            endTime: 20,
-            assertionResults: [{ duration: 20, fullName: "slow fixture", status: "passed" }],
-          },
-        ],
-      }),
-    );
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
-        "--report",
-        input,
-        "--output",
-        output,
-        "--max-test-ms",
-        "10",
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CI: "1",
-          GITHUB_ACTIONS: actions ? "true" : "",
-          GITHUB_STEP_SUMMARY: summary,
-        },
-      },
-    );
+    writeJson(input, {
+      testResults: [testResult("src/slow.test.ts", [0, 20], [["slow fixture", 20]])],
+    });
+    const result = runReportCli(["--report", input, "--output", output, "--max-test-ms", "10"], {
+      ...process.env,
+      CI: "1",
+      GITHUB_ACTIONS: actions ? "true" : "",
+      GITHUB_STEP_SUMMARY: summary,
+    });
     expect(result.status, result.stderr).toBe(actions ? 0 : 1);
     expect(result.stderr).toContain("slow fixture: 20.0ms exceeds 10.0ms");
     expect(JSON.parse(fs.readFileSync(output, "utf8")).slowTests).toHaveLength(1);
@@ -228,7 +333,7 @@ describe("scripts/test-group-report aggregation", () => {
   });
 
   it("profiles a selected test through the real Node wrapper", async () => {
-    const root = cliTempDirs.make("openclaw-test-group-report-cli-");
+    const root = makeTempDir(tempDirs, "openclaw-test-group-report-cli-");
     const output = path.join(root, "group-report.json");
     const target = "src/shared/human-list.test.ts";
     const result = await spawnText(
@@ -271,21 +376,15 @@ describe("scripts/test-group-report aggregation", () => {
           config: "test/vitest/vitest.commands.config.ts",
           report: {
             testResults: [
-              {
-                name: path.join(process.cwd(), "src", "commands", "agent.test.ts"),
-                startTime: 100,
-                endTime: 700,
-                assertionResults: [
-                  { duration: 150, fullName: "agent ok", status: "passed" },
-                  { duration: 2600, fullName: "agent slow", status: "passed" },
+              testResult(
+                "src/commands/agent.test.ts",
+                [100, 700],
+                [
+                  ["agent ok", 150],
+                  ["agent slow", 2600],
                 ],
-              },
-              {
-                name: path.join(process.cwd(), "extensions", "discord", "src", "send.test.ts"),
-                startTime: 200,
-                endTime: 450,
-                assertionResults: [{ duration: 50, fullName: "send ok", status: "passed" }],
-              },
+              ),
+              testResult("extensions/discord/src/send.test.ts", [200, 450], [["send ok", 50]]),
             ],
           },
         },
@@ -299,13 +398,7 @@ describe("scripts/test-group-report aggregation", () => {
       ["extensions/discord", 250],
     ]);
     expect(report.configs).toStrictEqual([
-      {
-        configs: ["commands"],
-        key: "commands",
-        durationMs: 850,
-        fileCount: 2,
-        testCount: 3,
-      },
+      { configs: ["commands"], ...keyedCounter("commands", 850, 2, 3) },
     ]);
     expect(report.slowTests).toStrictEqual([
       {
@@ -318,63 +411,29 @@ describe("scripts/test-group-report aggregation", () => {
     ]);
   });
 
-  it("fails missing report inputs instead of writing an empty green report", () => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const missingReport = path.join(tempDir, "missing.json");
-    const output = path.join(tempDir, "group-report.json");
-    try {
-      const result = runReportCli(["--report", missingReport, "--output", output]);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`[test-group-report] missing JSON report for missing`);
-      expect(fs.existsSync(output)).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it.each([
-    ["missing testResults array", {}],
-    ["empty testResults array", { testResults: [] }],
-  ])("fails malformed report inputs with %s", (reason, payload) => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const reportPath = path.join(tempDir, "malformed.json");
-    const output = path.join(tempDir, "group-report.json");
-    fs.writeFileSync(reportPath, `${JSON.stringify(payload)}\n`, "utf8");
-    try {
-      const result = runReportCli(["--report", reportPath, "--output", output]);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("[test-group-report] invalid JSON report for malformed");
-      expect(result.stderr).toContain(reason);
-      expect(fs.existsSync(output)).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+    { payload: undefined, errors: ["missing JSON report for input"] },
+    { payload: {}, errors: ["invalid JSON report for input", "missing testResults array"] },
+    {
+      payload: { testResults: [] },
+      errors: ["invalid JSON report for input", "empty testResults array"],
+    },
+  ])("rejects absent or malformed report inputs %#", ({ payload, errors }) => {
+    const { input, output } = reportPaths();
+    if (payload !== undefined) {
+      writeJson(input, payload);
     }
+    const [headline, ...details] = errors;
+    expectCliFailure(["--report", input], output, `[test-group-report] ${headline}`, ...details);
   });
 
   it("fails when every allow-failures run produces no JSON report", () => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const missingConfig = path.join(tempDir, "missing-vitest.config.ts");
-    const output = path.join(tempDir, "group-report.json");
-    try {
-      const result = runReportCli([
-        "--config",
-        missingConfig,
-        "--allow-failures",
-        "--no-rss",
-        "--timeout-ms",
-        "5000",
-        "--output",
-        output,
-      ]);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("[test-group-report] missing JSON report for failed config");
-      expect(fs.existsSync(output)).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    const { input, output } = reportPaths();
+    expectCliFailure(
+      ["--config", input, "--allow-failures", "--no-rss", "--timeout-ms", "5000"],
+      output,
+      "[test-group-report] missing JSON report for failed config",
+    );
   });
 
   it.each(["missing", "empty"])(
@@ -382,49 +441,27 @@ describe("scripts/test-group-report aggregation", () => {
     async (failedReport) => {
       const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
       const calls: string[] = [];
-      try {
-        const result = await runReportPlans({
-          args: parseTestGroupReportArgs([
-            "--config",
-            "failed.config.ts",
-            "--config",
-            "passed.config.ts",
-            "--allow-failures",
-            "--no-rss",
-          ]),
-          logDir: path.join(tempDir, "logs"),
-          reportDir: path.join(tempDir, "reports"),
-          runPlans: ["failed", "passed"].map((label) => ({
-            config: `${label}.config.ts`,
-            forwardedArgs: [],
-            label,
-          })),
-          runVitestJsonReport: async (params) => {
-            calls.push(params.label);
-            if (params.label === "passed" || failedReport === "empty") {
-              fs.mkdirSync(path.dirname(params.reportPath), { recursive: true });
-              fs.writeFileSync(
-                params.reportPath,
-                `${JSON.stringify({
-                  testResults: params.label === "passed" ? [{ name: "passed.test.ts" }] : [],
-                })}\n`,
-                "utf8",
-              );
-            }
-            return reportRun(params, params.label === "failed" ? 1 : 0);
-          },
-        });
-        expect(calls).toStrictEqual(["failed", "passed"]);
-        expect(result.failed).toBe(true);
-        expect(result.exitCode).toBe(0);
-        expect(result.runs.map((run) => [run.label, run.status])).toStrictEqual([
-          ["failed", 1],
-          ["passed", 0],
-        ]);
-        expect(result.runEntries.map((entry) => entry.config)).toStrictEqual(["passed"]);
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
+      const result = await runPlans(
+        tempDir,
+        ["failed", "passed"],
+        ["--allow-failures"],
+        async (params) => {
+          calls.push(params.label);
+          if (params.label === "passed" || failedReport === "empty") {
+            writeJson(params.reportPath, {
+              testResults: params.label === "passed" ? [{ name: "passed.test.ts" }] : [],
+            });
+          }
+          return reportRun(params, params.label === "failed" ? 1 : 0);
+        },
+      );
+      expect(calls).toStrictEqual(["failed", "passed"]);
+      expect(result).toMatchObject({ failed: true, exitCode: 0 });
+      expect(result.runs.map((run) => [run.label, run.status])).toStrictEqual([
+        ["failed", 1],
+        ["passed", 0],
+      ]);
+      expect(result.runEntries.map((entry) => entry.config)).toStrictEqual(["passed"]);
     },
   );
 
@@ -433,82 +470,38 @@ describe("scripts/test-group-report aggregation", () => {
     const labels = ["first", "second", "third"];
     const started: string[] = [];
     const resolvers = new Map<string, (status: number) => void>();
-    try {
-      const runPromise = runReportPlans({
-        args: parseTestGroupReportArgs([
-          ...labels.flatMap((label) => ["--config", `${label}.config.ts`]),
-          "--concurrency",
-          "2",
-          "--no-rss",
-        ]),
-        logDir: path.join(tempDir, "logs"),
-        reportDir: path.join(tempDir, "reports"),
-        runPlans: labels.map((label) => ({
-          config: `${label}.config.ts`,
-          forwardedArgs: [],
-          label,
-        })),
-        runVitestJsonReport: async (params) => {
-          started.push(params.label);
-          const status = await new Promise<number>((resolve) => {
-            resolvers.set(params.label, resolve);
-          });
-          return reportRun(params, status);
-        },
+    const runPromise = runPlans(tempDir, labels, ["--concurrency", "2"], async (params) => {
+      started.push(params.label);
+      const status = await new Promise<number>((resolve) => {
+        resolvers.set(params.label, resolve);
       });
+      return reportRun(params, status);
+    });
 
-      await vi.waitFor(() => {
-        expect(started).toStrictEqual(["first", "second"]);
-      });
-      resolvers.get("first")?.(1);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+    await vi.waitFor(() => {
       expect(started).toStrictEqual(["first", "second"]);
-      resolvers.get("second")?.(0);
+    });
+    resolvers.get("first")?.(1);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(started).toStrictEqual(["first", "second"]);
+    resolvers.get("second")?.(0);
 
-      const result = await runPromise;
-      expect(result.exitCode).toBe(1);
-      expect(result.failed).toBe(true);
-      expect(result.runs.map((run) => run.label)).toStrictEqual(["first", "second"]);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    const result = await runPromise;
+    expect(result).toMatchObject({ exitCode: 1, failed: true });
+    expect(result.runs.map((run) => run.label)).toStrictEqual(["first", "second"]);
   });
 
   it("prints slow tests as soon as each config report completes", async () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      await runReportPlans({
-        args: parseTestGroupReportArgs([
-          "--config",
-          "slow.config.ts",
-          "--max-test-ms",
-          "1000",
-          "--no-rss",
-        ]),
-        logDir: path.join(tempDir, "logs"),
-        reportDir: path.join(tempDir, "reports"),
-        runPlans: [{ config: "slow.config.ts", forwardedArgs: [], label: "slow" }],
-        runVitestJsonReport: async (params) => {
-          fs.mkdirSync(path.dirname(params.reportPath), { recursive: true });
-          fs.writeFileSync(
-            params.reportPath,
-            `${JSON.stringify({
-              testResults: [
-                {
-                  name: path.join(process.cwd(), "src", "slow.test.ts"),
-                  assertionResults: [
-                    { duration: 1250, fullName: "finishes eventually", status: "passed" },
-                  ],
-                },
-              ],
-            })}\n`,
-            "utf8",
-          );
-          return reportRun(params, 0);
-        },
+      await runPlans(tempDir, ["slow"], ["--max-test-ms", "1000"], async (params) => {
+        writeJson(params.reportPath, {
+          testResults: [testResult("src/slow.test.ts", [], [["finishes eventually", 1250]])],
+        });
+        return reportRun(params, 0);
       });
 
       expect(logSpy).toHaveBeenCalledWith(
@@ -518,78 +511,36 @@ describe("scripts/test-group-report aggregation", () => {
       );
     } finally {
       logSpy.mockRestore();
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
-});
-
-describe("scripts/test-group-report comparison", () => {
   it("compares grouped reports by group, file, config, and run metrics", () => {
     const comparison = buildGroupedTestComparison({
       beforePath: "before.json",
       afterPath: "after.json",
       before: {
         groupBy: "area",
-        totals: { durationMs: 1000, fileCount: 2, testCount: 4 },
+        totals: counter(1000, 2, 4),
         groups: [
-          { key: "src/commands", durationMs: 700, fileCount: 1, testCount: 2 },
-          { key: "extensions/discord", durationMs: 300, fileCount: 1, testCount: 2 },
+          keyedCounter("src/commands", 700, 1, 2),
+          keyedCounter("extensions/discord", 300, 1, 2),
         ],
-        configs: [{ key: "commands", durationMs: 1000, fileCount: 2, testCount: 4 }],
+        configs: [keyedCounter("commands", 1000, 2, 4)],
         topFiles: [
-          {
-            config: "commands",
-            file: "src/commands/agent.test.ts",
-            group: "src/commands",
-            durationMs: 700,
-            testCount: 2,
-          },
-          {
-            config: "commands",
-            file: "extensions/discord/src/send.test.ts",
-            group: "extensions/discord",
-            durationMs: 300,
-            testCount: 2,
-          },
+          fileCounter("src/commands/agent.test.ts", "src/commands", 700, 2),
+          fileCounter("extensions/discord/src/send.test.ts", "extensions/discord", 300, 2),
         ],
-        runs: [
-          {
-            config: "test/vitest/vitest.commands.config.ts",
-            elapsedMs: 2000,
-            maxRssBytes: 1024 * 1024 * 100,
-            status: 0,
-          },
-        ],
+        runs: [runCounter(2000, 100)],
       },
       after: {
         groupBy: "area",
-        totals: { durationMs: 900, fileCount: 2, testCount: 5 },
-        groups: [{ key: "src/commands", durationMs: 900, fileCount: 2, testCount: 5 }],
-        configs: [{ key: "commands", durationMs: 900, fileCount: 2, testCount: 5 }],
+        totals: counter(900, 2, 5),
+        groups: [keyedCounter("src/commands", 900, 2, 5)],
+        configs: [keyedCounter("commands", 900, 2, 5)],
         topFiles: [
-          {
-            config: "commands",
-            file: "src/commands/agent.test.ts",
-            group: "src/commands",
-            durationMs: 800,
-            testCount: 3,
-          },
-          {
-            config: "commands",
-            file: "src/commands/new.test.ts",
-            group: "src/commands",
-            durationMs: 100,
-            testCount: 2,
-          },
+          fileCounter("src/commands/agent.test.ts", "src/commands", 800, 3),
+          fileCounter("src/commands/new.test.ts", "src/commands", 100, 2),
         ],
-        runs: [
-          {
-            config: "test/vitest/vitest.commands.config.ts",
-            elapsedMs: 1800,
-            maxRssBytes: 1024 * 1024 * 80,
-            status: 0,
-          },
-        ],
+        runs: [runCounter(1800, 80)],
       },
     });
 
@@ -614,25 +565,13 @@ describe("scripts/test-group-report comparison", () => {
 
   it("keeps sharded run labels distinct in comparisons", () => {
     const report = (firstMs: number, secondMs: number) => ({
-      groupBy: "area",
-      totals: { durationMs: 0, fileCount: 0, testCount: 0 },
-      groups: [],
-      configs: [],
-      topFiles: [],
-      runs: [
-        {
-          config: "test/vitest/vitest.gateway-server.config.ts",
-          label: "gateway-server-1",
-          elapsedMs: firstMs,
-          status: 0,
-        },
-        {
-          config: "test/vitest/vitest.gateway-server.config.ts",
-          label: "gateway-server-2",
-          elapsedMs: secondMs,
-          status: 0,
-        },
-      ],
+      ...emptyGroupedReport(),
+      runs: [firstMs, secondMs].map((elapsedMs, index) => ({
+        config: "test/vitest/vitest.gateway-server.config.ts",
+        label: `gateway-server-${index + 1}`,
+        elapsedMs,
+        status: 0,
+      })),
     });
     const comparison = buildGroupedTestComparison({
       before: report(100, 200),
@@ -645,207 +584,100 @@ describe("scripts/test-group-report comparison", () => {
     ]);
   });
 
-  it("fails compare mode for malformed grouped reports", () => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const beforePath = path.join(tempDir, "before.json");
-    const afterPath = path.join(tempDir, "after.json");
-    const output = path.join(tempDir, "compare.json");
-    fs.writeFileSync(beforePath, "{}\n", "utf8");
-    writeGroupedReport(afterPath);
-    try {
-      const result = runReportCli(["--compare", beforePath, afterPath, "--output", output]);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("[test-group-report] invalid grouped report");
-      expect(result.stderr).toContain("command must be test-group-report");
-      expect(fs.existsSync(output)).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails compare mode for empty grouped report evidence", () => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const beforePath = path.join(tempDir, "before.json");
-    const afterPath = path.join(tempDir, "after.json");
-    const output = path.join(tempDir, "compare.json");
-    const emptyReport = {
-      command: "test-group-report",
-      groupBy: "area",
-      totals: { durationMs: 0, fileCount: 0, testCount: 0 },
-      groups: [],
-      configs: [],
-      topFiles: [],
-      slowTests: [],
-      runs: [],
-    };
-    fs.writeFileSync(beforePath, `${JSON.stringify(emptyReport)}\n`, "utf8");
-    writeGroupedReport(afterPath);
-    try {
-      const result = runReportCli(["--compare", beforePath, afterPath, "--output", output]);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("no evidence rows");
-      expect(fs.existsSync(output)).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("scripts/test-group-report arg parsing", () => {
-  it("parses repeatable config and passthrough args", () => {
-    expect(
-      parseTestGroupReportArgs([
-        "--config",
-        "a.ts",
-        "--config",
-        "b.ts",
-        "--group-by",
-        "folder",
-        "--allow-failures",
-        "--",
-        "--maxWorkers=1",
-        "--",
-        "--limit",
-        "99",
-      ]),
-    ).toStrictEqual({
-      allowFailures: true,
-      compare: null,
-      concurrency: null,
-      configs: ["a.ts", "b.ts"],
-      fullSuite: false,
-      groupBy: "folder",
-      killGraceMs: 10000,
-      limit: 25,
-      maxTestMs: null,
-      output: null,
-      reports: [],
-      rss: process.platform !== "win32",
-      timeoutMs: 1800000,
-      topFiles: 25,
-      vitestArgs: ["--maxWorkers=1", "--", "--limit", "99"],
+  it.each([
+    [{}, ["[test-group-report] invalid grouped report", "command must be test-group-report"]],
+    [emptyGroupedReport(), ["no evidence rows"]],
+  ])("rejects invalid comparison evidence %#", (payload, errors) => {
+    const { before, after, output } = reportPaths();
+    writeJson(before, payload);
+    writeJson(after, {
+      ...emptyGroupedReport(),
+      totals: counter(100, 1, 1),
+      groups: [{ configs: ["unit-fast"], ...keyedCounter("test/scripts", 100, 1, 1) }],
     });
+    expectCliFailure(["--compare", before, after], output, ...errors);
+  });
+  it.each([
+    {
+      command:
+        "--config a.ts --config b.ts --group-by folder --allow-failures -- --maxWorkers=1 -- --limit 99",
+      expected: {
+        allowFailures: true,
+        configs: ["a.ts", "b.ts"],
+        groupBy: "folder",
+        vitestArgs: ["--maxWorkers=1", "--", "--limit", "99"],
+      },
+    },
+    {
+      command: "--compare before.json after.json --limit 5 --top-files 3",
+      expected: {
+        compare: { before: "before.json", after: "after.json" },
+        limit: 5,
+        topFiles: 3,
+      },
+    },
+  ])("parses valid report arguments %#", ({ command, expected }) => {
+    expect(parseTestGroupReportArgs(command.split(" "))).toStrictEqual(expectedArgs(expected));
   });
 
-  it("parses compare mode", () => {
-    expect(
-      parseTestGroupReportArgs([
-        "--compare",
-        "before.json",
-        "after.json",
-        "--limit",
-        "5",
-        "--top-files",
-        "3",
-      ]),
-    ).toStrictEqual({
-      allowFailures: false,
-      compare: { before: "before.json", after: "after.json" },
-      concurrency: null,
-      configs: [],
-      fullSuite: false,
-      groupBy: "area",
-      killGraceMs: 10000,
-      limit: 5,
-      maxTestMs: null,
-      output: null,
-      reports: [],
-      rss: process.platform !== "win32",
-      timeoutMs: 1800000,
-      topFiles: 3,
-      vitestArgs: [],
-    });
+  it.each([
+    { command: "--help --unknown", error: "Unknown option: --unknown" },
+    { command: "--help --limit", error: "--limit requires a value" },
+    ...["--config", "--output"].flatMap((flag) => [
+      { command: `${flag} --limit 5`, error: `${flag} requires a value` },
+      { command: `${flag} -h`, error: `${flag} requires a value` },
+    ]),
+    { command: "--limit", error: "--limit requires a value" },
+    { command: "--limit --output report.json", error: "--limit requires a value" },
+    { command: "--compare before.json --limit", error: "--compare requires a value" },
+    { command: "--compare --limit 5", error: "--compare requires a value" },
+    {
+      command: "--compare before-a.json after-a.json --compare before-b.json after-b.json",
+      error: "--compare was provided more than once",
+    },
+  ])("rejects invalid report arguments $command", ({ command, error }) => {
+    expect(() => parseTestGroupReportArgs(command.split(" "))).toThrow(error);
   });
-
-  it("does not let help short-circuit later parse errors", () => {
-    expect(() => parseTestGroupReportArgs(["--help", "--unknown"])).toThrow(
-      "Unknown option: --unknown",
-    );
-    expect(() => parseTestGroupReportArgs(["--help", "--limit"])).toThrow(
-      "--limit requires a value",
-    );
-  });
-
-  it("rejects missing report path, config, and numeric option values", () => {
-    for (const flag of ["--config", "--output"]) {
-      expect(() => parseTestGroupReportArgs([flag, "--limit", "5"])).toThrow(
-        `${flag} requires a value`,
-      );
-      expect(() => parseTestGroupReportArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
-    }
-    expect(() => parseTestGroupReportArgs(["--limit"])).toThrow("--limit requires a value");
-    expect(() => parseTestGroupReportArgs(["--limit", "--output", "report.json"])).toThrow(
-      "--limit requires a value",
-    );
-    expect(() => parseTestGroupReportArgs(["--compare", "before.json", "--limit"])).toThrow(
-      "--compare requires a value",
-    );
-    expect(() => parseTestGroupReportArgs(["--compare", "--limit", "5"])).toThrow(
-      "--compare requires a value",
-    );
-  });
-
-  it("rejects duplicate comparison paths", () => {
-    expect(() =>
-      parseTestGroupReportArgs([
-        "--compare",
-        "before-a.json",
-        "after-a.json",
-        "--compare",
-        "before-b.json",
-        "after-b.json",
-      ]),
-    ).toThrow("--compare was provided more than once");
-  });
-});
-
-describe("scripts/test-group-report child process guard", () => {
   it.concurrent("kills timed wrapper process groups without orphaning the measured process", async () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
     }
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const markerPath = path.join(tempDir, "marker.txt");
-    try {
-      const result = await spawnText(
-        "/usr/bin/time",
+    const result = await spawnText(
+      "/usr/bin/time",
+      [
+        process.execPath,
+        "--input-type=module",
+        "--eval",
         [
-          process.execPath,
-          "--input-type=module",
-          "--eval",
-          [
-            "import fs from 'node:fs';",
-            "process.on('SIGTERM', () => {});",
-            `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
-          ].join("\n"),
-        ],
-        {
-          cwd: process.cwd(),
-          env: process.env,
-          killGraceMs: 25,
-          timeoutMs: 250,
-        },
-      );
+          "import fs from 'node:fs';",
+          "process.on('SIGTERM', () => {});",
+          `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 25,
+        timeoutMs: 250,
+      },
+    );
 
-      expect(result).toMatchObject({
-        status: 1,
-        timedOut: true,
-      });
-      expect(result.output).toContain("command timed out after 250ms");
-      expect(result.output).toContain("sending SIGKILL");
+    expect(result).toMatchObject({
+      status: 1,
+      timedOut: true,
+    });
+    expect(result.output).toContain("command timed out after 250ms");
+    expect(result.output).toContain("sending SIGKILL");
 
-      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 40);
-      });
-      const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-      expect(sizeAfterWait).toBe(sizeAfterReturn);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
+    const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+    expect(sizeAfterWait).toBe(sizeAfterReturn);
   });
 
   it("keeps the wrapper alive while timed process-group descendants await SIGKILL", () => {
@@ -864,32 +696,24 @@ describe("scripts/test-group-report child process guard", () => {
         `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
-      const runnerScript = [
-        `import { spawnText } from ${JSON.stringify(reportUrl.href)};`,
-        "const result = await spawnText(",
-        '  "/usr/bin/time",',
-        `  [process.execPath, "--eval", ${JSON.stringify(childScript)}],`,
-        "  { cwd: process.cwd(), env: process.env, killGraceMs: 25, timeoutMs: 500 },",
-        ");",
-        "process.stdout.write(JSON.stringify(result));",
-      ].join("\n");
       const result = spawnSync(
         process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          runnerScript,
-        ],
+        runnerArgv([
+          `import { spawnText } from ${JSON.stringify(reportUrl.href)};`,
+          "const result = await spawnText(",
+          '  "/usr/bin/time",',
+          `  [process.execPath, "--eval", ${JSON.stringify(childScript)}],`,
+          "  { cwd: process.cwd(), env: process.env, killGraceMs: 25, timeoutMs: 500 },",
+          ");",
+          "process.stdout.write(JSON.stringify(result));",
+        ]),
         {
           cwd: process.cwd(),
           encoding: "utf8",
           timeout: 5_000,
         },
       );
-      if (fs.existsSync(childPidPath)) {
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
-      }
+      childPid = readPid(childPidPath);
 
       expect(result.status).toBe(0);
       expect(result.stdout).not.toBe("");
@@ -901,7 +725,6 @@ describe("scripts/test-group-report child process guard", () => {
       expect(parsed.output).toContain("sending SIGKILL");
     } finally {
       killPidIfAlive(childPid);
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -912,21 +735,11 @@ describe("scripts/test-group-report child process guard", () => {
       return;
     }
 
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const childPidPath = path.join(tempDir, "child.pid");
-    const readyPath = path.join(tempDir, "child.ready");
-    let childPid: number | undefined;
-    let runner: ReturnType<typeof spawn> | undefined;
-    let runnerClosed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
+    const fixture = processFixture();
+    const { pidPath: childPidPath, readyPath } = fixture;
+    let started: ReturnType<typeof startRunner> | undefined;
     try {
-      const childScript = [
-        "import fs from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {});",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+      const childScript = fixture.childSource(["process.on('SIGTERM', () => {});"]);
       const parentScript = [
         "import { spawn } from 'node:child_process';",
         "import fs from 'node:fs';",
@@ -937,36 +750,20 @@ describe("scripts/test-group-report child process guard", () => {
         `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
-      const runnerScript = [
+      const runnerSource = [
         `import { spawnText } from ${JSON.stringify(reportUrl.href)};`,
         "await spawnText(",
         "  process.execPath,",
         `  ["--input-type=module", "--eval", ${JSON.stringify(parentScript)}],`,
         "  { cwd: process.cwd(), env: process.env, killGraceMs: 5_000, timeoutMs: 60_000 },",
         ");",
-      ].join("\n");
+      ];
 
-      const startedRunner = spawn(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(reportUrl, process.execPath).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          runnerScript,
-        ],
-        {
-          cwd: process.cwd(),
-          stdio: ["ignore", "ignore", "pipe"],
-        },
-      );
-      runner = startedRunner;
-      runnerClosed = new Promise((resolve, reject) => {
-        startedRunner.once("error", reject);
-        startedRunner.once("close", (code, childSignal) => resolve({ code, signal: childSignal }));
-      });
+      started = startRunner(runnerSource);
+      const { runner, closed: runnerClosed } = started;
       await withinTest(fixtureReadyBeforeSettlement(readyPath, runnerClosed), signal);
       await withinTest(fixtureReadyBeforeSettlement(childPidPath, runnerClosed), signal);
-      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      const childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
       expect(isProcessAlive(childPid)).toBe(true);
 
       runner.kill("SIGTERM");
@@ -977,25 +774,10 @@ describe("scripts/test-group-report child process guard", () => {
       });
       await waitForProcessExit(childPid, signal);
     } finally {
-      if (runner?.pid && isProcessAlive(runner.pid)) {
-        runner.kill("SIGTERM");
+      if (started?.runner.pid && isProcessAlive(started.runner.pid)) {
+        started.runner.kill("SIGTERM");
       }
-      try {
-        await runnerClosed;
-      } finally {
-        // Read ownership even if test cancellation interrupted the receipt wait.
-        childPid ??= fs.existsSync(childPidPath)
-          ? Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10)
-          : undefined;
-        killPidIfAlive(childPid);
-        try {
-          if (childPid !== undefined) {
-            await waitForProcessExit(childPid, signal);
-          }
-        } finally {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        }
-      }
+      await fixture.cleanup(signal, () => started?.closed);
     }
   });
 
@@ -1006,22 +788,16 @@ describe("scripts/test-group-report child process guard", () => {
       return;
     }
 
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const childPidPath = path.join(tempDir, "child.pid");
-    const cleanupPath = path.join(tempDir, "child.cleanup");
-    const childScript = [
-      "import fs from 'node:fs';",
-      fixtureReceiptClientSource(receipts.endpoint),
+    const fixture = processFixture();
+    const { pidPath: childPidPath, cleanupPath } = fixture;
+    const childScript = fixture.childSource([
       "process.on('SIGTERM', () => {",
       "  setTimeout(() => {",
       `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
       "    process.exit(0);",
       "  }, 25);",
       "});",
-      "setInterval(() => {}, 1000);",
-      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-      `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
-    ].join("\n");
+    ]);
     const parentScript = [
       "const { spawn } = require('node:child_process');",
       "process.on('SIGTERM', () => process.exit(0));",
@@ -1039,7 +815,6 @@ describe("scripts/test-group-report child process guard", () => {
       void operation.then(completion.resolve, completion.reject);
       return operation;
     });
-    let childPid: number | undefined;
     try {
       await withinTest(
         fixtureReadyBeforeSettlement(
@@ -1049,7 +824,7 @@ describe("scripts/test-group-report child process guard", () => {
         ),
         signal,
       );
-      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      const childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
       const startedAt = Date.now();
       const result = await withinTest(releaseAndWait(), signal);
 
@@ -1062,211 +837,107 @@ describe("scripts/test-group-report child process guard", () => {
       expect(Date.now() - startedAt).toBeLessThan(900);
       await waitForProcessExit(childPid, signal);
     } finally {
-      try {
-        await releaseAndWait();
-      } finally {
-        childPid ??= fs.existsSync(childPidPath)
-          ? Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10)
-          : undefined;
-        if (childPid !== undefined) {
-          killPidIfAlive(childPid);
-          await waitForProcessExit(childPid, signal);
-        }
-      }
+      await fixture.cleanup(signal, releaseAndWait);
     }
   });
 
-  it.concurrent("streams large child output to a log path without retaining it", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-"));
+  it.concurrent.each([
+    { mode: "large log", status: 0, message: "Maximum resident set size (kbytes): 12345" },
+    { mode: "bounded tail", status: 1, message: "output exceeded 1048576 bytes" },
+    { mode: "log cap", status: 1, message: "output log exceeded 1048576 bytes" },
+  ])("bounds child output: $mode", async ({ mode, status, message }) => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-log-");
     const logPath = path.join(tempDir, "child.log");
-    try {
-      const result = await spawnText(
-        process.execPath,
-        [
-          "--input-type=module",
-          "--eval",
-          [
-            "const chunk = Buffer.alloc(1024 * 1024, 120);",
-            "for (let index = 0; index < 65; index += 1) process.stdout.write(chunk);",
-            'process.stderr.write("Maximum resident set size (kbytes): 12345\\n");',
-          ].join("\n"),
-        ],
-        {
-          cwd: process.cwd(),
-          env: process.env,
-          killGraceMs: 50,
-          logPath,
-          outputTailBytes: 4096,
-          timeoutMs: 10_000,
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.output.length).toBeLessThan(8 * 1024);
-      expect(result.output).toContain("Maximum resident set size (kbytes): 12345");
-      expect(fs.statSync(logPath).size).toBeGreaterThan(64 * 1024 * 1024);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it.concurrent("keeps no-log child output bounded to a tail", async () => {
-    const result = await spawnText(
-      process.execPath,
+    const capped = mode === "log cap";
+    const logged = mode !== "bounded tail";
+    const result = await runNodeText(
       [
-        "--input-type=module",
-        "--eval",
-        [
-          "const chunk = Buffer.alloc(1024 * 1024, 120);",
-          "for (let index = 0; index < 3; index += 1) process.stdout.write(chunk);",
-        ].join("\n"),
+        ...(capped ? ["process.on('SIGTERM', () => {});"] : []),
+        "const chunk = Buffer.alloc(1024 * 1024, 120);",
+        capped
+          ? "setInterval(() => process.stdout.write(chunk), 1);"
+          : `for (let index = 0; index < ${logged ? 65 : 3}; index += 1) process.stdout.write(chunk);`,
+        ...(mode === "large log"
+          ? ['process.stderr.write("Maximum resident set size (kbytes): 12345\\n");']
+          : []),
       ],
       {
-        cwd: process.cwd(),
-        env: process.env,
         killGraceMs: 50,
-        maxBufferBytes: 1024 * 1024,
+        ...(logged ? { logPath } : { maxBufferBytes: 1024 * 1024 }),
+        ...(capped ? { maxLogBytes: 1024 * 1024 } : {}),
         outputTailBytes: 4096,
         timeoutMs: 10_000,
       },
     );
-
-    expect(result.status).toBe(1);
-    expect(result.output.length).toBeLessThan(8 * 1024);
-    expect(result.output).toContain("output exceeded 1048576 bytes");
-  });
-
-  it.concurrent("stops streamed child output after the configured log cap", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-cap-"));
-    const logPath = path.join(tempDir, "child.log");
-    try {
-      const result = await spawnText(
-        process.execPath,
-        [
-          "--input-type=module",
-          "--eval",
-          [
-            "process.on('SIGTERM', () => {});",
-            "const chunk = Buffer.alloc(1024 * 1024, 120);",
-            "setInterval(() => process.stdout.write(chunk), 1);",
-          ].join("\n"),
-        ],
-        {
-          cwd: process.cwd(),
-          env: process.env,
-          killGraceMs: 50,
-          logPath,
-          maxLogBytes: 1024 * 1024,
-          outputTailBytes: 4096,
-          timeoutMs: 10_000,
-        },
-      );
-
-      expect(result.status).toBe(1);
+    expect(result.status).toBe(status);
+    expect(result.output).toContain(message);
+    if (capped) {
       expect(result.signal).toBe("SIGKILL");
-      expect(result.output).toContain("output log exceeded 1048576 bytes");
       expect(fs.statSync(logPath).size).toBeLessThan(2 * 1024 * 1024);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+    } else {
+      expect(result.output.length).toBeLessThan(8 * 1024);
+      if (logged) {
+        expect(fs.statSync(logPath).size).toBeGreaterThan(64 * 1024 * 1024);
+      }
     }
   });
-});
-
-describe("scripts/test-group-report run plans", () => {
   let serialFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
   let parallelFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
 
   beforeAll(() => {
-    withEnv(
+    const fullSuite = () => resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+    serialFullSuitePlans = withEnv(
       {
         OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
       },
-      () => {
-        serialFullSuitePlans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
-      },
+      fullSuite,
     );
-    withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, () => {
-      parallelFullSuitePlans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
-    });
+    parallelFullSuitePlans = withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, fullSuite);
   });
 
-  it("isolates full-suite duration reports by default", () => {
-    expect(resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite"]))).toEqual([
-      "--isolate=true",
-    ]);
-    expect(
-      resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite", "--", "--maxWorkers=1"])),
-    ).toEqual(["--maxWorkers=1", "--isolate=true"]);
+  it.each([
+    [["--full-suite"], ["--isolate=true"]],
+    [
+      ["--full-suite", "--", "--maxWorkers=1"],
+      ["--maxWorkers=1", "--isolate=true"],
+    ],
+    [["--full-suite", "--", "--no-isolate"], ["--no-isolate"]],
+    [["--full-suite", "--", "--isolate=false"], ["--isolate=false"]],
+    [["--config", "a.ts"], []],
+  ])("resolves report isolation for %j", (args, expected) => {
+    expect(resolveReportVitestArgs(parseTestGroupReportArgs(args))).toEqual(expected);
   });
 
-  it("preserves explicit full-suite isolation choices and explicit-config defaults", () => {
+  it.each([
+    { env: {}, config: undefined, expected: { OPENCLAW_VITEST_MAX_WORKERS: "2" } },
+    { env: {}, config: "commands", expected: { OPENCLAW_VITEST_MAX_WORKERS: "1" } },
+    { env: { OPENCLAW_VITEST_MAX_WORKERS: "2" }, config: undefined, expected: {} },
+    { env: { OPENCLAW_TEST_WORKERS: "2" }, config: undefined, expected: {} },
+  ])("resolves profiling worker budget %#", ({ env, config, expected }) => {
     expect(
-      resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite", "--", "--no-isolate"])),
-    ).toEqual(["--no-isolate"]);
-    expect(
-      resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite", "--", "--isolate=false"])),
-    ).toEqual(["--isolate=false"]);
-    expect(resolveReportVitestArgs(parseTestGroupReportArgs(["--config", "a.ts"]))).toEqual([]);
+      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), env, config),
+    ).toEqual(expected);
   });
 
-  it("caps Vitest workers for full-suite profiling by default", () => {
-    expect(resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {})).toEqual({
-      OPENCLAW_VITEST_MAX_WORKERS: "2",
-    });
-  });
-
-  it("uses a serial worker budget for commands full-suite profiling", () => {
-    expect(
-      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {}, "commands"),
-    ).toEqual({
-      OPENCLAW_VITEST_MAX_WORKERS: "1",
-    });
-  });
-
-  it("preserves explicit Vitest worker budgets for full-suite profiling", () => {
-    expect(
-      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {
-        OPENCLAW_VITEST_MAX_WORKERS: "2",
-      }),
-    ).toEqual({});
-    expect(
-      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {
-        OPENCLAW_TEST_WORKERS: "2",
-      }),
-    ).toEqual({});
-  });
-
-  it("parallelizes repeated explicit configs but keeps full-suite profiling serial by default", () => {
-    expect(
-      resolveRunPlanConcurrency(parseTestGroupReportArgs(["--config", "a", "--config", "b"]), 2),
-    ).toBe(2);
-    expect(resolveRunPlanConcurrency(parseTestGroupReportArgs(["--full-suite"]), 8)).toBe(1);
-    expect(
-      resolveRunPlanConcurrency(
-        parseTestGroupReportArgs(["--full-suite", "--concurrency", "3"]),
-        8,
-      ),
-    ).toBe(3);
-    expect(resolveRunPlanConcurrency(parseTestGroupReportArgs(["--concurrency", "9"]), 2)).toBe(2);
+  it.each([
+    { args: ["--config", "a", "--config", "b"], plans: 2, expected: 2 },
+    { args: ["--full-suite"], plans: 8, expected: 1 },
+    { args: ["--full-suite", "--concurrency", "3"], plans: 8, expected: 3 },
+    { args: ["--concurrency", "9"], plans: 2, expected: 2 },
+  ])("caps report concurrency for $args", ({ args, plans, expected }) => {
+    expect(resolveRunPlanConcurrency(parseTestGroupReportArgs(args), plans)).toBe(expected);
   });
 
   it("isolates Vitest filesystem module caches for parallel report configs", () => {
-    const args = parseTestGroupReportArgs([
-      "--config",
-      "a.ts",
-      "--config",
-      "b.ts",
-      "--config",
-      "a.ts",
-    ]);
+    const plans = [
+      { config: "a.ts", forwardedArgs: [], label: "a" },
+      { config: "b.ts", forwardedArgs: [], label: "b" },
+      { config: "a.ts", forwardedArgs: [], label: "a-again" },
+    ];
     const specs = resolveReportRunSpecs(
-      args,
-      [
-        { config: "a.ts", forwardedArgs: [], label: "a" },
-        { config: "b.ts", forwardedArgs: [], label: "b" },
-        { config: "a.ts", forwardedArgs: [], label: "a-again" },
-      ],
+      parseTestGroupReportArgs(plans.flatMap(({ config }) => ["--config", config])),
+      plans,
       { cwd: "/repo", env: {} },
     );
 

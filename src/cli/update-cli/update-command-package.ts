@@ -57,6 +57,7 @@ import {
   runUpdateStep,
   UpdatePreMutationError,
 } from "./shared.js";
+import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import {
   createUpdateConfigSnapshot,
   captureUpdateConfigSnapshot,
@@ -82,6 +83,7 @@ type PackageDoctorContext = {
 
 type PackageDoctorOptions = {
   root: string;
+  fullIntegrityCheck?: boolean;
   restart?: boolean;
   timeoutMs?: number;
   /** Null leaves forward work unbounded; omission retains the caller's timeout. */
@@ -135,11 +137,29 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       "--doctor",
     ];
   } else {
+    const fullIntegrityCheck =
+      params.fullIntegrityCheck &&
+      (
+        await readUpdateTargetCliOptions(
+          {
+            nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
+            entryPath,
+            command: "doctor",
+          },
+          { cwd: params.root, baseEnv: doctorEnv, timeoutMs: params.timeoutMs },
+        )
+      ).has("--full-integrity-check");
+    // Older candidates already check fully and reject the new option.
     const invocation = resolveOpenClawCliInvocation({
       execPath: params.nodeRunner ?? resolveNodeRunner(),
       entryPath,
       execArgv: [],
-      args: ["doctor", "--non-interactive", ...(doctorPolicy.fix ? ["--fix"] : [])],
+      args: [
+        "doctor",
+        "--non-interactive",
+        ...(doctorPolicy.fix ? ["--fix"] : []),
+        ...(fullIntegrityCheck ? ["--full-integrity-check"] : []),
+      ],
     });
     doctorArgv = [invocation.command, ...invocation.args];
   }
@@ -216,6 +236,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
               input: {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
+                fullIntegrityCheck: params.fullIntegrityCheck,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
                 databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,

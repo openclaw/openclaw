@@ -7,11 +7,11 @@ import {
   editChannelMessage,
   getChannel,
   getChannelMessage,
-  isUnknownDiscordMessageError,
   pinChannelMessage,
   unpinChannelMessage,
-} from "./internal/discord.js";
+} from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
+import { isUnknownDiscordMessageError } from "./internal/rest-errors.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import {
   classifyDiscordDeliveryFailure,

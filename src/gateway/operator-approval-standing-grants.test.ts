@@ -186,7 +186,6 @@ function seedCronJob(
       job: loadedJob,
       agentId: "main",
       startedAtMs: NOW_MS,
-      observed: undefined,
     });
     receipts.set(
       databaseOptions,

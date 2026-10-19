@@ -2,11 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentToolsSandboxContext } from "../../agents/test-helpers/agent-tools-sandbox-context.js";
-import {
-  createSilentIdleArgv,
-  createStubChildAdapter,
-  spawnChild,
-} from "./supervisor.test-support.js";
+import { createStubChildAdapter } from "./supervisor.test-support.js";
 
 const { createChildAdapterMock, createPtyAdapterMock, getProcessSupervisorMock } = vi.hoisted(
   () => ({
@@ -99,13 +95,14 @@ describe("one-shot tool-generation process cleanup", () => {
       const cleanup = prepareOneShotTools(scopeKey, generationCleanups);
       const externalRun = await supervisor.spawn({
         mode: "child",
-        argv: createSilentIdleArgv(),
+        argv: ["fixture"],
         scopeKey,
         cleanupOwnership: "external",
       });
-      const hostRun = await spawnChild(supervisor, {
+      const hostRun = await supervisor.spawn({
+        mode: "child",
         scopeKey,
-        argv: createSilentIdleArgv(),
+        argv: ["fixture"],
       });
       expect(createChildAdapterMock.mock.calls[0]?.[0].ownProcessTree).toBeUndefined();
       expect(createChildAdapterMock.mock.calls[1]?.[0].ownProcessTree).toBe(true);

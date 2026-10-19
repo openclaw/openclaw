@@ -3,6 +3,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it } from "vitest";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -16,6 +21,8 @@ afterEach(() => {
 });
 
 function harness() {
+  registerAgentRunContext("model-wait-test", {});
+  cleanups.push(() => clearAgentRunContext("model-wait-test"));
   const statuses: Array<Record<string, unknown>> = [];
   const delivered: Array<Record<string, unknown>> = [];
   cleanups.push(
@@ -69,10 +76,12 @@ it("clears wait on the first stream event and admits another wait on a later cal
   const first = await h.start();
   const firstCall = expectDefined(h.calls[0], "first call");
   firstCall.report("response");
+  expect(getAgentRunContext("model-wait-test")?.localModelWait).toEqual({ requestId: "call-1" });
   firstCall.report("response");
   firstCall.stream.push({ type: "start", partial: makeAssistantMessageFixture() });
   const iterator = first[Symbol.asyncIterator]();
   await iterator.next();
+  expect(getAgentRunContext("model-wait-test")?.localModelWait).toBeUndefined();
   firstCall.report("slot");
   firstCall.stream.end(makeAssistantMessageFixture());
   await first.result();
@@ -113,6 +122,7 @@ it.each(["abort", "failure", "completion"] as const)(
       }),
     );
     await result.result();
+    expect(getAgentRunContext("model-wait-test")?.localModelWait).toBeUndefined();
     call.report("slot");
     expect(h.statuses).toEqual([
       { phase: "waiting_for_model", reason: "response" },

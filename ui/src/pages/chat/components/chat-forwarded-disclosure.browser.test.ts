@@ -175,7 +175,7 @@ it("keeps a forwarded stream open until final while collapsing prior messages", 
     .toBe(true);
 });
 
-it("rechecks wrapped content when the transcript width changes", async () => {
+it("rechecks retained content when the transcript width or message text changes", async () => {
   const { group, draw } = fixture("assistant", 1000);
   group.messages = [
     {
@@ -201,6 +201,10 @@ it("rechecks wrapped content when the transcript width changes", async () => {
   host.style.width = "1000px";
   await expect.poll(() => toggle.hidden).toBe(true);
   expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
+  group.messages[0]!.message = { role: "assistant", content: longText };
+  draw();
+  expect(host.querySelector(".chat-message-disclosure__content")).toBe(content);
+  await expect.poll(() => toggle.hidden).toBe(false);
 });
 
 it.each([

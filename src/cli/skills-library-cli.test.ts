@@ -218,8 +218,33 @@ describe("skills library CLI", () => {
     expect(mocks.call).not.toHaveBeenCalled();
   });
 
+  it("imports a directory named x.zip as a complete bundle", async () => {
+    const bundle = path.join(directory, "x.zip");
+    await fs.mkdir(bundle);
+    const content = "---\nname: checklist\ndescription: Checklist\n---\nCheck it.\n";
+    await fs.writeFile(path.join(bundle, "SKILL.md"), content);
+    await fs.writeFile(path.join(bundle, "notes.txt"), "Keep these notes.\r\n");
+    await parse(["import", bundle, "--slug", "checklist", "--json"]);
+    expect(mocks.call).toHaveBeenCalledExactlyOnceWith(
+      "skills.library.save",
+      expect.anything(),
+      expect.objectContaining({
+        content,
+        files: [
+          {
+            path: "notes.txt",
+            content: Buffer.from("Keep these notes.\r\n").toString("base64"),
+            encoding: "base64",
+            executable: false,
+          },
+        ],
+      }),
+      undefined,
+    );
+  });
+
   it("uses private upload begin/chunk/commit for ZIP imports", async () => {
-    const zip = path.join(directory, "bundle.zip");
+    const zip = path.join(directory, "bundle.ZIP");
     const bytes = Buffer.from([80, 75, 3, 4, 1]);
     await fs.writeFile(zip, bytes);
     mocks.call.mockImplementation(async (_method, _opts, params) =>

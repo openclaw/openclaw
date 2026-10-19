@@ -25,9 +25,9 @@ import {
   recordSkillUsed,
 } from "../agent-tools.before-tool-call.diagnostics.js";
 import {
-  createSkillInstructionDeliveryCache,
   createSkillInstructionDeliveryMarkers,
   wrapReadToolWithSkillContent,
+  type SkillInstructionDeliveryCache,
 } from "../agent-tools.read.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { ReadToolDetails } from "../sessions/tools/index.js";
@@ -108,7 +108,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
   function wrapLocalReadTool(
     prepared: Awaited<ReturnType<typeof prepareLocalRun>>,
     workspace: string,
-    instructionDeliveryCache: ReturnType<typeof createSkillInstructionDeliveryCache>,
+    instructionDeliveryCache: SkillInstructionDeliveryCache,
     instructionDeliveryMarkers: ReturnType<typeof createSkillInstructionDeliveryMarkers>,
   ) {
     const locator = resolveSkillReadPath(
@@ -216,7 +216,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       // loaded-bundle fingerprint by lookup — no tree walk at delivery — the
       // marker rides the invocation, and the emission consumes that marker
       // rather than the current snapshot.
-      const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+      const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
       const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
       const { locator, read } = wrapLocalReadTool(
         prepared,
@@ -268,7 +268,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       ).toBe(true);
       // Ordinary local skills still load and serve; only the identity is
       // absent, and a successful delivery settles with accounting intact.
-      const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+      const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
       const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
       const { locator, read } = wrapLocalReadTool(
         prepared,
@@ -304,7 +304,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       const loaded = entry.bundleFingerprint;
       expect(loaded).toBeTypeOf("string");
       readSkillBundleTreeSpy.mockClear();
-      const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+      const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
       const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
       const { locator, read } = wrapLocalReadTool(
         prepared,
@@ -485,7 +485,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     await writePondSkill(workspace);
     const prepared = await prepareLocalRun(workspace);
     try {
-      const instructionDeliveryCache = createSkillInstructionDeliveryCache();
+      const instructionDeliveryCache: SkillInstructionDeliveryCache = new Map();
       const instructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
       const { locator, read } = wrapLocalReadTool(
         prepared,

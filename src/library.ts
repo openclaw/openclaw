@@ -1,14 +1,7 @@
 // Public library facade for consumers embedding OpenClaw reply runtime APIs.
 import type { getReplyFromConfig as getReplyFromConfigRuntime } from "./auto-reply/reply.runtime.js";
-import "./auto-reply/templating.js";
-import "./cli/deps.js";
 import type { promptYesNo as promptYesNoRuntime } from "./cli/prompt.js";
-import "./cli/wait.js";
-import "./config/config.js";
-import "./config/sessions/paths.js";
-import "./config/sessions/session-key.js";
 import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
-import "./infra/ports.js";
 import type { monitorWebChannel as monitorWebChannelRuntime } from "./plugins/runtime/runtime-web-channel-plugin.js";
 import type {
   runCommandWithTimeout as runCommandWithTimeoutRuntime,

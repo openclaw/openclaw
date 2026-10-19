@@ -53,6 +53,10 @@ it.each([
 it.each([
   { file: "state/openclaw-state-read-value-abcdefgh.mjs", independent: true },
   { file: "infra/sqlite-readonly-value-abcdefgh.mjs", independent: true },
+  { file: "plugins/plugin-generation-preparation.worker.js", independent: true },
+  { file: "plugins/plugin-preparation-value-abcdefgh.mjs", independent: true },
+  { file: "process/spawn-broker/worker.js", independent: true },
+  { file: "plugins/runtime-value-abcdefgh.mjs", independent: false },
   { file: "state/runtime-value-abcdefgh.mjs", independent: false },
   { file: "infra/runtime-value-abcdefgh.mjs", independent: false },
 ])("resolves updater ownership beside $file", async ({ file, independent }) => {

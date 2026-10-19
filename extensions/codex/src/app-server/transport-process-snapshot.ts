@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { closeSync, constants, openSync, readSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
+import {
+  DarwinProcessInspectionError,
+  readDarwinProcessSnapshot,
+  readDarwinProcessTree,
+  readDarwinProcessCommandLine,
+} from "openclaw/plugin-sdk/process-runtime";
 
 export type PosixProcess = {
   pid: number;
@@ -69,9 +75,10 @@ export class ProcessInspectionError extends Error {
   constructor(readonly reason: "deadline" | "permission" | "unavailable") {
     const detail = {
       deadline: "Process inspection exceeded its deadline. Retry when the host is responsive.",
-      permission: "Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
+      permission:
+        "Check process inspection permissions (/proc on Linux, native process inspection on macOS), then retry.",
       unavailable:
-        "Process identity is unavailable or invalid. Check /proc on Linux or ps on macOS, then retry.",
+        "Process identity is unavailable or invalid. Check /proc on Linux or native process inspection on macOS, then retry.",
     }[reason];
     super(`Cannot inspect Codex processes. ${detail}`);
     this.name = "ProcessInspectionError";
@@ -90,6 +97,9 @@ function remainingInspectionTime(deadline: number): number {
 }
 
 function inspectionFailure(error: unknown): ProcessInspectionError {
+  if (error instanceof DarwinProcessInspectionError) {
+    return new ProcessInspectionError(error.reason);
+  }
   if (error instanceof ProcessInspectionError) {
     return error;
   }
@@ -116,12 +126,18 @@ function isMissingProcess(error: unknown): boolean {
 export async function readCodexAppServerProcessSnapshot(
   deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS,
   pids?: readonly number[],
+  treeRoots?: readonly number[],
 ): Promise<PosixProcess[]> {
   // Registration proves only known owners. Containment still needs the full tree.
   // Include the observer so an empty selected ps result cannot prove disappearance.
   const selected = pids === undefined ? undefined : [...new Set([process.pid, ...pids])];
-  const rows = await readProcesses(selected, deadline, selected !== undefined);
-  if (selected && !rows.some((row) => row.pid === process.pid)) {
+  const rows =
+    treeRoots && process.platform === "darwin"
+      ? await readDarwinProcessTree(deadline, treeRoots).catch((error: unknown) => {
+          throw inspectionFailure(error);
+        })
+      : await readProcesses(selected, deadline, selected !== undefined);
+  if ((selected || treeRoots) && !rows.some((row) => row.pid === process.pid)) {
     throw new ProcessInspectionError("unavailable");
   }
   return rows;
@@ -168,6 +184,10 @@ export async function readCodexAppServerProcessCommand(
         await setImmediate();
       }
     } while (pending);
+  } else if (process.platform === "darwin") {
+    output = await readDarwinProcessCommandLine(observed.pid, deadline).catch((error: unknown) => {
+      throw inspectionFailure(error);
+    });
   } else {
     output =
       (
@@ -193,6 +213,21 @@ function readProcesses(
 ): Promise<PosixProcess[]> {
   if (process.platform === "linux") {
     return readLinuxProcesses(pids, deadline);
+  }
+  if (process.platform === "darwin") {
+    return readDarwinProcessSnapshot(deadline, pids)
+      .then((rows) =>
+        rows.map(({ pid, ppid, pgid, state, startedAt }) => ({
+          pid,
+          ppid,
+          pgid,
+          state,
+          startedAt,
+        })),
+      )
+      .catch((error: unknown) => {
+        throw inspectionFailure(error);
+      });
   }
   const args = pids ? ["-o", PROCESS_COLUMNS, "-p", pids.join(",")] : ["-axo", PROCESS_COLUMNS];
   return readProcessOutput({ kind: "ps", args }, deadline).then((output) =>

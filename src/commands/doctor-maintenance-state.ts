@@ -147,6 +147,7 @@ export async function createDoctorMaintenanceState(options: {
       resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
+        sqliteIntegrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
         assertDatabaseAccess: acquired.assertDatabaseAccess,
         assertOwnerCurrent: (access) => {
           acquired.assertCurrent(() => {
@@ -204,7 +205,9 @@ export async function createDoctorMaintenanceState(options: {
     },
     run<T>(operation: () => T): T {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
-      return resources!.run(() => inspections!.run(operation));
+      return resources!.run(() =>
+        inspections!.run(() => (capture ? capture.run(operation) : operation())),
+      );
     },
     async acquire() {
       if (resources) {
@@ -222,6 +225,7 @@ export async function createDoctorMaintenanceState(options: {
           ...params,
           assertCurrent: options.assertCurrent,
           deadlineMs: options.deadline(),
+          signal: options.signal,
         },
       );
       await enterResources(acquired);
@@ -269,7 +273,7 @@ export async function createDoctorMaintenanceState(options: {
       await state.acquire();
       if (migration) {
         const { loadDotEnv } = await import("../infra/dotenv.js");
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
         const result = migration.result;
         for (const change of [...result.changes, ...(result.notices ?? [])]) {
           params.runtime.log(sanitizeDoctorNote(change));
@@ -297,6 +301,7 @@ export async function createDoctorMaintenanceState(options: {
             paths,
             stateDir,
             env: selectedEnv,
+            log: (message) => params.runtime.log(sanitizeDoctorNote(message)),
             assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });

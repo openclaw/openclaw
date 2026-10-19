@@ -252,9 +252,6 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
             rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
           }
         }
-        params.logVerbose(
-          `Hydrated ${Object.keys(groups ?? {}).length} participating groups on connect`,
-        );
       } catch (error) {
         const formatted = String(error);
         params.logHydrationWarning(formatted);

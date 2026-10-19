@@ -2,6 +2,7 @@
 import "../../test/host.setup.ts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
+import { getWorkboardDependencyState } from "./card-state.ts";
 import { getWorkboardLifecycle } from "./lifecycle.ts";
 import { loadWorkboard, refreshWorkboard } from "./loading.ts";
 import { moveWorkboardCard, updateWorkboardCardProperties } from "./mutations.ts";
@@ -22,6 +23,51 @@ describe("Workboard native owners", () => {
     expect(await loadWorkboard({ host, client })).toBe(true);
     expect(getWorkboardState(host).cards).toEqual([card]);
     expect(client.request.mock.calls.map(([method]) => method)).toEqual(["workboard.cards.list"]);
+  });
+
+  it("loads another bounded page on demand and refreshes the held window", async () => {
+    const host = {};
+    const first = createWorkboardCard();
+    const second = createWorkboardCard({ id: "card-2", position: 2000 });
+    const cursor = { id: first.id, position: first.position, createdAt: first.createdAt };
+    let firstTitle = first.title;
+    const client = createWorkboardTestClient((_method, params) => {
+      // SAFETY: this fixture receives only the cards-list request shape.
+      const input = params as { after?: typeof cursor };
+      return input.after
+        ? { cards: [second], boards: [] }
+        : { cards: [{ ...first, title: firstTitle }], boards: [], nextCursor: cursor };
+    });
+    await loadWorkboard({ host, client });
+    const state = getWorkboardState(host);
+    expect(state.cards).toHaveLength(1);
+    expect(state.nextCursor).toEqual(cursor);
+    await loadWorkboard({ host, client, more: true });
+    expect(state.cards.map((card) => card.id)).toEqual([first.id, second.id]);
+    expect(state.nextCursor).toBeNull();
+    firstTitle = "Fresh title";
+    await refreshWorkboard({ host, client, source: "manual" });
+    expect(state.cards.map((card) => card.title)).toEqual([firstTitle, second.title]);
+    expect(state.nextCursor).toBeNull();
+  });
+
+  it("does not mark a dependency outside the loaded page missing or block its card", () => {
+    const card = createWorkboardCard({
+      metadata: {
+        links: [
+          {
+            id: "parent-link",
+            type: "parent",
+            targetCardId: "not-loaded",
+            createdAt: 1,
+          },
+        ],
+      },
+    });
+    const partial = getWorkboardDependencyState(card, [card], false);
+    expect(partial.parents).toEqual([expect.objectContaining({ missing: false })]);
+    expect(partial.blockedParents).toEqual([]);
+    expect(getWorkboardDependencyState(card, [card]).blockedParents).toHaveLength(1);
   });
 
   it("refreshes server diagnostics before reading cards", async () => {

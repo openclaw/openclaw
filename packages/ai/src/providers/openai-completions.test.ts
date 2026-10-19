@@ -1122,7 +1122,18 @@ describe("openai-completions stop-reason tool-call guard", () => {
     const stream = streamOpenAICompletions(
       model,
       {
+        tools: [{ name: "session_status", description: "Status", parameters: { type: "object" } }],
         messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            content: [{ type: "toolCall", id: "call_1", name: "session_status", arguments: {} }],
+            usage: createZeroUsage(),
+            stopReason: "toolUse",
+            timestamp: 0,
+          },
           {
             role: "toolResult",
             toolCallId: "call_1",

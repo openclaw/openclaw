@@ -1,5 +1,4 @@
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 const injectionQueues = resolveGlobalSingleton(
@@ -78,27 +77,14 @@ export async function withMessageInjectionAdmission<T>(
   }
 }
 
-/** Order preparation on the captured backend; release before awaiting delivery. */
-export function enqueueMessageInjection<T>(
-  backend: object,
-  run: (release: () => void) => Promise<T>,
-): Promise<T> {
+/** Order preparation on the captured backend. */
+export function enqueueMessageInjection<T>(backend: object, run: () => Promise<T>): Promise<T> {
   let queue = injectionQueues.get(backend);
   if (!queue) {
     queue = new KeyedAsyncQueue();
     injectionQueues.set(backend, queue);
   }
-  const result = createDeferredCore<T>();
-  void queue
-    .enqueue(
-      "input",
-      () =>
-        new Promise<void>((release) => {
-          void run(release).then(result.resolve, result.reject).finally(release);
-        }),
-    )
-    .catch(result.reject);
-  return result.promise;
+  return queue.enqueue("input", run);
 }
 
 /** A refused owner assertion is terminal for this input, not permission to redispatch it. */
@@ -106,6 +92,15 @@ export class MessageInjectionAuthorityError extends Error {
   constructor(options?: ErrorOptions) {
     super("Message injection authority is no longer current", options);
     this.name = "MessageInjectionAuthorityError";
+  }
+}
+
+/** The input belongs to another requester and may be admitted as a separate turn. */
+export class MessageInjectionRequesterMismatchError extends Error {
+  override name = "MessageInjectionRequesterMismatchError";
+
+  constructor() {
+    super("Steering requires the active turn's authenticated requester");
   }
 }
 

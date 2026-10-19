@@ -29,7 +29,6 @@ function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<
 }
 
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
-import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import {
   createCodexNativeWebSearchWrapper,
@@ -42,6 +41,7 @@ import {
   createOpenAIThinkingLevelWrapper,
   resolveOpenAITextVerbosity,
 } from "../llm/providers/stream-wrappers/openai.js";
+import { createGoogleThinkingPayloadWrapper } from "../plugin-sdk/provider-stream-shared.js";
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,

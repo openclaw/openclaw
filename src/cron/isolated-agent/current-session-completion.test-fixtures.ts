@@ -13,7 +13,7 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import { managedImageRecordOperations } from "../../gateway/managed-image-record-store.kernel.js";
+import { managedImageRecordReadOperations } from "../../gateway/managed-image-record-store.kernel.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -109,9 +109,9 @@ export async function createCompletionFixture(
     }
     updates += 1;
     // Observe records at publication, before a wrongly late write could make the test pass.
-    const entries = managedImageRecordOperations["managedImages.entries"](
+    const { entries } = managedImageRecordReadOperations["managedImages.entries"](
       { sessionKey },
-      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
+      database.db,
     );
     for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({

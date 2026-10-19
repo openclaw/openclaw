@@ -2,7 +2,19 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
+import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { CronJob, CronRunStatus } from "../types.js";
+
+/** Only explicit conversation continuations can rearm a one-shot through next_check. */
+export function isCronOneShotContinuationJob(
+  job: Pick<CronJob, "schedule" | "payload" | "sessionTarget">,
+): boolean {
+  return (
+    job.schedule.kind === "at" &&
+    job.payload.kind === "agentTurn" &&
+    resolveCronSessionTargetSessionKey(job.sessionTarget) !== undefined
+  );
+}
 
 /** A manual run may retain the authored one-shot even while it has no runnable slot. */
 export function resolveForcePreservedOneShotAtMs(job: CronJob): number | undefined {

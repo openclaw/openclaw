@@ -1,20 +1,21 @@
-import { createMemo, untrack } from "@solidjs/signals";
+import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { BrowserPanelTabs } from "./browser-panel-tabs.tsx";
 
 registerEnglishCatalog(registerBrowserEnglish);
 export type BrowserPanelDock = "bottom" | "right";
-type ControllerProps = { controller: BrowserPanelController };
+type ControllerProps = { controller: BrowserPanel };
 
 function BrowserIconButton(props: {
   label: string;
@@ -98,6 +99,12 @@ function HeaderActions(
 }
 
 function Toolbar(props: ControllerProps & { embedded: boolean }) {
+  onSettled(() => {
+    const controller = props.controller;
+    return () => {
+      controller.addressInput = undefined;
+    };
+  });
   const nativeTab = createMemo(() => props.controller.native.activeTab);
   const hasView = createMemo(() => Boolean(nativeTab() || props.controller.view));
   return (
@@ -148,6 +155,7 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
       />
       <input
         class="bp-url"
+        ref={(element) => (props.controller.addressInput = element)}
         type="text"
         spellcheck="false"
         autocomplete="off"
@@ -306,7 +314,7 @@ function InspectTooltip(props: ControllerProps) {
 function NativeViewport(props: ControllerProps) {
   let stage!: HTMLDivElement;
   // Native geometry retains this viewport’s synchronous presentation owner.
-  onSettled(() => untrack(() => props.controller.native.presentation).mountStage(stage));
+  onSettled(() => props.controller.native.presentation.mountStage(stage));
   return (
     <div
       ref={(element) => (stage = element)}
@@ -323,6 +331,12 @@ function NativeViewport(props: ControllerProps) {
 }
 
 function ViewportContent(props: ControllerProps) {
+  const remoteInput = () =>
+    props.controller.native.activeTab ? undefined : props.controller.input;
+  onSettled(() => {
+    const input = props.controller.input;
+    return () => (input.elements = {});
+  });
   return (
     <Switch>
       <Match
@@ -370,13 +384,14 @@ function ViewportContent(props: ControllerProps) {
         />
       </Match>
       <Match when={Boolean(props.controller.view)}>
-        <div class="bp-stage">
+        <div class="bp-stage" ref={(element) => (props.controller.input.elements.stage = element)}>
           <img
             class="bp-shot"
             src={props.controller.view!.dataUrl}
             alt={props.controller.view?.metrics?.title || ""}
           />
           <canvas
+            ref={(element) => (props.controller.input.elements.overlay = element)}
             class={[
               "bp-overlay",
               {
@@ -384,7 +399,7 @@ function ViewportContent(props: ControllerProps) {
                 "bp-overlay--inspect": props.controller.mode === "inspect",
               },
             ]}
-            onClick={(event) => props.controller.handleStageClick(event)}
+            onClick={(event) => remoteInput()?.handleStageClick(event)}
             onPointerDown={(event) => props.controller.input.handleOverlayPointerDown(event)}
             onPointerMove={(event) => props.controller.handleOverlayPointerMove(event)}
             onPointerUp={(event) => props.controller.input.handleOverlayPointerUp(event)}
@@ -393,14 +408,15 @@ function ViewportContent(props: ControllerProps) {
           />
           {props.controller.mode === "interact" ? (
             <textarea
+              ref={(element) => (props.controller.input.elements.input = element)}
               class="bp-overlay bp-input"
               aria-label={t("browser.inputLabel")}
               autocomplete="off"
               autocorrect="off"
               autocapitalize="off"
               spellcheck="false"
-              onClick={(event) => props.controller.handleStageClick(event)}
-              onContextMenu={(event) => props.controller.handleStageClick(event)}
+              onClick={(event) => remoteInput()?.handleStageClick(event)}
+              onContextMenu={(event) => remoteInput()?.handleStageClick(event)}
               onBeforeInput={(event) => props.controller.input.handleTextInput(event)}
               onInput={(event) => props.controller.input.handleTextInput(event)}
               onCompositionStart={() => props.controller.input.handleCompositionStart()}
@@ -431,10 +447,11 @@ export function BrowserPanelChrome(
     tabsInHeader: boolean;
   },
 ) {
-  // Resource callbacks retain this viewport's synchronous browser owner.
-  const controller = untrack(() => props.controller);
-  let viewport!: HTMLDivElement;
+  const remoteInput = () =>
+    props.controller.native.activeTab ? undefined : props.controller.input;
   onSettled(() => {
+    const controller = props.controller;
+    const viewport = controller.input.elements.viewport!;
     const observer =
       typeof ResizeObserver === "function"
         ? new ResizeObserver(([entry]) => {
@@ -445,7 +462,7 @@ export function BrowserPanelChrome(
         : undefined;
     observer?.observe(viewport);
     // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
-    const handleWheel = (event: Event) => controller.handleWheel(event as WheelEvent);
+    const handleWheel = (event: Event) => remoteInput()?.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
       observer?.disconnect();
@@ -453,6 +470,7 @@ export function BrowserPanelChrome(
     };
   });
   const panelId = `browser-tab-panel-${generateUUID()}`;
+  const tabFocus = createTabFocus();
   const rendersTabStrip = createMemo(
     () =>
       !props.controller.host.fixedTab &&
@@ -474,6 +492,7 @@ export function BrowserPanelChrome(
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
           <BrowserPanelTabs
+            focusOwner={tabFocus}
             panelId={panelId}
             tabs={props.controller.tabs}
             activeTargetId={props.controller.activeTargetId}
@@ -504,7 +523,7 @@ export function BrowserPanelChrome(
         </div>
       ) : null}
       <div
-        ref={(element) => (viewport = element)}
+        ref={(element) => (props.controller.input.elements.viewport = element)}
         id={panelId}
         class="bp-viewport"
         role="tabpanel"
@@ -515,8 +534,8 @@ export function BrowserPanelChrome(
             : undefined
         }
         tabindex="0"
-        onKeyDown={(event: KeyboardEvent) => props.controller.handleViewportKeydown(event)}
-        onPaste={(event: ClipboardEvent) => props.controller.handleViewportPaste(event)}
+        onKeyDown={(event: KeyboardEvent) => remoteInput()?.handleViewportKeydown(event)}
+        onPaste={(event: ClipboardEvent) => remoteInput()?.handleViewportPaste(event)}
         aria-busy={props.controller.loading ? "true" : "false"}
       >
         <ViewportContent controller={props.controller} />

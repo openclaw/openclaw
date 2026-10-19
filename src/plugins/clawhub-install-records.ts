@@ -1,5 +1,11 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { ClawHubPackageChannel } from "../infra/clawhub-packages.js";
+import { normalizeClawHubSha256Hex } from "../infra/clawhub-integrity.js";
+import type {
+  ClawHubPackageArtifactSummary,
+  ClawHubPackageChannel,
+  ClawHubPackageClawPackSummary,
+} from "../infra/clawhub-packages.js";
 
 /** Install record fields captured for ClawHub plugin installs. */
 export type ClawHubPluginInstallRecordFields = {
@@ -30,6 +36,60 @@ export type ClawHubPluginInstallRecordFields = {
   clawpackManifestSha256?: string;
   clawpackSize?: number;
 };
+
+export function normalizeClawHubClawPackInstallFields(
+  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
+): Pick<
+  ClawHubPluginInstallRecordFields,
+  | "artifactKind"
+  | "artifactFormat"
+  | "npmIntegrity"
+  | "npmShasum"
+  | "npmTarballName"
+  | "clawpackSha256"
+  | "clawpackSpecVersion"
+  | "clawpackManifestSha256"
+  | "clawpackSize"
+> {
+  const isNpmPackArtifact =
+    clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
+  const isLegacyClawPack = clawpack && "available" in clawpack && clawpack.available;
+  if (!isNpmPackArtifact && !isLegacyClawPack) {
+    return {};
+  }
+
+  const clawpackSha256 =
+    typeof clawpack.sha256 === "string" ? normalizeClawHubSha256Hex(clawpack.sha256) : null;
+  const clawpackManifestSha256 =
+    "manifestSha256" in clawpack && typeof clawpack.manifestSha256 === "string"
+      ? normalizeClawHubSha256Hex(clawpack.manifestSha256)
+      : null;
+  const clawpackSpecVersion =
+    "specVersion" in clawpack &&
+    typeof clawpack.specVersion === "number" &&
+    Number.isSafeInteger(clawpack.specVersion) &&
+    clawpack.specVersion >= 0
+      ? clawpack.specVersion
+      : undefined;
+  const clawpackSize =
+    typeof clawpack.size === "number" && Number.isSafeInteger(clawpack.size) && clawpack.size >= 0
+      ? clawpack.size
+      : undefined;
+  const npmIntegrity = normalizeOptionalString(clawpack.npmIntegrity);
+  const npmShasum = normalizeOptionalString(clawpack.npmShasum);
+  const npmTarballName = normalizeOptionalString(clawpack.npmTarballName);
+  return {
+    artifactKind: "npm-pack",
+    artifactFormat: "tgz",
+    ...(npmIntegrity ? { npmIntegrity } : {}),
+    ...(npmShasum ? { npmShasum } : {}),
+    ...(npmTarballName ? { npmTarballName } : {}),
+    ...(clawpackSha256 ? { clawpackSha256 } : {}),
+    ...(clawpackSpecVersion !== undefined ? { clawpackSpecVersion } : {}),
+    ...(clawpackManifestSha256 ? { clawpackManifestSha256 } : {}),
+    ...(clawpackSize !== undefined ? { clawpackSize } : {}),
+  };
+}
 
 /** Builds plugin install record fields from resolved ClawHub package metadata. */
 export function buildClawHubPluginInstallRecordFields(

@@ -229,6 +229,8 @@ describe("chat pane session recovery", () => {
         sessions: fixture.host.sessions,
       });
       state.sessionKey = fixture.host.sessionKey;
+      // Both panes must read the queued outbox from the same gateway owner.
+      state.settings.gatewayUrl = fixture.host.settings.gatewayUrl ?? "";
       state.chatQueue = [...fixture.host.chatQueue];
       pane.applySessionsState(fixture.host.sessions.state);
       unsubscribe = fixture.host.sessions.subscribe((next) => pane.applySessionsState(next));

@@ -215,11 +215,15 @@ flags do not establish conversational support.
 
 - `protocol`: a bounded provider-owned adapter identifier, not a URL or auth identity.
 - `input`: supported text/image modalities for this task.
-- `questions`: declared `boolean`, `choice`, `score`, `sort`, or `tags` kinds.
+- `questions`: optional declared `boolean`, `choice`, `score`, `sort`, or `tags` kinds.
+  Omission means unknown support; an explicit empty declaration is invalid.
   Each records probability semantics (`boolean`, `categorical`, `independent`,
-  or `none`) and whether it can abstain. Optional option bounds include a
-  separate image-input bound. Independent probabilities must not be normalized
-  to sum to one; abstention must not become an argmax.
+  `provider-defined`, or `none`) and whether it can abstain. Optional option bounds
+  include a separate image-input bound. `requiresCriteria` records whether Boolean
+  questions need an explicit rubric. Independent and provider-defined estimates
+  must not be normalized to sum to one; abstention must not become an argmax.
+- `confidence`: optional `provider-specific` or `none`. A provider-specific
+  confidence metric is distinct from a calibrated correctness probability.
 - `reasoning`: supported `auto`/`off`/`on` modes, optional default/applicable
   question kinds, and whether execution metadata is returned. This does not
   imply reasoning text or set the primary model effort.
@@ -280,6 +284,22 @@ Provider fields:
 
 Use `modelPricing` when the hosted catalog publisher needs provider-specific pricing-key behavior. The publisher reads this metadata without importing provider runtime code.
 
+A plugin can declare a policy for each id in its `providers` or `cliBackends`. Policies for other ids are ignored. A CLI backend that sends a vendor's models to that vendor can use `priceAs` to price them with the vendor's catalog rows. Its usage is then estimated at the vendor's API rates, even when the CLI is billed through a subscription plan. No separate prices are published for the CLI backend. For example, the Anthropic plugin prices its `claude-cli` backend as `anthropic`:
+
+```json
+{
+  "providers": ["anthropic"],
+  "cliBackends": ["claude-cli"],
+  "modelPricing": {
+    "providers": {
+      "claude-cli": { "priceAs": "anthropic" }
+    }
+  }
+}
+```
+
+Another example:
+
 ```json
 {
   "providers": ["ollama", "openrouter"],
@@ -308,6 +328,7 @@ Provider fields:
 | `chutes`     | `false \| object` | Explicit mapping to the public Chutes `/v1/models` catalog. Never enabled implicitly.           |
 | `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
+| `priceAs`    | `string`          | Provider whose catalog rows price this provider's models when it has no price of its own.       |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
 | `modelsDev`  | `false \| object` | models.dev price list for the provider that bills the request. Enabled by default.              |
 | `openRouter` | `false \| object` | OpenRouter's own prices. They price only `openrouter/*` keys, never a vendor's models.          |

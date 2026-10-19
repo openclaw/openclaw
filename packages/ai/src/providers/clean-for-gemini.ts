@@ -1,5 +1,5 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import {
   evaluateSchemaWalk,
@@ -295,11 +295,7 @@ function* cleanSchemaForGeminiWithDefs(
       if (key === "type" && (unions.anyOf || unions.oneOf)) {
         continue;
       }
-      if (
-        key === "type" &&
-        Array.isArray(value) &&
-        value.every((entry) => typeof entry === "string")
-      ) {
+      if (key === "type" && isStringArray(value)) {
         const types = value.filter((entry) => entry !== "null");
         cleaned.type = types.length === 1 ? types[0] : types;
         continue;

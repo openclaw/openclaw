@@ -47,6 +47,18 @@ describe("public reader admission", () => {
       expect((await gate.run({ ...request(), work })).kind).toBe("ok");
     }
     expect(work).toHaveBeenCalledTimes(1);
+
+    const otherWork = vi.fn(async () => "Other configuration");
+    expect(await gate.run({ ...request(), config: {}, work: otherWork })).toMatchObject({
+      kind: "ok",
+      value: { body: "Other configuration" },
+    });
+    expect(otherWork).toHaveBeenCalledTimes(1);
+    expect(await gate.run({ ...request(), work })).toMatchObject({
+      kind: "ok",
+      value: { body: "Public text" },
+    });
+    expect(work).toHaveBeenCalledTimes(1);
   });
 
   it("queues twenty cold threads while retaining the eight-build budget", async () => {

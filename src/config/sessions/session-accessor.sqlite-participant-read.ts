@@ -15,10 +15,7 @@ export function listSessionParticipantsReadOnly(scope: {
   const memory = scope.sessionKey && getSessionActorStorageBinding(scope);
   if (memory) {
     return new Map([
-      [
-        scope.sessionKey!,
-        structuredClone(memory.actor.snapshot(memory.authority)?.participants ?? []),
-      ],
+      [scope.sessionKey!, memory.actor.snapshot(memory.authority)?.participants ?? []],
     ]);
   }
   const resolved = resolveSqliteReadScope(scope);

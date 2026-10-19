@@ -55,6 +55,15 @@ const catalog = {
     },
   },
   filePreview: {
+    skill: {
+      title: "Skill file preview",
+      source: "Skill source",
+      open: "Open full file",
+      loading: "Loading skill file…",
+      unavailable: "Skill file unavailable",
+      unavailableHint: "The skill may have moved or is not installed for this agent.",
+      lines: "L1–{count} / {total}",
+    },
     bundle: {
       binary: "This binary file is included in the bundle but cannot be displayed as text.",
       "too-large":

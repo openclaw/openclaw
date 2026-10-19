@@ -223,6 +223,8 @@ export async function readProcessHeldCliHistoryInWorker(
     const page = await readChatHistoryPageKernel(params, {
       readers: cli?.readers ?? readers,
       deferProfileDisplay: true,
+      // The host refreshes forwarded labels after the complete page returns.
+      resolveCronJobName: () => undefined,
       readMessageSequence: cli?.sequence,
     });
     cli?.applyPagination(page);

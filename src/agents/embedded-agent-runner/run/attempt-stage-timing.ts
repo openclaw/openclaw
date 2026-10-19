@@ -53,7 +53,7 @@ export function logEmbeddedRunStageSummary(
   }
 }
 
-export function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {
+function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {
   const stages = formatStageTimings(summary.stages);
   return `${prefix} pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=${summary.totalMs} stages=${stages}`;
 }

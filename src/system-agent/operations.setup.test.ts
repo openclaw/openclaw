@@ -6,12 +6,11 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import {
-  executeSystemAgentOperation as executeOperation,
-  type SystemAgentCommandDeps,
-} from "./operations.js";
+import { executeSystemAgentOperation as executeOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
+import { applySystemAgentSetup } from "./setup-apply.js";
+import { verifySetupInferenceConfig } from "./setup-inference.js";
 import { loadLocalSetupRecovery } from "./setup-recovery.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
@@ -20,7 +19,6 @@ import {
   installSystemAgentClaudeCliBackendTestFixture,
   createSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
-  requireTestRecord as requireRecord,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
@@ -28,6 +26,14 @@ const model = "openai/gpt-5.5";
 const previousModel = "anthropic/claude-sonnet-4-6";
 const workspace = "/tmp/approved-workspace";
 const configPath = "/tmp/openclaw.json";
+vi.mock("./setup-apply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-apply.js")>()),
+  applySystemAgentSetup: vi.fn(),
+}));
+vi.mock("./setup-inference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-inference.js")>()),
+  verifySetupInferenceConfig: vi.fn(),
+}));
 const localOnboarding = vi.hoisted(() => {
   const states = new Map<string, LocalOnboardingState>();
   return {
@@ -146,10 +152,10 @@ let metadata: SystemAgentPluginMetadataTestSnapshot;
 let restoreBackend: () => void;
 let runtime: ReturnType<typeof createSystemAgentTestRuntime>["runtime"];
 let lines: string[];
-type Options = NonNullable<Parameters<typeof executeOperation>[2]>;
-type ApplySetup = NonNullable<SystemAgentCommandDeps["applySetup"]>;
+type ApplySetup = typeof applySystemAgentSetup;
 let applySetup: ReturnType<typeof vi.fn<ApplySetup>>;
-type Verify = NonNullable<SystemAgentCommandDeps["verifyInferenceConfig"]>;
+type Verify = typeof verifySetupInferenceConfig;
+type Options = NonNullable<Parameters<typeof executeOperation>[2]>;
 function run(operation: Parameters<typeof executeOperation>[0], options: Options = {}) {
   return metadata.run(() => executeOperation(operation, runtime, { approved: true, ...options }));
 }
@@ -161,17 +167,23 @@ function setup(
     { kind: "setup", workspace, ...operation },
     {
       ...options,
-      deps: {
-        applySetup,
-        loadOverview: async () => overview(),
-        verifyInferenceConfig: async () => verified(),
-        ...options.deps,
-      },
+      deps: { loadOverview: async () => overview(), ...options.deps },
     },
   );
 }
-function setModel(options: Options) {
+function setModel(verify: Verify, options: Options = {}) {
+  vi.mocked(verifySetupInferenceConfig).mockImplementation(verify);
   return run({ kind: "set-default-model", model }, options);
+}
+function setupWithVerifier(verifyInferenceConfig: Verify) {
+  vi.mocked(verifySetupInferenceConfig).mockImplementation(verifyInferenceConfig);
+  return setup();
+}
+async function expectRejectedSetup(result: ReturnType<typeof setup>, error: string) {
+  await expect(result).rejects.toThrow(error);
+  expect(applySetup).not.toHaveBeenCalled();
+  expect(lines.join("\n")).not.toContain("[openclaw] running: openclaw.setup");
+  expectNoAudit("openclaw.setup");
 }
 const verified = () => ({ ok: true as const, modelRef: model, latencyMs: 5 });
 const withModel = (primary = model): OpenClawConfig => ({
@@ -222,7 +234,7 @@ async function rejectsModel(
 ) {
   const original = withModel(previousModel);
   mockConfig.set(original);
-  const result = expect(setModel({ deps: { verifyInferenceConfig }, ...options })).rejects;
+  const result = expect(setModel(verifyInferenceConfig, options)).rejects;
   if (typeof error === "string") {
     await result.toThrow(error);
   } else {
@@ -288,13 +300,22 @@ function expectPending(pending: LocalOnboardingState) {
   expect(localOnboarding.states.get(configPath)).toEqual(pending);
   expect(lines.join("\n")).not.toContain("[openclaw] done: openclaw.setup");
 }
+function afterFirstAuthorization(effect: () => void) {
+  let authorizations = 0;
+  return vi.fn(() => {
+    if (++authorizations > 1) {
+      effect();
+    }
+  });
+}
 async function rejectsRecovery(
   pending: LocalOnboardingState,
-  apply: ApplySetup,
+  apply: ApplySetup = async () => setupResult(),
   error = "onboarding configuration changed before setup could complete",
   options: Options = {},
 ) {
-  await expect(setup({ deps: { applySetup: apply }, ...options })).rejects.toThrow(error);
+  applySetup.mockImplementation(apply);
+  await expect(setup(options)).rejects.toThrow(error);
   expectPending(pending);
 }
 
@@ -308,6 +329,12 @@ afterAll(() => {
   restoreBackend();
 });
 beforeEach(() => {
+  vi.mocked(applySystemAgentSetup)
+    .mockReset()
+    .mockImplementation((...args) => applySetup(...args));
+  vi.mocked(verifySetupInferenceConfig)
+    .mockReset()
+    .mockImplementation(async () => verified());
   applySetup = vi.fn<ApplySetup>(async () => setupResult());
   mockConfig.reset();
   mockConfig.set(withModel());
@@ -336,17 +363,16 @@ describe("setup inference", () => {
       gateway: { port: 18789 },
     });
     const deps = {
-      applySetup,
       loadOverview: async () => ({
         ...overview(),
         defaultModel: undefined,
         setupModel: model,
       }),
-      verifyInferenceConfig: vi.fn(async () => {
-        mockConfig.set({ ...mockConfig.current(), gateway: { port: 19000 } });
-        return { ...verified(), latencyMs: 12 };
-      }),
     };
+    vi.mocked(verifySetupInferenceConfig).mockImplementation(async () => {
+      mockConfig.set({ ...mockConfig.current(), gateway: { port: 19000 } });
+      return { ...verified(), latencyMs: 12 };
+    });
     const operation = { kind: "setup" as const, workspace, model, agentName: "robby" };
     const plan = await run(operation, { approved: false, deps });
     expectRecordFields(plan, { applied: false });
@@ -385,50 +411,31 @@ describe("setup inference", () => {
 
   it("rejects setup without a model before workspace or Gateway writes", async () => {
     mockConfig.set({ agents: { entries: { main: {} } } });
-    await expect(
+    await expectRejectedSetup(
       setup({
         deps: {
-          applySetup,
           setupSurface: "gateway",
           loadOverview: async () => ({ ...overview(), defaultModel: undefined }),
         },
       }),
-    ).rejects.toThrow("requires working inference first");
-    expect(applySetup).not.toHaveBeenCalled();
-    expect(lines.join("\n")).not.toContain("[openclaw] running: openclaw.setup");
-    expectNoAudit("openclaw.setup");
+      "requires working inference first",
+    );
   });
 
   it("rejects setup when the current route fails live inference", async () => {
-    await expect(
-      setup({
-        deps: {
-          applySetup,
-          verifyInferenceConfig: async () => ({
-            ok: false,
-            status: "auth",
-            error: "not authenticated",
-          }),
-        },
-      }),
-    ).rejects.toThrow("failed a live check");
-    expect(applySetup).not.toHaveBeenCalled();
-    expect(lines.join("\n")).not.toContain("[openclaw] running: openclaw.setup");
-    expectNoAudit("openclaw.setup");
+    await expectRejectedSetup(
+      setupWithVerifier(async () => ({ ok: false, status: "auth", error: "not authenticated" })),
+      "failed a live check",
+    );
   });
 
   it("rejects setup route drift while preserving the concurrent edit", async () => {
     mockConfig.set({ ...withModel(), auth: { order: { openai: ["openai:old"] } } });
 
     await expect(
-      setup({
-        deps: {
-          applySetup,
-          verifyInferenceConfig: async () => {
-            mockConfig.set({ ...withModel(), auth: { order: { openai: ["openai:new"] } } });
-            return verified();
-          },
-        },
+      setupWithVerifier(async () => {
+        mockConfig.set({ ...withModel(), auth: { order: { openai: ["openai:new"] } } });
+        return verified();
       }),
     ).rejects.toThrow("changed during setup verification");
     expect(applySetup).not.toHaveBeenCalled();
@@ -445,36 +452,24 @@ describe("setup inference", () => {
 
 describe("model changes", () => {
   it("live-verifies the selected model before commit, preserves unrelated settings, and publishes the binding", async () => {
-    const original = {
-      agents: {
-        defaults: {
-          model: { primary: previousModel, fallbacks: ["openai/gpt-5.2"] },
-          systemAgent: { agentId: "main" },
-        },
-        entries: { main: { workspace: "/tmp/main" } },
-      },
-      gateway: { port: 18789 },
-      models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } },
-    } satisfies OpenClawConfig;
-    mockConfig.set(original);
+    const oldModel = { primary: previousModel, fallbacks: ["openai/gpt-5.2"] };
+    const nextModel = { ...oldModel, primary: model };
     const concurrent: OpenClawConfig = {
-      ...original,
+      gateway: { port: 18789 },
       auth: { profiles: { "google:other": { provider: "google", mode: "api_key" } } },
       models: {
         providers: {
-          ...original.models?.providers,
-          google: {
-            baseUrl: "https://example.invalid",
-            models: [],
-          },
+          openai: { baseUrl: "https://api.openai.com/v1", models: [] },
+          google: { baseUrl: "https://example.invalid", models: [] },
         },
       },
       agents: {
         defaults: {
-          ...original.agents?.defaults,
+          model: oldModel,
+          systemAgent: { agentId: "main" },
           models: { "google/unrelated": { agentRuntime: { id: "openclaw" } } },
         },
-        entries: { ...original.agents?.entries, work: { workspace: "/tmp/work" } },
+        entries: { main: { workspace: "/tmp/main" }, work: { workspace: "/tmp/work" } },
       },
       channels: { telegram: { enabled: true } },
     };
@@ -484,24 +479,15 @@ describe("model changes", () => {
     const verifyInferenceConfig = vi.fn<Verify>(
       async ({ config, onVerifiedExecution, requireExecutionOwner }) => {
         expect(requireExecutionOwner).toBe(true);
-        const stagedDefaults = requireRecord(
-          requireRecord(config.agents, "agents").defaults,
-          "defaults",
-        );
-        expect(stagedDefaults.model).toEqual({
-          primary: model,
-          fallbacks: ["openai/gpt-5.2"],
-        });
-        expect(mockConfig.current().agents?.defaults?.model).toEqual(
-          original.agents?.defaults?.model,
-        );
+        expect(config.agents?.defaults?.model).toEqual(nextModel);
+        expect(mockConfig.current().agents?.defaults?.model).toEqual(oldModel);
         onVerifiedExecution?.(reboundBinding);
         return { ...verified(), latencyMs: 17 };
       },
     );
-    expect(await setModel({ deps: { verifyInferenceConfig }, onVerifiedInferenceChanged })).toEqual(
-      { applied: true },
-    );
+    expect(await setModel(verifyInferenceConfig, { onVerifiedInferenceChanged })).toEqual({
+      applied: true,
+    });
     expect(verifyInferenceConfig).toHaveBeenCalledOnce();
     expect(onVerifiedInferenceChanged).toHaveBeenCalledExactlyOnceWith(reboundBinding);
     expect(mockConfig.mutate).toHaveBeenCalledOnce();
@@ -511,7 +497,7 @@ describe("model changes", () => {
         ...concurrent.agents,
         defaults: {
           ...concurrent.agents?.defaults,
-          model: { primary: model, fallbacks: ["openai/gpt-5.2"] },
+          model: nextModel,
           models: { ...concurrent.agents?.defaults?.models, [model]: {} },
         },
       },
@@ -545,13 +531,9 @@ describe("model changes", () => {
     expect(verify).toHaveBeenCalledOnce();
   });
   it("rechecks inference authority after the live probe", async () => {
-    let calls = 0;
-    const verify = vi.fn<Verify>(async () => {
-      calls++;
-      return verified();
-    });
+    const verify = vi.fn<Verify>(async () => verified());
     const beforePersistentApply = vi.fn(() => {
-      if (calls > 0) {
+      if (verify.mock.calls.length > 0) {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
     });
@@ -572,7 +554,7 @@ describe("model changes", () => {
       expect(config.agents?.entries?.work?.model).toEqual({ primary: model });
       return verified();
     });
-    await setModel({ deps: { verifyInferenceConfig } });
+    await setModel(verifyInferenceConfig);
     expect(mockConfig.current().agents).toMatchObject({
       defaults: { model: { primary: "anthropic/global-default" } },
       entries: { work: { model: { primary: model } } },
@@ -616,7 +598,7 @@ describe("local setup recovery", () => {
     });
   });
 
-  it.each(["completed receipt", "remote gateway"])(
+  it.each(["completed receipt", "remote gateway", "gateway-hosted setup"])(
     "does not adopt workspace authority from a %s",
     async (kind) => {
       const pending = pendingOwner();
@@ -626,12 +608,12 @@ describe("local setup recovery", () => {
           status: "completed",
           completedAtMs: 2,
         });
-      } else {
+      } else if (kind === "remote gateway") {
         mockConfig.set({ ...mockConfig.current(), gateway: { mode: "remote" } });
       }
       const before = localOnboarding.states.get(configPath);
-
-      expect((await setup()).applied).toBe(true);
+      const deps = kind === "gateway-hosted setup" ? { setupSurface: "gateway" as const } : {};
+      expect((await setup({ deps })).applied).toBe(true);
       expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
         beforePersistentApply: undefined,
       });
@@ -641,6 +623,9 @@ describe("local setup recovery", () => {
       );
       expect(localOnboarding.complete).not.toHaveBeenCalled();
       expect(localOnboarding.states.get(configPath)).toEqual(before);
+      if (kind === "gateway-hosted setup") {
+        expect(localOnboarding.readForConfig).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -681,7 +666,7 @@ describe("local setup recovery", () => {
   it("preserves recorded team intent when retry starts with a replaced coordinator", async () => {
     const pending = pendingOwner("coordinator");
     mockConfig.set(teamConfig(pending, "replacement"));
-    await rejectsRecovery(pending, async () => setupResult());
+    await rejectsRecovery(pending);
   });
 
   it("restores the recorded first team after activation stops before roster creation", async () => {
@@ -690,7 +675,7 @@ describe("local setup recovery", () => {
       agents: { defaults: { model: { primary: model } } },
       wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
     });
-    applySetup = vi.fn<ApplySetup>(async () => {
+    applySetup.mockImplementation(async () => {
       mockConfig.set(teamConfig(pending, pending.teamCoordinatorId));
       return setupResult();
     });
@@ -726,16 +711,11 @@ describe("local setup recovery", () => {
   it("never completes a competing onboarding owner after setup succeeds", async () => {
     const pending = pendingOwner();
     const replacement = { ...pending, runId: "replacement-run" };
-    await expect(
-      setup({
-        deps: {
-          applySetup: async () => {
-            localOnboarding.states.set(configPath, replacement);
-            return setupResult();
-          },
-        },
-      }),
-    ).rejects.toThrow("Another onboarding run replaced this setup operation");
+    applySetup.mockImplementation(async () => {
+      localOnboarding.states.set(configPath, replacement);
+      return setupResult();
+    });
+    await expect(setup()).rejects.toThrow("Another onboarding run replaced this setup operation");
     expect(localOnboarding.complete).toHaveBeenCalledExactlyOnceWith({
       configPath,
       runId: pending.runId,
@@ -781,18 +761,15 @@ describe("local setup recovery", () => {
         );
         return effect((await mockConfig.read()).sourceConfig);
       });
-      await rejectsRecovery(pending, async () => setupResult());
+      await rejectsRecovery(pending);
       expect(mockConfig.exclusive).toHaveBeenCalledOnce();
     },
   );
 
   it("rechecks setup authority immediately before completing onboarding", async () => {
     const pending = pendingOwner();
-    let authorizations = 0;
-    const beforePersistentApply = vi.fn(() => {
-      if (++authorizations > 1) {
-        throw new SystemAgentInferenceUnavailableError("conversation");
-      }
+    const beforePersistentApply = afterFirstAuthorization(() => {
+      throw new SystemAgentInferenceUnavailableError("conversation");
     });
     await expect(setup({ beforePersistentApply })).rejects.toBeInstanceOf(
       SystemAgentInferenceUnavailableError,
@@ -804,13 +781,10 @@ describe("local setup recovery", () => {
 
   it("reads final config only after the completion authority check", async () => {
     const pending = pendingOwner();
-    let authorizations = 0;
-    const beforePersistentApply = vi.fn(() => {
-      if (++authorizations > 1) {
-        recoveryConfig(pending, "2026-08-03T00:00:00.000Z");
-      }
-    });
-    await rejectsRecovery(pending, async () => setupResult(), undefined, { beforePersistentApply });
+    const beforePersistentApply = afterFirstAuthorization(() =>
+      recoveryConfig(pending, "2026-08-03T00:00:00.000Z"),
+    );
+    await rejectsRecovery(pending, undefined, undefined, { beforePersistentApply });
     expect(beforePersistentApply).toHaveBeenCalledTimes(2);
   });
 
@@ -820,18 +794,6 @@ describe("local setup recovery", () => {
       "Another onboarding run owns a different workspace",
     );
     expect(applySetup).not.toHaveBeenCalled();
-    expect(localOnboarding.complete).not.toHaveBeenCalled();
-    expect(localOnboarding.states.get(configPath)).toEqual(pending);
-  });
-
-  it("does not adopt local onboarding from a gateway-hosted setup", async () => {
-    const pending = pendingOwner();
-    const result = await setup({ deps: { setupSurface: "gateway" } });
-    expect(result.applied).toBe(true);
-    expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      beforePersistentApply: undefined,
-    });
-    expect(localOnboarding.readForConfig).not.toHaveBeenCalled();
     expect(localOnboarding.complete).not.toHaveBeenCalled();
     expect(localOnboarding.states.get(configPath)).toEqual(pending);
   });

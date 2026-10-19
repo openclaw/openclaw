@@ -7,6 +7,8 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
@@ -190,29 +192,29 @@ function startPointerDrag(params: {
   event: PointerEvent;
   canMove: boolean;
   provider: string;
+  row: HTMLElement;
+  section: HTMLElement;
+  rows: HTMLElement[];
   move: (targetId: string, position: ArrayDropPosition) => void;
-}): (() => void) | undefined {
+  drag: ReturnType<typeof createPointerDrag>;
+}): void {
   if (!params.canMove || params.event.button !== 0) {
-    return undefined;
+    return;
   }
   const grip = params.event.currentTarget;
   if (!(grip instanceof HTMLElement)) {
-    return undefined;
+    return;
   }
-  const row = grip.closest<HTMLElement>(".model-providers__profile");
-  const section = grip.closest<HTMLElement>(".model-providers__profiles");
-  if (!row || !section) {
-    return undefined;
-  }
+  const { row, section } = params;
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
   // make the insertion point oscillate as they move out from under the pointer.
-  const slots = [...section.querySelectorAll<HTMLElement>(".model-providers__profile")]
+  const slots = params.rows
     .filter((candidate) => candidate.dataset.profileProvider === params.provider)
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
   if (!source) {
-    return undefined;
+    return;
   }
   const others = slots.filter((slot) => slot !== source);
   let target: (typeof slots)[number] | undefined;
@@ -220,16 +222,7 @@ function startPointerDrag(params: {
   params.event.preventDefault();
   section.classList.add(SORTING_CLASS);
   row.classList.add(DRAGGING_CLASS);
-  try {
-    grip.setPointerCapture?.(params.event.pointerId);
-  } catch {
-    // Synthetic pointers can lack the active pointer required for capture.
-  }
-
   const update = (event: PointerEvent) => {
-    if (event.pointerId !== params.event.pointerId) {
-      return;
-    }
     const scrollOffset = sectionTop - section.getBoundingClientRect().top;
     const deltaY = event.clientY - params.event.clientY + scrollOffset;
     row.style.translate = `${event.clientX - params.event.clientX}px ${deltaY}px`;
@@ -269,55 +262,34 @@ function startPointerDrag(params: {
       top += slot.bounds.height;
     }
   };
-  let active = true;
   const cleanup = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    grip.removeEventListener("pointermove", update);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
-    grip.removeEventListener("lostpointercapture", handleCancel);
-    document.removeEventListener("keydown", handleKeyDown, true);
+    stopKeydown();
     section.classList.remove(SORTING_CLASS);
     for (const { element } of slots) {
       element.classList.remove(DRAGGING_CLASS);
       element.style.removeProperty("translate");
     }
-    try {
-      grip.releasePointerCapture?.(params.event.pointerId);
-    } catch {
-      // Pointer cancellation may release capture before this cleanup runs.
-    }
   };
-  const finish = (event: PointerEvent, apply: boolean) => {
-    if (!active || event.pointerId !== params.event.pointerId) {
-      return;
-    }
+  const finish = (event: PointerEvent) => {
     update(event);
     const targetId = target?.element.dataset.profileId;
     cleanup();
-    if (apply && targetId) {
+    if (targetId) {
       params.move(targetId, position);
     }
   };
-  const handleUp = (event: PointerEvent) => finish(event, true);
-  const handleCancel = (event: PointerEvent) => finish(event, false);
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      finish(params.event, false);
+      params.drag.cancel();
     }
   };
-  grip.addEventListener("pointermove", update);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
-  grip.addEventListener("lostpointercapture", handleCancel);
   // A drag owns Escape before the Settings shell handles its back shortcut.
-  document.addEventListener("keydown", handleKeyDown, true);
-  return cleanup;
+  const stopKeydown = listen(document, "keydown", { handleEvent: handleKeyDown }, true);
+  if (!params.drag.start(params.event, grip, { move: update, end: finish, cancel: cleanup })) {
+    cleanup();
+  }
 }
 
 function profileIdentity(profile: ProviderProfile, index: number): string {
@@ -417,6 +389,8 @@ export function renderProviderAccountSummary(
 }
 
 export function ProviderProfiles(props: ProviderProfilesViewProps & { card: ModelProviderCard }) {
+  let section!: HTMLElement;
+  const rowElements = new Map<string, HTMLElement>();
   const card = () => props.card;
   const groups = createMemo(() => profileGroups(card(), props.profileOrders));
   // Account numbers follow the saved inventory, not the editable priority order.
@@ -442,6 +416,7 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
     <Show when={card().profiles.length > 0}>
       <section
         class="model-providers__profiles"
+        ref={(element) => (section = element)}
         aria-label={`${t("modelProviders.profiles.title")}: ${card().displayName}`}
       >
         <div class="model-providers__profiles-heading">
@@ -495,6 +470,8 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
               <ProviderProfileRow
                 {...props}
                 row={row()}
+                section={() => section}
+                rowElements={rowElements}
                 identity={identities().get(row().profile.profileId)!}
               />
             )}
@@ -510,13 +487,19 @@ function ProviderProfileRow(
     row: { profile: ProviderProfile; group: ReturnType<typeof profileGroups>[number] };
     card: ModelProviderCard;
     identity: string;
+    section: () => HTMLElement;
+    rowElements: Map<string, HTMLElement>;
   },
 ) {
-  let cancelDrag: (() => void) | undefined;
+  let rowElement!: HTMLElement;
+  let registeredId: string | undefined;
+  const drag = createPointerDrag();
   let releaseUsage: (() => void) | undefined;
   onCleanup(() => {
-    cancelDrag?.();
     releaseUsage?.();
+    if (registeredId) {
+      props.rowElements.delete(registeredId);
+    }
   });
   const profile = () => props.row.profile;
   const group = () => props.row.group;
@@ -565,6 +548,11 @@ function ProviderProfileRow(
   return (
     <div
       class="model-providers__profile"
+      ref={(element) => {
+        rowElement = element;
+        registeredId = profile().profileId;
+        props.rowElements.set(registeredId, element);
+      }}
       role="listitem"
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
@@ -582,12 +570,19 @@ function ProviderProfileRow(
             aria-keyshortcuts={canMove() ? "ArrowUp ArrowDown" : undefined}
             title={reorderBlocked() || t("modelProviders.profiles.reorderHint")}
             onPointerDown={(event: PointerEvent) => {
-              cancelDrag?.();
-              cancelDrag = startPointerDrag({
+              drag.cancel();
+              startPointerDrag({
                 event,
                 canMove: canMove(),
                 provider: provider(),
+                row: rowElement,
+                section: props.section(),
+                rows: group().profiles.flatMap((entry) => {
+                  const element = props.rowElements.get(entry.profileId);
+                  return element ? [element] : [];
+                }),
                 move: reorder,
+                drag,
               });
             }}
             onKeyDown={(event: KeyboardEvent) => {

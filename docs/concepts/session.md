@@ -12,13 +12,16 @@ from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
 Session lists reconcile invalidated metadata before returning rows. If a native
-session changes ownership during a list read, the Gateway retries its runtime
-metadata once. Continued changes temporarily use the configured model metadata
-for that row while other sessions remain available. The next list read retries
-its native metadata.
+session changes ownership during a list read, that row uses the
+configured model metadata while other sessions remain available. Native metadata
+is refreshed when that row is next invalidated; an unchanged list read does not
+retry it.
 
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
+
+For turn ownership, queueing, stopping, and lifecycle mutation rules, see
+[Session controller](/concepts/session-controller).
 
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
@@ -57,6 +60,11 @@ Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
 completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
 or fallback state refresh the relevant model facts.
+When `sessions.list` requests `includeLastMessage`, rows can also include
+`lastAssistantMessage` with the latest visible assistant text and its timestamp.
+This field uses the same bounded recent transcript window as other previews;
+it is absent when no timestamped assistant text is available in that window.
+The general `lastMessagePreview` can still contain a user message.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
@@ -262,6 +270,9 @@ Startup discovery excludes archived sessions, recovery tombstones, and rows with
 recovery obligations before preparing targets. Completed sessions with pending
 recovery obligations still settle. Other skipped candidates are logged with a
 reason, including when other sessions recover.
+The final pass over exhausted recovery targets prepares one session at a time,
+so a restart cannot flood database queues with background preparation. A failure
+for one target is logged without abandoning the remaining targets.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
@@ -283,6 +294,9 @@ the original caller's permission to run worktree setup scripts.
 
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+Explicit nonfinal message-tool progress (`final: false`) recorded by the same run
+does not close that turn; recovery preserves the visible update without sending it
+back to the model as an answer.
 A restart-aborted embedded response retains its already-streamed text as an
 interrupted assistant message when the transcript writer is still available.
 Unfinished tool calls in that response are discarded before persistence.
@@ -297,28 +311,43 @@ Older interrupted turns without a recorded authorization source remain restricte
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.
 
+The reserved device-less backend helper connection is a local control-plane path,
+not a durable operator identity. Use an identified operator client, such as the
+TUI or Control UI, for user-owned work that must resume automatically. Paired
+clients must retain the original device-token generation: reissuing that token
+under a different authentication path can prevent recovery even for the same user.
+
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
 Parents still waiting after yielding to children remain owned by their child batch.
-Startup waits for subagent Gateway bindings and completion authority restoration
-before attempting to resume these parent turns. If the original completion cohort
-or its operator authority cannot be restored, recovery records one terminal
-interruption in the transcript and settles the old input. Later startup passes
-and restarts skip it. The session remains available for a fresh authenticated
-message; recovery never substitutes system authority. Temporary startup, binding,
-or access-policy availability failures keep their recovery claims and retry.
+Once a parent turn has its own recorded operator source, recovery revalidates that
+source against current policy using the parent's exact session claim. Changes to
+the original child batch, including settlement or cleanup, do not cancel that
+admitted parent input. Older requester inputs without a recorded operator source
+still reconcile their original completion cohort. If that source cannot be
+restored, recovery records one terminal interruption in the transcript and settles
+the old input. Later startup passes and restarts skip it. The session remains
+available for a fresh authenticated message; recovery never substitutes system
+authority. Temporary startup, binding, or access-policy availability failures keep
+their recovery claims and retry.
 
-If a delegated turn's sender authority cannot be reconstructed, automatic recovery
-stops with a recorded reason and a visible notice in the transcript or original
-channel. The notice offers **Resume** in WebChat. The click supplies current operator
-authority and continues the saved task in the same session. A saved
-delegation alone does not authorize replay after restart.
+If a delegated turn's sender authority cannot be reconstructed and no pending
+reply, harness completion, or independent run remains owed, recovery ends only that
+turn. One local interruption notice and terminal source receipt prevent replay;
+the same session and transcript remain available for a fresh authenticated message.
+Recovery does not send the notice to an external channel. Saved delegation alone
+does not authorize replay after restart.
+
+Turns with remaining custody retain the existing recovery block. **Resume** in
+WebChat supplies current operator authority to continue the saved task in the same
+session after its outstanding delivery settles.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.
-Stopping or replacing the session still cancels pending work.
+Stopping or replacing the session still cancels pending work. A recovery resend
+stopped during preparation stays canceled and is not replayed on the next startup.
 
 If subagent recovery changes session-protection facts while an incoming turn is
 being prepared, reply initialization refreshes those facts and retries within its
@@ -342,6 +371,11 @@ required restart-safe tools, WebChat offers **Resume in new session** instead.
 An unresolved final-delivery record must
 settle before an in-place continuation, and missing transcripts require repair.
 In other channels, `/new` or `/reset` still starts a replacement session.
+
+A canonical Main session archived specifically by restart recovery can also be
+reset. Reset retains its physical session identity and transcript while starting a
+fresh model context; it does not replay the interrupted task. Other archived
+sessions must be restored before reset.
 
 ## Where state lives
 

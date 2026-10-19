@@ -10,6 +10,7 @@ import {
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
+import { beginUpdatePostgresMigration } from "../update-doctor-migration-attribution.js";
 import { databaseEngineAdapters } from "./adapters.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
@@ -97,9 +98,13 @@ export function openEngineStore(ref: {
   prepareAnchor: () => void;
   inspectSqlite: () => { hasExistingData: boolean; hasEngineAnchor: boolean };
   existingOnly?: boolean;
+  /** Existing-state short leases may retain an idle PG transport in this worker. */
+  reusePostgresConnection?: boolean;
   /** Inspection admits the declared source schema without running its migration. */
   existingVersion?: boolean;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
+  /** Family custody for schema writes; shared state defaults to its physical owner. */
+  assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
 }): EngineConnection {
   const { anchor } = ref;
@@ -127,52 +132,55 @@ export function openEngineStore(ref: {
     );
   }
   ref.prepareAnchor();
+  const readOrCreateAnchor = () => {
+    const inspection = ref.inspectSqlite();
+    if (inspection.hasExistingData) {
+      throw new Error(
+        `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
+      );
+    }
+    if (!inspection.hasEngineAnchor && ref.existingOnly) {
+      throw new Error(
+        "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
+      );
+    }
+    if (!inspection.hasEngineAnchor) {
+      anchor.exec(
+        "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
+      );
+    }
+    const rows = readEngineAnchor(anchor, "identity", true) ?? [];
+    if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
+      throw new Error(
+        "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
+      );
+    }
+    const row = rows[0];
+    if (row) {
+      if (
+        typeof row.store_id !== "string" ||
+        row.engine !== "postgres" ||
+        typeof row.schema !== "string"
+      ) {
+        throw new Error("Invalid PostgreSQL anchor identity. Restore a matching backup.");
+      }
+      return { storeId: row.store_id, namespace: row.schema };
+    }
+    const storeId = randomUUID();
+    const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
+    anchor
+      .prepare(
+        "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
+      )
+      .run(storeId, namespace);
+    return { storeId, namespace };
+  };
   const identity =
     known?.engine === "postgres"
       ? known
-      : runSqliteImmediateTransactionSync(anchor, () => {
-          const inspection = ref.inspectSqlite();
-          if (inspection.hasExistingData) {
-            throw new Error(
-              `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
-            );
-          }
-          if (!inspection.hasEngineAnchor && ref.existingOnly) {
-            throw new Error(
-              "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
-            );
-          }
-          if (!inspection.hasEngineAnchor) {
-            anchor.exec(
-              "CREATE TABLE IF NOT EXISTS openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL CHECK (engine = 'postgres'), schema TEXT NOT NULL)",
-            );
-          }
-          const rows = readEngineAnchor(anchor, "identity", true) ?? [];
-          if (rows.length > 1 || (inspection.hasEngineAnchor && rows.length === 0)) {
-            throw new Error(
-              "Invalid engine anchor: expected exactly one identity. Restore a matching backup.",
-            );
-          }
-          const row = rows[0];
-          if (row) {
-            if (
-              typeof row.store_id !== "string" ||
-              row.engine !== "postgres" ||
-              typeof row.schema !== "string"
-            ) {
-              throw new Error("Invalid PostgreSQL anchor identity. Restore a matching backup.");
-            }
-            return { storeId: row.store_id, namespace: row.schema };
-          }
-          const storeId = randomUUID();
-          const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
-          anchor
-            .prepare(
-              "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
-            )
-            .run(storeId, namespace);
-          return { storeId, namespace };
-        });
+      : ref.existingOnly
+        ? readOrCreateAnchor()
+        : runSqliteImmediateTransactionSync(anchor, readOrCreateAnchor);
   const store: AdmittedStore = { ...ref, input: ref.input, ...identity };
   const adapter = databaseEngineAdapters.postgres;
   const db = adapter.openConnection(store);
@@ -196,8 +204,9 @@ export function openEngineStore(ref: {
     if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
-      const admitExistingOnly = ref.existingOnly && schema.postgresMigrations?.length === 0;
-      // Bootstrap-only stores can admit an existing schema without a mutation receipt.
+      // Existing-only forbids creation; an unsealed port still needs writable schema admission.
+      let migration: ReturnType<typeof beginUpdatePostgresMigration>;
+      let assertMigrationCurrent: (() => void) | undefined;
       db.runTransaction(
         () => {
           const fresh = !db
@@ -241,6 +250,9 @@ export function openEngineStore(ref: {
                 }
                 schema = { ...schema, ...source, version: Number(meta.version) };
               } else {
+                assertMigrationCurrent = ref.assertMigrationCurrent;
+                assertMigrationCurrent?.();
+                migration = beginUpdatePostgresMigration(db, assertMigrationCurrent);
                 invalidateLocalSqliteSchemaAdmissions(db);
                 stageSqliteTransactionState(db, {
                   stage: () => {},
@@ -254,9 +266,16 @@ export function openEngineStore(ref: {
           }
           admit(!meta);
         },
-        undefined,
-        admitExistingOnly,
+        {
+          withCommit(commit) {
+            assertMigrationCurrent?.();
+            migration?.beforeCommit();
+            commit();
+          },
+        },
+        false,
       );
+      migration?.committed();
     } else {
       admit(false);
     }

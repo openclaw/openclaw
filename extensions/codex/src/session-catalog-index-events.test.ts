@@ -12,7 +12,7 @@ import {
 } from "./session-catalog-events.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { codexCatalogSourceForClient, setCodexCatalogSource } from "./session-catalog-source.js";
 
 const cleanups: Array<() => Promise<void>> = [];

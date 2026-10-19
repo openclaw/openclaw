@@ -34,33 +34,29 @@ type RequestBodyLimitErrorInit = {
   message?: string;
 };
 
-const DEFAULT_ERROR_MESSAGE: Record<RequestBodyLimitErrorCode, string> = {
-  PAYLOAD_TOO_LARGE: "PayloadTooLarge",
-  REQUEST_BODY_TIMEOUT: "RequestBodyTimeout",
-  CONNECTION_CLOSED: "RequestBodyConnectionClosed",
-};
-
-const DEFAULT_ERROR_STATUS_CODE: Record<RequestBodyLimitErrorCode, number> = {
-  PAYLOAD_TOO_LARGE: 413,
-  REQUEST_BODY_TIMEOUT: 408,
-  CONNECTION_CLOSED: 400,
-};
-
-const DEFAULT_RESPONSE_MESSAGE: Record<RequestBodyLimitErrorCode, string> = {
-  PAYLOAD_TOO_LARGE: "Payload too large",
-  REQUEST_BODY_TIMEOUT: "Request body timeout",
-  CONNECTION_CLOSED: "Connection closed",
-};
+const REQUEST_BODY_LIMIT_ERRORS = {
+  PAYLOAD_TOO_LARGE: { message: "PayloadTooLarge", status: 413, text: "Payload too large" },
+  REQUEST_BODY_TIMEOUT: {
+    message: "RequestBodyTimeout",
+    status: 408,
+    text: "Request body timeout",
+  },
+  CONNECTION_CLOSED: {
+    message: "RequestBodyConnectionClosed",
+    status: 400,
+    text: "Connection closed",
+  },
+} satisfies Record<RequestBodyLimitErrorCode, { message: string; status: number; text: string }>;
 
 export class RequestBodyLimitError extends Error {
   readonly code: RequestBodyLimitErrorCode;
   readonly statusCode: number;
 
   constructor(init: RequestBodyLimitErrorInit) {
-    super(init.message ?? DEFAULT_ERROR_MESSAGE[init.code]);
+    super(init.message ?? REQUEST_BODY_LIMIT_ERRORS[init.code].message);
     this.name = "RequestBodyLimitError";
     this.code = init.code;
-    this.statusCode = DEFAULT_ERROR_STATUS_CODE[init.code];
+    this.statusCode = REQUEST_BODY_LIMIT_ERRORS[init.code].status;
   }
 }
 
@@ -72,7 +68,7 @@ export function isRequestBodyLimitError(
 }
 
 export function requestBodyErrorToText(code: RequestBodyLimitErrorCode): string {
-  return DEFAULT_RESPONSE_MESSAGE[code];
+  return REQUEST_BODY_LIMIT_ERRORS[code].text;
 }
 
 function parseContentLengthHeader(req: IncomingMessage): number | null {
@@ -309,7 +305,7 @@ export function installRequestBodyLimitGuard(
     void sendHttpRequestRejection(
       req,
       res,
-      DEFAULT_ERROR_STATUS_CODE[code],
+      REQUEST_BODY_LIMIT_ERRORS[code].status,
       body,
       `${contentType}; charset=utf-8`,
     );

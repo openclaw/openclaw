@@ -3,7 +3,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 
-/** Record a shutdown warning once. */
 export function recordGatewayShutdownWarning(warnings: string[], name: string): void {
   if (!warnings.includes(name)) {
     warnings.push(name);

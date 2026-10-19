@@ -104,6 +104,7 @@ vi.mock("../daemon-cli/restart-health.js", async (original) => ({
 vi.mock("./progress.js", async (original) => ({
   ...(await original<typeof import("./progress.js")>()),
   printResult: vi.fn(),
+  prepareResult: async () => () => {},
 }));
 
 let state: OpenClawTestState;
@@ -250,13 +251,13 @@ beforeEach(async () => {
   });
   mocks.inspect.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
     healthy: true,
-    runtime: { status: "running" },
+    runtime: { status: "running", pid: 4242 },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
   }));
   mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
     healthy: true,
-    runtime: { status: "running" },
+    runtime: { status: "running", pid: 4242 },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
   }));
@@ -420,7 +421,7 @@ it.for([
       mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
         // Keep the admission observation healthy; fail only the post-stop recovery.
         healthy: !stopped,
-        runtime: { status: stopped ? "stopped" : "running" },
+        runtime: { status: stopped ? "stopped" : "running", pid: stopped ? undefined : 4242 },
         gatewayVersion: expectedVersion,
         gatewayBuildId: expectedBuildId,
         staleGatewayPids: [],

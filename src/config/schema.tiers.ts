@@ -177,7 +177,9 @@ wizard.accessMode wizard.appRecommendations
 const ADVANCED_TUNING_PATHS = new Set([
   "agents.defaults.heartbeat.every",
   "agents.entries.*.tools.github.allowInSandbox",
+  "agents.entries.*.tools.github.app",
   "session.maintenance.preserveRecent",
+  "tools.github.app",
   "tools.sessions.allowThreadTargets",
 ]);
 

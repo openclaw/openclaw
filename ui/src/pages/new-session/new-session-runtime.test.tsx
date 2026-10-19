@@ -1,16 +1,24 @@
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
-import { Menu, type MenuHandle } from "../../components/solid/menu.tsx";
+import { closeMenusWithin, Menu, type MenuHandle } from "../../components/solid/menu.tsx";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
+import { SessionPicker } from "./picker.tsx";
 
 afterEach(cleanupSolid);
 
 describe("new session menu dismissal", () => {
   it.each(["agent reset", "draft handoff"])("closes owned menus on %s", async (action) => {
     let menu!: MenuHandle;
+    let picker!: HTMLDivElement;
     const view = mountSolid(() => (
-      <div class="new-session-page__select--agent">
+      <div
+        class="new-session-page__select--agent"
+        ref={(node) => {
+          picker = node;
+        }}
+      >
         <Menu
           id="draft-agent"
           label="Agent"
@@ -27,9 +35,9 @@ describe("new session menu dismissal", () => {
     document.body.append(menu.overlay.surface);
     try {
       if (action === "agent reset") {
-        closeAgentPicker(view.container);
+        closeMenusWithin(picker);
       } else {
-        closeSessionMenus(view.container);
+        closeMenusWithin(view.container);
       }
       expect(menu.overlay.open).toBe(false);
     } finally {
@@ -50,9 +58,77 @@ describe("new session menu dismissal", () => {
     ));
     await waitForSolid(() => expect(menu).toBeDefined());
     menu.open();
-    closeSessionMenus(document.createElement("div"));
+    closeMenusWithin(document.createElement("div"));
     expect(menu.overlay.open).toBe(true);
-    closeSessionMenus(view.container);
+    closeMenusWithin(view.container);
     expect(menu.overlay.open).toBe(true);
   });
+});
+
+describe("new session picker focus", () => {
+  it.each(["inside", "body", "outside"])(
+    "restores only its own lost focus from %s",
+    async (from) => {
+      let popover!: PopoverHandle;
+      let input!: HTMLInputElement;
+      let outside!: HTMLButtonElement;
+      const view = mountSolid(() => {
+        const [open, setOpen] = createSignal(false);
+        return (
+          <>
+            <button
+              ref={(node) => {
+                outside = node;
+              }}
+            >
+              Elsewhere
+            </button>
+            <SessionPicker
+              kind="project"
+              label="Project"
+              value="Workspace"
+              icon={<span />}
+              state={{
+                submitting: false,
+                pendingPlacement: false,
+                get popoverOpen() {
+                  return open();
+                },
+                onPopoverShow: () => setOpen(true),
+                onPopoverHide: () => setOpen(false),
+                onPopoverAfterHide: () => {},
+              }}
+              ref={(handle) => {
+                popover = handle;
+              }}
+            >
+              <input
+                ref={(node) => {
+                  input = node;
+                }}
+              />
+            </SessionPicker>
+          </>
+        );
+      });
+      await waitForSolid(() => expect(popover).toBeDefined());
+      popover.show();
+      await waitForSolid(() => expect(popover.overlay.open).toBe(true));
+      input.focus();
+      if (from === "body") {
+        input.blur();
+      }
+      if (from === "outside") {
+        outside.focus();
+      }
+      popover.hide();
+      await waitForSolid(() =>
+        expect(document.activeElement).toBe(
+          from === "outside"
+            ? outside
+            : view.container.querySelector("#new-session-project-trigger"),
+        ),
+      );
+    },
+  );
 });

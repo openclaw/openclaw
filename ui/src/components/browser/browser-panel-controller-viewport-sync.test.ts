@@ -9,7 +9,6 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 
 setupBrowserPanelTestCleanup();
 
@@ -19,7 +18,7 @@ function actionRequests(request: ReturnType<typeof createBrowserClient>["request
     .filter((envelope) => envelope.path === "/act" && envelope.body?.kind === kind);
 }
 
-describe("BrowserPanelController viewport sync", () => {
+describe("BrowserPanel viewport sync", () => {
   it.each([false, true, undefined])(
     "only auto-fits a browser whose owner allows it (canAutoResizeViewport=%s)",
     async (canAutoResizeViewport) => {
@@ -50,7 +49,7 @@ describe("BrowserPanelController viewport sync", () => {
         throw new Error(`Unexpected browser route: ${envelope.path}`);
       });
       const host = new TestBrowserPanelHost(client);
-      const controller = new BrowserPanelController(host);
+      const controller = host.createPanel();
       controller.handleViewportResize(600, 400);
       await controller.refreshAll();
       await vi.advanceTimersByTimeAsync(300);
@@ -64,7 +63,7 @@ describe("BrowserPanelController viewport sync", () => {
       // Local scaling still maps a quarter-frame click to the original CSS viewport.
       const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
       vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 300, 200));
-      controller.handleStageClick(new MouseEvent("click", { clientX: 75, clientY: 50 }));
+      controller.input.handleStageClick(new MouseEvent("click", { clientX: 75, clientY: 50 }));
       await vi.advanceTimersByTimeAsync(0);
       expect(actionRequests(request, "clickCoords").map((envelope) => envelope.body)).toEqual([
         { kind: "clickCoords", targetId: "tab-a", x: 300, y: 200 },
@@ -76,7 +75,7 @@ describe("BrowserPanelController viewport sync", () => {
       expect(actionRequests(request, "resize").map((envelope) => envelope.body)).toEqual([
         { kind: "resize", targetId: "tab-a", width: 900, height: 600 },
       ]);
-      controller.hostDisconnected();
+      controller.suspendView();
     },
   );
 
@@ -84,7 +83,7 @@ describe("BrowserPanelController viewport sync", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { client, request } = createBrowserClient(async () => ({ ok: true }));
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.canAutoResizeViewport = true;
     controller.activeTargetId = "tab-a";
     controller.view = createView("tab-a");

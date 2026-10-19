@@ -8,7 +8,10 @@ import type { ConfigUiHint, ConfigUiGroup } from "../shared/config-ui-hints-type
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
-import type { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
+import type {
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+  TRANSCRIPT_SOURCE_LOCATOR_FIELDS,
+} from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 /** UI hint metadata for plugin config schema fields. */
@@ -326,6 +329,9 @@ export type PluginManifestControlUi = {
   entry: string;
   /** Stylesheets in the same asset directory, loaded before activation. */
   styles?: string[];
+  /** Omission retains ordinary runtime activation. */
+  activation?: "settings-only";
+  settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
 };
 
 export type PluginManifestMcpServer = Record<string, unknown>;
@@ -388,11 +394,10 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
-/** Static transcript setup metadata; runtime registration does not gate configuration. */
 export type PluginManifestTranscriptSource = {
   name?: string;
   autoStart?: Partial<
-    Record<"accountId" | "guildId" | "channelId" | "meetingUrl", "optional" | "required">
+    Record<(typeof TRANSCRIPT_SOURCE_LOCATOR_FIELDS)[number], "optional" | "required">
   >;
 };
 
@@ -401,6 +406,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Shared-state databases retained under this state-scoped resource. */
+  databaseFamily?: "state";
 };
 
 /** Provider-authored limits and result semantics available before runtime activation. */

@@ -14,14 +14,15 @@ import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycl
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  captureSessionTarget,
+  isCompetingSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
   commitSessionInitializationRollback,
   getSessionInitializationRollback,
   type SessionInitialization,
 } from "../../sessions/session-initialization.js";
-import {
-  isCompetingSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "../../state/github-personal-publication-lifecycle.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -225,7 +226,7 @@ async function withSqliteSessionMutations<T>(
   }
   const assertTargetIdle = (target: AgentHarnessSessionDeletionTarget) => {
     if (
-      isCompetingSessionWorkAdmissionActive(ownerStorePath, [target.sessionKey, target.sessionId])
+      isCompetingSessionControllerWorkActive(ownerStorePath, [target.sessionKey, target.sessionId])
     ) {
       throw new Error(
         `Cannot mutate session while competing work is in flight for ${target.sessionKey}; retry after the run completes`,
@@ -456,12 +457,17 @@ async function withSqliteSessionMutations<T>(
         },
       );
     };
-    return await runExclusiveSessionLifecycleMutation("delete-prepare", {
-      scope: ownerStorePath,
-      identities: [
-        ...targets.flatMap((target) => [target.sessionKey, target.sessionId]),
-        ...(options.additionalIdentities ?? []),
-      ],
+    return await runSessionMutation({
+      diagnosticLabel: "delete-prepare",
+      targets: targets.map((target) =>
+        captureSessionTarget({
+          storeScope: ownerStorePath,
+          // Legacy blank keys are addressed by incarnation until Doctor removes them.
+          sessionKey: target.sessionKey.trim() ? target.sessionKey : target.sessionId,
+          incarnation: target.sessionId,
+          aliases: options.additionalIdentities,
+        }),
+      ),
       run: async () =>
         prepare
           ? await prepare(targets, invoke, options.assertSourceCurrent)

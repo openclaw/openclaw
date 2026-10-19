@@ -102,22 +102,15 @@ export function resolveAgentTextAvatar(
   return candidates.map(resolveAssistantTextAvatar).find(Boolean) ?? null;
 }
 
-type FormatBytesOptions = {
-  fallback?: string;
-  maxUnit?: "kilo" | "mega" | "giga" | "tera";
-  fractionDigits?: Parameters<typeof formatByteSize>[1]["fractionDigits"];
-};
-
-export function formatBytes(bytes?: number, options: FormatBytesOptions = {}) {
+export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
-    return options.fallback ?? "-";
+    return "-";
   }
   return formatByteSize(bytes, {
     style: "legacy-binary",
-    maxUnit: options.maxUnit ?? "tera",
+    maxUnit: "tera",
     separator: " ",
-    fractionDigits:
-      options.fractionDigits ?? ((value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0)),
+    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
   });
 }
 

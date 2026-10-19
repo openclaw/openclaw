@@ -472,7 +472,12 @@ export function retainSessionEntryWorkerPublication(params: {
             return undefined;
           }
           if (replacement?.previous.has(sessionKey) && !replacement.current.has(sessionKey)) {
-            return { kind: "removed" };
+            return {
+              kind: "removed",
+              ...(replacement.transcriptInventoryUnchanged
+                ? { transcriptInventoryUnchanged: true }
+                : {}),
+            };
           }
           const currentEntry = readCurrent(sessionKey);
           return currentEntry?.projection

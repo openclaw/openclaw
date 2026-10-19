@@ -244,7 +244,6 @@ final class GatewayProcessManager {
                 return
             }
         }
-        self.logger.debug("gateway active requested active=\(active)")
         self.desiredActive = active
         self.refreshEnvironmentStatus()
         if active, self.hostingChangeInProgress { return }
@@ -552,7 +551,6 @@ final class GatewayProcessManager {
         self.status = .starting
         self.gatewayStartGeneration &+= 1
         let startGeneration = self.gatewayStartGeneration
-        self.logger.debug("gateway start requested")
 
         // First try to attach to an already-running Gateway before enabling launchd.
         self.beginGatewayStartTask(generation: startGeneration) { [weak self] in
@@ -1164,7 +1162,6 @@ extension GatewayProcessManager {
             }
         }
         self.appendLog("[gateway] refreshing control channel (\(reason))\n")
-        self.logger.debug("gateway control channel refresh reason=\(reason)")
         Task { await ControlChannel.shared.configure() }
     }
 
@@ -1377,7 +1374,6 @@ extension GatewayProcessManager {
     func clearLog() {
         self.log = ""
         try? FileManager().removeItem(atPath: GatewayLaunchAgentManager.launchdGatewayLogPath())
-        self.logger.debug("gateway log cleared")
     }
 
     private nonisolated static func readGatewayLog(path: String, limit: Int) -> String {

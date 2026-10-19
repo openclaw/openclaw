@@ -71,8 +71,6 @@ export function getCachedIMessagePrivateApiStatus(
   return entry.status;
 }
 
-// Drop a cached verdict so the next action re-probes.
-//
 // cacheIMessagePrivateApiStatus caches successful probes without expiry, which is
 // right for the hot path but leaves no way back once the bridge dies: the
 // helper dylib can stop answering while Messages.app stays alive and the

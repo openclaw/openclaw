@@ -17,5 +17,5 @@ export function resolveDiagnosticModelResponse(result: EmbeddedAgentRunResult): 
   // delivery mirror for tool-only turns. finalAssistantRawText can be cumulative
   // or runner-substituted, so the model's own latest-message text wins.
   const rawText = result.meta.finalAssistantMessageRawText ?? result.meta.finalAssistantRawText;
-  return typeof rawText === "string" && rawText.trim() ? rawText : undefined;
+  return rawText?.trim() ? rawText : undefined;
 }

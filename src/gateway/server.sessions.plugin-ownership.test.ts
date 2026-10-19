@@ -5,7 +5,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -165,7 +165,7 @@ test("sessions.patch rechecks plugin ownership after waiting for lifecycle admis
   } as never;
   let releaseMutation = () => {};
   const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
+  const mutation = runSessionMutation({
     scope: storePath,
     identities: [sessionKey, sessionId],
     run: async () => {

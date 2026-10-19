@@ -9,7 +9,6 @@ type RegistrationResources = {
   runCleanup?: RegistrationCleanup;
   rolledBack?: boolean;
   disposal?: Promise<Error[]>;
-  disposalStarted?: boolean;
   retire?: () => Promise<void>;
 };
 
@@ -159,44 +158,27 @@ export class PluginRegistrationResourceSource {
     }
   }
 
-  #pendingWork(): AsyncWorkScope[] {
-    return [...this.#registrations.values()]
-      .filter((entry) => !entry.disposalStarted)
-      .map((entry) => entry.work);
-  }
-
   #dispose(pluginId: string, entry: RegistrationResources): Promise<Error[]> {
     return (entry.disposal ??= Promise.resolve().then(async () => {
       const signalCleanup = async () => {
         entry.work.beginClose();
-        // Abort listeners can queue work in a sibling. Keep this cleanup admission
-        // until those descendants join, before any registration resource is disposed.
         await this.#waitForRegistrations();
-        await AsyncWorkScope.runWhenAllIdle(
-          () => this.#pendingWork(),
-          () => undefined,
-        );
       };
       await (entry.runCleanup ? entry.runCleanup(signalCleanup) : signalCleanup());
       const failures: Error[] = [];
       try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => this.#pendingWork(),
-          () =>
-            entry.work.track(async () => {
-              entry.disposalStarted = true;
-              const disposers = entry.disposers.splice(0);
-              for (const { id, dispose } of disposers) {
-                try {
-                  await dispose();
-                } catch (cause) {
-                  failures.push(
-                    new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
-                  );
-                }
-              }
-            }),
-        );
+        await entry.work.runWhenIdle(async () => {
+          const disposers = entry.disposers.splice(0);
+          for (const { id, dispose } of disposers) {
+            try {
+              await dispose();
+            } catch (cause) {
+              failures.push(
+                new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
+              );
+            }
+          }
+        });
         try {
           // Instance cleanup can use the same captured tracker as raw disposal.
           await entry.work.runWhenIdle(() => entry.retire?.());

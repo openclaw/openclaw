@@ -10,6 +10,7 @@ type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number
 
 export function ModelPicker(props: ModelPickerParams) {
   const choices = createMemo(() => modelPickerOptions(props));
+  let customInput: HTMLInputElement;
   const commitCustom = (event: Event) => {
     if ((event.type === "change") === (props.custom?.commit === "change")) {
       // SAFETY: Both handlers are attached to the custom-model input below.
@@ -47,17 +48,14 @@ export function ModelPicker(props: ModelPickerParams) {
     onOpen: () => props.onOpen?.(),
     renderLeading: (option) => (option.provider ? providerIcon(option.provider) : undefined),
     onChange: (value) => props.onChange(value),
-    onChangeTarget: (value, select) => {
-      const input = select
-        .closest(".model-picker")
-        ?.querySelector<HTMLInputElement>(".model-picker__custom");
-      if (value === choices().customValue && input) {
-        input.hidden = false;
-        queueMicrotask(() => input.focus());
-        return;
-      }
+    onChangeTarget: (value) => {
+      const input = props.custom ? customInput : undefined;
       if (input) {
-        input.hidden = true;
+        input.hidden = value !== choices().customValue;
+        if (!input.hidden) {
+          queueMicrotask(() => input.focus());
+          return;
+        }
       }
       props.onChange(value);
     },
@@ -67,6 +65,7 @@ export function ModelPicker(props: ModelPickerParams) {
       <Picker params={pickerParams()} />
       {props.custom ? (
         <input
+          ref={(input) => (customInput = input)}
           id={props.custom.id}
           class="settings-input model-picker__custom"
           aria-label={props.custom.label}

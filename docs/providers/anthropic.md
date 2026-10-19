@@ -557,6 +557,13 @@ metadata appended to large transcripts is included without reading the entire
 history. Metadata outside those windows may be unavailable. Desktop rows retain
 their Desktop title and remain colorless.
 
+Routine discovery reads at most 64 MiB of transcript metadata across 10,000 files.
+If it reaches either limit, the final discovered page reports `DISCOVERY_TRUNCATED`
+instead of claiming the inventory is complete. Search by an exact session ID to
+look up matching transcripts independently of that frontier; reading, continuing,
+and opening a known session in a terminal use the same bounded lookup. Per-file
+metadata windows and normal path, sidechain, and archive checks still apply.
+
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
 Claude session commands when the local Claude projects directory exists
@@ -566,9 +573,9 @@ Approve the node pairing upgrade when those commands first appear.
 
 The sidebar groups rows by their Gateway or paired-node host and shows each
 host's newest bounded page as soon as that computer answers. It reconciles again
-after host-connectivity changes, when the page regains focus, and at most every
-30 seconds while visible, so Claude sessions created outside OpenClaw appear
-without a reload. A changed catalog gets a faster follow-up pass. Use **Load more
+after host-connectivity changes, when the page becomes visible, and every two
+minutes while visible, so Claude sessions created outside OpenClaw appear
+without a reload. Discovery pauses while hidden. Use **Load more
 sessions** below a catalog group to append the next page for every host that has
 more history; appended rows stay visible and are re-fetched to the same depth
 across refreshes. Catalog clients use `sessions.catalog.list`; opening a row uses

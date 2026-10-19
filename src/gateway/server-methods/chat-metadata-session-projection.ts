@@ -46,7 +46,8 @@ export type ChatMetadataProjectionFacts = {
 export type PreparedChatMetadataProjection = Awaited<
   ReturnType<typeof prepareChatMetadataModelProjection>
 > & {
-  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
+  agent: ChatMetadataProjectionFacts &
+    Pick<ChatMetadataResult, "commands" | "swarmEnabled"> & { revision: string };
 };
 
 export function readPreparedChatMetadata(
@@ -236,7 +237,7 @@ export function hasSessionCatalogContext(
   );
 }
 
-function resolveRequiredWorkerInferenceProfileId(
+export function resolveRequiredWorkerInferenceProfileId(
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
 ): string | undefined {

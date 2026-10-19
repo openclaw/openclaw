@@ -24,92 +24,132 @@ const { cancel } = vi.hoisted(() => ({ cancel: vi.fn(() => true) }));
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ cancel }) }));
 afterEach(() => {
   resetProcessRegistryForTests();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
-it("observes and stops the same process after the model turn has settled without starting another turn", async () => {
-  const descriptor = {
-    ...testWorkerDescriptor(process.cwd()),
-    connectionEndpoint: TEST_WORKER_ENDPOINT,
-  };
-  const record = createProcessSessionFixture({ id: "retained-build", backgrounded: true });
-  record.scopeKey = "worker:" + descriptor.admission.sessionId;
-  record.agentId = descriptor.assignment.agentId;
-  record.processActivity = { resultSettled: false, lastOutputAtMs: record.startedAt };
-  addSession(record);
-  appendOutput(record, "stdout", "Build is running\n");
-  vi.mocked(runWorkerDescriptor).mockResolvedValue({
-    status: "completed",
-    transcriptLeafId: null,
-    transcriptNextSeq: 1,
-  });
-  const input = new PassThrough();
-  const output = new PassThrough();
-  const waiting = new Map<string, ReturnType<typeof createDeferred<WorkerProcessMessage>>>();
-  output.on("data", (chunk: Buffer) => {
-    for (const line of chunk.toString("utf8").trim().split("\n")) {
-      const frame = parseWorkerProcessMessage(JSON.parse(line));
-      if (frame) {
-        waiting.get(frame.type === "process-result" ? frame.requestId : "turn")?.resolve(frame);
-      }
-    }
-  });
-  const request = (id: string, value: unknown) => {
-    const result = createDeferred<WorkerProcessMessage>();
-    waiting.set(id, result);
-    input.write(JSON.stringify(value) + "\n");
-    return result.promise;
-  };
-  const running = runWorkerCommand({ input, output, managed: true });
-  try {
-    expect(
-      await request("turn", { type: "turn", turnId: descriptor.assignment.turnId, descriptor }),
-    ).toMatchObject({ type: "result", retainWorker: true });
-    const binding = {
-      type: "process",
-      environmentId: descriptor.admission.environmentId,
-      sessionId: descriptor.admission.sessionId,
-      ownerEpoch: descriptor.admission.ownerEpoch,
+it.each([true, false])(
+  "observes retained processes and publishes changes only when negotiated=%s",
+  async (processChanges) => {
+    vi.useFakeTimers();
+    const descriptor = {
+      ...testWorkerDescriptor(process.cwd()),
+      connectionEndpoint: TEST_WORKER_ENDPOINT,
     };
-    const list = await request("list", {
-      ...binding,
-      requestId: "list",
-      operation: { action: "list" },
+    const record = createProcessSessionFixture({ id: "retained-build", backgrounded: true });
+    record.scopeKey = "worker:" + descriptor.admission.sessionId;
+    record.agentId = descriptor.assignment.agentId;
+    record.processActivity = { resultSettled: false, lastOutputAtMs: record.startedAt };
+    addSession(record);
+    appendOutput(record, "stdout", "Build is running\n");
+    vi.mocked(runWorkerDescriptor).mockResolvedValue({
+      status: "completed",
+      transcriptLeafId: null,
+      transcriptNextSeq: 1,
     });
-    expect(list).toMatchObject({
-      type: "process-result",
-      result: {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const waiting = new Map<string, ReturnType<typeof createDeferred<WorkerProcessMessage>>>();
+    const changes: WorkerProcessMessage[] = [];
+    output.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString("utf8").trim().split("\n")) {
+        const frame = parseWorkerProcessMessage(JSON.parse(line));
+        if (frame?.type === "processes-changed") {
+          changes.push(frame);
+        } else if (frame) {
+          waiting.get(frame.type === "process-result" ? frame.requestId : "turn")?.resolve(frame);
+        }
+      }
+    });
+    const request = (id: string, value: unknown) => {
+      const result = createDeferred<WorkerProcessMessage>();
+      waiting.set(id, result);
+      input.write(JSON.stringify(value) + "\n");
+      return result.promise;
+    };
+    const running = runWorkerCommand({ input, output, managed: true });
+    try {
+      expect(
+        await request("turn", {
+          type: "turn",
+          turnId: descriptor.assignment.turnId,
+          descriptor,
+          ...(processChanges ? { processChanges: true } : {}),
+        }),
+      ).toMatchObject({ type: "result", retainWorker: true });
+      const binding = {
+        type: "process",
+        environmentId: descriptor.admission.environmentId,
         sessionId: descriptor.admission.sessionId,
-        processes: [{ processId: record.id, tail: "Build is running\n" }],
-      },
-    });
-    if (list.type !== "process-result" || !list.result || !("processes" in list.result)) {
-      throw new Error("Expected process list");
+        ownerEpoch: descriptor.admission.ownerEpoch,
+      };
+      const list = await request("list", {
+        ...binding,
+        requestId: "list",
+        operation: { action: "list" },
+      });
+      expect(list).toMatchObject({
+        type: "process-result",
+        result: {
+          sessionId: descriptor.admission.sessionId,
+          processes: [{ processId: record.id, tail: "Build is running\n" }],
+        },
+      });
+      if (list.type !== "process-result" || !list.result || !("processes" in list.result)) {
+        throw new Error("Expected process list");
+      }
+      const row = list.result.processes[0]!;
+      expect(
+        await request("stale", {
+          ...binding,
+          ownerEpoch: binding.ownerEpoch + 1,
+          requestId: "stale",
+          operation: { action: "stop", processId: row.processId, instanceId: row.instanceId },
+        }),
+      ).toMatchObject({ error: expect.stringContaining("owner changed") });
+      expect(cancel).not.toHaveBeenCalled();
+      expect(
+        await request("stop", {
+          ...binding,
+          requestId: "stop",
+          operation: { action: "stop", processId: row.processId, instanceId: row.instanceId },
+        }),
+      ).toMatchObject({ result: { requested: true } });
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(record.id, "manual-cancel");
+      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+      expect(record.pendingOutput).toEqual([{ stream: "stdout", text: "Build is running\n" }]);
+      expect(record.terminalPollObserved).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changes).toHaveLength(processChanges ? 1 : 0);
+      expect(
+        await request("stopping", {
+          ...binding,
+          requestId: "stopping",
+          operation: { action: "list" },
+        }),
+      ).toMatchObject({
+        result: { processes: [{ processId: record.id, status: "running", canStop: false }] },
+      });
+      appendOutput(record, "stdout", "Build output after the turn\n");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changes).toHaveLength(processChanges ? 2 : 0);
+      const other = createProcessSessionFixture({ id: "another-owner", backgrounded: true });
+      other.scopeKey = "worker:another-session";
+      other.agentId = record.agentId;
+      addSession(other);
+      appendOutput(other, "stdout", "Unrelated output\n");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changes).toHaveLength(processChanges ? 2 : 0);
+      appendOutput(record, "stdout", "Build progressed after the turn\n");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changes).toHaveLength(processChanges ? 3 : 0);
+      markExited(record, 0, null, "completed");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changes).toHaveLength(processChanges ? 4 : 0);
+    } finally {
+      markExited(record, 0, null, "completed");
+      input.end();
+      await running;
     }
-    const row = list.result.processes[0]!;
-    expect(
-      await request("stale", {
-        ...binding,
-        ownerEpoch: binding.ownerEpoch + 1,
-        requestId: "stale",
-        operation: { action: "stop", processId: row.processId, instanceId: row.instanceId },
-      }),
-    ).toMatchObject({ error: expect.stringContaining("owner changed") });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(
-      await request("stop", {
-        ...binding,
-        requestId: "stop",
-        operation: { action: "stop", processId: row.processId, instanceId: row.instanceId },
-      }),
-    ).toMatchObject({ result: { requested: true } });
-    expect(cancel).toHaveBeenCalledExactlyOnceWith(record.id, "manual-cancel");
-    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
-    expect(record.pendingOutput).toEqual([{ stream: "stdout", text: "Build is running\n" }]);
-    expect(record.terminalPollObserved).toBeUndefined();
-  } finally {
-    markExited(record, 0, null, "completed");
-    input.end();
-    await running;
-  }
-});
+  },
+);

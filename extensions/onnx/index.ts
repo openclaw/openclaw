@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { definePluginEntry, type OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { findModel } from "./src/catalog.js";
 import { ConfigSchema, resolveOnnxConfig } from "./src/config.js";
-import { createOnnxProvider } from "./src/decisions.js";
+import { createPreparedOnnxProvider } from "./src/decisions.js";
 import { InferenceWorkerClient } from "./src/worker-client.js";
 
 function selectedModels(config: OpenClawConfig): string[] {
@@ -39,7 +39,9 @@ export default definePluginEntry({
     );
     const config = resolveOnnxConfig(api.pluginConfig, api.resolvePath);
     const client = new InferenceWorkerClient({ workerUrl, config });
-    api.registerDecisionProvider(createOnnxProvider(client, (message) => api.logger.warn(message)));
+    api.registerDecisionProvider(
+      createPreparedOnnxProvider(client, (message) => api.logger.warn(message)),
+    );
     api.registerService({
       id: "onnx-worker",
       async start(context) {

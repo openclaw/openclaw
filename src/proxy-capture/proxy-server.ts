@@ -9,14 +9,15 @@ import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
+import { promisify } from "node:util";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import { createDebugProxyChildCaptureReceiver } from "./child-server.js";
-import type { DebugProxyCliStore } from "./cli-contract.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
 import { reportCapturePersistenceFailure } from "./runtime-owner.js";
 import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
+import type { DebugProxyCliStore } from "./store.types.js";
 import type { CaptureEventRecord } from "./types.js";
 
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
@@ -284,7 +285,7 @@ export async function startDebugProxyServer(params: {
             recordTargetEvent({
               direction: "inbound",
               kind: "response",
-              status: upstreamRes.statusCode ?? undefined,
+              status: upstreamRes.statusCode,
               headersJson: JSON.stringify(redactedCaptureHeaders(upstreamRes.headers)),
               ...finishBodyPreviewCapture(responseCapture),
             });
@@ -470,15 +471,7 @@ export async function startDebugProxyServer(params: {
         stopping ??= (async () => {
           childCapture.stop();
           try {
-            await new Promise<void>((resolve, reject) => {
-              server.close((error) => {
-                if (error) {
-                  reject(error);
-                  return;
-                }
-                resolve();
-              });
-            });
+            await promisify(server.close.bind(server))();
           } catch (error) {
             errors.push(error);
           }

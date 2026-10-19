@@ -148,6 +148,8 @@ function ActivityGroupBody(props: {
   options: NativeMessageGroupOptions;
   renderEntries: ActivityEntries;
 }) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const state = () => props.state;
   const overrides = createMemo(() => props.state.toolCardOverrides);
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
@@ -170,8 +172,8 @@ function ActivityGroupBody(props: {
           type="button"
           aria-expanded={state().activityExpanded ? "true" : "false"}
           aria-controls={state().activityBodyId}
-          onPointerEnter={syncToolDisclosureOverflow}
-          onFocus={syncToolDisclosureOverflow}
+          onPointerEnter={syncOverflow}
+          onFocus={syncOverflow}
           onClick={() =>
             props.options.onToggleToolMessageExpanded?.(
               state().activityDisclosureId,
@@ -180,6 +182,7 @@ function ActivityGroupBody(props: {
           }
         >
           <ChatActivityHeadline
+            contentRef={(element) => (disclosureContent = element)}
             scope={JSON.stringify([
               props.options.sessionKey,
               props.options.connectionEpoch,

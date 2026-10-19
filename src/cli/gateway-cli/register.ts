@@ -8,7 +8,7 @@ import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilityBundle } from "../../logging/diagnostic-stability-bundle.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -71,6 +71,10 @@ function gatewayAction(action: Parameters<Command["action"]>[0], label?: string)
     try {
       await action.apply(this, args);
     } catch (err) {
+      // Completed output must reach CLI finalization without a second failure envelope.
+      if (err instanceof ExitError) {
+        throw err;
+      }
       if (!json) {
         rethrowExpectedCliError(err);
       }
@@ -189,6 +193,9 @@ function renderStabilityBundleSummary(params: {
   const { bundle, path, rich, snapshot } = params;
   const processDetails = [
     `pid=${bundle.process.pid}`,
+    ...(bundle.process.openclawVersion ? [`openclaw=${bundle.process.openclawVersion}`] : []),
+    ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
+    ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
     `node=${bundle.process.node}`,
     `${bundle.process.platform}/${bundle.process.arch}`,
     `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,

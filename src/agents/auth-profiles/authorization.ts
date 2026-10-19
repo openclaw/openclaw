@@ -204,7 +204,7 @@ export async function captureAuthProfileAuthorization(params: {
         selectedPath === requestedPath && selected.type !== "oauth" ? [requestedPath] : paths;
       return { rows, selectedPath, lineagePaths };
     };
-    const assertFacts = (allowPending = false) => {
+    const assertFacts = () => {
       assertOwners();
       for (const target of targets) {
         if (!target.incarnation) {
@@ -224,7 +224,7 @@ export async function captureAuthProfileAuthorization(params: {
             retired = true;
             throw new AuthProfileAuthorizationError("retired");
           }
-          if (fact.status === "pending" && !allowPending) {
+          if (fact.status === "pending") {
             throw new AuthProfileAuthorizationError("unavailable");
           }
         }
@@ -277,38 +277,13 @@ export async function captureAuthProfileAuthorization(params: {
         ]),
       )
       .digest("hex");
-    let observation: "ready" | "pending" | "unavailable" = "ready";
     return {
       authorizationId,
-      assertCurrent() {
-        assertFacts();
-        // Canonical observation happens in revalidate; commit checks consume owner publications
-        // without probing the WAL being written by this very admission.
-        if (observation !== "ready") {
-          throw new AuthProfileAuthorizationError("unavailable");
-        }
-      },
+      assertCurrent: assertFacts,
       async revalidate() {
-        assertFacts(true);
-        if (observation === "pending") {
-          throw new AuthProfileAuthorizationError("unavailable");
-        }
-        observation = "pending";
-        try {
-          const current = await readCanonical();
-          assertFacts();
-          if (current.selectedPath !== selectedPath) {
-            retired = true;
-            throw new AuthProfileAuthorizationError("retired");
-          }
-          observation = "ready";
-        } catch (error) {
-          observation = "unavailable";
-          // An in-flight reader may reject on cleanup before it can return a row.
-          // Known source retirement takes precedence over a transient read failure.
-          assertRoot();
-          throw sanitize(error);
-        }
+        // The credential writer publishes replacement, refresh, and revocation facts.
+        // External writers require exclusive offline custody; no foreign-commit probe.
+        assertFacts();
       },
       dispose() {
         if (disposed) {

@@ -29,7 +29,6 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 ]);
 
 // Responses-family APIs retain their inherited "aborted" synthetic-result convention.
-/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model,

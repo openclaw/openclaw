@@ -269,7 +269,6 @@ it("reports decoder initialization failure to the receive owner", async () => {
   await decodeOpusStreamChunks(Readable.from([Buffer.from([0xf8, 0xff, 0xfe])]), {
     onError,
     onChunk,
-    onVerbose: vi.fn(),
     onWarn: vi.fn(),
   });
   expect(onError).toHaveBeenCalledExactlyOnceWith(error);

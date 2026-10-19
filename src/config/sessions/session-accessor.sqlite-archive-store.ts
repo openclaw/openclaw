@@ -115,9 +115,6 @@ export async function publishSessionStateArchives(
                   requested: requestedForPass,
                 },
               });
-              if (prepared.kind !== "archive-publish-prepare") {
-                throw new Error("SQLite archive preparation returned another operation's result");
-              }
               assertOwnerCurrent();
               for (const plan of prepared.value) {
                 if (
@@ -137,7 +134,7 @@ export async function publishSessionStateArchives(
             },
             async record(results) {
               assertOwnerCurrent();
-              const recorded = await runSqliteSessionReclamation({
+              await runSqliteSessionReclamation({
                 assertCommitAllowed: assertOwnerCurrent,
                 plan: {
                   kind: "archive-publish-record",
@@ -147,9 +144,6 @@ export async function publishSessionStateArchives(
                   nowMs: Date.now(),
                 },
               });
-              if (recorded.kind !== "archive-publish-record") {
-                throw new Error("SQLite archive recording returned another operation's result");
-              }
             },
           },
           signal,

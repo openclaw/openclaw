@@ -2,6 +2,7 @@
 
 import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { CommandPaletteElement } from "../components/command-palette-contract.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -28,7 +29,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mountLoader() {
+async function mountLoader() {
   const foreground = document.createElement("textarea");
   foreground.value = "Keep this foreground draft";
   document.body.prepend(foreground);
@@ -37,6 +38,7 @@ function mountLoader() {
   const { state, dispose: disposeOwner } = createRoot((dispose) => {
     const loading = new ShellCommandPaletteOwner(
       {
+        elements: {},
         commandPaletteElement: COMMAND_PALETTE_ELEMENT,
         lazyCustomElements: createLazyCustomElementRequests(),
         chatNavigationOptions: () => undefined,
@@ -58,8 +60,9 @@ function mountLoader() {
     { container },
   );
   flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
   const input = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-  input.focus();
+  expect(document.activeElement).toBe(input);
   return { state, input, foreground, close, disposeOwner };
 }
 
@@ -69,8 +72,70 @@ function type(input: HTMLTextAreaElement, value: string) {
 }
 
 describe("cold command palette input custody", () => {
-  it("retains its live field and selection while the shell refreshes and locks a queued submit", () => {
-    const { state, input } = mountLoader();
+  it.each(["open", "toggle"] as const)(
+    "preserves the %s intent when the retained palette is detached",
+    (action) => {
+      const palette = () =>
+        Object.assign(document.createElement("openclaw-command-palette"), {
+          custodianAvailable: false,
+          desktopAvailable: false,
+          isOpen: false,
+          openPalette: vi.fn<CommandPaletteElement["openPalette"]>(),
+          togglePalette: vi.fn<CommandPaletteElement["togglePalette"]>(),
+        });
+      const detached = palette();
+      container.append(detached);
+      detached.remove();
+      const host = {
+        elements: { commandPalette: detached },
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: createLazyCustomElementRequests(),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      };
+      const request = vi.fn<ConstructorParameters<typeof ShellCommandPaletteOwner>[1]["request"]>();
+      const { owner, dispose } = createRoot((disposeRoot) => ({
+        owner: new ShellCommandPaletteOwner(host, {
+          request,
+          clear: () => {},
+          cancel: () => {},
+          pending: () => false,
+        }),
+        dispose: disposeRoot,
+      }));
+      onTestFinished(dispose);
+      mountSolid(
+        () => createComponent(CommandPaletteLoading, { state: owner.loading, onClose: () => {} }),
+        { container },
+      );
+
+      owner[action]();
+      flush();
+      expect(detached.openPalette).not.toHaveBeenCalled();
+      expect(detached.togglePalette).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledOnce();
+      const input = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input");
+      if (!input) {
+        throw new Error("Expected the replacement palette's loading input");
+      }
+      type(input, "Keep the replacement intent");
+
+      const replacement = palette();
+      container.append(replacement);
+      host.elements.commandPalette = replacement;
+      request.mock.calls[0]?.[2]?.();
+      expect(replacement.openPalette).toHaveBeenCalledOnce();
+      const take = replacement.openPalette.mock.calls[0]?.[0];
+      expect(typeof take).toBe("function");
+      expect(typeof take === "function" ? take() : undefined).toMatchObject({
+        value: "Keep the replacement intent",
+      });
+      expect(owner.loading.active()).toBe(false);
+    },
+  );
+
+  it("retains its live field and selection while the shell refreshes and locks a queued submit", async () => {
+    const { state, input } = await mountLoader();
     type(input, "Keep this selection");
     input.setSelectionRange(5, 9, "backward");
     flush();
@@ -96,8 +161,8 @@ describe("cold command palette input custody", () => {
 
   it.each(["typed", "pasted", "replaced", "dropped", "composing"])(
     "preserves only a typed mention trigger: %s",
-    (mode) => {
-      const { state, input } = mountLoader();
+    async (mode) => {
+      const { state, input } = await mountLoader();
       const edit = (value: string, inputType: string, data: string) => {
         input.value = value;
         input.setSelectionRange(value.length, value.length);
@@ -124,35 +189,38 @@ describe("cold command palette input custody", () => {
     },
   );
 
-  it.each(["transfer", "dismiss"] as const)("keeps pasted images only until %s", (outcome) => {
-    const { state, input } = mountLoader();
-    const file = new File(["image"], "clipboard.png", { type: "image/png" });
-    const event = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "clipboardData", {
-      value: { items: [{ type: file.type, getAsFile: () => file }], getData: () => "" },
-    });
-    input.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-    const take = state.captureHandoff();
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Enter",
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    expect(state.submitRequested()).toBe(true);
-    if (outcome === "dismiss") {
-      state.clear();
-      state.begin();
-      expect(take()).toBeUndefined();
-      expect(state.captureHandoff()()?.imageFiles).toBeUndefined();
-    } else {
-      expect(take()).toMatchObject({ value: "", imageFiles: [file], submitRequested: true });
-      expect(take()).toBeUndefined();
-    }
-  });
+  it.each(["transfer", "dismiss"] as const)(
+    "keeps pasted images only until %s",
+    async (outcome) => {
+      const { state, input } = await mountLoader();
+      const file = new File(["image"], "clipboard.png", { type: "image/png" });
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: { items: [{ type: file.type, getAsFile: () => file }], getData: () => "" },
+      });
+      input.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      const take = state.captureHandoff();
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(state.submitRequested()).toBe(true);
+      if (outcome === "dismiss") {
+        state.clear();
+        state.begin();
+        expect(take()).toBeUndefined();
+        expect(state.captureHandoff()()?.imageFiles).toBeUndefined();
+      } else {
+        expect(take()).toMatchObject({ value: "", imageFiles: [file], submitRequested: true });
+        expect(take()).toBeUndefined();
+      }
+    },
+  );
 
   it.each([
     { modifier: { ctrlKey: true }, submit: true, value: "Start this background task" },
@@ -160,8 +228,8 @@ describe("cold command palette input custody", () => {
     { modifier: {}, submit: false, value: "unsent prompt" },
   ])(
     "handles Enter without leaking a loading prompt ($modifier)",
-    ({ modifier, submit, value }) => {
-      const { state, input, close } = mountLoader();
+    async ({ modifier, submit, value }) => {
+      const { state, input, close } = await mountLoader();
       type(input, value);
       const event = new KeyboardEvent("keydown", {
         key: "Enter",
@@ -208,7 +276,7 @@ describe("cold command palette input custody", () => {
   ])(
     "hands off live text, selection and original focus (remounted: $remount)",
     async ({ remount, value, start, end }) => {
-      const { state, input, foreground, close } = mountLoader();
+      const { state, input, foreground, close } = await mountLoader();
       expect(input.disabled).toBe(false);
       type(input, remount ? value : "early draft");
       const take = state.captureHandoff();
@@ -246,7 +314,7 @@ describe("cold command palette input custody", () => {
   );
 
   it("keeps the composing field alive until its final input and selection commit", async () => {
-    const { state, input } = mountLoader();
+    const { state, input } = await mountLoader();
     input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     type(input, "に");
     const accepted = vi.fn();
@@ -271,7 +339,7 @@ describe("cold command palette input custody", () => {
   });
 
   it("retires a composition handoff when its shell owner is disposed", async () => {
-    const { state, input, disposeOwner } = mountLoader();
+    const { state, input, disposeOwner } = await mountLoader();
     input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     type(input, "retired prompt");
     const take = state.captureHandoff();
@@ -287,7 +355,7 @@ describe("cold command palette input custody", () => {
   it.each(["composing", "commit-pending"] as const)(
     "retires a %s handoff without reviving its prompt on reopen",
     async (phase) => {
-      const { state, input } = mountLoader();
+      const { state, input } = await mountLoader();
       input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
       type(input, "retired text");
       const accepted = vi.fn();

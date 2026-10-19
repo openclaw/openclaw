@@ -575,7 +575,7 @@ function setYamlInsertion(ast: YamlAst, info: InsertionInfo, value: string): OcA
 
 function coerceYamlValue(value: string, current: unknown): unknown {
   if (typeof current === "number") {
-    if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)) {
+    if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value)) {
       return undefined;
     }
     const n = Number(value);

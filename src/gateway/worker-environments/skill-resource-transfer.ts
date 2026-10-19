@@ -4,9 +4,11 @@ import {
   prepareSkillBundle,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
+import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
+import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   isWorkspaceSkillReadPath,
@@ -206,12 +208,6 @@ export async function transferSkillResources(params: {
     const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
       (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
     );
-    // Consumer catalogs (installed-skill catalog, skill.used matcher) prefer the
-    // discovery projection over resolved entries, so transferred identities must
-    // reach it too. Cloning keeps the pre-transfer snapshot untouched.
-    const discoverySkills = params.snapshot.discoverySkills
-      ? structuredClone(params.snapshot.discoverySkills)
-      : undefined;
     const skippedSkillNames = new Set(
       (params.snapshot.resolvedSkills ?? [])
         .filter(
@@ -227,6 +223,7 @@ export async function transferSkillResources(params: {
     const skills = structuredClone(params.snapshot.skills).filter(
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
+    const deliveredSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
     // Delivery prep disambiguates same-path Gateway/workspace collisions by
     // rewriting the workspace skill's source path to a workspace-skill:// read
@@ -286,33 +283,34 @@ export async function transferSkillResources(params: {
       }
       const remoteBase = `${params.remoteWorkspaceDir.replaceAll("\\", "/")}/${directory}/${index}`;
       mounts.push({ hostPath: sourceBase, containerPath: remoteBase });
+      const filePath = `${remoteBase}/SKILL.md`;
+      const sourceSkill =
+        selected ??
+        params.snapshot.discoverySkills?.find((candidate) => candidate.name === skill.name);
+      const delivered = clearSkillFileHost({
+        ...sourceSkill,
+        name: skill.name,
+        description: skill.description,
+        disableModelInvocation: sourceSkill?.disableModelInvocation ?? skill.modelVisible === false,
+        filePath,
+        baseDir: remoteBase,
+        source: sourceSkill?.source ?? "openclaw-resources",
+        sourceInfo:
+          sourceSkill?.sourceInfo ??
+          createSyntheticSourceInfo(filePath, {
+            source: "openclaw-resources",
+            baseDir: remoteBase,
+          }),
+        contentHash: bundle.revision,
+        bundleFingerprint: bundle.revision,
+        readContent: bundle.files.find((file) => file.path === "SKILL.md")!.bytes.toString("utf8"),
+      });
+      delete delivered.locationNote;
+      deliveredSkills.push(delivered);
       if (selected) {
-        selected.filePath = `${remoteBase}/SKILL.md`;
-        selected.baseDir = remoteBase;
-        // Carry the retained delivery identity identically to local materialization.
-        selected.bundleFingerprint = bundle.revision;
-        // Code Mode reads the same verified instructions even when the node has no filesystem bridge.
-        selected.readContent = bundle.files
-          .find((file) => file.path === "SKILL.md")!
-          .bytes.toString("utf8");
+        Object.assign(selected, delivered);
+        delete selected.fileHost;
         delete selected.locationNote;
-      }
-      // Map the transferred bundle onto the discovery projection entry consumers
-      // prefer (installed-skill catalog, skill.used matcher): the matching entry
-      // becomes an entry of the transferred bundle — path, instructions, identity —
-      // so its reader serves the transferred bytes. Matching is by admitted
-      // identity; an identity is never borrowed onto an entry serving other bytes.
-      const discoverySkill = discoverySkills?.find((candidate) =>
-        matchesDeliveryIdentity(candidate, skill),
-      );
-      if (discoverySkill) {
-        discoverySkill.filePath = `${remoteBase}/SKILL.md`;
-        discoverySkill.baseDir = remoteBase;
-        discoverySkill.bundleFingerprint = bundle.revision;
-        discoverySkill.readContent = bundle.files
-          .find((file) => file.path === "SKILL.md")!
-          .bytes.toString("utf8");
-        delete discoverySkill.locationNote;
       }
     }
     await flush();
@@ -323,7 +321,12 @@ export async function transferSkillResources(params: {
         ...params.snapshot,
         skills,
         resolvedSkills,
-        ...(discoverySkills ? { discoverySkills } : {}),
+        discoverySkills: [
+          ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
+          ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
+            (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
+          ),
+        ],
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },
       mounts,

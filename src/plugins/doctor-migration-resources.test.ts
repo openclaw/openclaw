@@ -69,6 +69,38 @@ function collectResources(migration: PluginDoctorStateMigration, pluginId: strin
   return preparePluginDoctorMigrationResources([{ pluginId, migration }], input);
 }
 
+it.each([
+  { engine: "postgres", stateEngine: undefined, skipped: true },
+  { engine: "postgres", stateEngine: "sqlite", skipped: false },
+  { engine: "sqlite", stateEngine: "postgres", skipped: true },
+] as const)(
+  "does not inspect legacy backup paths when the effective family is PostgreSQL: $engine / $stateEngine",
+  async ({ engine, stateEngine, skipped }) => {
+    input.config = {
+      database: {
+        engine,
+        ...(stateEngine ? { families: { state: { engine: stateEngine } } } : {}),
+      },
+    };
+    const resource = { path: path.join(stateDir, "legacy.sqlite"), kind: "sqlite" as const };
+    const collectBackupResources = vi.fn(() => [resource]);
+    const result = await collectResources(
+      { ...fixtureMigration, sqliteOnly: { family: "state" }, collectBackupResources },
+      "legacy-owner",
+    );
+    expect(collectBackupResources).toHaveBeenCalledTimes(skipped ? 0 : 1);
+    expect(result.resources).toEqual(skipped ? [] : [resource]);
+    expect(result.notices).toEqual(
+      skipped
+        ? [
+            "Resource fixture: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port.",
+          ]
+        : [],
+    );
+    expect(input.warnings).toEqual([]);
+  },
+);
+
 it("does not claim missing recovery coverage for bundled core-only and disposable migrations", async () => {
   expect(noDataMigrations).toHaveLength(4);
   const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);

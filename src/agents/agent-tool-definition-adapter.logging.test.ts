@@ -54,7 +54,7 @@ function firstLogErrorMessage(): unknown {
 }
 function expectPrivateExecLog(...secrets: string[]) {
   const message = String(firstLogErrorMessage());
-  expect(message).toBe("[tools] exec failed: exec denied: allowlist miss");
+  expect(message).toBe("[tools] exec failed:");
   for (const secret of [...secrets, "export XAI_API_KEY"]) {
     expect(message).not.toContain(secret);
   }
@@ -91,40 +91,48 @@ describe("agent tool definition adapter logging", () => {
       details: { ok: true },
     }));
 
-    await invoke(def, "call-edit-1", { path: "private-notes.txt" });
+    const result = await invoke(def, "call-edit-1", { path: "private-notes.txt" });
 
-    expect(firstLogErrorMessage()).toBe(
-      "[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying.",
-    );
+    expect(firstLogErrorMessage()).toBe("[tools] edit failed:");
+    expect(result.details).toEqual({
+      status: "error",
+      tool: "edit",
+      error:
+        "Missing required parameter: edits (received: path). Supply correct parameters before retrying.",
+    });
     expect(
       JSON.stringify([...mocks.logError.mock.calls, ...mocks.logDebug.mock.calls]),
     ).not.toContain("private-notes.txt");
   });
 
   it("logs the operator hint for a contained tool failure without exposing it to the model", async () => {
+    const message = "Path escapes sandbox root (~/workspace): /outside/private-tool-message.md";
+    const failure = new Error(message);
+    failure.stack = "Error: private-tool-stack-sentinel";
+    const operatorHint =
+      "apply_patch is restricted to the workspace by default. Set tools.exec.applyPatch.workspaceOnly to false.";
     const baseTool = {
       name: "apply_patch",
       label: "apply_patch",
       description: "patches files",
       parameters: Type.Object({ input: Type.String() }),
       execute: async () => {
-        throw withToolOperatorHint(
-          new Error("Path escapes sandbox root (~/workspace): /outside/note.md"),
-          "apply_patch is restricted to the workspace by default. Set tools.exec.applyPatch.workspaceOnly to false.",
-        );
+        throw withToolOperatorHint(failure, operatorHint);
       },
     } satisfies AgentTool;
     const result = await invoke(definitionFor(baseTool), "call-hint-1", {
       input: "*** Begin Patch",
     });
 
-    const logged = String(firstLogErrorMessage());
-    expect(logged).toContain("Path escapes sandbox root");
-    expect(logged).toContain("tools.exec.applyPatch.workspaceOnly");
+    expect(firstLogErrorMessage()).toBe(`[tools] apply_patch failed: ${operatorHint}`);
+    const logs = JSON.stringify([...mocks.logError.mock.calls, ...mocks.logDebug.mock.calls]);
+    expect(logs).not.toContain("private-tool-message");
+    expect(logs).not.toContain("private-tool-stack-sentinel");
 
     // The model-visible result carries the rejection but never the way to lift it.
+    expect(result.details).toEqual({ status: "error", tool: "apply_patch", error: message });
     const modelText = JSON.stringify(result);
-    expect(modelText).toContain("Path escapes sandbox root");
+    expect(modelText).toContain(message);
     expect(modelText).not.toContain("workspaceOnly");
   });
 

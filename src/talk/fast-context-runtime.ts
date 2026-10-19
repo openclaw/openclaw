@@ -1,6 +1,4 @@
 /**
- * Fast context lookup for realtime voice consults.
- *
  * When memory/session search can answer quickly, Talk can return concise
  * context without launching a full agent consult; otherwise callers may fall
  * back to the normal consult flow.

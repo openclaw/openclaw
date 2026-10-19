@@ -5,6 +5,7 @@ import { prepareSessionEventProjection } from "./session-event-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { identity, type Row } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 type PendingSummary = { captured: Row; work: Promise<void> };
 const pendingSummaries = new WeakMap<SessionRowProjection, Map<string, PendingSummary>>();
@@ -47,6 +48,7 @@ export async function broadcastSessionActivitySummary(
       },
       {
         sessionKeys: [target.key],
+        sessionEventSubscriptionKeys: [resolveSessionSubscriptionKey(target.key, target.agentId)],
         agentId: target.agentId,
         dropIfSlow: true,
         ...(read && projection
@@ -58,9 +60,10 @@ export async function broadcastSessionActivitySummary(
   if (projection) {
     const publications = sessionEventPublicationRows(projection);
     const work = publications.track(
-      Promise.resolve().then(() =>
-        publications.withReadyRows(() => [query], publish, { includeAncestors: true }),
-      ),
+      // Leave publication/transport headroom within the one-second delivery budget.
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 750);
+      }).then(() => publications.withReadyRows(() => [query], publish, { includeAncestors: true })),
     );
     if (captured && key) {
       const owner = pendingSummaries.get(projection) ?? new Map<string, PendingSummary>();

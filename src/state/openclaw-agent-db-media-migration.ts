@@ -23,22 +23,41 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 /** Upgrade older owned databases to the structural schema required by the media cutover. */
 export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   db: DatabaseSync,
-  options: OpenClawAgentDatabaseOptions,
+  options: OpenClawAgentDatabaseOptions & { integrityCheck?: "quick" | "full" },
 ): SqliteIntegrityOperation<void> {
   const targetVersion = AGENT_MEDIA_SCHEMA_VERSION - 1;
-  if (readSqliteUserVersion(db) > targetVersion) {
+  const userVersion = readSqliteUserVersion(db);
+  if (userVersion > targetVersion) {
     return;
   }
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-  assertSupportedAgentMigrationSchemas(db, pathname, readSqliteUserVersion(db));
+  assertSupportedAgentMigrationSchemas(db, pathname, userVersion);
   if (db.location()) {
     maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   }
-  yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
+  yield* agentDatabaseIntegrityBeforeMutationSteps(
+    db,
+    agentId,
+    pathname,
+    undefined,
+    undefined,
+    false,
+    false,
+    options.integrityCheck,
+  );
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });
-  ensureOpenClawAgentSchema(db, agentId, pathname, targetVersion);
+  ensureOpenClawAgentSchema(
+    db,
+    agentId,
+    pathname,
+    targetVersion,
+    undefined,
+    undefined,
+    false,
+    options.integrityCheck,
+  );
 }

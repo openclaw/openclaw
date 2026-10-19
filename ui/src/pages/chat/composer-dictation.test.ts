@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
-import { createComponent, createSignal } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
 import { ComposerDictationSession } from "./composer-dictation-session.ts";
-import { ComposerDictationController, insertComposerDictation } from "./composer-dictation.ts";
+import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
 
 type GatewayListener = (event: GatewayEventFrame) => void;
 type MockProcessor = ReturnType<typeof connection> & {
@@ -18,7 +18,7 @@ type MockProcessor = ReturnType<typeof connection> & {
 };
 
 const listeners = new Set<GatewayListener>();
-const controllers: ComposerDictationController[] = [];
+const controllers: ComposerDictationOwner[] = [];
 const processors: MockProcessor[] = [];
 const audios: MockAudio[] = [];
 let speechStarted = createDeferred();
@@ -156,7 +156,7 @@ function pointer(type: string): Event {
   return event;
 }
 
-type ControllerOptions = ConstructorParameters<typeof ComposerDictationController>[0];
+type ControllerOptions = ConstructorParameters<typeof ComposerDictationOwner>[0];
 function controllerFixture(overrides: Omit<Partial<ControllerOptions>, "client"> = {}) {
   const callbacks = { onCommit: vi.fn(), onError: vi.fn(), onTap: vi.fn() };
   const options = {
@@ -164,11 +164,10 @@ function controllerFixture(overrides: Omit<Partial<ControllerOptions>, "client">
     connected: true,
     enabled: true,
     realtimeTalkActive: false,
-    onStateChange: vi.fn(),
     ...callbacks,
     ...overrides,
   };
-  const controller = new ComposerDictationController(options);
+  const controller = new ComposerDictationOwner(options);
   controllers.push(controller);
   return { controller, options, ...callbacks };
 }
@@ -194,24 +193,18 @@ function createHarness(overrides: Omit<Partial<ControllerOptions>, "client"> = {
 function createButtonHarness() {
   const container = document.createElement("div");
   document.body.append(container);
-  const [revision, setRevision] = createSignal(0);
-  const harness = controllerFixture({ onStateChange: renderButton });
+  const harness = controllerFixture();
   const { controller } = harness;
-  function renderButton() {
-    setRevision((value) => value + 1);
-    flush();
-  }
   mountSolid(
-    () =>
-      createComponent(renderComposerVoiceButtonSolid, {
+    () => {
+      const owner = projectOwner(controller, (value) => value);
+      return createComponent(renderComposerVoiceButtonSolid, {
         connected: true,
-        readDictation: () => {
-          revision();
-          return controller;
-        },
+        readDictation: owner.read,
         onDictationPointerDown: (event) => controller.handlePointerDown(event),
         onToggleVoice: vi.fn(),
-      }),
+      });
+    },
     { container },
   );
   const target = container.querySelector("button");
@@ -219,7 +212,7 @@ function createButtonHarness() {
   return { ...harness, target: pointerTarget(target) };
 }
 
-async function startDirect(controller: ComposerDictationController) {
+async function startDirect(controller: ComposerDictationOwner) {
   const start = vi.spyOn(ComposerDictationSession.prototype, "start");
   expect(controller.startDirect()).toBe(true);
   const started = start.mock.results[0];
@@ -252,7 +245,7 @@ async function releaseLatched(target: HTMLElement): Promise<void> {
 }
 
 async function commitLatched(
-  controller: ComposerDictationController,
+  controller: ComposerDictationOwner,
   target: HTMLElement,
 ): Promise<void> {
   await releaseLatched(target);
@@ -303,9 +296,31 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ComposerDictationController", () => {
+describe("ComposerDictationOwner", () => {
+  it("retires capture before a retained owner adopts another draft's callbacks", async () => {
+    const { controller, options, onCommit } = createHarness({ draftKey: "first" });
+    const stopTrack = vi.fn();
+    getUserMedia.mockResolvedValue(microphone(stopTrack));
+    await startDirect(controller);
+    emit({ type: "partial", text: "Old draft words" });
+    const nextCommit = vi.fn();
+
+    controller.update({ ...options, draftKey: "next", onCommit: nextCommit });
+    transcript("Old draft final words");
+
+    expect(controller.active).toBe(false);
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(nextCommit).not.toHaveBeenCalled();
+    await waitForFast(() => expectClosed("dictation-1", true));
+  });
+
   it("surfaces final transcription failure and discards its pending result", async () => {
     const { controller, onCommit, onError } = createHarness();
+    const publishedErrors: unknown[] = [];
+    const unsubscribe = controller.subscribe(() => {
+      publishedErrors.push(onError.mock.lastCall?.[0]);
+    });
 
     await startDirect(controller);
     const finished = controller.finishActive();
@@ -319,6 +334,8 @@ describe("ComposerDictationController", () => {
     expect(onCommit).not.toHaveBeenCalled();
     expect(controller.locksComposer).toBe(false);
     expect(listeners.size).toBe(0);
+    expect(publishedErrors).toContain("Local transcription failed");
+    unsubscribe();
   });
 
   it("lets Read aloud discard pending dictation without stopping newer playback", async () => {
@@ -486,47 +503,55 @@ describe("ComposerDictationController", () => {
     }
   });
 
-  it("unlocks immediately and rejects a pending result after a new session starts", async () => {
-    const { promise: close, resolve: resolveClose } = createDeferred();
-    let sessionsCreated = 0;
-    request = vi.fn(async (method: string) => {
-      if (method === "talk.session.create") {
-        const sessionId = `dictation-${++sessionsCreated}`;
-        return sessionResult(sessionId);
-      }
-      if (method === "talk.session.close") {
-        return close;
-      }
-      return { ok: true };
-    });
-    const { controller, onCommit, onError, target } = createHarness();
-    await startHold(target);
+  it.each(["new capture", "draft switch"])(
+    "unlocks immediately and rejects a pending result after %s",
+    async (transition) => {
+      const { promise: close, resolve: resolveClose } = createDeferred();
+      let sessionsCreated = 0;
+      request = vi.fn(async (method: string) => {
+        if (method === "talk.session.create") {
+          const sessionId = `dictation-${++sessionsCreated}`;
+          return sessionResult(sessionId);
+        }
+        if (method === "talk.session.close") {
+          return close;
+        }
+        return { ok: true };
+      });
+      const { controller, onCommit, onError, target, options } = createHarness();
+      await startHold(target);
 
-    const committed = controller.finishActive();
+      const committed = controller.finishActive();
 
-    expect(controller).toMatchObject({ active: false, locksComposer: false });
-    expect(onCommit).not.toHaveBeenCalled();
-    await waitForFast(() => expectClosed());
-    try {
-      expect(controller.startDirect()).toBe(true);
-      await waitForFast(() => expect(sessionsCreated).toBe(2));
-      emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
-      expect(controller.transcript).toBe("new preview");
-      emit({ type: "partial", text: "stale preview" });
-      expect(controller.transcript).toBe("new preview");
-      emit({ type: "error", message: "stale failure" });
-      expect(onError).not.toHaveBeenCalled();
-      transcript("late final");
-      expect(controller.transcript).toBe("new preview");
-      resolveClose();
-      await expect(committed).resolves.toBe(false);
+      expect(controller).toMatchObject({ active: false, locksComposer: false });
       expect(onCommit).not.toHaveBeenCalled();
-    } finally {
-      resolveClose();
-      controller.dispose();
-      await Promise.resolve();
-    }
-  });
+      await waitForFast(() => expectClosed());
+      try {
+        if (transition === "draft switch") {
+          controller.cancel();
+          controller.update({ ...options, sessionKey: "replacement" });
+          controller.update(options);
+        }
+        expect(controller.startDirect()).toBe(true);
+        await waitForFast(() => expect(sessionsCreated).toBe(2));
+        emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
+        expect(controller.transcript).toBe("new preview");
+        emit({ type: "partial", text: "stale preview" });
+        expect(controller.transcript).toBe("new preview");
+        emit({ type: "error", message: "stale failure" });
+        expect(onError).not.toHaveBeenCalled();
+        transcript("late final");
+        expect(controller.transcript).toBe("new preview");
+        resolveClose();
+        await expect(committed).resolves.toBe(false);
+        expect(onCommit).not.toHaveBeenCalled();
+      } finally {
+        resolveClose();
+        controller.dispose();
+        await Promise.resolve();
+      }
+    },
+  );
 
   it("consumes release after the pointer enters the visible hold state", async () => {
     const { controller, onTap, target } = createHarness();

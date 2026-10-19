@@ -47,6 +47,9 @@ const location = {
   agentId: "main",
   path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
 };
+const filter = { engineId: "test", isHeartbeat: false };
+const publishLimits = { maxEvents: 10, maxBytes: 10_000 };
+const actorAuthority = { assertCurrent() {}, assertReadable() {} };
 afterEach(() => {
   for (const owner of owners.splice(0)) {
     owner.close();
@@ -67,10 +70,7 @@ async function fixture(suffix = "one", owner = createMemorySessionActorOwner(loc
   }
   const sessionKey = `agent:main:dashboard:incognito-side-${suffix}`;
   const sessionId = `session-${suffix}`;
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
+  const actor = await owner.acquire({ database: owner.identity, sessionKey }, actorAuthority);
   const storage = actor.storage!;
   const binding = { ...location, actor, authority };
   const storageScope = {
@@ -127,6 +127,69 @@ async function fixture(suffix = "one", owner = createMemorySessionActorOwner(loc
   return { owner, actor, storage, binding, scope, message, turn };
 }
 
+type Scope = Omit<Awaited<ReturnType<typeof fixture>>["scope"], "sessionActor">;
+type Binding = Awaited<ReturnType<typeof fixture>>["binding"];
+
+function outbox(scope: Scope, sessionActor?: Binding) {
+  return openContextEngineTurnOutboxWorkerStore({
+    agentId: scope.agentId,
+    path: scope.storePath,
+    sessionKey: scope.sessionKey,
+    sessionId: scope.sessionId,
+    sessionActor,
+  });
+}
+
+async function trajectorySink(scope: Scope, sessionActor?: Binding) {
+  const sink = await createSqliteTrajectoryRuntimeSink({
+    env: scope.env,
+    sessionId: scope.sessionId,
+    sessionKey: scope.sessionKey,
+    sessionTarget: scope,
+    sessionActor,
+    maxRuntimeFileBytes: 1000,
+  });
+  if (!sink) {
+    throw new Error("Expected memory trajectory sink");
+  }
+  return sink;
+}
+
+function heartbeat(
+  scope: Scope,
+  summary: string,
+  occurredAt = 1,
+  taskNames?: string[],
+  outcome: "progress" | "done" = "progress",
+) {
+  return persistHeartbeatOutcome({
+    ...scope,
+    runSessionKey: scope.sessionKey,
+    occurredAt,
+    response: { outcome, notify: false, summary },
+    taskNames,
+  });
+}
+
+async function publicationFails(scope: Scope, operation: () => Promise<unknown>) {
+  const stop = failSessionActorMemoryPublication(scope.sessionKey);
+  try {
+    await expect(operation()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+  } finally {
+    stop();
+  }
+}
+
+function contextEngine(commitTurn: ContextEngine["commitTurn"]): ContextEngine {
+  return {
+    info: { id: "test", name: "test" },
+    ingest: async () => ({ ingested: true }),
+    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+    compact: async () => ({ ok: true, compacted: false }),
+    commitTurn,
+  };
+}
+
 function trajectory(sessionId: string, text: string, seq: number): TrajectoryEvent {
   return {
     traceSchema: "openclaw-trajectory",
@@ -145,30 +208,8 @@ function trajectory(sessionId: string, text: string, seq: number): TrajectoryEve
 describe("memory session side-data consumers", () => {
   it("reports committed heartbeat publication failures without releasing the claim", async () => {
     const { scope } = await fixture();
-    const fail = () => failSessionActorMemoryPublication(scope.sessionKey);
-    const stopPersist = fail();
-    try {
-      await expect(
-        persistHeartbeatOutcome({
-          ...scope,
-          runSessionKey: scope.sessionKey,
-          occurredAt: 1,
-          response: { outcome: "progress", notify: false, summary: "saved" },
-        }),
-      ).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
-    } finally {
-      stopPersist();
-    }
-    const stopClaim = fail();
-    try {
-      await expect(claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).rejects.toMatchObject(
-        {
-          name: "SessionActorStorageCommittedError",
-        },
-      );
-    } finally {
-      stopClaim();
-    }
+    await publicationFails(scope, () => heartbeat(scope, "saved"));
+    await publicationFails(scope, () => claimHeartbeatOutcomeForRun({ ...scope, runId: "first" }));
     expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "other" })).toBeUndefined();
     expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toMatchObject({
       summary: "saved",
@@ -200,22 +241,9 @@ describe("memory session side-data consumers", () => {
   it("reports an outbox publication failure while preserving the accepted turn", async () => {
     const { scope, binding, turn } = await fixture();
     const boundary = await turn("accepted");
-    const store = openContextEngineTurnOutboxWorkerStore({
-      ...location,
-      sessionKey: scope.sessionKey,
-      sessionId: scope.sessionId,
-      sessionActor: binding,
-    });
-    const filter = { engineId: "test", isHeartbeat: false };
-    const stop = failSessionActorMemoryPublication(scope.sessionKey);
-    try {
-      await expect(store.acceptIntent({ ...filter, boundary })).rejects.toMatchObject({
-        name: "SessionActorStorageCommittedError",
-      });
-    } finally {
-      stop();
-    }
-    await store.publishClosedTurn({ ...filter, boundary, maxEvents: 10, maxBytes: 10_000 });
+    const store = outbox(scope, binding);
+    await publicationFails(scope, () => store.acceptIntent({ ...filter, boundary }));
+    await store.publishClosedTurn({ ...filter, boundary, ...publishLimits });
     expect(await store.readNextPending({ ...filter, sessionId: scope.sessionId })).toMatchObject({
       advancement_key: "accepted",
     });
@@ -223,27 +251,10 @@ describe("memory session side-data consumers", () => {
 
   it("does not append a committed trajectory batch again after publication fails", async () => {
     const { scope, binding } = await fixture();
-    const sink = await createSqliteTrajectoryRuntimeSink({
-      env: scope.env,
-      sessionId: scope.sessionId,
-      sessionKey: scope.sessionKey,
-      sessionTarget: scope,
-      sessionActor: binding,
-      maxRuntimeFileBytes: 1000,
-    });
-    if (!sink) {
-      throw new Error("Expected memory trajectory sink");
-    }
+    const sink = await trajectorySink(scope, binding);
     const event = trajectory(scope.sessionId, "saved", 1);
     sink.write(event, JSON.stringify(event));
-    const stop = failSessionActorMemoryPublication(scope.sessionKey);
-    try {
-      await expect(sink.flush()).rejects.toMatchObject({
-        name: "SessionActorStorageCommittedError",
-      });
-    } finally {
-      stop();
-    }
+    await publicationFails(scope, () => sink.flush());
     expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
     await sink.flush();
     expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
@@ -262,12 +273,7 @@ describe("memory session side-data consumers", () => {
       updatedAt: 1,
       incognito: true,
     });
-    await persistHeartbeatOutcome({
-      ...scope,
-      runSessionKey: scope.sessionKey,
-      occurredAt: 1,
-      response: { outcome: "progress", notify: false, summary: "unbound" },
-    });
+    await heartbeat(scope, "unbound");
     expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "user" }))?.summary).toBe(
       "unbound",
     );
@@ -292,32 +298,15 @@ describe("memory session side-data consumers", () => {
       admission: { ...appended.anchor, logicalTurnId: "unbound-turn", role: "user" },
       terminal: appended.anchor,
     };
-    const store = openContextEngineTurnOutboxWorkerStore({
-      agentId: scope.agentId,
-      path: scope.storePath,
-      sessionKey: scope.sessionKey,
-      sessionId: scope.sessionId,
-    });
-    const filter = { engineId: "test", isHeartbeat: false };
+    const store = outbox(scope);
     await store.acceptIntent({ ...filter, boundary });
-    expect(
-      await store.publishClosedTurn({ ...filter, boundary, maxEvents: 10, maxBytes: 10_000 }),
-    ).toBe("ok");
+    expect(await store.publishClosedTurn({ ...filter, boundary, ...publishLimits })).toBe("ok");
     expect(await store.readNextPending({ ...filter, sessionId: scope.sessionId })).toMatchObject({
       advancement_key: "unbound-turn",
     });
     await store.complete("unbound-turn");
     const event = trajectory(scope.sessionId, "unbound", 0);
-    const sink = await createSqliteTrajectoryRuntimeSink({
-      env: scope.env,
-      sessionId: scope.sessionId,
-      sessionKey: scope.sessionKey,
-      sessionTarget: scope,
-      maxRuntimeFileBytes: 1000,
-    });
-    if (!sink) {
-      throw new Error("Expected unbound trajectory sink");
-    }
+    const sink = await trajectorySink(scope);
     sink.write(event, JSON.stringify(event));
     await sink.flush();
     expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
@@ -339,15 +328,7 @@ describe("memory session side-data consumers", () => {
 
   it("claims heartbeat context once per run, sees replacements, and keeps returned data detached", async () => {
     const { scope, binding } = await fixture();
-    await runWithSessionActorStorage(binding, () =>
-      persistHeartbeatOutcome({
-        ...scope,
-        runSessionKey: scope.sessionKey,
-        occurredAt: 1,
-        response: { outcome: "progress", notify: false, summary: "first" },
-        taskNames: ["task"],
-      }),
-    );
+    await runWithSessionActorStorage(binding, () => heartbeat(scope, "first", 1, ["task"]));
     const [winner, other] = await Promise.all([
       claimHeartbeatOutcomeForRun({ ...scope, runId: "run-one" }),
       claimHeartbeatOutcomeForRun({ ...scope, runId: "run-two" }),
@@ -358,12 +339,7 @@ describe("memory session side-data consumers", () => {
     expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "run-one" }))?.taskNames).toEqual([
       "task",
     ]);
-    await persistHeartbeatOutcome({
-      ...scope,
-      runSessionKey: scope.sessionKey,
-      occurredAt: 2,
-      response: { outcome: "done", notify: false, summary: "replacement" },
-    });
+    await heartbeat(scope, "replacement", 2, undefined, "done");
     expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "run-two" }))?.summary).toBe(
       "replacement",
     );
@@ -380,13 +356,7 @@ describe("memory session side-data consumers", () => {
 
   it("recovers ordered accepted turns and allows plugin callbacks to await the same actor", async () => {
     const { scope, actor, storage, binding, turn } = await fixture();
-    const store = openContextEngineTurnOutboxWorkerStore({
-      ...location,
-      sessionKey: scope.sessionKey,
-      sessionId: scope.sessionId,
-      sessionActor: binding,
-    });
-    const filter = { engineId: "test", isHeartbeat: false };
+    const store = outbox(scope, binding);
     const abandoned = await turn("abandoned");
     await store.enqueueIntent({ ...filter, admission: abandoned.admission });
     expect(await store.prepareRun({ ...filter, sessionId: scope.sessionId })).toMatchObject({
@@ -405,22 +375,16 @@ describe("memory session side-data consumers", () => {
       admitted: false,
     });
     const calls: string[] = [];
-    const engine: ContextEngine = {
-      info: { id: "test", name: "test" },
-      ingest: async () => ({ ingested: true }),
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-      async commitTurn(input) {
-        calls.push(input.advancementKey);
-        expect(input.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
-        // Awaiting the same owner here would deadlock if draining held its FIFO.
-        await storage.read({ type: "session.history.stats", input: {} }, authority);
-        if (calls.length === 1) {
-          throw new Error("retry plugin");
-        }
-        return { status: "committed" };
-      },
-    };
+    const engine = contextEngine(async (input) => {
+      calls.push(input.advancementKey);
+      expect(input.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+      // Awaiting the same owner here would deadlock if draining held its FIFO.
+      await storage.read({ type: "session.history.stats", input: {} }, authority);
+      if (calls.length === 1) {
+        throw new Error("retry plugin");
+      }
+      return { status: "committed" };
+    });
     const warn = vi.fn();
     expect(await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn })).toEqual({
       pending: true,
@@ -448,17 +412,9 @@ describe("memory session side-data consumers", () => {
     const first = await fixture();
     const second = await fixture("two", first.owner);
     const initial = trajectory(first.scope.sessionId, "old", 1);
-    const sink = await createSqliteTrajectoryRuntimeSink({
-      env: first.scope.env,
-      maxRuntimeFileBytes: 1000,
-      sessionId: first.scope.sessionId,
-      sessionKey: first.scope.sessionKey,
-      sessionTarget: first.scope,
-      sessionActor: first.binding,
-    });
-    expect(sink).not.toBeNull();
-    sink!.write({ ...initial, data: { text: "unbounded source" } }, JSON.stringify(initial));
-    await sink!.flush();
+    const sink = await trajectorySink(first.scope, first.binding);
+    sink.write({ ...initial, data: { text: "unbounded source" } }, JSON.stringify(initial));
+    await sink.flush();
     const read = await loadSqliteTrajectoryRuntimeEvents(first.scope);
     expect(read).toEqual([initial]);
     read[0]!.data = { text: "mutated" };
@@ -470,8 +426,8 @@ describe("memory session side-data consumers", () => {
       loadSqliteTrajectoryRuntimeEvents({ ...first.scope, maxEventBytes: 1 }),
     ).rejects.toThrow("too large");
     const newer = trajectory(first.scope.sessionId, "same-session", 2);
-    sink!.write(newer, JSON.stringify(newer));
-    await sink!.flush();
+    sink.write(newer, JSON.stringify(newer));
+    await sink.flush();
     expect(loadSqliteTrajectoryRuntimeEventRowsSync({ ...first.scope, afterSeq: 0 })).toEqual([
       { event: newer, seq: 1 },
     ]);
@@ -501,8 +457,8 @@ describe("memory session side-data consumers", () => {
     expect(await loadSqliteTrajectoryRuntimeEvents(first.scope)).toEqual([]);
     expect(await loadSqliteTrajectoryRuntimeEvents(second.scope)).toHaveLength(1);
     const oversized = trajectory(first.scope.sessionId, "x".repeat(2000), 3);
-    sink!.write(oversized, JSON.stringify(oversized));
-    await sink!.flush();
+    sink.write(oversized, JSON.stringify(oversized));
+    await sink.flush();
     expect(await loadSqliteTrajectoryRuntimeEvents(first.scope)).toEqual([]);
   });
 
@@ -514,29 +470,22 @@ describe("memory session side-data consumers", () => {
       sessionKey: scope.sessionKey,
       sessionActor: binding,
     });
-    const filter = { engineId: "test", isHeartbeat: false };
     await store.acceptIntent({ ...filter, boundary });
     await store.publishClosedTurn({ ...filter, boundary, maxEvents: 10, maxBytes: 100_000 });
     const entered = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
-    const engine: ContextEngine = {
-      info: { id: "test", name: "test" },
-      ingest: async () => ({ ingested: true }),
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-      async commitTurn() {
-        entered.resolve();
-        await finish.promise;
-        return { status: "committed" };
-      },
-    };
+    const engine = contextEngine(async () => {
+      entered.resolve();
+      await finish.promise;
+      return { status: "committed" };
+    });
     const drain = drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn() {} });
     await entered.promise;
     const released = actor.release();
     finish.resolve();
     await expect(drain).rejects.toThrow("released");
     await released;
-    const next = await owner.acquire(actor.target, { assertCurrent() {}, assertReadable() {} });
+    const next = await owner.acquire(actor.target, actorAuthority);
     expect(
       await next.storage!.read({ type: "session.outbox.hasPending", input: filter }, authority),
     ).toBe(false);

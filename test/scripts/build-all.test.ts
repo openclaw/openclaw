@@ -791,8 +791,8 @@ describe("resolveBuildAllSteps", () => {
       name: "legacy updater marker",
       profile: "full",
       env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      runtimeOnly: true,
-      skipDts: "1",
+      runtimeOnly: false,
+      skipDts: undefined,
     },
     {
       name: "explicit declarations during update",

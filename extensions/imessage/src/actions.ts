@@ -32,8 +32,11 @@ import {
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
-import { imessageRpcSupportsMethod } from "./private-api-status.js";
-import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+} from "./private-api-status.js";
+import { probeIMessagePrivateApi } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
 
@@ -501,7 +504,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       }
       const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const reference = await messageReference();
-      const reactionsToSend = remove && !reaction ? [...TAPBACK_KINDS] : reaction ? [reaction] : [];
+      const reactionsToSend = remove && !reaction ? TAPBACK_KINDS : reaction ? [reaction] : [];
       for (const kind of reactionsToSend) {
         await runtime.sendReaction({
           chatGuid: reference.chatGuid,

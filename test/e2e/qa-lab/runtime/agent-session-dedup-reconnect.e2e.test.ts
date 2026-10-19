@@ -1,11 +1,13 @@
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
-import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  connectOperator,
+  messageRole,
+  messageText,
+  runCleanups,
+  startSessionGateway,
+} from "./agent-session.test-support.js";
 import { MODEL_REF } from "./cloud-worker-midturn-loss-fixture.js";
 import { startHeldResponsesProvider } from "./held-responses-provider.js";
 
@@ -17,7 +19,6 @@ const ORIGINAL_MESSAGE = "Return exactly SESSION-DEDUP-RECONNECT-OK.";
 const CHANGED_MESSAGE = "This changed replay must not create another turn.";
 const TERMINAL_TEXT = "SESSION-DEDUP-RECONNECT-OK";
 
-type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -25,204 +26,48 @@ type AgentResult = {
     payloads?: Array<{ text?: string }>;
   };
 };
-type GatewayRequestTiming = Parameters<
-  NonNullable<ConstructorParameters<typeof GatewayClient>[0]["onRequestTiming"]>
->[0];
 
 const cleanups: Array<() => Promise<void>> = [];
 
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "session dedup reconnect cleanup failed");
-  }
-});
-
-async function connectOperator(
-  gateway: GatewayHandle,
-  displayName: string,
-  onRequestTiming?: (timing: GatewayRequestTiming) => void,
-): Promise<GatewayClient> {
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        client.stop();
-        reject(error);
-        return;
-      }
-      resolve(client);
-    };
-    const client = new GatewayClient({
-      url: gateway.wsUrl,
-      token: gateway.token,
-      env: gateway.runtimeEnv,
-      role: "operator",
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientDisplayName: displayName,
-      clientVersion: "1.0.0",
-      platform: process.platform,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      deviceIdentity: null,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onRequestTiming,
-      onHelloOk: () => finish(),
-      onConnectError: (error) => finish(error),
-      onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
-    });
-    const timeout = setTimeout(
-      () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
-      REQUEST_TIMEOUT_MS,
-    );
-    timeout.unref();
-    client.start();
-  });
-}
-
-function messageRole(message: unknown): string | undefined {
-  const role = message && typeof message === "object" ? (message as { role?: unknown }).role : null;
-  return typeof role === "string" ? role : undefined;
-}
-
-function messageText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((part) =>
-      part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-        ? [(part as { text: string }).text]
-        : [],
-    )
-    .join("\n");
-}
+afterEach(() => runCleanups(cleanups, "agent-session-dedup-reconnect cleanup failed"));
 
 describe("agent session deduplication across reconnect", () => {
   it(
     "replays one accepted run and one terminal transcript without a second provider call",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const startedAt = performance.now();
-      let stage = "start-provider";
       const provider = await startHeldResponsesProvider({
         modelRef: MODEL_REF,
         terminalText: TERMINAL_TEXT,
       });
-      let gatewayLogs = () => "Gateway startup did not return a ready child.";
-      onTestFailed(() => {
-        process.stderr.write(
-          [
-            "Session dedup reconnect fixture failed",
-            JSON.stringify({
-              stage,
-              elapsedMs: Math.round(performance.now() - startedAt),
-              providerRequests: provider.requests.length,
-            }),
-            gatewayLogs().slice(-12_000),
-            "",
-          ].join("\n"),
-        );
-      });
       cleanups.push(() => provider.stop());
       const gatewayOwner = createQaGatewayChild();
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-      stage = "start-gateway";
-      const gateway = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        providerBaseUrl: `${provider.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiEnabled: false,
-        fastMode: true,
-        runtimeEnvPatch: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        },
-        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
-        onListening: ({ logs }) => {
-          gatewayLogs = logs;
-          stage = "gateway-listening";
-        },
-      });
-      gatewayLogs = gateway.logs;
-      stage = "gateway-ready";
-      cleanups.push(async () => provider.release());
-
-      stage = "connect-client-a";
-      let firstAgentSentAfterMs: number | undefined;
-      let firstAgentRequestTiming: GatewayRequestTiming | undefined;
-      const clientA = await connectOperator(gateway, "Session dedup client A", (timing) => {
-        if (timing.method === "agent") {
-          firstAgentRequestTiming = timing;
-        }
-      });
-      cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));
+      const gateway = await startSessionGateway(gatewayOwner, provider.baseUrl);
       onTestFailed(() => {
-        process.stderr.write(
-          JSON.stringify({
-            firstAgentSentAfterMs,
-            firstAgentRequestTiming,
-            providerRequestCount: provider.requests.length,
-            clientConnected: clientA.connected,
-          }).slice(0, 2_000) + "\n",
-        );
+        process.stderr.write(gateway.logs().slice(-12_000));
       });
-      stage = "accept-original-run";
-      const acceptedA = await clientA.request<AgentResult>(
-        "agent",
-        {
-          sessionKey: SESSION_KEY,
-          message: ORIGINAL_MESSAGE,
-          deliver: false,
-          idempotencyKey: IDEMPOTENCY_KEY,
-        },
-        {
-          onSent: () => {
-            firstAgentSentAfterMs = Math.round(performance.now() - startedAt);
-          },
-        },
-      );
+      cleanups.push(async () => provider.release());
+      const clientA = await connectOperator(gateway, "Session dedup client A");
+      cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));
+      const acceptedA = await clientA.request<AgentResult>("agent", {
+        sessionKey: SESSION_KEY,
+        message: ORIGINAL_MESSAGE,
+        deliver: false,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      });
       expect(acceptedA).toMatchObject({
         status: "accepted",
         runId: IDEMPOTENCY_KEY,
       });
-      stage = "wait-provider-request";
       await vi.waitFor(() => expect(provider.requests).toHaveLength(1), {
         interval: 20,
         timeout: REQUEST_TIMEOUT_MS,
       });
-      stage = "disconnect-client-a";
       await clientA.stopAndWait({ timeoutMs: 1_000 });
 
-      stage = "connect-client-b";
       const clientB = await connectOperator(gateway, "Session dedup client B");
       cleanups.push(() => clientB.stopAndWait({ timeoutMs: 1_000 }));
-      stage = "replay-in-flight-run";
       const acceptedB = await clientB.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: ORIGINAL_MESSAGE,
@@ -237,7 +82,6 @@ describe("agent session deduplication across reconnect", () => {
       expect(provider.requests).toHaveLength(1);
 
       provider.release();
-      stage = "wait-terminal-run";
       const terminal = await clientB.request<AgentResult>(
         "agent.wait",
         { runId: IDEMPOTENCY_KEY, timeoutMs: 30_000 },
@@ -248,7 +92,6 @@ describe("agent session deduplication across reconnect", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
-      stage = "replay-terminal-run";
       const cachedTerminal = await clientB.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: ORIGINAL_MESSAGE,
@@ -262,7 +105,6 @@ describe("agent session deduplication across reconnect", () => {
           payloads: [{ text: TERMINAL_TEXT }],
         },
       });
-      stage = "replay-changed-message";
       const changedReplay = await clientB.request<AgentResult>("agent", {
         sessionKey: SESSION_KEY,
         message: CHANGED_MESSAGE,
@@ -272,7 +114,6 @@ describe("agent session deduplication across reconnect", () => {
       expect(changedReplay).toEqual(cachedTerminal);
       expect(provider.requests).toHaveLength(1);
 
-      stage = "read-history";
       const history = await clientB.request<{ messages?: unknown[] }>("chat.history", {
         sessionKey: SESSION_KEY,
         limit: 20,

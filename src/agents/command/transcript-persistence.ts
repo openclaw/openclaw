@@ -28,6 +28,7 @@ import { buildUsageWithNoCost } from "../stream-message-shared.js";
 
 type TextTurnTranscriptContext = {
   inputProvenance?: InputProvenance;
+  privateCompletion?: true;
   body: string;
   transcriptBody?: string;
   sessionId: string;
@@ -124,7 +125,7 @@ async function persistTextTurnTranscript(
           );
           return prepared
             ? projectAgentHarnessTranscriptMessageForDisplay({
-                hidden: false,
+                hidden: params.privateCompletion === true,
                 inputProvenance,
                 message: prepared,
               })
@@ -156,7 +157,7 @@ async function persistTextTurnTranscript(
           // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
           const assistant = message as Parameters<PrepareAssistantTranscriptMessage>[0];
           return projectAgentHarnessTranscriptMessageForDisplay({
-            hidden: false,
+            hidden: params.privateCompletion === true,
             inputProvenance,
             message: prepareAssistantTranscriptMessage
               ? prepareAssistantTranscriptMessage(assistant, replyText)

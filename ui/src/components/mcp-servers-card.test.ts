@@ -65,7 +65,6 @@ function createGateway(
 function createRuntimeConfig(config: Record<string, unknown>) {
   const ensureLoaded = vi.fn(async () => undefined);
   const patch = vi.fn<(options: ConfigPatchOptions) => Promise<boolean>>(async () => true);
-  const refresh = vi.fn(async () => undefined);
   const listeners = new Set<() => void>();
   const state = {
     configSnapshot: { sourceConfig: config, hash: "base" },
@@ -84,13 +83,12 @@ function createRuntimeConfig(config: Record<string, unknown>) {
     ensureLoaded,
     patch,
     patchFromSnapshot,
-    refresh,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
   } as unknown as ApplicationContext["runtimeConfig"];
-  return { runtimeConfig, ensureLoaded, patch, refresh };
+  return { runtimeConfig, ensureLoaded, patch };
 }
 async function mountCard(
   options: {
@@ -203,6 +201,33 @@ describe("openclaw-mcp-servers-card", () => {
     cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+  it("keeps form toggles ordered before the next render", async () => {
+    const { card } = await mountCard();
+    const add = actionButton(card, "Add server");
+    add.click();
+    add.click();
+    flush();
+    expect(card.querySelector(".mcp-server-form")).toBeNull();
+    add.click();
+    flush();
+    expect(card.querySelector(".mcp-server-form")).not.toBeNull();
+  });
+  it("admits one mutation before rendering busy and releases it after completion", async () => {
+    const { card, harness } = await mountCard({
+      config: configWith({ local: { command: "node" } }),
+    });
+    const completion = deferred<boolean>();
+    harness.patch.mockReturnValueOnce(completion.promise);
+    const disable = actionButton(card, "Disable");
+    disable.click();
+    actionButton(card, "Remove local").click();
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    expect(disable.disabled).toBe(true);
+    completion.resolve(true);
+    await waitForFast(() => expect(disable.disabled).toBe(false));
+    disable.click();
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
   });
   it("starts the selected connector and keeps a usable link when the popup is blocked", async () => {
     const { card, request, open, connection } = await mountLoginCard();
@@ -547,7 +572,7 @@ describe("openclaw-mcp-servers-card", () => {
       ...(replacePaths.length ? { replacePaths } : {}),
     });
   });
-  it.each(["load", "patch rejection", "patch refusal", "refresh"] as const)(
+  it.each(["load", "patch rejection", "patch refusal"] as const)(
     "shows a %s mutation failure and releases the controls for retry",
     async (stage) => {
       const { card, harness } = await mountCard({
@@ -558,11 +583,9 @@ describe("openclaw-mcp-servers-card", () => {
         harness.ensureLoaded.mockRejectedValueOnce(failure);
       } else if (stage === "patch rejection") {
         harness.patch.mockRejectedValueOnce(failure);
-      } else if (stage === "patch refusal") {
+      } else {
         harness.runtimeConfig.state.lastError = failure.message;
         harness.patch.mockResolvedValueOnce(false);
-      } else {
-        harness.refresh.mockRejectedValueOnce(failure);
       }
 
       actionButton(card, "Disable").click();

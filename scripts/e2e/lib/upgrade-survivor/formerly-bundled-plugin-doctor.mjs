@@ -8,6 +8,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import { runManagedCommand, terminateManagedChild } from "../../../lib/managed-child-process.mts";
 import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
@@ -45,16 +46,9 @@ for (const directory of [stateDir, workspace, proofArtifacts]) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 }
 const env = {
-  ...process.env,
-  HOME: home,
-  OPENCLAW_HOME: home,
-  OPENCLAW_STATE_DIR: stateDir,
-  OPENCLAW_CONFIG_PATH: configPath,
+  ...createBuildSmokeEnv(home, process.env),
   OPENCLAW_AGENT_DIR: path.join(stateDir, "agents", "main", "agent"),
   OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-  XDG_CONFIG_HOME: path.join(home, ".config"),
-  XDG_CACHE_HOME: path.join(home, ".cache"),
-  XDG_DATA_HOME: path.join(home, ".local", "share"),
 };
 delete env.OPENCLAW_PROFILE;
 

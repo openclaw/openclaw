@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.js";
@@ -93,7 +93,7 @@ vi.mock("../agents/cli-runner/execute.runtime.js", () => ({ executePreparedCliRu
 vi.mock("../agents/model-auth-provider.js", () => ({ resolveApiKeyForProviderCore }));
 
 function createCompanion(cfg: OpenClawConfig = {}) {
-  return createSessionCompanion({
+  const companion = createSessionCompanion({
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
@@ -106,10 +106,16 @@ function createCompanion(cfg: OpenClawConfig = {}) {
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "test/model-a",
   });
+  onTestFinished(() => companion.dispose());
+  return companion;
 }
 
 const imageBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=";
+
+const completion = (text = "The session is reading a file.") => ({
+  meta: { durationMs: 1, finalAssistantVisibleText: text },
+});
 
 const question = {
   agentId: "main",
@@ -117,6 +123,27 @@ const question = {
   question: "What is it doing?",
   connId: "conn-1",
 };
+
+async function invokeAsk(
+  companion: ReturnType<typeof createSessionCompanion>,
+  params: Record<string, unknown>,
+  connId: string,
+  cfg: OpenClawConfig = {},
+  getCommittedRuntimeConfig?: () => OpenClawConfig,
+) {
+  const respond = vi.fn();
+  await sessionCompanionHandlers["sessions.companion.ask"]!({
+    params: { sessionKey: question.sessionKey, ...params },
+    client: { connId },
+    context: {
+      sessionCompanion: companion,
+      getRuntimeConfig: () => cfg,
+      getCommittedRuntimeConfig,
+    },
+    respond,
+  } as never);
+  return respond;
+}
 
 describe("session companion embedded invocation", () => {
   beforeEach(() => {
@@ -132,9 +159,7 @@ describe("session companion embedded invocation", () => {
     appendMessage.mockReset().mockResolvedValue("seed-entry");
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
     removeSession.mockResolvedValue(undefined);
-    runEmbeddedAgent.mockReset().mockResolvedValue({
-      meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
-    });
+    runEmbeddedAgent.mockReset().mockResolvedValue(completion("The session is reading a file."));
   });
 
   it.each(["embedded", "cli", "denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(
@@ -299,78 +324,62 @@ describe("session companion embedded invocation", () => {
 
   it("passes a selected-text comment to the model without persisting it as a file", async () => {
     const companion = createCompanion();
-    const respond = vi.fn();
-    try {
-      await sessionCompanionHandlers["sessions.companion.ask"]!({
-        params: {
-          sessionKey: question.sessionKey,
-          question: "What changed?",
-          selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
-        },
-        client: { connId: "selection-connection" },
-        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-        respond,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ answer: expect.any(String) }),
-      );
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
-          images: undefined,
-        }),
-      );
-      expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
-      expect(
-        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
-      ).toEqual([
-        { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
-      ]);
-      await companion.ask({ ...question, question: "What next?" });
-      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
-      expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
-    } finally {
-      companion.dispose();
-    }
+    const respond = await invokeAsk(
+      companion,
+      {
+        question: "What changed?",
+        selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
+      },
+      "selection-connection",
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ answer: expect.any(String) }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
+        images: undefined,
+      }),
+    );
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
+    expect(companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges).toEqual(
+      [{ question: "What changed?", answer: expect.any(String), ts: expect.any(Number) }],
+    );
+    await companion.ask({ ...question, question: "What next?" });
+    expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
+    expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
   });
 
   it.each([0, 2_000_001])(
     "delivers an image with %i padding bytes from the registered RPC to the read-only model run",
     async (padding) => {
       const companion = createCompanion();
-      const respond = vi.fn();
       const data = Buffer.concat([
         Buffer.from(imageBase64, "base64"),
         Buffer.alloc(padding),
       ]).toString("base64");
-      try {
-        await sessionCompanionHandlers["sessions.companion.ask"]!({
-          params: {
-            sessionKey: question.sessionKey,
-            question: "What does this show?",
-            attachments: [{ mimeType: "image/png", fileName: "proof.png", content: data }],
-          },
-          client: { connId: "image-connection" },
-          context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ answer: expect.any(String) }),
-        );
-        expect(runEmbeddedAgent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            prompt: "What does this show?",
-            images: [expect.objectContaining({ type: "image", mimeType: "image/png", data })],
-            disableMessageTool: true,
-            requireWorkspaceOnly: true,
-            toolsAllow: ["read", "sessions_history", "sessions_search"],
-          }),
-        );
-      } finally {
-        companion.dispose();
-      }
+      const respond = await invokeAsk(
+        companion,
+        {
+          question: "What does this show?",
+          attachments: [{ mimeType: "image/png", fileName: "proof.png", content: data }],
+        },
+        "image-connection",
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ answer: expect.any(String) }),
+      );
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "What does this show?",
+          images: [expect.objectContaining({ type: "image", mimeType: "image/png", data })],
+          disableMessageTool: true,
+          requireWorkspaceOnly: true,
+          toolsAllow: ["read", "sessions_history", "sessions_search"],
+        }),
+      );
     },
   );
 
@@ -383,7 +392,6 @@ describe("session companion embedded invocation", () => {
         committed = { gateway: { uploads: { enabled: false } } };
       };
       const companion = createCompanion(cfg);
-      const respond = vi.fn();
       const prepare = attachmentProcessor.prepareMediaAttachment;
       const preparation = vi.spyOn(attachmentProcessor, "prepareMediaAttachment");
       if (phase === "preparation") {
@@ -400,24 +408,20 @@ describe("session companion embedded invocation", () => {
       } else {
         runEmbeddedAgent.mockImplementationOnce(async () => {
           disable();
-          return { meta: { durationMs: 1, finalAssistantVisibleText: "Accepted image answer" } };
+          return completion("Accepted image answer");
         });
       }
       try {
-        await sessionCompanionHandlers["sessions.companion.ask"]!({
-          params: {
-            sessionKey: question.sessionKey,
+        const respond = await invokeAsk(
+          companion,
+          {
             question: "Describe the image",
             attachments: [{ mimeType: "image/png", content: imageBase64 }],
           },
-          client: { connId: "late-policy-image" },
-          context: {
-            sessionCompanion: companion,
-            getRuntimeConfig: () => cfg,
-            getCommittedRuntimeConfig: () => committed,
-          },
-          respond,
-        } as never);
+          "late-policy-image",
+          cfg,
+          () => committed,
+        );
         if (phase === "accepted") {
           expect(runEmbeddedAgent).toHaveBeenCalledOnce();
           expect(respond).toHaveBeenCalledWith(
@@ -465,30 +469,23 @@ describe("session companion embedded invocation", () => {
       runEmbeddedAgent.mockImplementationOnce(async (params) => {
         params.assertModelInput?.(model);
         modelIo();
-        return { meta: { durationMs: 1, finalAssistantVisibleText: "The image is visible." } };
+        return completion("The image is visible.");
       });
       const companion = createCompanion();
-      const respond = vi.fn();
-      try {
-        await sessionCompanionHandlers["sessions.companion.ask"]!({
-          params: {
-            sessionKey: question.sessionKey,
-            question: "What does this show?",
-            attachments: [{ mimeType: "image/png", content: imageBase64 }],
-          },
-          client: { connId: "catalog-image-connection" },
-          context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ answer: "The image is visible." }),
-        );
-        expect(modelIo).toHaveBeenCalledOnce();
-        expect(resolveModelAsync).not.toHaveBeenCalled();
-      } finally {
-        companion.dispose();
-      }
+      const respond = await invokeAsk(
+        companion,
+        {
+          question: "What does this show?",
+          attachments: [{ mimeType: "image/png", content: imageBase64 }],
+        },
+        "catalog-image-connection",
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ answer: "The image is visible." }),
+      );
+      expect(modelIo).toHaveBeenCalledOnce();
+      expect(resolveModelAsync).not.toHaveBeenCalled();
     },
   );
 
@@ -497,42 +494,33 @@ describe("session companion embedded invocation", () => {
     runEmbeddedAgent.mockImplementationOnce(async (params) => {
       params.assertModelInput?.({ input: ["text"] });
       modelIo();
-      return {
-        meta: { durationMs: 1, finalAssistantVisibleText: "Must not answer an unseen image." },
-      };
+      return completion("Must not answer an unseen image.");
     });
     const companion = createCompanion();
-    const respond = vi.fn();
-    try {
-      await sessionCompanionHandlers["sessions.companion.ask"]!({
-        params: {
-          sessionKey: question.sessionKey,
-          question: "What does this show?",
-          attachments: [{ mimeType: "image/png", content: imageBase64 }],
-        },
-        client: { connId: "image-connection" },
-        context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
-        respond,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining("does not support image input"),
-          details: { reason: "image-input-unsupported" },
-          retryable: false,
-        }),
-      );
-      expect(modelIo).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(resolveModelAsync).not.toHaveBeenCalled();
-      await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      expect(runEmbeddedAgent.mock.calls[1]?.[0].assertModelInput).toBeUndefined();
-      expect(resolveModelAsync).not.toHaveBeenCalled();
-    } finally {
-      companion.dispose();
-    }
+    const respond = await invokeAsk(
+      companion,
+      {
+        question: "What does this show?",
+        attachments: [{ mimeType: "image/png", content: imageBase64 }],
+      },
+      "image-connection",
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("does not support image input"),
+        details: { reason: "image-input-unsupported" },
+        retryable: false,
+      }),
+    );
+    expect(modelIo).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(resolveModelAsync).not.toHaveBeenCalled();
+    await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAgent.mock.calls[1]?.[0].assertModelInput).toBeUndefined();
+    expect(resolveModelAsync).not.toHaveBeenCalled();
   });
 
   it("keeps read-only tools direct when the selected agent model opts into Code Mode", async () => {
@@ -551,50 +539,39 @@ describe("session companion embedded invocation", () => {
       },
       tools: { toolSearch: true, codeMode: { enabled: true, maxOutputBytes: 4096 } },
     };
-    runEmbeddedAgent.mockResolvedValueOnce({
-      meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
-    });
+    runEmbeddedAgent.mockResolvedValueOnce(completion("The session is reading a file."));
     const companion = createCompanion(cfg);
 
+    await expect(companion.ask(question)).resolves.toMatchObject({
+      answer: "The session is reading a file.",
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    const invocation = runEmbeddedAgent.mock.calls[0]?.[0];
+    if (!invocation) {
+      throw new Error("Expected the companion embedded invocation");
+    }
+    expect(invocation.config?.tools?.codeMode).toEqual(cfg.tools?.codeMode);
+    const surface = createAgentHarnessToolSurfaceRuntimeCore({
+      config: invocation.config,
+      agentId: invocation.agentId,
+      modelProvider: invocation.provider,
+      modelId: invocation.model,
+      model: { compat: { codeMode: "preferred" } },
+      codeModeOverride: invocation.codeModeOverride,
+      disableToolSearch: invocation.disableToolSearch,
+      toolsAllow: invocation.toolsAllow,
+      modelToolsEnabled: true,
+      executeTool: async () => ({ content: [], details: {} }),
+    });
     try {
-      await expect(
-        companion.ask({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          question: "What is it doing?",
-          connId: "conn-1",
-        }),
-      ).resolves.toMatchObject({ answer: "The session is reading a file." });
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      const invocation = runEmbeddedAgent.mock.calls[0]?.[0];
-      if (!invocation) {
-        throw new Error("Expected the companion embedded invocation");
-      }
-      expect(invocation.config?.tools?.codeMode).toEqual(cfg.tools?.codeMode);
-      const surface = createAgentHarnessToolSurfaceRuntimeCore({
-        config: invocation.config,
-        agentId: invocation.agentId,
-        modelProvider: invocation.provider,
-        modelId: invocation.model,
-        model: { compat: { codeMode: "preferred" } },
-        codeModeOverride: invocation.codeModeOverride,
-        disableToolSearch: invocation.disableToolSearch,
-        toolsAllow: invocation.toolsAllow,
-        modelToolsEnabled: true,
-        executeTool: async () => ({ content: [], details: {} }),
-      });
-      try {
-        const tools = ["read", "sessions_history", "sessions_search"].map(createStubTool);
-        expect(surface.compactTools(tools).tools.map((tool) => tool.name)).toEqual([
-          "read",
-          "sessions_history",
-          "sessions_search",
-        ]);
-      } finally {
-        surface.cleanup();
-      }
+      const tools = ["read", "sessions_history", "sessions_search"].map(createStubTool);
+      expect(surface.compactTools(tools).tools.map((tool) => tool.name)).toEqual([
+        "read",
+        "sessions_history",
+        "sessions_search",
+      ]);
     } finally {
-      companion.dispose();
+      surface.cleanup();
     }
   });
 

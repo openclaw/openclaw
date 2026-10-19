@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -80,6 +81,33 @@ beforeEach(async () => {
 afterEach(() => {
   document.body.replaceChildren();
 });
+
+it.each(["question", "outside"] as const)(
+  "restores focus after removing a question only when it held focus (%s)",
+  async (focusAt) => {
+    const request = vi.fn().mockResolvedValue({ question: question() });
+    const { page } = mount(request);
+    await settle(page);
+    await questionPanelIn(page);
+    const input = page.querySelector("textarea")!;
+    const outside = document.body.appendChild(document.createElement("button"));
+    const target = focusAt === "question" ? input : outside;
+    target.focus();
+    expect(document.activeElement).toBe(target);
+
+    page.questionId = "";
+    await settle(page);
+
+    await waitForSolid(() => {
+      expect(input.isConnected).toBe(false);
+      expect(document.activeElement).toBe(
+        focusAt === "question" ? page.querySelector("#question-page-title") : outside,
+      );
+    });
+    expect(page.textContent).toContain("Unavailable");
+    expect(request).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("recovers a failed reconnect lookup without losing the typed answer", async () => {
   const request = vi
@@ -163,4 +191,27 @@ it("keeps confirmed missing questions unavailable without a retry", async () => 
   await settle(page);
   expect(page.textContent).toContain("Unavailable");
   expect(retry(page)).toBeUndefined();
+});
+
+it("loads only the final question when native IDs change in one turn", async () => {
+  const request = vi.fn(async (_method: string, params?: unknown) => {
+    if (!isRecord(params) || typeof params.id !== "string") {
+      throw new Error("Expected a question ID");
+    }
+    return { question: question(params.id) };
+  });
+  const { page } = mount(request);
+  await settle(page);
+  await questionPanelIn(page);
+
+  page.questionId = "question-two";
+  page.questionId = "question-three";
+  await settle(page);
+  await questionPanelIn(page);
+
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    { id: "question-one" },
+    { id: "question-three" },
+  ]);
+  expect(page.textContent).toContain("Who should receive question-three?");
 });

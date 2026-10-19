@@ -165,7 +165,7 @@ describe("pending input additive schema", () => {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
       } else {
-        const current = new DatabaseSync(filename);
+        const current = openNodeSqliteDatabase(filename);
         if (path === "doctor") {
           ensureOpenClawAgentDatabaseSchema(current, options);
         } else {

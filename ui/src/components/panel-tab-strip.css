@@ -7,7 +7,6 @@
   border-left: 1px solid var(--border);
 }
 .tabstrip {
-  --track-width: 0;
   display: flex;
   align-items: center;
   /* Allow the strip to shrink inside a flex header so wide tab rows scroll

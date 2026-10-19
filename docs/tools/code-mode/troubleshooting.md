@@ -103,8 +103,9 @@ The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
   `codeModeOnly` is a separate native feature that this field does not track.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
-  (`{ search, describe, call }`). These calls never reach the provider;
-  provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+  (`{ search, describe, call }`). These are not provider requests. The embedded
+  runtime's `meta.toolSummary.calls` includes outer and nested tool terminals,
+  so bridge counts can overlap it and must not be added to it.
 - `costUsd`: estimated USD cost from the run's accumulated usage and the
   model's cost config (cache read/write tiers included); omitted when the
   model has no cost data.
@@ -155,10 +156,10 @@ openclaw gateway
 ```
 
 For payload-shape debugging, use `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted`.
-This logs a capped, redacted JSON snapshot of the model request; use it only
-while debugging, since prompts and message text can still appear.
+This logs request shape and the complete tool-name list, without prompt,
+message, or tool content.
 
-For stream debugging, use `OPENCLAW_DEBUG_SSE=peek` to log the first five
-redacted SSE events. Code mode also rejects the final provider
+For stream debugging, use `OPENCLAW_DEBUG_SSE=events` or `peek` for timing
+diagnostics without SSE event bodies. Code mode also rejects the final provider
 payload if it does not contain exactly one `exec`, one `wait`, and only approved
 direct-only tools after the code-mode surface has activated.

@@ -1,8 +1,8 @@
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { formatDurationCompact, formatDurationHuman } from "../lib/format-duration.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 
 type ElapsedTimeProps = {
   startMs: number | null;
@@ -15,17 +15,9 @@ defineSolidBridge<ElapsedTimeProps>(
   "openclaw-elapsed-time",
   (props) => {
     const [tick, setTick] = createSignal(0);
-    const polling = useVisiblePoll(1_000, () => setTick((value) => value + 1));
-    createEffect(
-      () => props.startMs != null && props.endMs == null,
-      (ticking) => {
-        if (ticking) {
-          polling.start();
-        } else {
-          polling.stop();
-        }
-      },
-    );
+    useVisiblePoll(1_000, () => setTick((value) => value + 1), {
+      enabled: () => props.startMs != null && props.endMs == null,
+    });
     const label = createMemo(() => {
       tick();
       i18nRevision();

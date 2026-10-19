@@ -2,10 +2,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
+  createComposerQuestionPrompt as questionPrompt,
   createComposerProps as props,
   findComposerButton as button,
   renderComposerFixture as renderComposer,
@@ -111,32 +112,6 @@ describe("suggestion composer", () => {
   });
 });
 
-function questionPrompt(id: string, question: string): QuestionPrompt {
-  return {
-    id,
-    questions: [
-      {
-        questionId: "choice",
-        header: "Choice",
-        question,
-        options: [{ label: "Yes" }, { label: "No" }],
-        isOther: false,
-      },
-    ],
-    sessionKey: "queue-test",
-    createdAtMs: 1_000,
-    expiresAtMs: Date.now() + 60_000,
-    status: "pending",
-    answeredElsewhere: false,
-    localResolutionConfirmed: false,
-    locallyExpired: false,
-    submitting: false,
-    error: null,
-    drafts: new Map(),
-    revision: 1,
-  };
-}
-
 class DictationAudioContext {
   readonly destination = {};
   readonly sampleRate = 8000;
@@ -175,9 +150,7 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
   const container = createComposerContainer();
   document.body.append(container);
   const composerProps = props(overrides);
-  const draw = () => renderComposerInto(container, composerProps);
-  composerProps.onRequestUpdate = draw;
-  draw();
+  renderComposerInto(container, composerProps);
   return { container };
 }
 
@@ -203,6 +176,49 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
+  it("keeps composer, send, and queue class lists aligned with refreshed state", () => {
+    const { container, props: initial } = renderComposer({
+      draft: "A draft",
+      queue: [{ id: "a", text: "Queued message", createdAt: 1, sendState: "waiting-idle" }],
+    });
+    const classes = (selector: string) => new Set(container.querySelector(selector)?.classList);
+    const inputClasses = [
+      "agent-chat__input",
+      "agent-chat__input--chat",
+      "agent-chat__input--mobile-toolbar",
+    ];
+    expect(classes(".agent-chat__input")).toEqual(new Set(inputClasses));
+    expect(classes(".chat-send-btn--send")).toEqual(
+      new Set(["chat-send-btn", "chat-send-btn--send"]),
+    );
+    expect(classes(".chat-queue__item")).toEqual(
+      new Set(["chat-queue__item", "chat-queue__item--no-avatar"]),
+    );
+
+    renderComposerInto(container, { ...initial, offline: true, sending: true });
+    expect(classes(".agent-chat__input")).toEqual(
+      new Set([...inputClasses, "agent-chat__input--offline"]),
+    );
+    expect(classes(".chat-send-btn--send")).toEqual(
+      new Set(["chat-send-btn", "chat-send-btn--send", "chat-send-btn--sending"]),
+    );
+    expect(classes(".chat-queue__item")).toEqual(
+      new Set(["chat-queue__item", "chat-queue__item--no-avatar", "chat-queue__item--reconnect"]),
+    );
+    expect(classes(".chat-queue__badge")).toEqual(
+      new Set(["chat-queue__badge", "chat-queue__badge--reconnect"]),
+    );
+
+    renderComposerInto(container, initial);
+    expect(classes(".agent-chat__input")).toEqual(new Set(inputClasses));
+    expect(classes(".chat-send-btn--send")).toEqual(
+      new Set(["chat-send-btn", "chat-send-btn--send"]),
+    );
+    expect(classes(".chat-queue__item")).toEqual(
+      new Set(["chat-queue__item", "chat-queue__item--no-avatar"]),
+    );
+  });
+
   it("shows actionable connecting guidance in a visible status region", () => {
     const detail =
       "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.";
@@ -235,9 +251,7 @@ describe("renderChatComposer controls", () => {
     composerProps.realtimeTalkDetail = "The selected microphone is unavailable";
     composerProps.onUseSystemDefaultMicrophone = vi.fn();
     composerProps.onDismissRealtimeTalkError = dismissRecovery;
-    const draw = () => renderComposerInto(container, composerProps);
-    composerProps.onRequestUpdate = draw;
-    draw();
+    renderComposerInto(container, composerProps);
     await vi.advanceTimersByTimeAsync(0);
     button(container, t("chat.composer.startVoiceInput")).dispatchEvent(
       dictationPointer("pointerdown", 15),
@@ -474,9 +488,18 @@ describe("renderChatComposer controls", () => {
     capturedButton!.dispatchEvent(dictationPointer("pointerdown", 9));
     expect(capturedButton!.hasPointerCapture(9)).toBe(true);
     await vi.advanceTimersByTimeAsync(300);
-    expect(capturedButton?.classList.contains("chat-send-btn--dictation-arming")).toBe(true);
+    expect(new Set(capturedButton?.classList)).toEqual(
+      new Set([
+        "chat-send-btn",
+        "chat-send-btn--voice",
+        "chat-send-btn--hold-enabled",
+        "chat-send-btn--dictation-arming",
+      ]),
+    );
     const holdingControl = capturedButton?.closest(".chat-talk-control");
-    expect(holdingControl?.classList.contains("chat-talk-control--holding")).toBe(true);
+    expect(new Set(holdingControl?.classList)).toEqual(
+      new Set(["chat-talk-control", "chat-talk-control--holding"]),
+    );
     expect(holdingControl?.querySelector(".chat-talk-input-picker")).not.toBeNull();
     expect(capturedButton!.hasPointerCapture(9)).toBe(true);
     await vi.advanceTimersByTimeAsync(500);
@@ -486,7 +509,9 @@ describe("renderChatComposer controls", () => {
     );
     expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
     expect(rerenderedButton).toBe(capturedButton);
-    expect(rerenderedButton?.classList.contains("chat-send-btn--dictating")).toBe(true);
+    expect(new Set(rerenderedButton?.classList)).toEqual(
+      new Set(["chat-send-btn", "chat-send-btn--dictating"]),
+    );
     expect(
       container.querySelector(".agent-chat__dictation-phase--listening")?.textContent?.trim(),
     ).toBe(t("chat.composer.dictationListening"));
@@ -578,27 +603,25 @@ describe("renderChatComposer controls", () => {
 describe("renderChatComposer status", () => {
   it("keeps every concurrent gateway question reachable", async () => {
     const container = createComposerContainer();
-    const onRequestUpdate = vi.fn();
     const composerProps = props({
       sessionKey: "queue-test",
       gatewayQuestionPrompts: [
         questionPrompt("question-1", "First prompt"),
         questionPrompt("question-2", "Second prompt"),
       ],
-      onRequestUpdate,
     });
 
     renderComposerInto(container, composerProps);
-    let panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    const panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
     expect(panel.props!.model.questions[0]?.question).toBe("First prompt");
     expect(panel.props!.model.requestPosition).toEqual({ current: 1, total: 2 });
 
     panel.props!.onNextRequest?.();
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-    renderComposerInto(container, composerProps);
-    panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
-    expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
-    expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    await waitForSolid(() => {
+      const nextPanel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+      expect(nextPanel.props!.model.questions[0]?.question).toBe("Second prompt");
+      expect(nextPanel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    });
   });
 
   it("keeps fallback status in the composer without a compaction overlay", () => {

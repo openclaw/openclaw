@@ -1,5 +1,6 @@
-import { For, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
@@ -9,13 +10,16 @@ import type {
   SessionMenuActionsState as MenuState,
 } from "./session-menu-actions.ts";
 import { Icon } from "./solid/icon.tsx";
-import type { MenuEntry } from "./solid/menu.tsx";
+import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
+
+registerSessionOrganizationEnglish();
 
 export function useSessionMenuDetails(
   actions: SessionMenuActions,
   readState: () => MenuState,
   disabled: (kind: SessionManagementActionKind) => boolean,
+  controls?: MenuControls,
 ) {
   const ownerSnapshot = actions.ownerMenu.snapshot;
   const ownerStatus = (): MenuEntry[] => {
@@ -51,7 +55,7 @@ export function useSessionMenuDetails(
     searchGeneration();
     return "";
   });
-  const owners = () => {
+  const owners = createMemo(() => {
     const state = ownerSnapshot();
     const options = [...state.owners];
     const currentOwner = readState().currentOwner;
@@ -77,7 +81,10 @@ export function useSessionMenuDetails(
           .includes(term),
       ),
     );
-  };
+  });
+  const ownersByKey = createMemo(
+    () => new Map(owners().map((owner) => [`${owner.type}:${owner.id}`, owner])),
+  );
   const ownerSearchEntry: MenuEntry = {
     kind: "content",
     id: "owners-search",
@@ -87,6 +94,7 @@ export function useSessionMenuDetails(
         ref={nativeListener("click", (event) => event.stopPropagation())}
       >
         <input
+          ref={controls?.ref()}
           type="search"
           data-search
           data-form-control
@@ -117,17 +125,37 @@ export function useSessionMenuDetails(
           checked,
           disabled: actions.actionDisabled("assign-owner") || checked,
           attributes: { title: readState().actionDisabledReasons["assign-owner"] },
-          icon: (
-            <span class="session-menu__avatar" aria-hidden="true">
-              <SessionOwnerAvatar owner={owner} />
-            </span>
+          render: (attributes) => (
+            <button
+              {...attributes}
+              type="button"
+              value={`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
+              class="oc-menu-item session-menu__item"
+              disabled={attributes["aria-disabled"] === "true"}
+              title={readState().actionDisabledReasons["assign-owner"]}
+            >
+              <span class="oc-menu-item__check" aria-hidden="true">
+                {attributes["aria-checked"] === "true" ? "✓" : ""}
+              </span>
+              <span class="oc-menu-item__icon">
+                <span class="session-menu__avatar" aria-hidden="true">
+                  <SessionOwnerAvatar
+                    owner={ownersByKey().get(`${owner.type}:${owner.id}`) ?? owner}
+                  />
+                </span>
+              </span>
+              <span class="oc-menu-item__label">
+                <span class="session-menu__text">{attributes["aria-label"]}</span>
+              </span>
+              <Show when={attributes["aria-checked"] === "true"}>
+                <span class="oc-menu-item__details">
+                  <span class="session-menu__check" aria-hidden="true">
+                    <Icon name="check" />
+                  </span>
+                </span>
+              </Show>
+            </button>
           ),
-          content: <span class="session-menu__text">{label}</span>,
-          details: checked ? (
-            <span class="session-menu__check" aria-hidden="true">
-              <Icon name="check" />
-            </span>
-          ) : undefined,
         };
       }),
       ...(options.length === 0
@@ -190,10 +218,7 @@ export function useSessionMenuDetails(
                             ? t("sessionsView.communication.default")
                             : undefined)
                         }
-                        ref={(element) => {
-                          click(element);
-                          keydown(element);
-                        }}
+                        ref={[controls?.ref(), click, keydown]}
                       >
                         {t(
                           mode === "always"

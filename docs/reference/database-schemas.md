@@ -9,7 +9,7 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; fresh agent stores also support the [experimental PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. PostgreSQL agent schemas currently support bootstrap only. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [experimental PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied forward migrations for PostgreSQL state and agent schemas, including agent schema 27 to 28, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -122,6 +122,8 @@ Doctor's explicit verification remain in place.
 
 Fresh agent databases install the current canonical schema directly, without
 running legacy migration discovery or repairing indexes that were just created.
+The schema owner reads ownership and version inside the write transaction, so
+concurrent initializers cannot replace another agent's claim while waiting for the lock.
 After the creation transaction commits, the schema owner publishes the admitted
 catalog and canonical-validation facts for later opens and workers. Tracked DDL
 and rollback still invalidate those facts; existing databases retain their first
@@ -152,17 +154,21 @@ old. A hit skips startup snapshot, readiness, schema, and integrity inspection,
 including post-ready scans. The plain checksum-protected write needs no rename
 or fsync protocol; an incomplete seal falls back to full validation.
 
-Admitted facts are shared with all workers and handles while the database is open.
-Final close releases their in-memory payloads; a clean-close seal restores validated
-facts on reopen without SQL. A close that cannot seal requires fresh admission.
+Admitted physical facts are shared with all workers and handles for the process
+lifetime. Final close retires row caches, write receipts, and pathname bindings;
+explicitly process-lived schema, integrity, and quarantine facts remain with the
+physical file descriptor. Reopen reuses them without validation SQL after identifying
+the file. A clean-close seal carries validated facts across process restarts.
 File identity uses volume, inode, and stable
 birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
 Admission lookups and established borrowers reuse those shared facts without
 checking the pathname again. Native open and reopen still identify replacement
 files, and creation witnesses retain their physical file check. A replaced or
 restored file needs fresh admission. Migration and repair owners validate their
-changes and publish new facts after successful DDL settlement. Doctor and explicit
-verification retain full checks, and observed corruption still revokes admission.
+changes and publish new facts after successful DDL settlement. Ordinary Doctor
+migrations and repairs default to quick integrity with full checks of affected
+tables. Explicit verification and recovery retain full checks, and observed
+corruption still revokes admission.
 Silent corruption with unchanged metadata is outside the seal's guarantee and
 is caught by normal SQLite access or the next full verification. See
 [clean-close seal and integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks)
@@ -192,6 +198,12 @@ The shared-state reader pool keeps its first worker warm for the normal handle
 idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
+
+If a shared-state writer worker is lost, its logical leases retire even while
+idle. Retirement joins dispatched commands but does not wait for external
+callback bodies, allowing agent lease cleanup to reach its existing recovery
+path. An uncertain write remains `outcome-unknown`; recovery never replays it or
+claims that it rolled back.
 
 Durable usage refreshes publish rollups in bounded transactions instead of one
 writer request per transcript. A batch flushes after 50 transcripts, 1 MiB of
@@ -301,7 +313,7 @@ process's published facts without repeating validation.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
-The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent idle timeout (30 minutes in the Gateway, 30 seconds in CLI processes so Doctor maintenance is not left waiting on an idle lease); a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
 Creating an agent database at an admitted absent path revokes the previous file's
 retained validation before worker preparation. A recreated file cannot borrow that

@@ -164,11 +164,6 @@ describe("Git network recovery", () => {
       args: ["--git-dir=/repo/.git", "ls-remote", "origin"],
       stderr: "fatal: Could not resolve host: example.invalid",
     },
-    {
-      args: ["fetch", "origin"],
-      stderr:
-        "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/repo/.git/refs/remotes/origin/main.lock': File exists.",
-    },
   ])("recovers transport errors with Git global options: $stderr", async ({ args, stderr }) => {
     results({ ...failure, stderr }, success);
     const pending = executeGitCommand("/repo", args, { timeoutMs: 10_000 });
@@ -180,6 +175,20 @@ describe("Git network recovery", () => {
   it.each([
     { args: ["fetch", "origin"], stderr: "fatal: repository not found" },
     { args: ["push", "origin", "main"], stderr: failure.stderr },
+    {
+      args: ["fetch", "origin"],
+      stderr:
+        "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/repo/.git/refs/remotes/origin/main.lock': File exists.",
+    },
+    {
+      args: ["fetch", "origin"],
+      stderr: "error: cannot lock ref 'refs/remotes/origin/main': is at aaaa but expected bbbb",
+    },
+    {
+      args: ["fetch", "origin"],
+      stderr:
+        "error: cannot lock ref 'refs/remotes/origin/main': is at aaaa but expected bbbb\nerror: origin did not send all necessary objects",
+    },
   ])(
     "does not replay permanent failures or unsafe operations: $args $stderr",
     async ({ args, stderr }) => {

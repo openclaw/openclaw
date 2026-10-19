@@ -2,6 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import {
   SqliteDatabaseGenerationSlot,
+  SqliteDatabaseAdmissionRegistry,
+  createSqliteDatabaseAdmissionCursor,
   readSqliteDatabaseGeneration,
   type Admission,
 } from "./sqlite-database-admission-record.js";
@@ -35,6 +37,8 @@ it("publishes cohort scope discovery once and preserves independent write receip
   const receipts = createSqliteDatabaseWriteReceipts({
     admission: () => record,
     pathAdmission: () => record,
+    retain: () => {},
+    release: () => {},
     writeListeners: new WeakMap(),
     readRevision: () => 0,
     writer: () => record,
@@ -77,6 +81,59 @@ it("publishes cohort scope discovery once and preserves independent write receip
   }
 });
 
+it("publishes new scope snapshots without revisiting unrelated scope cells", () => {
+  const record = createAdmission();
+  const registry = new SqliteDatabaseAdmissionRegistry();
+  registry.records.set(record.identity, record);
+  const receipts = createSqliteDatabaseWriteReceipts({
+    admission: () => record,
+    pathAdmission: () => record,
+    retain: () => {},
+    release: () => {},
+    writeListeners: new WeakMap(),
+    readRevision: () => 0,
+    writer: () => record,
+    suspended: () => false,
+    publish: (current, keys) => registry.publish(current, keys),
+  });
+  const cursor = createSqliteDatabaseAdmissionCursor();
+  const initial = receipts.readSqliteDatabaseScopedWriteTokensForPath(
+    ":memory:",
+    Array.from({ length: 256 }, (_, index) => `existing-${index}`),
+  );
+  const [before] = registry.capture(cursor);
+  let visited = 0;
+  for (const revision of record.writeScopes.values()) {
+    const state = revision.state;
+    Object.defineProperty(revision, "state", {
+      get() {
+        visited++;
+        return state;
+      },
+    });
+  }
+
+  const added = receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new");
+  expect(visited).toBe(0);
+  const [delta] = registry.capture(cursor);
+  expect([...delta!.writeScopes.keys()]).toEqual(['["key","new"]']);
+  expect(before!.writeScopes.size).toBe(256);
+  expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "existing-0")).toBe(
+    initial![0],
+  );
+
+  const database = new DatabaseSync(":memory:");
+  try {
+    receipts.retireSqliteDatabaseWriteScopes(database, ["new"]);
+    expect(Atomics.load(delta!.writeScopes.get('["key","new"]')!.state, 1)).toBe(1);
+    expect(registry.capture()[0]!.writeScopes.size).toBe(256);
+    expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new")).not.toBe(added);
+    expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","new"]']);
+  } finally {
+    database.close();
+  }
+});
+
 it("invalidates a scope registered by another isolate during an accepted write", () => {
   const reader = new DatabaseSync(":memory:");
   const writer = new DatabaseSync(":memory:");
@@ -85,6 +142,8 @@ it("invalidates a scope registered by another isolate during an accepted write",
   const receipts = createSqliteDatabaseWriteReceipts({
     admission: (database) => (database === reader ? host : worker),
     pathAdmission: () => host,
+    retain: () => {},
+    release: () => {},
     writeListeners: new WeakMap(),
     readRevision: () => 0,
     writer: () => worker,

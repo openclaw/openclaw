@@ -20,12 +20,24 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+OpenAI Responses native compaction and checkpoint replay follow
+[context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
+including legacy defaults, explicit opt-in, and handling of preexisting checkpoints
+when switching engines.
+
 For direct OpenAI API-key sessions, the `/responses/compact` endpoint can return
 a canonical window of retained messages followed by an encrypted checkpoint.
 OpenClaw preserves that entire window, including retained assistant messages,
 for the next request and after a restart. The provider chooses which messages
 remain; it does not have to retain every original user message. See
 [OpenAI server-side compaction](/providers/openai/advanced).
+
+Built-in summarization rejects responses cut short by the model's output token limit,
+even when they contain summary text. In `mode: "default"`, automatic compaction
+retries invalid summary output once; manual compaction reports the failure without
+retrying. If no valid summary is produced, the original history remains in context
+and no compaction entry is written. Branch navigation also rejects truncated
+summaries and leaves the current branch unchanged.
 
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
@@ -79,7 +91,7 @@ Before automatically reducing the output budget for an OpenAI-compatible tool re
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
-If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
+If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. If the recovery compaction itself fails, for example because the summary model errors or times out, the reply says so and suggests trying again or running `/compact`. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
 
 Stopping or timing out a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
 
@@ -222,11 +234,9 @@ Compaction summarization requests exact opaque identifier retention by default (
 
 ### Active transcript byte guard
 
-When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw
-triggers normal local compaction before a run if transcript history reaches
-that size. This is useful for long-running sessions where provider-side context
-management may keep model context healthy while persisted transcript history
-keeps growing. Set a positive byte count or size string such as `"20mb"` to opt
+When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, the built-in
+runtime triggers local compaction before a run if transcript history reaches
+that size. Set a positive byte count or size string such as `"20mb"` to opt
 in; `0` or an unset value disables the guard. It does not split raw bytes; it
 asks the normal compaction pipeline to create a semantic summary. If compaction
 is declined or leaves history over the limit, the turn continues with a bounded
@@ -238,15 +248,17 @@ It shows a notice even with compaction notifications disabled; resend any
 essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
-Suppressed byte-compaction retries still use a bounded view on subsequent turns.
-Native compaction that leaves the host transcript unchanged preserves retry
-suppression. Host compaction clears or refreshes it; changing the session or
-limit, falling below the limit, or growing by another full threshold also rearms
-the guard.
-Retained history remains available on disk and may continue growing; this is not
-a storage-retention limit. For Codex
-app-server sessions, the same threshold caps native rollout transcripts and
-oversized native threads restart fresh.
+Manual compaction also reports `transcript_bytes` pressure to the context engine
+when the configured positive threshold is reached and automatic compaction is
+enabled. This lets an owning engine apply the same byte-pressure policy during
+manual recovery as during preflight.
+
+The built-in runtime suppresses repeated unsuccessful byte compaction until
+the session or limit changes, history shrinks below the limit, or it grows by
+another full threshold. Retained history remains available; this is not a
+storage-retention limit.
+
+For Codex app-server, see [fresh-thread seed compaction](/plugins/codex-harness-runtime/compaction#compaction-and-transcript-mirror); native compaction remains separate.
 
 <Warning>
 The byte guard applies to the active SQLite transcript history. Legacy JSONL

@@ -1,6 +1,5 @@
 /** Resolves agent runtime metadata from model/provider policy and ACP session overlays. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyAcpRuntimeOverlay, type AgentRuntimeMetadata } from "./acp-runtime-overlay.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/availability.js";
 import type { AgentRuntimePolicyScope } from "./model-runtime-policy.js";
@@ -9,6 +8,24 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "./session-runtime-compat.js";
+
+type AgentRuntimeMetadata = {
+  id: string;
+  source: "implicit" | "model" | "provider" | "session" | "session-key";
+};
+
+/** Persisted ACP ownership is authoritative even for ordinary session keys. */
+function applyAcpRuntimeOverlay(
+  meta: AgentRuntimeMetadata,
+  acpRuntime: boolean | undefined,
+  acpBackend?: string,
+): AgentRuntimeMetadata {
+  if (acpRuntime === true) {
+    const id = acpBackend && acpBackend.length > 0 ? acpBackend : "acpx";
+    return { id, source: "session-key" };
+  }
+  return meta;
+}
 
 type ModelAgentRuntimeMetadataParams = {
   cfg: OpenClawConfig;

@@ -2556,10 +2556,10 @@ struct ChatViewModelTests {
         await viewModel.refreshSwarmCapability()
         #expect(viewModel.activeSwarmGroups.isEmpty)
 
-        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        await viewModel.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(!viewModel.activeSwarmGroups.isEmpty)
 
-        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        await viewModel.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(viewModel.activeSwarmGroups.isEmpty)
     }
 
@@ -9456,6 +9456,43 @@ struct ChatViewModelTests {
         #expect(vm.canSend)
     }
 
+    @Test(arguments: [
+        (#"{"modelCatalogChanged":false,"authChanged":false}"#, false),
+        (#"{"agentId":"other","modelCatalogChanged":true}"#, false),
+        (#"{"agentId":"main","modelCatalogChanged":true}"#, true),
+        (#"{"modelCatalogChanged":false,"authChanged":true}"#, true),
+        (#"{"agentId":"other","modelCatalogChanged":false,"modelSelectionChanged":true}"#, true),
+        ("{}", true),
+    ])
+    @MainActor func `metadata publications reload only the affected model catalog`(
+        payload: String,
+        reloads: Bool) async throws
+    {
+        let unavailable = modelChoice(
+            id: "fixture",
+            name: "Fixture",
+            available: false,
+            unavailableReason: "missing-auth")
+        let available = modelChoice(id: "fixture", name: "Fixture", available: true)
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:main:main",
+            historyResponses: [historyPayload()],
+            modelResponses: [[unavailable], [available]],
+            modelAvailabilityIsSessionScoped: true)
+        await vm.fetchModels()
+
+        let frame = try JSONDecoder().decode(
+            EventFrame.self,
+            from: Data("""
+            {"type":"event","event":"chat.metadata.changed","payload":\(payload)}
+            """.utf8))
+        let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: frame))
+        await vm.handleTransportEvent(event)?.value
+
+        #expect(await transport.modelAgentIDs().count == (reloads ? 2 : 1))
+        #expect(vm.modelChoices == (reloads ? [available] : [unavailable]))
+    }
+
     @Test @MainActor func `metadata refresh and sequence recovery replace the selected model gate`() async throws {
         let unavailable = modelChoice(
             id: "claude-opus-4-6",
@@ -9484,7 +9521,7 @@ struct ChatViewModelTests {
         vm.input = "hello"
         #expect(!vm.canSend)
 
-        await vm.handleTransportEvent(.chatMetadataChanged)?.value
+        await vm.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(await MainActor.run { vm.modelChoices.first?.available == true })
         #expect(vm.canSend)
 
@@ -9521,7 +9558,7 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.seqGap)
         await transport.waitForState { $0.modelAgentIDs.count >= 2 }
         #expect(await transport.modelAgentIDs().count >= 2)
-        let metadata = vm.handleTransportEvent(.chatMetadataChanged)
+        let metadata = vm.handleTransportEvent(.chatMetadataChanged())
         await sequenceRecoveryGate.open()
         await metadata?.value
         #expect(await MainActor.run { vm.modelChoices.first?.available == true })

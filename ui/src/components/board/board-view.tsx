@@ -8,7 +8,8 @@ import {
   layout,
 } from "../../lib/board/grid.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
 import { BoardTabs } from "./board-tabs.tsx";
@@ -179,8 +180,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     // Hybrid devices move the chrome in/out of flow when pointer capability changes.
     const pointer =
       typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
-    pointer?.addEventListener("change", invalidateLayout);
-    return () => pointer?.removeEventListener("change", invalidateLayout);
+    return pointer ? listen(pointer, "change", invalidateLayout) : undefined;
   });
   onCleanup(() => {
     disposed = true;

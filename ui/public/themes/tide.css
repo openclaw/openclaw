@@ -117,11 +117,6 @@
   --popover: #ffffff;
   --popover-foreground: #1b232b;
   --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 52%,
-    var(--panel-strong) 48%
-  );
 
   --panel: #f7f9fb;
   --panel-strong: #eef2f7;

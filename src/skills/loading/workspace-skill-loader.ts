@@ -480,7 +480,6 @@ async function prepareWorkspaceSkillSelection(
     // Local binaries can change between discovery scans; remote hosts supply their own facts.
     getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills ? sources.runtime : undefined,
   );
-  preparation.assertCurrent();
   // Source or eligibility changes during preparation take effect on the next scan/turn.
   const eligible = filterSkillEntries(entries, {
     ...opts,

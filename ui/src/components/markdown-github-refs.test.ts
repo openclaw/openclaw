@@ -22,17 +22,28 @@ describe("github item references", () => {
   function render(source: string, options: MarkdownRenderOptions = { githubRepo }) {
     return htmlFragment(toSanitizedMarkdownHtml(source, options));
   }
+  function renderBoth(source: string, options: MarkdownRenderOptions = { githubRepo }) {
+    return [
+      render(source, options),
+      htmlFragment(toStreamingMarkdownParts(source, options).join("")),
+    ];
+  }
+  function expectItem(fragment: HTMLElement, number: string, kind: string) {
+    const anchor = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-item");
+    expect(anchor?.getAttribute("href")).toBe(
+      `https://github.com/openclaw/openclaw/${kind === "pull" ? "pull" : "issues"}/${number}`,
+    );
+    expect(anchor?.dataset.githubKind).toBe(kind);
+    expect(anchor?.textContent).toBe(`openclaw/openclaw#${number}`);
+    return anchor;
+  }
 
   it.each([
     "Posted [the summary](https://github.com/acme/research/pull/24#issuecomment-123) and merged PR #24 into `main`.",
     "Merged PR **#24**: [the summary](https://github.com/acme/research/pull/24).",
     "https://github.com/acme/research/pull/24 and PR #24.",
   ])("uses matching explicit links instead of the checkout in %s", (source) => {
-    for (const html of [
-      toSanitizedMarkdownHtml(source, { githubRepo }),
-      toStreamingMarkdownParts(source, { githubRepo }).join(""),
-    ]) {
-      const fragment = htmlFragment(html);
+    for (const fragment of renderBoth(source)) {
       const chip = [...fragment.querySelectorAll("a")].findLast(
         (a) => a.textContent === "acme/research#24",
       );
@@ -44,11 +55,7 @@ describe("github item references", () => {
     const source =
       "[A](https://github.com/acme/a/pull/24) and " +
       "[B](https://github.com/acme/b/pull/24): PR #24.";
-    for (const html of [
-      toSanitizedMarkdownHtml(source, { githubRepo }),
-      toStreamingMarkdownParts(source, { githubRepo }).join(""),
-    ]) {
-      const fragment = htmlFragment(html);
+    for (const fragment of renderBoth(source)) {
       expect(fragment.querySelectorAll("a")).toHaveLength(2);
       expect(fragment.textContent?.trim()).toBe("A and B: PR #24.");
     }
@@ -116,11 +123,8 @@ describe("github item references", () => {
       },
     ],
   ])("resolves the complete known repository in %s", (source, target, options) => {
-    for (const rendered of [
-      toSanitizedMarkdownHtml(source, options),
-      toStreamingMarkdownParts(source, options).join(""),
-    ]) {
-      expect(htmlFragment(rendered).querySelector("a")?.getAttribute("href")).toBe(
+    for (const fragment of renderBoth(source, options)) {
+      expect(fragment.querySelector("a")?.getAttribute("href")).toBe(
         "https://github.com/" + target,
       );
     }
@@ -190,11 +194,8 @@ describe("github item references", () => {
   ])(
     "leaves absent, unknown, and ambiguous repository identities unlinked: %s",
     (source, options) => {
-      for (const rendered of [
-        toSanitizedMarkdownHtml(source, options),
-        toStreamingMarkdownParts(source, options).join(""),
-      ]) {
-        expect(htmlFragment(rendered).querySelector("a")).toBeNull();
+      for (const fragment of renderBoth(source, options)) {
+        expect(fragment.querySelector("a")).toBeNull();
       }
     },
   );
@@ -244,12 +245,8 @@ describe("github item references", () => {
     ["issue #9999999999", "issue ", "9999999999", "issue"],
   ])("renders %s through the existing GitHub chip classifier", (input, prefix, number, kind) => {
     const fragment = render(input);
-    const anchor = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-item");
-    const href = `https://github.com/openclaw/openclaw/${kind === "pull" ? "pull" : "issues"}/${number}`;
-    expect(anchor?.getAttribute("href")).toBe(href);
+    const anchor = expectItem(fragment, number, kind);
     expect(anchor?.classList.contains("markdown-github-link")).toBe(true);
-    expect(anchor?.dataset.githubKind).toBe(kind);
-    expect(anchor?.textContent).toBe(`openclaw/openclaw#${number}`);
     expect(anchor?.hasAttribute("title")).toBe(false);
     expect(anchor?.previousSibling?.textContent ?? "").toBe(prefix);
     expect(fragment.textContent).toBe(`${prefix}openclaw/openclaw#${number}\n`);
@@ -283,12 +280,7 @@ describe("github item references", () => {
     ["*issue* **#42**", "issue #42", "42", "issue"],
   ])("preserves the item kind across emphasis in %s", (input, label, number, kind) => {
     const fragment = render(input);
-    const anchor = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-item");
-    expect(anchor?.getAttribute("href")).toBe(
-      `https://github.com/openclaw/openclaw/${kind === "pull" ? "pull" : "issues"}/${number}`,
-    );
-    expect(anchor?.dataset.githubKind).toBe(kind);
-    expect(anchor?.textContent).toBe(`openclaw/openclaw#${number}`);
+    expectItem(fragment, number, kind);
     expect(fragment.textContent?.trim()).toBe(
       label.replace(`#${number}`, `openclaw/openclaw#${number}`),
     );

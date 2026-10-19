@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaArtifactPath } from "../cli-paths.js";
@@ -44,10 +45,6 @@ type MantisOutputRoot = Pick<
   Awaited<ReturnType<typeof root>>,
   "exists" | "mkdir" | "move" | "remove" | "stat"
 >;
-
-function isNotFoundError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
 
 async function removeMantisOutputTree(
   outputRoot: MantisOutputRoot,
@@ -260,7 +257,7 @@ async function readNormalizedLaneResult(params: {
   try {
     rawSummary = await fs.readFile(summaryPath, "utf8");
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;

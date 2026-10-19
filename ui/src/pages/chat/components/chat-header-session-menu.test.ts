@@ -4,6 +4,7 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
+import { profileDirectory } from "../../../lib/profile-directory.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -22,7 +23,7 @@ import type { ChatPageHost } from "../chat-state-host.ts";
 import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
 import { PaneHeaderView } from "./chat-pane-header.tsx";
 import "./chat-header-session-menu.ts";
-import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
+import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
 import { openNativeSessionMenu } from "./native-session-menu.runtime.ts";
 
 type HeaderMenuElement = HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
@@ -108,6 +109,7 @@ async function mountMenu(
   if (open) {
     expect(menu.openMenu()).toBe(true);
     flush();
+    await materializeSubmenus(menu);
     await menu.updateComplete;
   }
   return menu;
@@ -144,6 +146,31 @@ function item(menu: ParentNode, label: string): MenuItemElement {
     throw new Error(`Expected menu item: ${label}`);
   }
   return found;
+}
+
+async function materializeSubmenus(menu: HeaderMenuElement): Promise<void> {
+  const visit = async (root: HTMLElement) => {
+    for (const trigger of root.querySelectorAll<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )) {
+      if (trigger.closest('[role="menu"]') !== root || trigger.disabled) {
+        continue;
+      }
+      trigger.click();
+      flush();
+      await menu.updateComplete;
+      const branch = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
+      if (!branch) {
+        throw new Error("Expected submenu panel");
+      }
+      await visit(branch);
+      if (branch.matches(":popover-open")) {
+        trigger.click();
+        flush();
+      }
+    }
+  };
+  await visit(panel(menu));
 }
 
 function submenuItems(trigger: HTMLElement): MenuItemElement[] {
@@ -202,12 +229,70 @@ describe("chat header session menu", () => {
     expect(menu.openMenu()).toBe(true);
     flush();
     const pin = item(menu, "Unpin session");
+    const hidden = new Promise<void>((resolve) => {
+      panel(menu).addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
     panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
     expect(panel(menu).matches(":popover-open")).toBe(false);
+    await hidden;
+    const changes: MutationRecord[] = [];
+    const mutations = new MutationObserver((records) => changes.push(...records));
+    mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
+    menu.session = { ...menu.session, pinned: false, unread: true };
+    await menu.updateComplete;
+    flush();
+    expect([...changes, ...mutations.takeRecords()]).toEqual([]);
+    mutations.disconnect();
     expect(menu.openMenu()).toBe(true);
     flush();
-    expect(item(menu, "Unpin session")).toBe(pin);
+    expect(item(menu, "Pin session")).toBe(pin);
+    expect(item(menu, "Mark as read")).toBeDefined();
+  });
+
+  it("reconciles parked owner membership and labels without replacing surviving rows", async () => {
+    const owner = createSessionOwnerMenuHarness();
+    owner.context.agents.state.agentsList!.agents.push({ id: "retired", name: "Retired" });
+    const menu = await mountMenu({ context: owner.context }, false);
+    expect(menu.openMenu()).toBe(true);
+    flush();
+    item(menu, "Assign to…").click();
+    flush();
+    await profileDirectory(owner.context.gateway).load();
+    await menu.updateComplete;
+    const research = item(menu, "Research");
+    const self = item(menu, "Me");
+    const hidden = new Promise<void>((resolve) => {
+      panel(menu).addEventListener("overlay-after-hide", (event) => {
+        if (event.target === panel(menu)) {
+          resolve();
+        }
+      });
+    });
+    menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.click();
+    await menu.updateComplete;
+    expect(panel(menu).matches(":popover-open")).toBe(false);
+    await hidden;
+    const changes: MutationRecord[] = [];
+    const mutations = new MutationObserver((records) => changes.push(...records));
+    mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
+    owner.context.agents.state.agentsList!.agents = [
+      { id: "research:one", name: "Updated research" },
+      { id: "new", name: "New agent" },
+    ];
+    owner.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
+    await menu.updateComplete;
+    expect([...changes, ...mutations.takeRecords()]).toEqual([]);
+    mutations.disconnect();
+    expect(menu.openMenu()).toBe(true);
+    flush();
+    expect(item(menu, "Updated research")).toBe(research);
+    expect(item(menu, "Me")).toBe(self);
+    expect(
+      submenuItems(item(menu, "Assign to…"))
+        .filter((option) => option.value.startsWith("assign-owner:"))
+        .map(itemLabel),
+    ).toEqual(["Me", "New agent", "Updated research"]);
   });
 
   it.each(["shown", "aborted", "retargeted"] as const)(
@@ -220,6 +305,7 @@ describe("chat header session menu", () => {
       }
       const opened = await openNativeSessionMenu({
         pane: menu.parentElement!,
+        getMenu: () => menu,
         signal: abort.signal,
         isCurrent: () => outcome !== "retargeted",
       });
@@ -237,6 +323,7 @@ describe("chat header session menu", () => {
     expect(
       await openNativeSessionMenu({
         pane: menu.parentElement!,
+        getMenu: () => menu,
         signal: abort.signal,
         isCurrent: () => true,
       }),
@@ -259,15 +346,16 @@ describe("chat header session menu", () => {
           ?.textContent?.replace(/\s+/gu, "")
           .trim(),
       ).toBe(platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A");
-      const inactive = await mountMenu();
+      menu.archiveShortcut = false;
+      await menu.updateComplete;
       expect(
-        item(inactive, "Archive session")
-          .querySelector(".session-menu__shortcut")
-          ?.textContent?.trim(),
+        item(menu, "Archive session").querySelector(".session-menu__shortcut")?.textContent?.trim(),
       ).toBe("A");
-      const archived = await mountMenu({ archiveShortcut: true, session: { archived: true } });
+      menu.archiveShortcut = true;
+      menu.session = { ...menu.session, archived: true };
+      await menu.updateComplete;
       expect(
-        archived
+        menu
           .querySelector('[data-value="toggle-archived"] .session-menu__shortcut')
           ?.textContent?.trim(),
       ).toBe("A");
@@ -356,6 +444,10 @@ describe("chat header session menu", () => {
       expect(menu?.openMenu()).toBe(true);
       flush();
       await menu?.updateComplete;
+      if (!menu) {
+        throw new Error("Expected chat header session menu");
+      }
+      await materializeSubmenus(menu);
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
       expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
@@ -421,6 +513,7 @@ describe("chat header session menu", () => {
     flush();
     await menu.updateComplete;
 
+    await materializeSubmenus(menu);
     const moveToGroup = item(menu, "Move to group");
     const groupLabels = submenuItems(moveToGroup).map(itemLabel);
     expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);

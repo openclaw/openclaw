@@ -63,7 +63,6 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
-  createSkillInstructionDeliveryCache,
   createSkillInstructionDeliveryMarkers,
   wrapReadToolWithSkillContent,
 } from "./agent-tools.read.js";
@@ -1729,7 +1728,7 @@ describe("before_tool_call loop detection behavior", () => {
 
   function createSkillDeliveryState() {
     return {
-      cache: createSkillInstructionDeliveryCache(),
+      cache: new Map<string, Promise<boolean>>(),
       markers: createSkillInstructionDeliveryMarkers(),
     };
   }

@@ -83,7 +83,7 @@
   margin: 3px 0 7px 14px;
   padding-inline-start: 8px;
   border-inline-start: 1px solid var(--border);
-  max-height: 180px;
+  max-height: 280px;
   overflow: auto;
 }
 .chat-context__entry {
@@ -137,4 +137,51 @@
 }
 .chat-context__compact:disabled {
   opacity: 0.5;
+}
+
+.chat-context__source + .chat-context__source {
+  margin-top: 10px;
+}
+.chat-context__source-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+  font-size: 10px;
+  padding: 6px 0;
+}
+.chat-context__source-heading > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-context__source-heading small {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chat-context__path {
+  display: block;
+  font-size: 9px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.chat-context__deferred {
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.chat-context__source-heading > svg {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  color: var(--muted);
+}
+.chat-context__details[open] > summary > svg {
+  transform: rotate(180deg);
+}
+.chat-context__details > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 3px;
 }

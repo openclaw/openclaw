@@ -5,6 +5,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui-components.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
+import { listen as listenTo } from "../lib/reactive/listener.ts";
 
 function resolveAppearanceColor(value: string | null | undefined): string {
   const color = normalizeSessionColorValue(value ?? "");
@@ -52,12 +53,12 @@ export function createControlUiComponents(options: {
         return;
       }
       active = false;
-      options.signal.removeEventListener("abort", dispose);
+      unlistenAbort();
       unsubscribe?.();
       unlisten?.();
       element?.remove();
     };
-    options.signal.addEventListener("abort", dispose, { once: true });
+    const unlistenAbort = listenTo(options.signal, "abort", dispose, { once: true });
     void load()
       .then((loaded) => {
         // Imports can finish after navigation or reload. The retired mount must
@@ -166,7 +167,13 @@ export function createControlUiComponents(options: {
         props,
         async () => {
           await import("../components/modal-dialog.ts");
-          return document.createElement("openclaw-modal-dialog");
+          const dialog = document.createElement("openclaw-modal-dialog");
+          // Plugin content is a foreign DOM island with native autofocus semantics.
+          dialog.initialFocus = () =>
+            content?.matches("[autofocus]")
+              ? content
+              : (content?.querySelector<HTMLElement>("[autofocus]") ?? null);
+          return dialog;
         },
         (element, next) => {
           element.label = next.label;
@@ -186,15 +193,12 @@ export function createControlUiComponents(options: {
             content = next.content;
           }
         },
-        (element, getProps) => {
-          const cancel = (event: Event) => {
+        (element, getProps) =>
+          listenTo(element, "modal-cancel", (event) => {
             if (getProps().onCancel() === false) {
               event.preventDefault();
             }
-          };
-          element.addEventListener("modal-cancel", cancel);
-          return () => element.removeEventListener("modal-cancel", cancel);
-        },
+          }),
       );
     },
     mountAgentPicker: (container, props) =>

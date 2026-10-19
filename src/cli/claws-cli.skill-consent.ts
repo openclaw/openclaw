@@ -1,4 +1,5 @@
 import type { ClawSkillInstallConsent } from "../claws/packages.js";
+import { collectClawSkillWarningReviews } from "../claws/skill-warning-review.js";
 import type { ClawAddPlan } from "../claws/types.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -11,34 +12,11 @@ export type ClawCliSkillWarning = {
 };
 
 export function addPlanSkillWarnings(plan: ClawAddPlan): ClawCliSkillWarning[] {
-  return plan.actions.flatMap((action) => {
-    const details = action.details;
-    if (
-      action.kind !== "package" ||
-      action.blocked ||
-      details?.kind !== "skill" ||
-      details.ownerAction !== "install" ||
-      typeof details.riskWarning !== "string" ||
-      !details.riskWarning
-    ) {
-      return [];
-    }
-    if (
-      typeof details.ref !== "string" ||
-      typeof details.version !== "string" ||
-      typeof details.integrity !== "string" ||
-      action.id !== `skill:${details.ref}`
-    ) {
+  return collectClawSkillWarningReviews(plan).map(({ actionId, ...warning }) => {
+    if (actionId !== `skill:${warning.ref}`) {
       throw new Error("The Claw skill trust review is incomplete.");
     }
-    return [
-      {
-        ref: details.ref,
-        version: details.version,
-        integrity: details.integrity,
-        riskWarning: details.riskWarning,
-      },
-    ];
+    return warning;
   });
 }
 

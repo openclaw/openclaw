@@ -133,7 +133,6 @@ describe("broadcast serialization failures", () => {
         broadcastToConnIds: connection.broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => recipients },
         sessionMessageSubscribers: { get: () => recipients },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       });
       for (const order of [peers, peers.toReversed()]) {
@@ -240,7 +239,6 @@ describe("broadcast serialization failures", () => {
         broadcastToConnIds: connection.broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => recipients },
         sessionMessageSubscribers: { get: () => recipients },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       });
       const update = { target: scope, messageId: "steer", messageSeq: 1, message };
@@ -424,7 +422,7 @@ describe("broadcast serialization failures", () => {
 
     expect(reads).toEqual([initial, initial + " changed", initial]);
     for (const [index, peer] of peers.entries()) {
-      expect(peer.socket.send.mock.calls[0]?.[0]).toBe(
+      expect(String(peer.socket.send.mock.calls[0]?.[0])).toBe(
         JSON.stringify({
           type: "event",
           event: "session.message",

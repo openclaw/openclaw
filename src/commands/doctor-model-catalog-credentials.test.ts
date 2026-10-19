@@ -12,6 +12,7 @@ import {
   loadPersistedSharedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
 import {
+  closeAuthProfileReadPool,
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
@@ -24,12 +25,17 @@ import {
   replacePersistedPluginModelCatalogs,
 } from "../agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -86,8 +92,17 @@ function migrationParams(state: ReturnType<typeof createState>, cfg: OpenClawCon
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
+    // Physical admissions outlive native handles; retire them before deleting fixture files.
+    const root = `${fs.realpathSync(dir)}${path.sep}`;
+    closeAuthProfileReadPool({ kind: "root", rootPath: root });
+    for (const { location } of captureSqliteDatabaseAdmissions()) {
+      if (location.startsWith(root)) {
+        retireSqliteDatabaseAdmissionForPath(location);
+      }
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

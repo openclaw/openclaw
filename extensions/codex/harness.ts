@@ -1,6 +1,3 @@
-/**
- * Codex app-server agent harness registration and lazy runtime boundaries.
- */
 import type {
   AgentHarnessV2,
   AgentHarnessCompactParams,
@@ -80,10 +77,6 @@ async function disposeSharedCodexAppServerClients(): Promise<void> {
   await dispose?.();
 }
 
-/**
- * Creates the Codex app-server harness used for attempts, side questions,
- * compaction, reset, and disposal.
- */
 export function createCodexAppServerAgentHarness(
   options: CodexAppServerAgentHarnessOptions,
 ): AgentHarnessV2 {
@@ -215,12 +208,15 @@ export function createCodexAppServerAgentHarness(
         if (!isCodexConfiguredConnectionArtifact(binding.id)) {
           return validateCodexAppServerRuntimeArtifact(binding);
         }
-        const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+        const { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } =
+          await import("./src/app-server/config.js");
         return validateCodexAppServerRuntimeArtifact(
           binding,
           undefined,
           resolveCodexAppServerRuntimeOptions({
-            pluginConfig: resolveAttemptPluginConfig(options.resolveConfig?.()),
+            pluginConfig: readCodexPluginConfig(
+              resolveAttemptPluginConfig(options.resolveConfig?.()),
+            ),
           }).start,
         );
       },
@@ -431,8 +427,11 @@ export function createCodexAppServerAgentHarness(
       }
       const { runCodexIsolatedCompletion } =
         await import("./src/app-server/isolated-completion.js");
+      const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
       return runCodexIsolatedCompletion(params, {
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        pluginConfig: readCodexPluginConfig(
+          options.resolvePluginConfig?.() ?? options.pluginConfig,
+        ),
       });
     },
     runIsolatedCompletion: async (params) => {
@@ -453,8 +452,11 @@ export function createCodexAppServerAgentHarness(
     finalizeSettledTurn: async (params) => {
       const { runCodexSettledTurnFinalization } =
         await import("./src/app-server/settled-turn-finalizer.js");
+      const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
       return runCodexSettledTurnFinalization(params, {
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        pluginConfig: readCodexPluginConfig(
+          options.resolvePluginConfig?.() ?? options.pluginConfig,
+        ),
       });
     },
     runSideQuestion: async (params) => {
@@ -470,9 +472,12 @@ export function createCodexAppServerAgentHarness(
     compact: async (params) => {
       const admittedParams = requireCodexCompactionCapabilities(params);
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+      const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
       return maybeCompactCodexAppServerSession(admittedParams, {
         bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        pluginConfig: readCodexPluginConfig(
+          options.resolvePluginConfig?.() ?? options.pluginConfig,
+        ),
       });
     },
     withDescendantCancellation: async (params, run) => {
@@ -551,9 +556,10 @@ export function createCodexAppServerNativeCompaction(
     const admittedParams: AgentHarnessNativeCompactionParams<2> =
       requireCodexCompactionCapabilities(params);
     const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+    const { readCodexPluginConfig } = await import("./src/app-server/config-parsing.js");
     return maybeCompactCodexAppServerSession(admittedParams, {
       bindingStore: options.bindingStore,
-      pluginConfig: options.resolvePluginConfig?.() ?? options.pluginConfig,
+      pluginConfig: readCodexPluginConfig(options.resolvePluginConfig?.() ?? options.pluginConfig),
       allowNonManualNativeRequest: true,
       nativeCompactionRequest: admittedParams.nativeCompactionRequest,
     });

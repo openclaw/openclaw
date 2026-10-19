@@ -22,9 +22,10 @@ import {
 } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import {
-  isSessionTranscriptIndexStatusClean,
-  maintainSessionTranscriptIndexStatus,
-} from "./session-transcript-index-status.worker.js";
+  isSessionTranscriptIndexReady,
+  publishSessionTranscriptIndexReady,
+} from "./session-transcript-index-readiness.js";
+import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
@@ -81,7 +82,7 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
   ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"] {
     backend.assertOpen();
     if (command.type === "preflight" || command.type === "sweep") {
-      if (isSessionTranscriptIndexStatusClean(db)) {
+      if (isSessionTranscriptIndexReady(context.databasePath)) {
         return { sessionIds: [], hasMore: false, traversalComplete: true };
       }
       // Derived maintenance has no prepared row or publication facts. Admit the whole
@@ -102,7 +103,11 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
               beginLockFailureReporting: "suppress",
             },
           );
-        return isPostgresSqlConnection(db) ? run() : runWithSqliteBusyTimeout(db, 0, run);
+        const status = isPostgresSqlConnection(db) ? run() : runWithSqliteBusyTimeout(db, 0, run);
+        if (!status.hasMore && status.sessionIds.length === 0) {
+          publishSessionTranscriptIndexReady(db, context.databasePath);
+        }
+        return status;
       } catch (error) {
         if (entered || !isSqliteLockError(error)) {
           throw error;

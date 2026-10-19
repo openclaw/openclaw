@@ -9,6 +9,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createMcpBridgeFixture } from "../test-helpers/mcp-app-view-bridge.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -28,53 +29,10 @@ const bridgeMocks = vi.hoisted(() => ({
   transports: [] as Array<Record<string, unknown>>,
   appModes: undefined as string[] | undefined,
 }));
-// This constructor seam is a complete factory, and the unit-mock-registry
-// project prevents its substituted classes from reaching unrelated files.
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
-  class AppBridge {
-    oninitialized?: () => void;
-    messageHandler?: BridgeFixture["bridge"]["messageHandler"];
-    updateModelContextHandler?: BridgeFixture["bridge"]["updateModelContextHandler"];
-    onsizechange?: (params: { height?: number }) => void;
-    getAppCapabilities = () => ({ availableDisplayModes: bridgeMocks.appModes });
-    setHostContext = vi.fn();
-    teardownResource = vi.fn(async () => ({}));
-    sendSandboxResourceReady = vi.fn(async () => undefined);
-    sendToolInput = vi.fn(async () => undefined);
-    sendToolResult = vi.fn(async () => undefined);
-    onrequestteardown?: () => void;
-    constructor(
-      _client: unknown,
-      _hostInfo: unknown,
-      public capabilities: Record<string, unknown>,
-      public options: Record<string, unknown>,
-    ) {
-      bridgeMocks.instances.push(this as unknown as Record<string, unknown>);
-    }
-    set onmessage(handler: NonNullable<AppBridge["messageHandler"]>) {
-      this.messageHandler = handler;
-    }
-    set onupdatemodelcontext(handler: NonNullable<AppBridge["updateModelContextHandler"]>) {
-      this.updateModelContextHandler = handler;
-    }
-    protected replaceRequestHandler() {}
-    emit(type: string) {
-      if (type === "requestteardown") {
-        this.onrequestteardown?.();
-      }
-    }
-    async connect() {
-      this.oninitialized?.();
-    }
-  }
-  class PostMessageTransport {
-    close = vi.fn(async () => undefined);
-    constructor() {
-      bridgeMocks.transports.push(this as unknown as Record<string, unknown>);
-    }
-  }
-  return { ...actual, AppBridge, PostMessageTransport };
+  const { createMcpAppBridgeMocks } = await import("./mcp-app-view-mocks.test-support.ts");
+  return { ...actual, ...createMcpAppBridgeMocks(bridgeMocks) };
 });
 const mountBridge = createMcpBridgeFixture(bridgeMocks);
 type BridgeFixture = Awaited<ReturnType<typeof mountBridge>>;
@@ -87,7 +45,7 @@ const partsEntrypoint = {
 function gatewayContext(request: unknown) {
   return {
     gateway: {
-      snapshot: { client: { request } },
+      snapshot: { client: { request }, phase: "connected", hello: null },
       connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
     },
   };
@@ -126,6 +84,80 @@ function expectHost(bridge: BridgeFixture["bridge"], context: Record<string, unk
   expect(bridge.setHostContext).toHaveBeenLastCalledWith(expect.objectContaining(context));
 }
 describe("mcp-app-view localization", () => {
+  it("retries initialization after its sandbox deadline through the error control", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const request = vi.fn(() =>
+      Promise.resolve({
+        sandboxUrl: "/mcp-app-sandbox?ticket=retry",
+        sandboxPort: 8444,
+        html: "<input value='unsaved'>",
+        toolInput: {},
+        toolResult: { content: [] },
+      }),
+    );
+    const { view, unmount } = mountView(
+      { sessionKey: "agent:main:main", viewId: "view-retry" },
+      {
+        gateway: {
+          snapshot: {
+            client: { request },
+            phase: "connected",
+            hello: gatewayHelloForMethods(["mcp.app.view"]),
+          },
+          connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+        },
+      },
+    );
+    try {
+      await view.updateComplete;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await view.updateComplete;
+      expect(view.querySelector(".error")?.textContent).toContain("timed out");
+      view.querySelector<HTMLButtonElement>(".error button")!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await view.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(view.querySelector(".error")).toBeNull();
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the App frame across transport loss while retiring pending calls and changed identities", async () => {
+    const { view, frame, bridge, request, gateway, publish, transport } =
+      await mountBridge("view-offline");
+    const pendingContext = deferred<{ state: McpAppContextState }>();
+    const hello = gateway.snapshot.hello;
+    request.mockReturnValueOnce(pendingContext.promise);
+    const pending = bridge.updateModelContextHandler!({ structuredContent: { draft: "unsaved" } });
+    const rejected = pending.catch((error: unknown) => error);
+    publish({ ...gateway.snapshot, phase: "reconnecting", hello: null });
+    flush();
+    expect(view.querySelector("iframe")).toBe(frame);
+    expect(transport.close).not.toHaveBeenCalled();
+    await expect(bridge.updateModelContextHandler!({ structuredContent: {} })).rejects.toThrow(
+      "gateway unavailable",
+    );
+    pendingContext.resolve({ state: null });
+    expect(await rejected).toMatchObject({ name: "AbortError" });
+    expect(
+      request.mock.calls.filter(([method]) => method === "mcp.app.updateModelContext"),
+    ).toHaveLength(1);
+    publish({ ...gateway.snapshot, phase: "connected", hello });
+    flush();
+    expect(view.querySelector("iframe")).toBe(frame);
+    await bridge.updateModelContextHandler!({ structuredContent: { draft: "resumed" } });
+    expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(1);
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(vi.fn(() => new Promise(() => {}))),
+    });
+    flush();
+    await waitForSolid(() => expect(view.querySelector("iframe")).toBeNull());
+    expect(transport.close).toHaveBeenCalledOnce();
+  });
+
   it("keeps resource display hints within the initialized App capabilities", async () => {
     bridgeMocks.appModes = ["inline"];
     const { view, bridge } = await mountBridge("view-modes", true, true, {
@@ -350,7 +382,7 @@ describe("mcp-app-view localization", () => {
     const client = createTestGatewayClient(request);
     const context = {
       gateway: {
-        snapshot: { client, phase: "connected" },
+        snapshot: { client, phase: "connected", hello: null },
         connectionRevision: 1,
         connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
         subscribe: () => () => {},
@@ -444,11 +476,48 @@ describe("mcp-app-view localization", () => {
         content: [{ type: "text", text: "selected item" }],
       }),
     ).resolves.toBeDefined();
-    expect(request).toHaveBeenCalledWith("mcp.app.updateModelContext", {
-      sessionKey: "agent:main:main",
-      viewId: expect.any(String),
+    expect(request).toHaveBeenCalledWith(
+      "mcp.app.updateModelContext",
+      {
+        sessionKey: "agent:main:main",
+        viewId: expect.any(String),
+        content: [{ type: "text", text: "selected item" }],
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("retains model context when its refresh fails and clears only a confirmed null", async () => {
+    const state = {
+      updateId: "retained-context",
       content: [{ type: "text", text: "selected item" }],
+    };
+    const { view, frame, bridge, request } = await mountBridge(
+      "view-context-read-failure",
+      true,
+      true,
+      {
+        hostContext: { "openai/modelContext": state },
+      },
+    );
+    const received: McpAppContextEventDetail[] = [];
+    view.addEventListener(MCP_APP_CONTEXT_EVENT, (event: Event) => {
+      received.push((event as CustomEvent<McpAppContextEventDetail>).detail);
     });
+    request.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("Context read interrupted"));
+    await expect(bridge.updateModelContextHandler!({ content: state.content })).resolves.toEqual(
+      {},
+    );
+    expectHost(bridge, { "openai/modelContext": state });
+    expect(received).toHaveLength(0);
+    expect(view.querySelector("iframe")).toBe(frame);
+
+    request.mockResolvedValueOnce({}).mockResolvedValueOnce({ state: null });
+    await bridge.updateModelContextHandler!({ content: state.content });
+    expectHost(bridge, { "openai/modelContext": null });
+    expect(received).toHaveLength(1);
+    expect(received[0]?.state).toBeNull();
+    expect(view.querySelector("iframe")).toBe(frame);
   });
 
   it("does not republish consumed context when an earlier bridge refresh settles", async () => {
@@ -656,11 +725,15 @@ describe("mcp-app-view localization", () => {
       agentId: "foreign-agent",
     };
     await bridge.updateModelContextHandler?.(hostileAppInput);
-    expect(request).toHaveBeenCalledWith("mcp.app.updateModelContext", {
-      sessionKey: "agent:main:main",
-      viewId,
-      content: [{ type: "text", text: "context" }],
-    });
+    expect(request).toHaveBeenCalledWith(
+      "mcp.app.updateModelContext",
+      {
+        sessionKey: "agent:main:main",
+        viewId,
+        content: [{ type: "text", text: "context" }],
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
   it("pushes live theme and container changes and cleans up their observers", async () => {
     let resize: (() => void) | undefined;
@@ -792,6 +865,43 @@ describe("mcp-app-view localization", () => {
     await expect.poll(() => transport.close, { timeout: 1_000 }).toHaveBeenCalledOnce();
     expect(frame.isConnected).toBe(false);
   });
+  it.each(["completed", "timed out"])(
+    "cancels App RPCs after graceful teardown has %s",
+    async (outcome) => {
+      const { bridge, frame, request, view } = await mountBridge("view-teardown-rpcs");
+      await view.updateComplete;
+      const teardownFinished = deferred<Record<string, never>>();
+      const pendingSave = deferred<Record<string, never>>();
+      bridge.teardownResource.mockReturnValueOnce(teardownFinished.promise);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const teardown = view.teardown();
+        expect(bridge.teardownResource).toHaveBeenCalledOnce();
+        request.mockReturnValueOnce(pendingSave.promise);
+        const save = bridge.updateModelContextHandler!({ structuredContent: { draft: "saved" } });
+        const rejected = save.catch((error: unknown) => error);
+        const signal = request.mock.calls.at(-1)?.[2]?.signal;
+        expect(signal).toBeInstanceOf(AbortSignal);
+        expect(signal?.aborted).toBe(false);
+        expect(frame.isConnected).toBe(true);
+        if (outcome === "completed") {
+          teardownFinished.resolve({});
+        } else {
+          await vi.advanceTimersByTimeAsync(250);
+        }
+        await teardown;
+        expect(frame.isConnected).toBe(false);
+        expect(signal?.aborted).toBe(true);
+        pendingSave.resolve({});
+        expect(await rejected).toMatchObject({ name: "AbortError" });
+        await expect(
+          bridge.updateModelContextHandler!({ structuredContent: {} }),
+        ).rejects.toMatchObject({ name: "AbortError" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
   it("honors an app-requested teardown before detaching its frame", async () => {
     const pending = deferred<Record<string, never>>();
     const { bridge, frame, transport } = await mountBridge(
@@ -820,7 +930,7 @@ describe("mcp-app-view localization", () => {
     const { view } = mountView({ sessionKey: "agent:main:main", viewId: "view-1" });
     await expect
       .poll(() => view.querySelector(".error")?.textContent)
-      .toBe("Aplicativo MCP indisponível: Gateway do aplicativo MCP indisponível");
+      .toContain("Aplicativo MCP indisponível: Gateway do aplicativo MCP indisponível");
   });
   it.each([
     ["foreign origin", "https://attacker.example/mcp-app-sandbox", 8444, undefined],

@@ -9,7 +9,16 @@ import type {
   CronRunTelemetry,
 } from "../types.js";
 
-export type CronLaneWaitCallback = (info?: { waiting?: boolean }) => void;
+/**
+ * Lane wait transitions for isolated cron work. `waiting: false` ends a wait;
+ * only signals without `stage` come from the execution lane and mean the run was admitted.
+ * Session preparation reports its own waits so callers can pause timers without
+ * treating per-session lane entry as execution admission.
+ */
+export type CronLaneWaitCallback = (info?: {
+  waiting?: boolean;
+  stage?: "session-preparation";
+}) => void;
 
 /** Pre-run disposition returned when isolated cron work never enters an agent runner. */
 export type CronAgentAdmissionDisposition = "session-conflict" | "rejected";

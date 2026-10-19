@@ -8,8 +8,6 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
-export { clawPackageLifecycleLeaseKey } from "./claw-package-lifecycle-lease-key.js";
-
 export type ClawPackageLifecycleLeaseIdentity = {
   scope: typeof CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE;
   key: string;

@@ -2,6 +2,7 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
+import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "../state/openclaw-agent-db-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
@@ -38,6 +39,7 @@ export async function prepareDoctorDatabaseMigrations(
       path: migration.path,
       env: params.env,
       versionMigrationOnly: true,
+      integrityCheck: params.check ?? "quick",
     });
     if (migrated.warnings.length > 0) {
       throw new Error(migrated.warnings.join("\n"));
@@ -47,7 +49,11 @@ export async function prepareDoctorDatabaseMigrations(
   const agentMigrations = migrations.filter((entry) => entry.kind === "agent");
   if (agentMigrations.length > 0) {
     await withAgentDatabaseMaintenanceLease(
-      { env: params.env, processBound: true },
+      {
+        env: params.env,
+        processBound: true,
+        schemaPolicy: isStatePostgres() ? "existing" : undefined,
+      },
       async (lease) => {
         for (const migration of agentMigrations) {
           const target = params.agentDatabaseTargets?.find(({ path }) => path === migration.path);
@@ -55,20 +61,31 @@ export async function prepareDoctorDatabaseMigrations(
             throw new Error(`Missing discovered agent migration target: ${migration.path}`);
           }
           using database = openNodeSqliteDatabase(target.path);
-          await runSqliteIntegrityOperationInWorker(
-            ensureOpenClawAgentDatabaseSchemaSteps(database, {
-              agentId: target.agentId,
-              path: target.path,
-              env: params.env,
-              versionMigrationOnly: true,
-              onMigrationWarning: (warning) => result.warnings.push(warning),
-            }),
-            {
-              busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-              signal: lease.signal,
-              beforeResume: () => lease.assertOwned(),
-            },
-          );
+          if (agentEngineInput()) {
+            lease.assertOwned();
+            withEngineStoreAdmission(() => {
+              const engine = openAgentEngineStore(database, target.agentId, target.path, true);
+              if (engine !== database) {
+                engine.close();
+              }
+            });
+          } else {
+            await runSqliteIntegrityOperationInWorker(
+              ensureOpenClawAgentDatabaseSchemaSteps(database, {
+                agentId: target.agentId,
+                path: target.path,
+                env: params.env,
+                versionMigrationOnly: true,
+                integrityCheck: params.check ?? "quick",
+                onMigrationWarning: (warning) => result.warnings.push(warning),
+              }),
+              {
+                busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+                signal: lease.signal,
+                beforeResume: () => lease.assertOwned(),
+              },
+            );
+          }
           result.changes.push(
             `Upgraded agent database schema in ${target.path}: v${migration.foundVersion} -> v${migration.supportedVersion}.`,
           );

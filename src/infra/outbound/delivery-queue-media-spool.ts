@@ -12,12 +12,14 @@ import {
   type OutboundMediaAccess,
 } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { oldestDeliveryQueueMediaStageAdmission } from "../delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { hasErrnoCode } from "../errno.js";
 import { generateSecureUuid } from "../secure-random.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import {
   ARTIFACT_NAME_RE,
   collectEntrySpoolPaths,
@@ -225,35 +227,49 @@ export async function pruneOrphanedDeliveryQueueMedia(
   const captured = context ?? captureDeliveryQueueStateContext(params?.stateDir);
   const stateDir = captured.stateDir;
   const cutoffMs = (params?.nowMs ?? Date.now()) - ORPHAN_GRACE_MS;
-  const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
-    { expireBeforeMs: cutoffMs },
-    captured,
-  );
   const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
-  const retainPaths = new Set(
-    snapshot.stagedArtifacts
-      .concat(snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)))
-      .map((entry) => path.resolve(entry)),
-  );
+  let retainPaths: Set<string> | undefined;
+  const loadRetainedPaths = async () => {
+    const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
+      { expireBeforeMs: cutoffMs },
+      captured,
+    );
+    retainPaths = new Set(
+      snapshot.stagedArtifacts
+        .concat(snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)))
+        .map((entry) => path.resolve(entry)),
+    );
+    return retainPaths;
+  };
   const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch(ignoreMissingArtifact);
-  if (!entries) {
-    return;
-  }
-
-  for (const entry of entries) {
+  for (const entry of entries ?? []) {
     // Unknown files and symlinks are not spool artifacts; never follow them.
     if (!entry.isFile() || !ARTIFACT_NAME_RE.test(entry.name)) {
       continue;
     }
     const artifactPath = path.join(spoolRoot, entry.name);
-    if (retainPaths.has(artifactPath)) {
+    if (retainPaths?.has(artifactPath)) {
       continue;
     }
     const stats = await fs.stat(artifactPath).catch(ignoreMissingArtifact);
     if (!stats || stats.mtimeMs > cutoffMs) {
       continue;
     }
+    if ((retainPaths ?? (await loadRetainedPaths())).has(artifactPath)) {
+      continue;
+    }
     await releaseSpoolArtifacts([artifactPath], stateDir);
+  }
+  if (!retainPaths) {
+    const oldest = getOrLoadSqliteDatabaseAdmissionForPath(
+      captured.workerContext.admission.databasePath,
+      oldestDeliveryQueueMediaStageAdmission,
+      () => undefined,
+    );
+    // A crashed producer can leave an expiring stage without ever creating a file.
+    if (oldest === undefined || (oldest !== null && oldest <= cutoffMs)) {
+      await loadRetainedPaths();
+    }
   }
 }
 
