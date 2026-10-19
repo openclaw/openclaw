@@ -1,16 +1,44 @@
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  onSessionLifecycleEvent,
+  type SessionLifecycleEvent,
+} from "../sessions/session-lifecycle-events.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import type { InternalApplySessionModelSelectionParams } from "./apply-session-model-selection.js";
 
-export function useSelectionEffects(
-  mocks: Pick<ReturnType<typeof createModelSelectionMocks>, "effects" | "resetMocks">,
-  onSessionLifecycleEvent: typeof import("../sessions/session-lifecycle-events.js").onSessionLifecycleEvent,
-  loadProviderScopedThinkingCatalog: typeof import("../agents/model-catalog.runtime.js").loadProviderScopedThinkingCatalog,
-) {
+const selectionMocks = vi.hoisted(() => createModelSelectionMocks());
+export { selectionMocks };
+vi.mock("../agents/model-runtime-choice.js", selectionMocks.factories.runtimeChoice);
+vi.mock("../agents/model-catalog.runtime.js", selectionMocks.factories.catalog);
+vi.mock("../infra/system-events.js", selectionMocks.factories.systemEvents);
+vi.mock("../auto-reply/reply/queue.js", selectionMocks.factories.queue);
+vi.mock("../gateway/session-patch-hooks.js", selectionMocks.factories.patchHooks);
+vi.mock("../config/config.js", selectionMocks.factories.config);
+vi.mock("../logging/subsystem.js", selectionMocks.factories.logging);
+vi.mock(
+  "../gateway/session-worker-placement-context.js",
+  selectionMocks.factories.placementContext,
+);
+// mock-isolation: Runtime eligibility and worker preparation are tested by their owners.
+vi.mock(
+  "../gateway/worker-environments/placement-session-runtime.js",
+  selectionMocks.factories.placementRuntime,
+);
+vi.mock(
+  "../gateway/worker-environments/placement-session-runtime-preparation.js",
+  selectionMocks.factories.placementRuntimePreparation,
+);
+
+export function useSelectionEffects() {
+  const mocks = selectionMocks;
   const lifecycleEvents: SessionLifecycleEvent[] = [];
   let unsubscribe: () => void;
   beforeEach(() => {
@@ -35,7 +63,16 @@ export function useSelectionEffects(
   };
 }
 
-export function configuredModels(
+export function useSelectionStore(prefix: string) {
+  const dirs = useSessionStoreTempDirs(afterAll, prefix);
+  return async (sessionEntry: SessionEntry, sessionKey: string) => {
+    const storePath = path.join(dirs.make(), "sessions.json");
+    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    return { sessionEntry, sessionKey, storePath };
+  };
+}
+
+function configuredModels(
   models: ModelCatalogEntry[],
   maxTokens = 4096,
 ): NonNullable<OpenClawConfig["models"]> {
@@ -57,7 +94,15 @@ export function configuredModels(
   };
 }
 
-export function createModelSelectionMocks() {
+function createModelSelectionMocks() {
+  const validateRuntime = vi.fn<() => string | undefined>(() => undefined);
+  const prepareRuntime = vi.fn<
+    typeof import("../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
+    validate: validateRuntime,
+  }));
   const effects = {
     enqueueSystemEvent: vi.fn(),
     info: vi.fn(),
@@ -72,6 +117,8 @@ export function createModelSelectionMocks() {
     resolveWorkerPlacementSessionRuntimeCapabilities: vi.fn(),
   };
   const factories = {
+    runtimeChoice: () => ({ preparePublishedModelRuntimeChoice: prepareRuntime }),
+    catalog: () => ({ loadProviderScopedThinkingCatalog: vi.fn(async () => []) }),
     systemEvents: () => ({
       enqueueSystemEvent: (...args: unknown[]) => effects.enqueueSystemEvent(...args),
     }),
@@ -116,6 +163,7 @@ export function createModelSelectionMocks() {
     }),
   };
   const resetMocks = () => {
+    validateRuntime.mockReset().mockReturnValue(undefined);
     effects.enqueueSystemEvent.mockReset();
     effects.info.mockReset();
     effects.warn.mockReset();
@@ -142,7 +190,7 @@ export function createModelSelectionMocks() {
       });
     placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReset();
   };
-  return { effects, placementMocks, factories, resetMocks };
+  return { effects, placementMocks, factories, resetMocks, prepareRuntime, validateRuntime };
 }
 
 export function createModelSelectionInputs() {
@@ -206,5 +254,30 @@ export function createModelSelectionInputs() {
     } satisfies InternalApplySessionModelSelectionParams;
   }
 
-  return { catalog, createEntry, createSelectedEntry, createParams };
+  function createFixtureParams(
+    modelCatalog: ModelCatalogEntry[],
+    defaults: AgentDefaultsConfig,
+    overrides: Partial<InternalApplySessionModelSelectionParams> = {},
+    maxTokens = 4096,
+  ) {
+    return createParams({
+      cfg: { agents: { defaults }, models: configuredModels(modelCatalog, maxTokens) },
+      defaultProvider: "fixture",
+      defaultModel: "primary",
+      currentProvider: "fixture",
+      currentModel: "manual",
+      sessionEntry: createEntry({ providerOverride: "fixture", modelOverride: "manual" }),
+      modelCatalog,
+      thinkingCatalog: modelCatalog,
+      request: {
+        provider: "fixture",
+        model: "manual",
+        isDefault: false,
+        runtime: { kind: "unchanged" },
+      },
+      ...overrides,
+    });
+  }
+
+  return { catalog, createEntry, createSelectedEntry, createParams, createFixtureParams };
 }
