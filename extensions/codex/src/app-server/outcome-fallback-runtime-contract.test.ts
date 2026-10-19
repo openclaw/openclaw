@@ -9,10 +9,13 @@ import {
   openFileBackedSessionManagerForTest,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-outcome-contract";
@@ -64,14 +67,18 @@ function forCurrentTurn(
   method: ProjectorNotification["method"],
   params: Record<string, unknown>,
 ): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method,
     params: { threadId: THREAD_ID, turnId: TURN_ID, ...params },
-  } as ProjectorNotification;
+  } as CodexServerNotification);
 }
 
 function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
-  const finalAssistantText = result.assistantTexts.join("\n\n").trim();
+  const preparedTerminalReply = expectDefined(
+    result.preparedTerminalReply,
+    "Codex projected terminal reply",
+  );
+  const finalAssistantText = preparedTerminalReply.text;
   return classifyEmbeddedAgentRunResultForModelFallback({
     provider: "codex",
     model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
@@ -81,6 +88,7 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
         durationMs: 1,
         aborted: readAttemptTerminal(result).aborted,
         agentHarnessResultClassification: result.agentHarnessResultClassification,
+        terminalReply: preparedTerminalReply.terminalReply,
         finalAssistantRawText: finalAssistantText || undefined,
         finalAssistantVisibleText: finalAssistantText || undefined,
       },
@@ -225,7 +233,11 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
-    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.preparedTerminalReply).toEqual({
+      text: "",
+      terminalReply: { disposition: "silent" },
+    });
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "NO_REPLY" }]);
     expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(classifyProjectedAttemptResult(result)).toBeNull();

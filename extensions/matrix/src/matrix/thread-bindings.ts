@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { hasSqliteWorkerOutcomeUnknown } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -58,13 +58,9 @@ function buildThreadBindingStoreKey(record: {
   conversationId: string;
   parentConversationId?: string;
 }): string {
-  const digest = createHash("sha256")
-    .update(record.accountId)
-    .update("\0")
-    .update(record.parentConversationId ?? "")
-    .update("\0")
-    .update(record.conversationId)
-    .digest("hex");
+  const digest = sha256Hex(
+    `${record.accountId}\0${record.parentConversationId ?? ""}\0${record.conversationId}`,
+  );
   return `${record.accountId}:${digest}`;
 }
 
@@ -134,29 +130,18 @@ async function persistBindingsSnapshot(params: {
 }): Promise<MatrixThreadBindingRecord[]> {
   const store = createThreadBindingStore(params);
   const liveKeys = new Set(params.bindings.map((record) => buildThreadBindingStoreKey(record)));
-  const stored = new Map<string, MatrixThreadBindingRecord>();
   for (const entry of await store.entries()) {
     const record = normalizeBindingRecord(entry.value, params.accountId);
-    if (record) {
-      stored.set(entry.key, record);
-    }
     if (record && !liveKeys.has(entry.key)) {
       await store.delete(entry.key);
     }
   }
-  const committed: MatrixThreadBindingRecord[] = [];
+  // The persistence queue captures these records after earlier touches have settled.
   for (const record of params.bindings) {
     const key = buildThreadBindingStoreKey(record);
-    const previous = stored.get(key);
-    // A snapshot accepted behind a targeted touch must not restore its older activity time.
-    const next =
-      previous && sameBindingIncarnation(previous, record)
-        ? { ...record, lastActivityAt: Math.max(record.lastActivityAt, previous.lastActivityAt) }
-        : record;
-    await store.register(key, toPluginJsonValue(next));
-    committed.push(next);
+    await store.register(key, toPluginJsonValue(record));
   }
-  return committed;
+  return params.bindings;
 }
 
 export async function createMatrixThreadBindingManager(params: {

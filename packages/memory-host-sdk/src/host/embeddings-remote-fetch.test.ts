@@ -109,6 +109,22 @@ describe("fetchRemoteEmbeddingVectors", () => {
     );
   });
 
+  it("promotes the Azure version header before sending embeddings", async () => {
+    respondJson({ data: [{ embedding: [0.1] }] });
+    await fetchRemoteEmbeddingVectors({
+      ...REQUEST,
+      url: "https://example.openai.azure.com/embeddings",
+      headers: { "api-version": "2024-10-21" },
+      body: { input: ["one"] },
+    });
+    expect(remoteHttpMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.openai.azure.com/embeddings?api-version=2024-10-21",
+        init: expect.objectContaining({ headers: {} }),
+      }),
+    );
+  });
+
   it("returns indexed response vectors in their original request order", async () => {
     respondJson({
       data: [

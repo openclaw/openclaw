@@ -1,7 +1,7 @@
 import { insert, type JSX } from "@solidjs/web";
 import {
   createMemo,
-  createRenderEffect,
+  createEffect,
   createRoot,
   createSignal,
   For,
@@ -12,13 +12,11 @@ import {
   runWithOwner,
   Show,
   Switch,
-  untrack,
   type Accessor,
 } from "solid-js";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-bridge.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
@@ -40,8 +38,9 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { renderChatSourcePreviews } from "./chat-source-previews.ts";
-import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { ChatSourcePreviews } from "./chat-source-previews.tsx";
+import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
+import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 
 type AgentRunFrameOptions = {
   basePath?: string;
@@ -97,9 +96,14 @@ function FrameBody(props: {
     }
     setParent(committedParent);
   });
-  createRenderEffect(
-    () => ({ parent: readParent(), parts: props.parts, options: props.options }),
-    ({ parent, parts, options }) => {
+  createEffect(
+    () => ({
+      parent: readParent(),
+      parts: props.parts,
+      options: props.options,
+      render: props.children,
+    }),
+    ({ parent, parts, options, render }) => {
       if (!parent) {
         return;
       }
@@ -126,11 +130,7 @@ function FrameBody(props: {
           createRoot((dispose): PartRange => {
             // The headline's connection scope must change with its activity.
             const [readInput, write] = createSignal({ part: value, options }, { ownedWrite: true });
-            insert(
-              parent,
-              untrack(() => props.children(readInput)),
-              end,
-            );
+            insert(parent, render(readInput), end);
             return { start, end, write, dispose };
           }),
         );
@@ -208,7 +208,7 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
             : [],
       )
       .at(0) ?? null;
-  const workPreviews = renderWorkGroupBrowserTabPreviews(
+  const workPreviews = selectWorkGroupBrowserTabPreviews(
     frame.parts.flatMap((part) =>
       !opts.streamOptions.bubbleMode && part.kind === "work-group" && !opts.isWorkExpanded(part.key)
         ? [part]
@@ -217,17 +217,14 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     opts.renderGroupOptions(shell),
   );
   const sourcePreviews = actionOwner
-    ? renderChatSourcePreviews(
-        extractChatSourcePreviews({
-          groups,
-          answer: actionOwner.message,
-          runId: frame.runId,
-          basePath: opts.basePath,
-          sessionPublicOrigin: opts.sessionPublicOrigin,
-        }),
-        opts.streamOptions.fetchLinkFavicon,
-      )
-    : undefined;
+    ? extractChatSourcePreviews({
+        groups,
+        answer: actionOwner.message,
+        runId: frame.runId,
+        basePath: opts.basePath,
+        sessionPublicOrigin: opts.sessionPublicOrigin,
+      })
+    : [];
   return {
     shell,
     actionOwner,
@@ -337,7 +334,7 @@ function RunFrame(props: FrameProps) {
               {(group) => (
                 <>
                   <MessageGroupContent group={group()} options={groupOptions(group())} />
-                  <LitContent render={() => state().workPreviews.get(group().key)} />
+                  <BrowserTabPreviews previews={state().workPreviews.get(group().key)} />
                 </>
               )}
             </Match>
@@ -345,7 +342,10 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
-    <LitContent render={() => state().sourcePreviews} />,
+    <ChatSourcePreviews
+      sources={state().sourcePreviews}
+      fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
+    />,
     <Show when={props.frame.outcome.kind === "interrupted"}>
       <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
         {t("chat.composer.runInterrupted")}

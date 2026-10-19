@@ -15,7 +15,6 @@ import {
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
 } from "./app-sidebar-session-types.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "../styles/settings-native-controls.css";
@@ -84,6 +83,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         vi.unstubAllGlobals();
       });
       const { sidebar, page } = await mountFilters(width);
+      // A retained pointer can open the rail tooltip when the layout switches to RTL.
+      await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
       sidebar.dir = direction;
       const occlusion: boolean[] = [];
       const started = performance.now();
@@ -144,6 +145,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
           () => new DOMRect(0, 0, innerWidth, innerHeight),
         ),
       );
+      expect(occlusion).toEqual([false]);
       const { userEvent } = await import("vitest/browser");
       const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
       const active = page.getByRole("radio", { name: "Active", exact: true });
@@ -186,12 +188,13 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect
         .element(page.getByRole("listbox", { name: "Owners", exact: true }))
         .toBeVisible();
-      await expect.poll(() => occlusion).toEqual([false, true]);
       expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", "My sessions", "Bob"]);
       const search = page.getByRole("combobox", { name: "Search", exact: true });
       const ownersSurface = search.element().closest(".picker-select__menu")!;
-      // Settle the phone picker's opening animation before exercising Escape.
+      // Native overlap can change during the sheet's slide-in; sample close/open edges after entry.
       await Promise.all(ownersSurface.getAnimations().map((animation) => animation.finished));
+      await expect.poll(() => occlusion.at(-1)).toBe(true);
+      const occlusionAfterOpening = occlusion.length;
       await expect.element(search).toHaveFocus();
       expect(getComputedStyle(sidebar.querySelector(".picker-select__search")!).boxShadow).not.toBe(
         "none",
@@ -210,9 +213,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard("{Escape}");
       await ownersHidden;
       await expect.element(owners).toHaveFocus();
-      expect(occlusion).toEqual([false, true, false]);
+      expect(occlusion.slice(occlusionAfterOpening)).toEqual([false]);
       await trigger.click();
-      await expect.poll(() => occlusion).toEqual([false, true, false, true]);
+      await expect.poll(() => occlusion.slice(occlusionAfterOpening)).toEqual([false, true]);
       await expectFits();
       await expect.element(active).toHaveFocus();
       await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
@@ -280,12 +283,14 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
-      await expect.poll(() => occlusion).toEqual([false, true, false, true, false]);
+      await expect.poll(() => occlusion.slice(occlusionAfterOpening)).toEqual([false, true, false]);
       await trigger.click();
       await expect
         .element(page.getByRole("radio", { name: "Archived", exact: true }))
         .toHaveFocus();
-      await expect.poll(() => occlusion).toEqual([false, true, false, true, false, true]);
+      await expect
+        .poll(() => occlusion.slice(occlusionAfterOpening))
+        .toEqual([false, true, false, true]);
       // The phone sheet covers the toolbar; its backdrop dismisses it instead.
       if (width < 560) {
         sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
@@ -293,7 +298,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         await trigger.click();
       }
       await expect.poll(() => sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
-      await expect.poll(() => occlusion).toEqual([false, true, false, true, false, true, false]);
+      await expect
+        .poll(() => occlusion.slice(occlusionAfterOpening))
+        .toEqual([false, true, false, true, false]);
     },
   );
 

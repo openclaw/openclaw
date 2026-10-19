@@ -51,8 +51,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
   const { entry, userId } = params;
   if (!entry.guildName) {
     const guild = await params.client.fetchGuild(entry.guildId).catch(() => null);
-    entry.guildName =
-      guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
+    entry.guildName = guild?.name.trim() ? guild.name : undefined;
   }
   const speaker = await params.speakerContext.resolveContext(entry.guildId, userId);
   const speakerIdentity = await params.speakerContext.resolveIdentity(entry.guildId, userId);

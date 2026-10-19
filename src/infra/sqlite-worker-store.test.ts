@@ -21,8 +21,14 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
+  hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerReply,
 } from "./sqlite-worker-contract.js";
 import {
@@ -30,10 +36,12 @@ import {
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
+  runSqliteWorkerStoreOperation,
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
@@ -658,6 +666,7 @@ describe("SQLite worker store", () => {
         expect(expire).toBeDefined();
         expire?.();
         await opening;
+        expect(fs.existsSync(pendingFile)).toBe(false);
       } finally {
         timeout.mockRestore();
       }
@@ -858,9 +867,11 @@ describe("SQLite worker store", () => {
   it("reports an uncertain result when serialization fails after commit without replaying the write", async () => {
     const file = databasePath();
     const store = await open(file);
-    await expect(
-      store.execute({ type: "commitUnserializable", input: { value: "committed once" } }),
-    ).rejects.toMatchObject({ code: "outcome-unknown" });
+    const failure = await store
+      .execute({ type: "commitUnserializable", input: { value: "committed once" } })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "outcome-unknown" });
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
     expect(await read(store)).toEqual(["committed once"]);
     expect(await append(store, "next write")).toMatchObject({ writes: 2 });
     await store.close();
@@ -886,4 +897,47 @@ describe("SQLite worker store", () => {
     expect(await append(recovered, "explicit recovery")).toMatchObject({ writes: 1 });
     expect(await read(recovered)).toEqual(["committed", "explicit recovery"]);
   });
+
+  it.each(["native", "schema-maintenance"] as const)(
+    "invalidates saved authority receipts when a %s writer dies inside native COMMIT",
+    async (mode) => {
+      const file = databasePath();
+      const store = await open(file);
+      const sibling = openNodeSqliteDatabase(file);
+      try {
+        const receipt = readSqliteDatabaseWriteTokenForPath(file);
+        const scoped = readSqliteDatabaseScopedWriteTokenForPath(file, "fixture:authority");
+        expect(receipt).toBeDefined();
+        expect(scoped).toBeDefined();
+        await expect(
+          runSqliteWorkerStoreOperation(
+            store,
+            (scope) =>
+              scope.execute({
+                type: "commitWithoutReceipt",
+                input: { value: "revoked", mode },
+              }),
+            undefined,
+            undefined,
+            () => ({
+              admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+                if (mode === "native") {
+                  throw new Error("Native writes do not request separate domain admission");
+                }
+                grant();
+              }),
+              nativeLocations: [file],
+            }),
+          ),
+        ).rejects.toMatchObject({ code: "outcome-unknown" });
+        expect(readSqliteDatabaseWriteTokenForPath(file)).not.toBe(receipt);
+        expect(readSqliteDatabaseScopedWriteTokenForPath(file, "fixture:authority")).not.toBe(
+          scoped,
+        );
+        expect(await read(await open(file))).toEqual(["revoked"]);
+      } finally {
+        sibling.close();
+      }
+    },
+  );
 });

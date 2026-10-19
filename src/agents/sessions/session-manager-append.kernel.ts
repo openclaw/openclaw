@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { requireTranscriptEventAppendSnapshot } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
 import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
@@ -9,6 +9,7 @@ import { isReadableSessionMessage } from "../../config/sessions/session-entry-co
 import type { SessionMetadataOperations } from "../../config/sessions/session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { decodeMetadataAppendEvent } from "./session-manager-append-codec.js";
 import type {
@@ -24,7 +25,7 @@ type PreparedSessionManagerAppend = {
 };
 
 export function prepareSessionMetadataAppend(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: SessionMetadataOperations["session.metadata.append"]["input"],
 ): PreparedSessionManagerAppend {
   const event = decodeMetadataAppendEvent(input);
@@ -109,20 +110,42 @@ export function applySessionMetadataAppendInTransaction(
     }
     return { snapshot, projectionNeedsReconcile };
   }
-  return {
-    snapshot: appendTranscriptEventSnapshotSync(
-      input.scope,
-      event,
-      input.options,
-      {
-        ...projection,
-        eventJson: typeof input.event === "string" ? input.event : undefined,
-      },
-      undefined,
-      database,
-    ),
-    projectionNeedsReconcile,
-  };
+  const initialModel = input.initialModel
+    ? requireTranscriptEventAppendSnapshot(
+        appendTranscriptEventSnapshotSync(
+          input.scope,
+          input.initialModel,
+          input.options,
+          projection,
+          undefined,
+          database,
+        ),
+        "Initial model metadata was not persisted",
+      )
+    : undefined;
+  const snapshot = appendTranscriptEventSnapshotSync(
+    input.scope,
+    event,
+    initialModel ? { ...input.options, expectedMutationAt: undefined } : input.options,
+    {
+      ...projection,
+      eventJson: typeof input.event === "string" ? input.event : undefined,
+    },
+    undefined,
+    database,
+  );
+  if (initialModel) {
+    const thinking = requireTranscriptEventAppendSnapshot(
+      snapshot,
+      "Initial thinking metadata was not persisted",
+    );
+    return {
+      snapshot: { ok: true, value: { ...thinking, before: initialModel.before } },
+      initialModelParentId: initialModel.result.effectiveParentId,
+      projectionNeedsReconcile,
+    };
+  }
+  return { snapshot, projectionNeedsReconcile };
 }
 
 export function applySessionDirectMessageInTransaction(

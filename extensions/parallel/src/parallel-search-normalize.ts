@@ -1,5 +1,6 @@
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   readCachedSearchPayload,
@@ -91,7 +92,6 @@ export async function executeParallelSearchRequest(params: {
   endpoint: string;
   args: Record<string, unknown>;
   searchConfig: SearchConfigRecord | undefined;
-  signal?: AbortSignal;
   search: (
     request: NormalizedParallelSearchRequest,
     timeoutSeconds: number,
@@ -119,8 +119,6 @@ export async function executeParallelSearchRequest(params: {
 
   const start = Date.now();
   const response = await params.search(request, resolveSearchTimeoutSeconds(params.searchConfig));
-  // A provider can finish after its caller aborts; never cache that stale result.
-  params.signal?.throwIfAborted();
   const results = mapParallelResults(response, request.count);
   const payload: Record<string, unknown> = {
     ...(request.objective ? { objective: request.objective } : {}),
@@ -128,12 +126,7 @@ export async function executeParallelSearchRequest(params: {
     provider: params.provider,
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: params.provider,
-      wrapped: true,
-    },
+    externalContent: externalContentStamp(params.provider),
     results,
   };
   if (typeof response.search_id === "string") {

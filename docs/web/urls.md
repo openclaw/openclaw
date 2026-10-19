@@ -280,9 +280,22 @@ The public reader does not open a Gateway WebSocket, subscribe to the session
 roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Reasoning, executable widgets, internal metadata, and hidden messages are omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
 
 The latest public view checks for updates approximately every 15 seconds while
-visible. **Older messages** opens earlier pages without automatic refresh;
-**Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
+visible and catches up when the tab returns or the connection comes back online.
+Updates follow the conversation when you are at its latest message, but preserve
+your place and expanded tool steps when you scroll back. **Top** and **Latest**
+let you jump without reloading; **Refresh now** checks in place and shows retry
+status if the connection fails. **Older messages** opens earlier pages without
+automatic refresh; **Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
+
+The reader uses the saved Control UI language preference on the same origin, or
+your browser language when no supported preference is saved. Navigation, status,
+copy controls, and reader notices are localized, with right-to-left layout for
+Arabic and Persian. Conversation titles, messages, code, tool names, and filenames
+are never translated. Missing translations fall back to English; without
+JavaScript the initial document remains in English. Reader translations are
+packaged at build time from the same generated catalog as the Control UI, without
+loading the operator app or fetching a translation service.
 
 Public session links include a 1200 × 630 preview card with the session title and
 opening public request. When recorded worktree changes are already available,

@@ -8,7 +8,6 @@ import {
   markConversationDeliveryRejected,
   markConversationDeliverySent,
   markConversationDeliveryUnknown,
-  type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
 import * as deliveryStore from "../config/sessions/conversation-delivery-store.js";
 import {
@@ -20,7 +19,6 @@ import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
 } from "../infra/outbound/delivery-queue.test-helpers.js";
-import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import * as messageActionRunner from "../infra/outbound/message-action-runner.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
@@ -38,36 +36,50 @@ import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
+import {
+  captureOutcome,
+  reassignedConfig,
+  releaseAndDrain,
+  sentResult,
+} from "./conversation-send-turn.test-support.js";
 import { runGatewayConversationSend } from "./conversation-send.js";
 
-function sentResult() {
-  return {
-    kind: "send",
-    channel: "reef",
-    action: "send",
-    to: conversation.target,
-    handledBy: "core",
-    payload: {},
-    sendResult: {
-      channel: "reef",
-      to: conversation.target,
-      via: "direct",
-      mediaUrl: null,
-      result: { messageId: "reef-outbound-1" },
-      deliveryStatus: "sent",
-    },
-    dryRun: false,
-  } satisfies Extract<MessageActionResult, { kind: "send" }>;
-}
+const currentConversation = {
+  ...conversation,
+  channel: "reef-current",
+  conversationRef: "conv_ffffffffffffffffffffffffffffffff",
+};
 
-async function createDeps(agentId = "main") {
-  const store = await createConversationDeliveryTestStore(agentId);
+async function createDeps() {
+  const store = await createConversationDeliveryTestStore();
   return {
     ...store,
-    beginOperation: vi.spyOn(deliveryStore, "beginConversationDeliveryOperation"),
-    getOperation: vi.spyOn(deliveryStore, "getConversationDeliveryOperation"),
-    markSent: vi.spyOn(deliveryStore, "markConversationDeliverySent"),
-    markSuppressed: vi.spyOn(deliveryStore, "markConversationDeliverySuppressed"),
+    readState: (id: string) => readConversationDeliveryStateForTest(store.scope, id),
+    get: (id: string) => deliveryStore.getConversationDeliveryOperation(store.scope, id),
+    send: (
+      operationId: string,
+      overrides: Partial<Parameters<typeof runGatewayConversationSend>[0]> = {},
+    ) =>
+      runGatewayConversationSend({
+        config: store.config,
+        agentId: "main",
+        senderIsOwner: true,
+        operationId,
+        conversationRef: conversation.conversationRef,
+        message: "hello",
+        ...overrides,
+      }),
+    begin: (
+      operationId: string,
+      overrides: Partial<Parameters<typeof beginConversationDeliveryOperation>[1]> = {},
+    ) =>
+      beginConversationDeliveryOperation(store.scope, {
+        operationId,
+        operationKind: "send",
+        conversationRef: conversation.conversationRef,
+        message: "hello",
+        ...overrides,
+      }),
     resolveConversation: vi
       .spyOn(conversationRegistry, "readConversation")
       .mockResolvedValue(conversation),
@@ -146,19 +158,14 @@ describe("conversation send through an accepted channel response", () => {
     );
     const replay = await runGatewayConversationSend(input);
 
-    expect(transport).toHaveBeenCalledOnce();
-    expect(transport.mock.calls[0]).toMatchObject([
-      "https://clickclack.example/api/channels/chn_synthetic/messages",
-      { method: "POST" },
+    expect(transport.mock.calls).toMatchObject([
+      ["https://clickclack.example/api/channels/chn_synthetic/messages", { method: "POST" }],
     ]);
     expect(persisted).toMatchObject({ status: "unknown", queueId: initial.queueId });
     expect(await loadPendingDeliveries(stateDir)).toMatchObject([
       { recoveryState: "unknown_after_send" },
     ]);
-    expect({ initial: initial.status, replay: replay.status }).toEqual({
-      initial: "unknown",
-      replay: "unknown",
-    });
+    expect([initial.status, replay.status]).toEqual(["unknown", "unknown"]);
   });
 });
 
@@ -175,24 +182,13 @@ describe("runGatewayConversationSend", () => {
       await writer.entered;
       const controller = new AbortController();
       const reason = new Error("conversation cancelled while waiting");
-      const sent = runGatewayConversationSend({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId: "send-admitted-lookup",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
+      const sent = deps.send("send-admitted-lookup", {
         signal: controller.signal,
       });
-      const outcome = sent.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const outcome = captureOutcome(sent);
       try {
         await setImmediate();
-        expect(
-          readConversationDeliveryStateForTest(deps.scope, "send-admitted-lookup"),
-        ).toBeUndefined();
+        expect(deps.readState("send-admitted-lookup")).toBeUndefined();
         expect(deps.runMessageAction).not.toHaveBeenCalled();
         if (aborted) {
           controller.abort(reason);
@@ -200,19 +196,13 @@ describe("runGatewayConversationSend", () => {
         await writer.release();
         if (aborted) {
           expect(await outcome).toEqual({ error: reason });
-          expect(
-            readConversationDeliveryStateForTest(deps.scope, "send-admitted-lookup"),
-          ).toBeUndefined();
+          expect(deps.readState("send-admitted-lookup")).toBeUndefined();
           expect(deps.runMessageAction).not.toHaveBeenCalled();
         } else {
           expect(await outcome).toMatchObject({ value: { status: "sent" } });
         }
       } finally {
-        try {
-          await writer.release();
-        } finally {
-          await outcome;
-        }
+        await releaseAndDrain(writer.release, outcome);
       }
     },
   );
@@ -236,23 +226,14 @@ describe("runGatewayConversationSend", () => {
       blocked.resolve(writer);
       return sentResult();
     });
-    let settled = false;
-    const sent = runGatewayConversationSend({
-      config: deps.config,
-      readCurrentConfig: () => currentConfig,
-      agentId: "main",
-      senderIsOwner: true,
-      operationId: "send-settlement",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
-      signal: controller.signal,
-    }).finally(() => {
-      settled = true;
-    });
-    const outcome = sent.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const settled = vi.fn();
+    const sent = deps
+      .send("send-settlement", {
+        readCurrentConfig: () => currentConfig,
+        signal: controller.signal,
+      })
+      .finally(settled);
+    const outcome = captureOutcome(sent);
     const writerReady = Promise.race([blocked.promise, outcome.then(() => undefined)]);
     try {
       const writer = await writerReady;
@@ -265,58 +246,39 @@ describe("runGatewayConversationSend", () => {
       controller.abort(new Error("cancelled after recipient evidence"));
       currentConfig = replacement.config;
       await setImmediate();
-      expect(settled).toBe(false);
-      expect(readConversationDeliveryStateForTest(deps.scope, "send-settlement")?.status).toBe(
-        "queued",
-      );
+      expect(settled).not.toHaveBeenCalled();
+      expect(deps.readState("send-settlement")?.status).toBe("queued");
       await writer.release();
       expect(await outcome).toMatchObject({
         value: { status: "sent", messageId: "reef-outbound-1" },
       });
-      expect(await deps.getOperation(deps.scope, "send-settlement")).toMatchObject({
-        status: "sent",
-      });
+      expect(await deps.get("send-settlement")).toMatchObject({ status: "sent" });
       expect(await replacement.getOperation(replacement.scope, "send-settlement")).toBeUndefined();
       expect(deps.runMessageAction).toHaveBeenCalledOnce();
     } finally {
       const writer = await writerReady;
-      try {
+      await releaseAndDrain(async () => {
         await writer?.release();
-      } finally {
-        await outcome;
-      }
+      }, outcome);
     }
   });
 
   it.each([
     { status: "unknown", preparedMessageId: "prepared" },
-    { status: "rejected" },
-  ] satisfies Array<{
-    status: ConversationDeliveryRecord["status"];
-    preparedMessageId?: string;
-  }>)(
+    { status: "rejected", preparedMessageId: undefined },
+  ] as const)(
     "replays $status with persisted metadata and no current store access",
     async ({ status, preparedMessageId }) => {
       const deps = await createDeps();
       const operationId = "send-completed";
-      await beginConversationDeliveryOperation(deps.scope, {
-        operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        preparedMessageId,
-      });
+      await deps.begin(operationId, { preparedMessageId });
       await markConversationDeliveryQueued(deps.scope, operationId, "queue-existing");
       if (status === "unknown") {
         await markConversationDeliveryUnknown(deps.scope, operationId);
       } else {
         await markConversationDeliveryRejected(deps.scope, operationId, "permanent rejection");
       }
-      deps.resolveConversation.mockResolvedValue({
-        ...conversation,
-        channel: "reef-current",
-        conversationRef: "conv_ffffffffffffffffffffffffffffffff",
-      });
+      deps.resolveConversation.mockResolvedValue(currentConversation);
       const currentConfig = {
         session: {
           get store(): string {
@@ -324,14 +286,8 @@ describe("runGatewayConversationSend", () => {
           },
         },
       };
-      const result = runGatewayConversationSend({
-        config: deps.config,
+      const result = deps.send(operationId, {
         readCurrentConfig: () => currentConfig,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId,
-        conversationRef: conversation.conversationRef,
-        message: "hello",
       });
       if (status === "rejected") {
         await expect(result).rejects.toMatchObject({
@@ -353,67 +309,41 @@ describe("runGatewayConversationSend", () => {
 
   it("projects current conversation metadata for an unfinished send", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "send-unfinished",
-      operationKind: "send",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
-    });
-    const current = {
-      ...conversation,
-      channel: "reef-current",
-      conversationRef: "conv_ffffffffffffffffffffffffffffffff",
-    };
+    await deps.begin("send-unfinished");
     await registerConversationAddresses(deps.scope, [
-      { ...current, deliveryTarget: current.target },
+      { ...currentConversation, deliveryTarget: currentConversation.target },
     ]);
-    deps.resolveConversation.mockResolvedValue(current);
-    await expect(
-      runGatewayConversationSend({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId: "send-unfinished",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-      }),
-    ).resolves.toMatchObject({
+    deps.resolveConversation.mockResolvedValue(currentConversation);
+    await expect(deps.send("send-unfinished")).resolves.toMatchObject({
       status: "sent",
-      channel: current.channel,
-      conversationRef: current.conversationRef,
+      channel: currentConversation.channel,
+      conversationRef: currentConversation.conversationRef,
     });
     expect(deps.runMessageAction).toHaveBeenCalledOnce();
   });
 
   it("owns durable delivery in the Gateway and binds the source session", async () => {
     const deps = await createDeps();
-    const result = await runGatewayConversationSend({
-      config: deps.config,
-      agentId: "main",
-      senderIsOwner: true,
+    const result = await deps.send("send-1", {
       sourceSessionKey: "agent:main:telegram:direct:operator",
-      operationId: "send-1",
-      conversationRef: conversation.conversationRef,
       message: "hello molty",
     });
 
-    expect(await deps.getOperation(deps.scope, "send-1")).toMatchObject({
+    expect(await deps.get("send-1")).toMatchObject({
       operationId: "send-1",
       operationKind: "send",
       conversationRef: conversation.conversationRef,
       sourceSessionKey: "agent:main:telegram:direct:operator",
       status: "sent",
     });
-    expect(deps.runMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaultAccountId: conversation.accountId,
-        gatewayOwnedDelivery: true,
-        forceCoreDelivery: true,
-        requireQueuePersistence: true,
-        suppressTranscriptMirror: true,
-        sessionKey: "agent:main:telegram:direct:operator",
-      }),
-    );
+    expect(deps.runMessageAction.mock.calls[0]?.[0]).toMatchObject({
+      defaultAccountId: conversation.accountId,
+      gatewayOwnedDelivery: true,
+      forceCoreDelivery: true,
+      requireQueuePersistence: true,
+      suppressTranscriptMirror: true,
+      sessionKey: "agent:main:telegram:direct:operator",
+    });
     expect(deps.runMessageAction.mock.calls[0]?.[0]?.params).not.toHaveProperty("accountId");
     expect(result).toEqual({
       status: "sent",
@@ -426,32 +356,12 @@ describe("runGatewayConversationSend", () => {
 
   it("does not reveal completed send state after the route owner changes", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "send-reassigned",
-      operationKind: "send",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
-    });
+    await deps.begin("send-reassigned");
     await markConversationDeliverySent(deps.scope, "send-reassigned", "reef-private-message");
 
     await expect(
-      runGatewayConversationSend({
-        config: {
-          ...deps.config,
-          agents: { entries: { main: {}, finance: {} } },
-          bindings: [
-            {
-              type: "route",
-              agentId: "finance",
-              match: { channel: "reef", accountId: "default" },
-            },
-          ],
-        },
-        agentId: "main",
-        senderIsOwner: true,
-        operationId: "send-reassigned",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
+      deps.send("send-reassigned", {
+        config: reassignedConfig(deps.config),
       }),
     ).rejects.toBeInstanceOf(ConversationInputError);
   });
@@ -460,31 +370,19 @@ describe("runGatewayConversationSend", () => {
     const deps = await createDeps();
     deps.runMessageAction.mockImplementation(async (input) => {
       await queueConversationDeliveryForTest(input, "queue-revoked-route");
-      readCurrentConfig.mockReturnValue({
-        ...deps.config,
-        agents: { entries: { main: {}, finance: {} } },
-        bindings: [
-          { type: "route", agentId: "finance", match: { channel: "reef", accountId: "default" } },
-        ],
-      });
+      readCurrentConfig.mockReturnValue(reassignedConfig(deps.config));
       await input.withDirectAdapterHandoff?.(async () => undefined);
       return sentResult();
     });
     const readCurrentConfig = vi.fn().mockReturnValue(deps.config);
 
     await expect(
-      runGatewayConversationSend({
-        config: deps.config,
+      deps.send("send-revoked-route", {
         readCurrentConfig,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId: "send-revoked-route",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
       }),
     ).resolves.toMatchObject({ status: "queued", queueId: "queue-revoked-route" });
 
-    expect(await deps.getOperation(deps.scope, "send-revoked-route")).toMatchObject({
+    expect(await deps.get("send-revoked-route")).toMatchObject({
       status: "queued",
       queueId: "queue-revoked-route",
     });
@@ -494,38 +392,19 @@ describe("runGatewayConversationSend", () => {
     const deps = await createDeps();
     deps.resolveConversation.mockResolvedValueOnce(undefined);
 
-    await expect(
-      runGatewayConversationSend({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId: "send-missing",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-      }),
-    ).rejects.toBeInstanceOf(ConversationInputError);
-    expect(readConversationDeliveryStateForTest(deps.scope, "send-missing")).toBeUndefined();
+    await expect(deps.send("send-missing")).rejects.toBeInstanceOf(ConversationInputError);
+    expect(deps.readState("send-missing")).toBeUndefined();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
   it("preserves durable operation conflicts for Gateway identity recovery", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "send-reused",
-      operationKind: "send",
-      conversationRef: conversation.conversationRef,
-      message: "original",
-    });
+    await deps.begin("send-reused", { message: "original" });
     await markConversationDeliverySent(deps.scope, "send-reused");
     deps.resolveConversation.mockResolvedValue(undefined);
 
     await expect(
-      runGatewayConversationSend({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId: "send-reused",
-        conversationRef: conversation.conversationRef,
+      deps.send("send-reused", {
         message: "different",
       }),
     ).rejects.toBeInstanceOf(ConversationOperationConflictError);

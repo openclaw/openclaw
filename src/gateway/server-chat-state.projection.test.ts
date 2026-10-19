@@ -6,14 +6,13 @@ import {
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.js";
 import * as codeRegions from "../shared/text/code-regions.js";
-import { sanitizeChatHistoryMessage } from "./chat-display-projection.sanitize.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { createChatRunState } from "./server-chat-state.js";
 
 describe("live chat directive projection", () => {
   it.each([
     {
-      name: "bare trailing policy",
+      name: "literal trailing marker",
       prefix: "The token is ",
       suffix: SILENT_REPLY_TOKEN,
       expected: SILENT_REPLY_TOKEN,
@@ -24,13 +23,17 @@ describe("live chat directive projection", () => {
       suffix: `${SILENT_REPLY_TOKEN}.`,
       expected: `${SILENT_REPLY_TOKEN}.`,
     },
-    { name: "standalone silent reply", prefix: "", suffix: SILENT_REPLY_TOKEN, expected: "" },
     {
-      name: "terminal control lead fragment",
+      name: "prepared literal marker",
+      prefix: "",
+      suffix: SILENT_REPLY_TOKEN,
+      expected: SILENT_REPLY_TOKEN,
+    },
+    {
+      name: "prepared short reply",
       prefix: SILENT_REPLY_TOKEN.slice(0, 1),
       suffix: SILENT_REPLY_TOKEN.slice(1, 2),
-      expected: "",
-      finalExpected: SILENT_REPLY_TOKEN.slice(1, 2),
+      expected: SILENT_REPLY_TOKEN.slice(1, 2),
     },
     {
       name: "runtime directive crossing occurrences",
@@ -56,42 +59,26 @@ describe("live chat directive projection", () => {
       suffix: "https://example.com/a.png\n",
       expected: "https://example.com/a.png\n",
     },
-  ])(
-    "decides suppression from full source for $name",
-    ({ prefix, suffix, expected, finalExpected }) => {
-      const state = createChatRunState();
-      const runId = "source-classification";
-      if (prefix) {
-        state.updateBuffer(runId, { itemId: "native", occurrenceId: "a", text: prefix });
-      }
-      state.updateBuffer(runId, {
-        itemId: "native",
-        occurrenceId: "b",
-        text: prefix + suffix,
-        managedMediaUrls: ["./model.png"],
-      });
-      if (prefix && suffix === SILENT_REPLY_TOKEN) {
-        // Full live/history policy strips a bare trailing token. Once its context
-        // commits, the raw tail stays visible instead of being classified alone.
-        expect(state.resolveBuffer(runId).text).toBe(prefix.trimEnd());
-        expect(
-          sanitizeChatHistoryMessage({
-            role: "assistant",
-            content: [{ type: "text", text: prefix + suffix }],
-          }).message,
-        ).toMatchObject({ content: [{ type: "text", text: prefix.trimEnd() }] });
-      }
-      if (prefix) {
-        state.retireBuffer(runId, ["a"]);
-      }
-      expect
-        .soft(state.resolveBuffer(runId))
-        .toMatchObject({ text: expected, suppress: !expected });
-      expect.soft(projectInFlightRunSnapshot({ chatRunState: state, runId }).text).toBe(expected);
-      const final = state.resolveBuffer(runId, { final: true });
-      expect(final.displayText ?? final.text).toBe(finalExpected ?? expected);
-    },
-  );
+  ])("preserves prepared source for $name", ({ prefix, suffix, expected }) => {
+    const state = createChatRunState();
+    const runId = "source-classification";
+    if (prefix) {
+      state.updateBuffer(runId, { itemId: "native", occurrenceId: "a", text: prefix });
+    }
+    state.updateBuffer(runId, {
+      itemId: "native",
+      occurrenceId: "b",
+      text: prefix + suffix,
+      managedMediaUrls: ["./model.png"],
+    });
+    if (prefix) {
+      state.retireBuffer(runId, ["a"]);
+    }
+    expect.soft(state.resolveBuffer(runId)).toMatchObject({ text: expected, suppress: !expected });
+    expect.soft(projectInFlightRunSnapshot({ chatRunState: state, runId }).text).toBe(expected);
+    const final = state.resolveBuffer(runId, { final: true });
+    expect(final.displayText ?? final.text).toBe(expected);
+  });
 
   it("matches a terminal-only native receipt by identity before accepting an identical new item", () => {
     const state = createChatRunState();
@@ -387,13 +374,13 @@ describe("live chat directive projection", () => {
   it("retains pending display deltas across reads and reconciles terminal whitespace", () => {
     const state = createChatRunState();
     state.updateBuffer("reply", { delta: "N" });
-    expect(state.resolveBuffer("reply").suppress).toBe(true);
-    expect(state.takeBufferDelta("reply", "")).toBeUndefined();
+    expect(state.resolveBuffer("reply").suppress).toBe(false);
+    expect(state.takeBufferDelta("reply", "N")).toEqual({ deltaText: "N" });
     state.updateBuffer("reply", { delta: "ice" });
     expect(state.resolveBuffer("reply").text).toBe("Nice");
     state.updateBuffer("reply", { delta: " work " });
     expect(state.resolveBuffer("reply").text).toBe("Nice work ");
-    expect(state.takeBufferDelta("reply", "Nice work ")).toEqual({ deltaText: "Nice work " });
+    expect(state.takeBufferDelta("reply", "Nice work ")).toEqual({ deltaText: "ice work " });
     expect(state.takeBufferDelta("reply", "Nice work ")).toBeUndefined();
     expect(state.takeBufferDelta("reply", "Nice work")).toEqual({
       deltaText: "Nice work",

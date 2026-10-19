@@ -8,6 +8,66 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import type { SessionListOptions, SessionListSnapshot } from "./session-capability.ts";
+import { canApplySessionListSnapshot } from "./session-list-query.ts";
+
+it.each([
+  [200, 60, true],
+  [200, 59, false],
+  [2, 2, true],
+  [2, 1, false],
+] as const)(
+  "excludes an old owned ancestor only behind the full owner prefix (limit=%i, owned=%i)",
+  (limit, owned, expected) => {
+    const actor = (id: string) => ({
+      type: "human" as const,
+      id,
+      identity: { type: "profile" as const, id },
+    });
+    const rows: GatewaySessionRow[] = Array.from({ length: limit }, (_, index) => ({
+      key: `agent:main:child-${index}`,
+      sessionId: `child-${index}`,
+      kind: "direct",
+      updatedAt: 1_000 - index,
+      owner: { actor: actor(index < owned ? "viewer" : "other") },
+      parentSessionKey: "agent:main:main",
+    }));
+    const parent: GatewaySessionRow = {
+      key: "agent:main:main",
+      sessionId: "parent",
+      kind: "direct",
+      updatedAt: 1,
+      owner: { actor: actor("viewer") },
+    };
+    const result = {
+      ...sessionsResult(rows, 2_000),
+      hasMore: true,
+      nextOffset: limit,
+    };
+    const event = {
+      reason: "patch",
+      session: { ...rows[0], updatedAt: 2_001 },
+      ancestorSessions: [parent],
+    };
+    const query = { agentId: "main", limit, ownerFirst: true };
+    expect(
+      canApplySessionListSnapshot(result, event, query, "updatedAt", undefined, "viewer"),
+    ).toBe(expected);
+    // A parent that becomes recent may enter the shared page even with a full owner prefix.
+    expect(
+      canApplySessionListSnapshot(
+        result,
+        {
+          ...event,
+          ancestorSessions: [{ ...parent, updatedAt: 2_002 }],
+        },
+        query,
+        "updatedAt",
+        undefined,
+        "viewer",
+      ),
+    ).toBe(false);
+  },
+);
 
 describe("session list replacement options", () => {
   it("keeps deliberate dock-inclusive queries separate from the ordinary roster", async () => {

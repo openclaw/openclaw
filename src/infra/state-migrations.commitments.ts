@@ -15,7 +15,6 @@ import {
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -198,9 +197,7 @@ async function migrateWithExclusiveStateOwnership(params: {
   try {
     snapshot = await source.read();
     params.beforeVerify?.();
-    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read())) {
-      throw new Error("retired commitments source changed after Doctor loaded it");
-    }
+    await source.verify(snapshot, "retired commitments source changed after Doctor loaded it");
   } catch (error) {
     return {
       changes: [],
@@ -242,9 +239,7 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read(true))) {
-      throw new Error("retired commitments Doctor claim changed before cleanup");
-    }
+    await source.verify(snapshot, "retired commitments Doctor claim changed before cleanup", true);
     await source.remove({
       removeSource: params.removeSource,
       sourceReappearedMessage: "retired commitments source reappeared during cleanup",

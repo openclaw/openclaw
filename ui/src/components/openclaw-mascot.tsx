@@ -1,10 +1,13 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
+import { createDocumentVisibility, createMediaQuery } from "../lib/reactive/platform.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
 import {
+  MASCOT_MOODS,
   mascotPalette,
   staticMascotPose,
   type MascotMood,
@@ -14,17 +17,7 @@ import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./openclaw-mascot.css";
 
 type Props = { mood: MascotMood; size: number; tease: boolean };
-const moods = new Set<MascotMood>([
-  "idle",
-  "curious",
-  "thinking",
-  "working",
-  "happy",
-  "celebrating",
-  "sad",
-  "sleepy",
-  "attentive",
-]);
+const moods = new Set<MascotMood>(MASCOT_MOODS);
 
 defineSolidBridge<Props>(
   "openclaw-mascot",
@@ -39,16 +32,17 @@ defineSolidBridge<Props>(
     const [themeRevision, setThemeRevision] = createSignal(0);
     const mood = () => (moods.has(props.mood) ? props.mood : "idle");
     const size = () => (Number.isFinite(props.size) && props.size > 0 ? props.size : 120);
+    const reducedMotion = createMediaQuery("(prefers-reduced-motion: reduce)");
+    const documentVisible = createDocumentVisibility();
     let animationFrame = 0;
     let visible = true;
-    let reducedMotion = false;
-    const canvas = () => host.querySelector("canvas");
+    let canvas: HTMLCanvasElement | undefined;
     const shouldAnimate = () =>
-      host.isConnected &&
+      canvas?.isConnected &&
       branding.read().brandIcon === "claw" &&
       visible &&
-      !reducedMotion &&
-      document.visibilityState !== "hidden";
+      !reducedMotion() &&
+      documentVisible();
     const stopAnimation = () => {
       if (animationFrame) {
         window.cancelAnimationFrame(animationFrame);
@@ -56,12 +50,9 @@ defineSolidBridge<Props>(
       }
     };
     const drawPose = (pose: MascotPose) => {
-      const element = canvas();
-      if (!element || typeof Path2D === "undefined") {
-        return;
-      }
-      const context = element.getContext("2d");
-      if (!context) {
+      const element = canvas;
+      const context = typeof Path2D === "undefined" ? null : element?.getContext("2d");
+      if (!element?.isConnected || !context) {
         return;
       }
       const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
@@ -81,7 +72,7 @@ defineSolidBridge<Props>(
       element.style.transform = `translate3d(0, ${(pose.floatOffset * size()) / 120}px, 0)`;
     };
     const draw = (time: number) =>
-      drawPose(reducedMotion ? staticMascotPose(mood()) : animator.poseAt(time));
+      drawPose(reducedMotion() ? staticMascotPose(mood()) : animator.poseAt(time));
     const renderFrame = (timestamp: number) => {
       animationFrame = 0;
       if (!shouldAnimate()) {
@@ -91,43 +82,40 @@ defineSolidBridge<Props>(
       animationFrame = window.requestAnimationFrame(renderFrame);
     };
     const syncPlayback = () => {
-      if (!canvas() || !shouldAnimate()) {
+      if (!shouldAnimate()) {
         stopAnimation();
-        if (canvas() && reducedMotion) {
+        if (reducedMotion()) {
           drawPose(staticMascotPose(mood()));
         }
       } else if (!animationFrame) {
         animationFrame = window.requestAnimationFrame(renderFrame);
       }
     };
-    createEffect(
+    const configuration = createMemo(
       () => [props.mood, props.tease, props.size, branding.read(), themeRevision()] as const,
-      () => {
-        const time = performance.now() / 1_000;
-        animator.setMood(mood(), time);
-        animator.setTease(props.tease, time);
-        host.style.setProperty("--openclaw-mascot-size", `${size()}px`);
-        draw(time);
+    );
+    createEffect(
+      () => [configuration(), reducedMotion(), documentVisible()] as const,
+      ([current], previous) => {
+        // Visibility changes resume playback without resetting the tease timestamp.
+        if (current !== previous?.[0]) {
+          const time = performance.now() / 1_000;
+          animator.setMood(mood(), time);
+          animator.setTease(props.tease, time);
+          host.style.setProperty("--openclaw-mascot-size", `${size()}px`);
+          draw(time);
+        }
+        syncPlayback();
+      },
+    );
+    createIntersectionObserver(
+      () => [host],
+      (entries) => {
+        visible = entries.some((entry) => entry.isIntersecting);
         syncPlayback();
       },
     );
     onSettled(() => {
-      const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-      reducedMotion = motionQuery?.matches ?? false;
-      const motionChange = (event: MediaQueryListEvent) => {
-        reducedMotion = event.matches;
-        syncPlayback();
-      };
-      document.addEventListener("visibilitychange", syncPlayback);
-      motionQuery?.addEventListener("change", motionChange);
-      const intersection =
-        typeof IntersectionObserver === "undefined"
-          ? undefined
-          : new IntersectionObserver((entries) => {
-              visible = entries.some((entry) => entry.isIntersecting);
-              syncPlayback();
-            });
-      intersection?.observe(host);
       const themeObserver = new MutationObserver(() => setThemeRevision((value) => value + 1));
       themeObserver.observe(document.documentElement, {
         attributes: true,
@@ -136,9 +124,6 @@ defineSolidBridge<Props>(
       draw(performance.now() / 1_000);
       syncPlayback();
       return () => {
-        document.removeEventListener("visibilitychange", syncPlayback);
-        motionQuery?.removeEventListener("change", motionChange);
-        intersection?.disconnect();
         themeObserver.disconnect();
       };
     });
@@ -146,7 +131,7 @@ defineSolidBridge<Props>(
     return (
       <>
         {branding.read().brandIcon === "claw" ? (
-          <canvas />
+          <canvas ref={(element) => (canvas = element)} />
         ) : (
           <span class="openclaw-mascot--neutral">
             <ThemeBrandIcon branding={branding.read()} />

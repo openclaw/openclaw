@@ -3,9 +3,14 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import type { OpenClawStateIntegrityAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
+import {
+  getDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "./database-engine/context.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
+  databaseEngineSelection?: DatabaseEngineSelection;
   environment: NodeJS.ProcessEnv & {
     OPENCLAW_STATE_DIR: string;
     OPENCLAW_SUPERVISOR_MODE?: "external";
@@ -25,6 +30,7 @@ export function captureSqliteWorkerStateContext(
   context: SqliteWorkerStateContext,
 ): SqliteWorkerStateContext {
   return {
+    databaseEngineSelection: context.databaseEngineSelection ?? getDatabaseEngineSelection(),
     environment: { ...context.environment },
     ...(context.initializationEnvironment
       ? { initializationEnvironment: { ...context.initializationEnvironment } }
@@ -60,6 +66,7 @@ export function sqliteWorkerRequestBytes(
         bytes,
       ),
     input.byteLength +
+      Buffer.byteLength(JSON.stringify(context?.databaseEngineSelection) ?? "", "utf8") +
       (preparation?.byteLength ?? 0) +
       agentPathBytes +
       (context?.scheduledMaintenanceSuspension?.byteLength ?? 0),

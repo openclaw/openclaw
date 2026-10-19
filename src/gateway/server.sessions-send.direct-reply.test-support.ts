@@ -84,7 +84,11 @@ export async function runDirectSessionReplyScenario(params: {
       lifecycleRevision: entry?.lifecycleRevision ?? null,
     },
     replyTimeoutMs: 5_000,
-    reply: { status: "ok", replyText: "same-session reply delivered" },
+    reply: {
+      status: "ok",
+      replyText: "same-session reply delivered",
+      terminalReply: { disposition: "visible", text: "same-session reply delivered" },
+    },
   });
 
   expect(sendCalls).toHaveLength(1);

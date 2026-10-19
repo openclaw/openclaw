@@ -60,7 +60,7 @@ export function parseCodexNativeToolCatalog(
       type: "function",
       name: value.name,
       description: value.description,
-      inputSchema: structuredClone(value.inputSchema),
+      inputSchema: value.inputSchema,
       ...(value.deferLoading === true ? { deferLoading: true } : {}),
     };
   };

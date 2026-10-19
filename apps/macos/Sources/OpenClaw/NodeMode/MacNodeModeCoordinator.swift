@@ -22,7 +22,7 @@ struct MacNodeGatewayTLSSessionCache {
     }
 }
 
-private struct ConnectionAttempt {
+struct ConnectionAttempt {
     let endpointGeneration: UInt64
     let routeAuthorityGeneration: UInt64
     let workerUnavailable: (reason: String, diagnostic: String?)?
@@ -32,7 +32,7 @@ private struct ConnectionAttempt {
     let fallbackMainSessionKey: String
 }
 
-private enum RouteInvalidationMode {
+enum RouteInvalidationMode {
     case ordinaryDisconnect
     case reconnectRefresh
     case workerRestart
@@ -333,7 +333,7 @@ final class MacNodeModeCoordinator: NSObject {
         }
     }
 
-    private func refresh(
+    func refresh(
         isPaused: Bool,
         computerControlEnabled: Bool,
         computerControlProvider: ComputerControlProvider)
@@ -375,7 +375,7 @@ final class MacNodeModeCoordinator: NSObject {
     /// Generation advances synchronously; disconnect then cancels active computer
     /// invokes and runs the held-input release hook before the latest refresh wakes.
     @discardableResult
-    private func enqueueRouteInvalidation(
+    func enqueueRouteInvalidation(
         mode: RouteInvalidationMode) -> Task<Void, Never>
     {
         // Worker replacement advances synchronously so a queued exit from the
@@ -449,7 +449,7 @@ final class MacNodeModeCoordinator: NSObject {
         await runtime.releaseHeldComputerInput()
     }
 
-    private func awaitStableRouteInvalidationDrain(
+    func awaitStableRouteInvalidationDrain(
         onPendingSnapshot: (@Sendable () async -> Void)? = nil) async
     {
         while self.completedRouteAuthorityGeneration != self.routeAuthorityGeneration {
@@ -780,7 +780,7 @@ final class MacNodeModeCoordinator: NSObject {
         }
     }
 
-    private func routeAuthorityAllowsInvoke(_ capturedGeneration: UInt64, isPaused: Bool? = nil) -> Bool {
+    func routeAuthorityAllowsInvoke(_ capturedGeneration: UInt64, isPaused: Bool? = nil) -> Bool {
         Self.routeAuthorityAllowsInvoke(
             capturedRouteAuthorityGeneration: capturedGeneration,
             currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
@@ -789,40 +789,11 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     #if DEBUG
-    func waitForRouteInvalidationForTesting(
-        onPendingSnapshot: (@Sendable () async -> Void)? = nil) async
-    {
-        await self.awaitStableRouteInvalidationDrain(onPendingSnapshot: onPendingSnapshot)
-    }
-
-    func refreshForTesting(
-        isPaused: Bool,
-        computerControlEnabled: Bool,
-        computerControlProvider: ComputerControlProvider = .peekaboo)
-    {
-        self.refresh(
-            isPaused: isPaused,
-            computerControlEnabled: computerControlEnabled,
-            computerControlProvider: computerControlProvider)
-    }
-
-    func enqueueRouteInvalidationForTesting() {
-        self.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
-    }
-
     func generationsForTesting() -> (endpointAttempt: UInt64, routeAuthority: UInt64, completedRouteAuthority: UInt64) {
         (
             self.endpointAttemptGeneration,
             self.routeAuthorityGeneration,
             self.completedRouteAuthorityGeneration)
-    }
-
-    func routeAuthorityAllowsInvokeForTesting(_ capturedGeneration: UInt64, isPaused: Bool) -> Bool {
-        Self.routeAuthorityAllowsInvoke(
-            capturedRouteAuthorityGeneration: capturedGeneration,
-            currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-            completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-            isPaused: isPaused)
     }
 
     func prepareNodeHostWorkerRetryForTesting(command: [String]) throws {
@@ -845,16 +816,6 @@ final class MacNodeModeCoordinator: NSObject {
         await self.nodeHostWorkerRetryTask?.value
     }
 
-    func handleNodeHostConfigurationChangeForTesting() async {
-        await self.handleNodeHostConfigurationChange().value
-    }
-
-    func resolveWorkerManifestForConnectionForTesting(
-        provider: ComputerControlProvider = .peekaboo) async throws
-        -> (manifest: MacNodeHostManifest?, unavailable: (reason: String, diagnostic: String?)?)
-    {
-        try await self.resolveWorkerManifestForConnection(provider: provider)
-    }
     #endif
 
     private func cancelReconnectProbe() {
@@ -882,7 +843,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     @discardableResult
-    private func handleNodeHostConfigurationChange() -> Task<Void, Never> {
+    func handleNodeHostConfigurationChange() -> Task<Void, Never> {
         // Worker code, plugin availability, and its manifest are startup-scoped.
         // Replace the process before reconnecting so updates cannot leave a stale route.
         self.enqueueRouteInvalidation(mode: .workerRestart)
@@ -890,33 +851,7 @@ final class MacNodeModeCoordinator: NSObject {
 }
 
 extension MacNodeModeCoordinator {
-    #if DEBUG
-    func connectForTesting(
-        endpoint: GatewayConnection.EndpointSnapshot,
-        sessionBox: WebSocketSessionBox) async throws -> Bool
-    {
-        try await self.connectWithTLSRepair(ConnectionAttempt(
-            endpointGeneration: self.endpointAttemptGeneration,
-            routeAuthorityGeneration: self.routeAuthorityGeneration,
-            workerUnavailable: nil,
-            endpoint: endpoint,
-            options: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-macos",
-                clientMode: "node",
-                clientDisplayName: "Renewal Test",
-                includeDeviceIdentity: false),
-            sessionBox: sessionBox,
-            fallbackMainSessionKey: "main"))
-    }
-
-    #endif
-
-    private func connectWithTLSRepair(_ attempt: ConnectionAttempt) async throws -> Bool {
+    func connectWithTLSRepair(_ attempt: ConnectionAttempt) async throws -> Bool {
         do {
             try await self.connect(attempt)
             return true
@@ -943,7 +878,7 @@ extension MacNodeModeCoordinator {
     /// precondition. Backoff-pending is transient (its lifecycle-owned wake
     /// retries shortly); every other worker failure connects this Mac with
     /// native capabilities only and surfaces the reason to the operator.
-    private func resolveWorkerManifestForConnection(
+    func resolveWorkerManifestForConnection(
         provider: ComputerControlProvider) async throws
         -> (manifest: MacNodeHostManifest?, unavailable: (reason: String, diagnostic: String?)?)
     {

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateWriter from "../state/openclaw-state-worker-owner.js";
 import {
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
@@ -101,6 +102,31 @@ it.each([false, true])(
     });
   },
 );
+
+it("reads committed publication status while writer dispatch is unavailable", async () => {
+  const fixture = await createPersonalPublicationFixture();
+  const workspace = await sharedRepositoryWorkspace();
+  const row = repositoryReceipt(workspace, {
+    owner_profile_id: fixture.owner,
+    connection_generation: fixture.generation,
+    identity_source: "personal",
+    status: "needs_confirmation",
+  });
+  insertRepositoryGitHubPublicationFixture(row, fixture.action.assertCurrent);
+  vi.spyOn(stateWriter, "getOpenClawStateWorkerOwner").mockImplementation(() => {
+    throw new Error("Writer dispatch unavailable");
+  });
+  await expect(
+    readPendingRepositoryGitHubPublication({
+      ownerProfileId: fixture.owner,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+    }),
+  ).resolves.toMatchObject({ request_id: row.request_id, status: "needs_confirmation" });
+  await expect(
+    publicationStore.readRepositoryGitHubPublicationAsync(row.request_id),
+  ).resolves.toEqual(row);
+});
 
 it("returns the terminal receipt without executing an older confirmation", async () => {
   const fixture = await createPersonalPublicationFixture();

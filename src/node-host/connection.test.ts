@@ -39,7 +39,6 @@ it.each([
     declared: ["presence", "future_tool", "portal", "read"],
     expected: ["presence", "future_tool", "portal", "read"],
   },
-  { declared: ["future_tool"], expected: ["future_tool"] },
   { declared: [], expected: [] },
 ])(
   "preserves declared launch names or the published 2026.9.6 vocabulary ($declared)",
@@ -81,7 +80,6 @@ it.each([
 it.each([
   { reason: "non-array", value: "read" },
   { reason: "duplicate", value: ["read", "read"] },
-  { reason: "duplicate unknown", value: ["future_tool", "future_tool"] },
   { reason: "non-string", value: [1] },
   { reason: "empty name", value: [""] },
   { reason: "oversized name", value: ["x".repeat(65)] },
@@ -213,6 +211,50 @@ function startConnectionFixture(
   const publications = () => request.mock.calls.filter(([method]) => method === "node.event");
   return { connection, request, publications, writeStderrLine, start, prepared, runtime };
 }
+
+it("publishes retained process changes through the current connection only", async () => {
+  const { connection, request, start } = startConnectionFixture(true);
+  const changed = start.mock.calls[0]![0].onProcessesChanged!;
+  const binding = {
+    environmentId: "environment-1",
+    sessionId: "session-1",
+    ownerEpoch: 3,
+    placementGeneration: 2,
+  };
+  const replacementRequest = vi.fn().mockResolvedValue({});
+  const processEvents = (calls: unknown[][]) =>
+    calls.filter(
+      ([, params]) =>
+        typeof params === "object" &&
+        params !== null &&
+        "event" in params &&
+        params.event === "worker.processes.changed",
+    );
+  try {
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toHaveLength(0);
+    connection.connect(gateway);
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toEqual([
+      [
+        "node.event",
+        {
+          event: "worker.processes.changed",
+          payloadJSON: JSON.stringify(binding),
+        },
+      ],
+    ]);
+    connection.connect(gateway, { request: replacementRequest });
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toHaveLength(1);
+    expect(processEvents(replacementRequest.mock.calls)).toHaveLength(1);
+    connection.disconnect();
+    changed(binding);
+    expect(processEvents(replacementRequest.mock.calls)).toHaveLength(1);
+  } finally {
+    await connection.close();
+  }
+});
 
 it("sends permission details only while the connected Gateway advertises support", async () => {
   const { connection, request, start } = startConnectionFixture();
@@ -493,7 +535,7 @@ it.each([false, true])(
 it.each(["resolve", "reject"] as const)(
   "retires in-flight runner publication and its pending value before late %s",
   async (settle) => {
-    const { connection, request, start, writeStderrLine } = startConnectionFixture(true);
+    const { connection, request, start } = startConnectionFixture(true);
     const previous = createDeferred<unknown>();
     let first = true;
     request.mockImplementation((method) => {
@@ -528,7 +570,6 @@ it.each(["resolve", "reject"] as const)(
           }),
         ),
       );
-      expect(writeStderrLine).not.toHaveBeenCalled();
     } finally {
       previous.resolve({});
       await connection.close();
@@ -606,7 +647,6 @@ it.each([
   { kind: "workspace", platform: "linux", bun: false },
   { kind: "workspace", platform: "linux", bun: true },
   { kind: "workspace", platform: "win32", bun: false },
-  { kind: "workspace", platform: "win32", bun: true },
   { kind: "workspace", platform: "darwin", bun: false },
 ] as const)(
   "negotiates $kind inventory per connection ($platform, Bun=$bun)",

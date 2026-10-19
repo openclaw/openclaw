@@ -629,7 +629,7 @@ parse_node_release_version() {
   NODE_RELEASE_VERSION_CORE=""
   while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
   while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
-  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
     return 1
   fi
   major="${BASH_REMATCH[1]}"
@@ -640,6 +640,9 @@ parse_node_release_version() {
       return 1
     fi
   done
+  if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+    return 1
+  fi
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
 }
@@ -651,7 +654,7 @@ node_release_version_is_supported() {
 
 # Download labels are plain numeric Node distribution versions. Installed
 # runtimes use node_release_version_is_supported, which accepts canonical
-# release labels with a leading v or build metadata.
+# release labels with a leading v, build metadata, or future-major prereleases.
 node_version_is_supported() {
   local version="${1#v}"
   local major minor patch
@@ -961,7 +964,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.10.1"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.12.1"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1

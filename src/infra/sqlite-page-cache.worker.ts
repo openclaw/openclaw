@@ -8,7 +8,6 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { readSqlitePageCacheResidency } from "./sqlite-page-cache-residency.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
 
@@ -216,8 +215,7 @@ function* warm(
   };
   try {
     if (input.kind === "agent") {
-      db = openNodeSqliteDatabase(pathname, { readOnly: true });
-      setSqliteBusyTimeout(db, 0);
+      db = openNodeSqliteDatabase(pathname, { readOnly: true, timeout: 0 });
       db.exec("PRAGMA cache_size = -1024; PRAGMA mmap_size = 0;"); // sqlite-allow-raw -- Bound the private cache and account for pread bytes.
       const query = getNodeSqliteKysely<DB>(db);
       const hotQuery = sessionEntryProjection(query)
@@ -242,12 +240,12 @@ function* warm(
             progress.payloadBytes += chunk.payloadBytes;
             progress.payloadMessages += chunk.payloadMessages;
           }
-          update();
+          const current = update();
           if (Math.max(progress.readBytes, progress.diskBytes) >= input.maxBytes) {
             progress.limited = true;
             break;
           }
-          yield update();
+          yield current;
         }
       } finally {
         pages.return();

@@ -522,7 +522,7 @@ struct OnboardingWizardView: View {
             self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.manualConnectionSecurityRows
+            ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
             self.manualConnectButton
         } header: {
             Text("Developer Local")
@@ -710,7 +710,7 @@ extension OnboardingWizardView {
             self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.manualConnectionSecurityRows
+            ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
             self.onboardingTextField(
                 "Discovery Domain (optional)",
                 text: self.$discoveryDomain,
@@ -746,29 +746,6 @@ extension OnboardingWizardView {
                 self.manualContextPath = nil
                 self.manualTLS = enabled
             })
-    }
-
-    @ViewBuilder
-    private var manualConnectionSecurityRows: some View {
-        Picker(selection: self.manualTLSBinding) {
-            Text("Unencrypted")
-                .font(OpenClawType.captionSemiBold)
-                .tag(false)
-            Text("Secure (TLS)")
-                .font(OpenClawType.captionSemiBold)
-                .tag(true)
-        } label: {
-            Text("Connection security")
-                .font(OpenClawType.captionSemiBold)
-        }
-        .pickerStyle(.segmented)
-        .disabled(self.manualTransport.requiresTLS)
-
-        if let helperText = self.manualTransport.helperText {
-            Text(helperText)
-                .font(OpenClawType.footnote)
-                .foregroundStyle(.secondary)
-        }
     }
 
     private func onboardingLabeledContent(_ title: LocalizedStringKey, value: String) -> some View {

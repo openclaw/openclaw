@@ -115,7 +115,8 @@ export async function completeTerminalEffects(
   }
   const isProvisionalKill = entry.killReconciliation !== undefined;
 
-  if (!suppressSessionEffects) {
+  // Duplicate receipts drain cleanup without replaying best-effort timing writes.
+  if (!suppressSessionEffects && (mutated || completeParams.recoverInterrupted === true)) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -382,8 +383,11 @@ export async function completeTerminalEffects(
   }
 
   if (isProvisionalKill) {
-    // Browser and MCP resources can close immediately, but completion delivery
-    // waits for the provider result or the killed tombstone reconciliation.
+    // Browser and MCP resources can close immediately; completion delivery waits
+    // for the kill's confirmation once the run's controller operation settles.
+    if (isCurrentTerminalCallback()) {
+      params.confirmProvisionalKill(entry);
+    }
     return;
   }
 

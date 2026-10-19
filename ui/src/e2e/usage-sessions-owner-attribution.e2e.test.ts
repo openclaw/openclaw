@@ -12,7 +12,6 @@ import {
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -41,12 +40,6 @@ async function capture(page: Page, name: string) {
     fullPage: true,
     path: path.join(suite.artifactDir, name),
   });
-}
-
-async function prepareUsageProofPage(page: Page) {
-  await page.addInitScript((key) => {
-    window.localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));
-  }, COMMUNITY_INVITE_KEY);
 }
 
 async function dragTimelineRange(page: Page, fraction: number) {
@@ -215,7 +208,6 @@ suite.define(() => {
               viewport,
             },
             async ({ page }) => {
-              await prepareUsageProofPage(page);
               const pageErrors: string[] = [];
               page.on("pageerror", (error) => pageErrors.push(String(error)));
 
@@ -336,7 +328,6 @@ suite.define(() => {
           await suite.withPage(
             { locale: "en-US", timezoneId: "UTC", serviceWorkers: "block", viewport },
             async ({ page }) => {
-              await prepareUsageProofPage(page);
               const key = "agent:opus:usage-instance-proof";
               const gatewayUrl = new URL(`ws://127.0.0.1:${port}`).href;
               const pageErrors: string[] = [];

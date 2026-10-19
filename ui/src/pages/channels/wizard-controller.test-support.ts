@@ -1,6 +1,6 @@
 // Shared fixtures for the channel wizard controller suites.
 import { vi } from "vitest";
-import { ChannelWizardController } from "./wizard-controller.ts";
+import { createChannelWizard } from "./wizard-runner.ts";
 
 type RequestHandler = (
   method: string,
@@ -12,7 +12,7 @@ export function createWizardTestController(handler: RequestHandler) {
   const request = vi.fn(handler);
   const onChange = vi.fn();
   const client = { request: request as never };
-  const controller = new ChannelWizardController(
+  const controller = createChannelWizard(
     () => client,
     onChange,
     () => false,

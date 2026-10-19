@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
@@ -6,7 +6,7 @@ import { formatDateTimeMs } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
@@ -20,6 +20,7 @@ export type SidebarBuildChipProps = {
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
   menuAttributes?: MenuItemBindings;
+  copyButtonRef?: (element: HTMLButtonElement) => void;
 };
 
 function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement) {
@@ -56,7 +57,11 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
           {text ? <span class="sidebar-footer-build__text">{text}</span> : null}
         </a>
         <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
-          {renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, props.gatewayVersion)}
+          {renderSidebarServerDetails(
+            CONTROL_UI_BUILD_INFO,
+            props.gatewayVersion,
+            props.copyButtonRef,
+          )}
         </div>
       </openclaw-tooltip>
     );
@@ -74,9 +79,28 @@ export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
       onNavigate: { default: undefined, attribute: false },
       variant: { default: "identity", attribute: false },
       menuAttributes: { default: undefined, attribute: false },
+      copyButtonRef: { default: undefined, attribute: false },
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-sidebar-build-chip": SolidBridgeElement<SidebarBuildChipProps>;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-sidebar-build-chip": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-sidebar-build-chip"]
+      > & {
+        [K in keyof SidebarBuildChipProps as `prop:${K}`]?: SidebarBuildChipProps[K];
+      };
+    }
+  }
+}
 
 const COPY_FEEDBACK_MS = 1_500;
 
@@ -96,7 +120,8 @@ async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLa
 function renderSidebarServerDetails(
   info: ControlUiBuildInfo,
   gatewayVersion: string | null,
-): JSX.Element {
+  copyButtonRef?: (element: HTMLButtonElement) => void,
+): SolidJSX.Element {
   const commit = info.commit?.slice(0, 12) ?? null;
   const builtAtMs = info.builtAt ? Date.parse(info.builtAt) : Number.NaN;
   const builtAt = Number.isFinite(builtAtMs)
@@ -124,6 +149,7 @@ function renderSidebarServerDetails(
             <span>{commit ?? unavailable}</span>
             {commit ? (
               <button
+                ref={copyButtonRef}
                 type="button"
                 class="sidebar-build-hover-card__copy"
                 aria-label={copyLabel}

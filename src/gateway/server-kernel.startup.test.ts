@@ -2,8 +2,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { getPairedDevice, withPairedDeviceRecords } from "../infra/device-pairing.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getDeterministicFreePortBlock, getFreePort } from "../test-utils/ports.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
@@ -35,6 +37,15 @@ describe("Gateway startup", () => {
         agents: { defaults: { model: "unit-test/model", utilityModel: "" } },
       });
       state.applyEnv();
+      await withPairedDeviceRecords(undefined, (paired) => {
+        paired["startup-device"] = {
+          deviceId: "startup-device",
+          publicKey: "synthetic-startup-key",
+          createdAtMs: 1,
+          approvedAtMs: 1,
+        };
+        return { value: undefined, persist: true };
+      });
       const identity = {
         agentId: "main",
         sessionKey: "agent:main:placement",
@@ -48,6 +59,16 @@ describe("Gateway startup", () => {
         sidecarStartup: "defer",
       });
       kernel.kernel.setDispatchReady(true);
+      const read = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockRejectedValue(new Error("reader busy after startup"));
+      try {
+        expect(await getPairedDevice("startup-device")).toMatchObject({
+          publicKey: "synthetic-startup-key",
+        });
+      } finally {
+        read.mockRestore();
+      }
       const placements = kernel.workerEnvironmentStartup?.placementStore;
       if (!placements) {
         throw new Error("Expected worker placement store in full Gateway");

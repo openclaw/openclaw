@@ -44,6 +44,27 @@ async function loadWithTools(state: TestState) {
     vi.unstubAllGlobals();
   }
 }
+
+it("restores a later model wait alongside earlier response text", async () => {
+  const history = activeHistory("run-live");
+  history.inFlightRun!.text = "First result.";
+  history.inFlightRun!.events = [
+    event(3, "run_status", {
+      phase: "waiting_for_model",
+      reason: "slot",
+    }),
+  ];
+  const state = createState(history);
+  await loadChatHistory(state);
+  expect(state.chatRunStartup).toMatchObject({
+    state: "status",
+    runId: "run-live",
+    phase: "waiting_for_model",
+    waitReason: "slot",
+    seq: 3,
+  });
+});
+
 it("retires an interrupted run after missing its live terminal", async () => {
   const history = activeHistory("run-interrupted");
   const state = createState(history);
@@ -783,7 +804,7 @@ describe("chat history run ownership recovery", () => {
     const loading = loadChatHistory(state);
     expect(request).toHaveBeenCalledOnce();
     if (change === "lifecycle restart") {
-      reconcileChatRunLifecycle(state, { clearLocalRun: true, requestUpdate: false });
+      reconcileChatRunLifecycle(state, { clearLocalRun: true, publishRunState: false });
       adoptStartedChatRun(state, "run-owned", 2);
     } else if (change === "pending send") {
       state.chatQueue.push({

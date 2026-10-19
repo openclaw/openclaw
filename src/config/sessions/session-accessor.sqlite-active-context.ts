@@ -35,7 +35,11 @@ import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventJsonSql, transcriptEventResetNavigationSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventResetNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 function readBoundedRetentionRanges(
@@ -180,7 +184,7 @@ function readIndexedLogicalParents(
   contextSequences: number[],
 ): Map<string, string | null> {
   const actor = readSessionActorTransactionState(projection.database, projection.resolved);
-  if (actor) {
+  if (actor?.transcript.complete) {
     const idsByPosition = new Map<number, string>();
     for (const identity of actor.transcript.identities.values()) {
       const active = actor.transcript.active.get(identity.seq);
@@ -315,12 +319,21 @@ export function readSessionTranscriptBoundedActiveContextCore(
           transcript
             .select([
               "seq",
-              "navigation_valid",
+              transcriptPredicateSql(projection.database.db, "navigation_valid").as(
+                "navigation_valid",
+              ),
               /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
               sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
             ])
             .where((eb) =>
-              eb.or([eb("navigation_type", "=", "session"), eb("navigation_valid", "=", 0)]),
+              eb.or([
+                eb(
+                  transcriptPredicateSql(projection.database.db, "navigation_type"),
+                  "=",
+                  "session",
+                ),
+                eb(transcriptPredicateSql(projection.database.db, "navigation_valid"), "=", 0),
+              ]),
             )
             .orderBy("seq", "asc")
             .limit(1),

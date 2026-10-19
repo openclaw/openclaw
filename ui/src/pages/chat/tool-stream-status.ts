@@ -192,7 +192,6 @@ function setCompactionStatus(
       }
       host.compactionStatus = null;
       host.compactionClearTimer = null;
-      host.requestUpdate?.();
     }, COMPACTION_ACTIVE_STALE_TIMEOUT_MS);
   }
 }
@@ -339,7 +338,6 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   host.fallbackClearTimer = window.setTimeout(() => {
     host.fallbackStatus = null;
     host.fallbackClearTimer = null;
-    host.requestUpdate?.();
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
@@ -369,6 +367,21 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (
+    payload.stream === "run_status" &&
+    (payload.data.phase === "waiting_for_model" || payload.data.phase === "starting_model")
+  ) {
+    reconcileChatRunStartup(host, {
+      state: "status",
+      runId: payload.runId,
+      phase: payload.data.phase,
+      ...(payload.data.phase === "waiting_for_model"
+        ? { waitReason: payload.data.reason === "slot" ? "slot" : "response" }
+        : {}),
+      seq: payload.seq,
+    });
+    return true;
+  }
   if (
     payload.stream === "lifecycle" &&
     payload.data.phase === "start" &&

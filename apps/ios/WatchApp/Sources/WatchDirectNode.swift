@@ -583,14 +583,7 @@ final class WatchDirectNode {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        switch params.priority ?? .active {
-        case .passive:
-            content.interruptionLevel = .passive
-        case .timeSensitive:
-            content.interruptionLevel = .timeSensitive
-        case .active:
-            content.interruptionLevel = .active
-        }
+        content.interruptionLevel = (params.priority ?? .active).interruptionLevel
         let sound = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         content.sound = sound.map { ["none", "silent", "off"].contains($0) } == true ? nil : .default
         try await self.notificationCenter.add(UNNotificationRequest(

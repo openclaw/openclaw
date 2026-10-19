@@ -6,7 +6,11 @@ import { resolveDaemonInstallRuntimeInputs } from "./daemon-install-plan.shared.
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 
 const readPin = vi.hoisted(() => vi.fn<() => DaemonRuntimePinSnapshot>());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+// mock-isolation: Runtime selection tests use supplied pin snapshots without opening disk state.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => run(),
+  readDaemonRuntimePinForInstall: readPin,
+}));
 
 describe("setup runtime intent", () => {
   beforeEach(() => {

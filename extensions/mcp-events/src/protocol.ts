@@ -1,9 +1,10 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 
 /** OpenAI's webhook profile, not the experimental polling/streaming extensions. */
@@ -98,7 +99,7 @@ export function canonicalArguments(value: Record<string, unknown>): string {
 }
 
 export function identityHash(parts: readonly string[]): string {
-  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  return hashText(JSON.stringify(parts));
 }
 
 export function createSigningSecret(): string {
@@ -247,22 +248,24 @@ export function parseEventCatalog(value: unknown): {
   const events: EventDefinition[] = [];
   for (const input of result.events) {
     const event = record(input);
+    const inputSchema =
+      typeof event?.inputSchema === "boolean" ? event.inputSchema : record(event?.inputSchema);
+    const payloadSchema =
+      typeof event?.payloadSchema === "boolean"
+        ? event.payloadSchema
+        : record(event?.payloadSchema);
     if (
       !event ||
       !boundedString(event.name, 256) ||
       !Array.isArray(event.delivery) ||
-      !(typeof event.inputSchema === "boolean" || record(event.inputSchema)) ||
-      !(typeof event.payloadSchema === "boolean" || record(event.payloadSchema))
+      inputSchema === undefined ||
+      payloadSchema === undefined
     ) {
       throw new Error("Invalid MCP event definition");
     }
     if (!event.delivery.includes("webhook")) {
       continue;
     }
-    const inputSchema =
-      typeof event.inputSchema === "boolean" ? event.inputSchema : record(event.inputSchema)!;
-    const payloadSchema =
-      typeof event.payloadSchema === "boolean" ? event.payloadSchema : record(event.payloadSchema)!;
     // Compile now: a broken catalog must not create a subscription that can never accept data.
     validateJsonSchemaValue({ schema: inputSchema, value: {} });
     validateJsonSchemaValue({ schema: payloadSchema, value: {} });

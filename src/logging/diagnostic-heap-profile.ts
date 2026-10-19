@@ -14,7 +14,7 @@ type SamplingNode = Omit<HeapProfiler.SamplingHeapProfileNode, "children"> & {
   id: number;
   children: SamplingNode[];
 };
-type SamplingProfile = {
+export type SamplingProfile = {
   head: SamplingNode;
   samples: Array<{ size: number; nodeId: number; ordinal: number }>;
 };
@@ -43,7 +43,7 @@ type HeapProfileResult = Metadata & {
   truncated: boolean;
 } & ({ profile: SamplingProfile } | { summary: AllocationSummary[] });
 
-function boundProfile(
+export function sanitizeDiagnosticHeapProfile(
   profile: SamplingProfile,
   packageRoot: string | null,
   metadata: Metadata,
@@ -180,7 +180,7 @@ export function captureDiagnosticHeapProfile(
       }),
     sanitize: (profile, packageRoot, measurement) =>
       // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
-      boundProfile(profile as SamplingProfile, packageRoot, {
+      sanitizeDiagnosticHeapProfile(profile as SamplingProfile, packageRoot, {
         durationMs: measurement.durationMs,
         samplingIntervalBytes,
         ...collectionOptions,

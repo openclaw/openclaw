@@ -17,12 +17,9 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
-  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-  DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_DEFAULT_PORT,
   resolveCachedLlamaCppModelPath,
   resolveHomePath,
-  resolveLegacyLlamaCppModelCacheDir,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
@@ -615,20 +612,6 @@ export async function ensureManagedLlamaServerForChat(params: {
     model: params.model,
     provider: params.provider,
   });
-  if (!chatModelPath && resolveLlamaCppModelSource(params.model) === DEFAULT_LLAMA_CPP_MODEL_URI) {
-    const legacy = path.join(
-      resolveLegacyLlamaCppModelCacheDir(),
-      DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-    );
-    if (
-      await fsp
-        .stat(legacy)
-        .then((stat) => stat.isFile())
-        .catch(() => false)
-    ) {
-      chatModelPath = legacy;
-    }
-  }
   chatModelPath = await ensureLlamaCppModel({
     source: chatModelPath ?? resolveLlamaCppModelSource(params.model),
     cacheDir,

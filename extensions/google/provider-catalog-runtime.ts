@@ -77,10 +77,8 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
     cost: GOOGLE_GEMINI_COST,
     contextWindow,
     maxTokens,
-    ...(staticModel?.compat ? { compat: { ...staticModel.compat } } : {}),
-    ...(staticModel?.thinkingLevelMap
-      ? { thinkingLevelMap: { ...staticModel.thinkingLevelMap } }
-      : {}),
+    ...(staticModel?.compat ? { compat: staticModel.compat } : {}),
+    ...(staticModel?.thinkingLevelMap ? { thinkingLevelMap: staticModel.thinkingLevelMap } : {}),
   };
 }
 

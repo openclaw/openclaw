@@ -126,12 +126,12 @@ describe("gateway/node-command-policy", () => {
       approvedCommands: [...NODE_WORKER_PRIVATE_COMMANDS],
     };
 
-    expect([...resolveNodeCommandAllowlist(cfg, node)]).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
-    );
-    expect([...resolveNodePairingCommandAllowlist(cfg, node)]).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
-    );
+    const allowlist = resolveNodeCommandAllowlist(cfg, node);
+    const pairingAllowlist = resolveNodePairingCommandAllowlist(cfg, node);
+    for (const command of NODE_WORKER_PRIVATE_COMMANDS) {
+      expect(allowlist.has(command)).toBe(false);
+      expect(pairingAllowlist.has(command)).toBe(false);
+    }
   });
 
   it("keeps safe PTZ status Mac-only and requires an explicit allow for control", () => {

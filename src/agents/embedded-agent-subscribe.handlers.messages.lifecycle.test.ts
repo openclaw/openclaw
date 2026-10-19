@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   createMessageEndContext,
   createMessageToolEnvelope,
@@ -56,9 +56,7 @@ describe("handleMessageEnd", () => {
       },
     });
     await endMessage(ctx, { message: textMessage("NO_REPLY") });
-    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "NO_REPLY" }),
-    );
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
     expect(JSON.stringify(onBlockReply.mock.calls)).not.toContain("<internal escalation note>");
   });
 

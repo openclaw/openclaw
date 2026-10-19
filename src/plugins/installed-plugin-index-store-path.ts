@@ -63,5 +63,5 @@ export function resolveLegacyInstalledPluginIndexStorePath(
 }
 
 export function legacyInstalledPluginIndexUnsupportedMessage(sourcePath: string): string {
-  return `Plugin install index ${sourcePath} predates the July 2026 upgrade support window and was left unchanged. Run openclaw doctor --fix on 2026.9.5 with a pre-update backup before upgrading again: https://docs.openclaw.ai/install/updating#upgrading-very-old-versions`;
+  return `Plugin install index ${sourcePath} uses a retired JSON format and was left unchanged. Run openclaw doctor --fix to archive the original bytes in the retired-state recovery archive and continue.`;
 }

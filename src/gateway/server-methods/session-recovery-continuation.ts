@@ -1,4 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
+import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import type { SessionRecoveryContinuationOutcome } from "../session-recovery-service.js";
@@ -16,6 +18,7 @@ export async function launchSessionRecoveryContinuation(params: {
   agentId: string;
   client: GatewayRequestHandlerOptions["client"];
   commitGuard?: () => void;
+  assertAdmittedSourceCurrent?: () => void;
   context: GatewayRequestHandlerOptions["context"];
   hasCurrentClientAuthority?: GatewayRequestHandlerOptions["hasCurrentClientAuthority"];
   idempotencyKey: string;
@@ -24,6 +27,7 @@ export async function launchSessionRecoveryContinuation(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
+  resume?: SessionRestartResume;
 }): Promise<SessionRecoveryContinuationOutcome> {
   let outcome: SessionRecoveryContinuationOutcome | undefined;
   try {
@@ -48,6 +52,7 @@ export async function launchSessionRecoveryContinuation(params: {
       destination.authorization,
       params.commitGuard,
       undefined,
+      params.resume ? params.assertAdmittedSourceCurrent : undefined,
     );
     if (!destinationAuthorization) {
       return {
@@ -62,7 +67,11 @@ export async function launchSessionRecoveryContinuation(params: {
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           sessionId: params.sessionId,
-          message: formatSystemTurnPrompt(RECOVERY_CONTINUATION_TEXT),
+          message: formatSystemTurnPrompt(
+            params.resume
+              ? `${RESTART_RECOVERY_INTERRUPTION_NOTE}\n\n${RECOVERY_CONTINUATION_TEXT}${params.resume.forceRestartSafeTools ? " This turn uses restart-safe tools; inspect the recorded outcome before attempting more work." : ""}`
+              : RECOVERY_CONTINUATION_TEXT,
+          ),
           idempotencyKey: params.idempotencyKey,
           deliver: false,
           suppressCommandInterpretation: true,
@@ -99,6 +108,7 @@ export async function launchSessionRecoveryContinuation(params: {
             return true;
           }
         : undefined,
+      params.resume ? { stageCreatedInput: true, restartResume: params.resume } : undefined,
     );
   } catch (error) {
     outcome = {

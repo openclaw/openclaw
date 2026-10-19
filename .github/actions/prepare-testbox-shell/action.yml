@@ -9,6 +9,11 @@ inputs:
     description: Go version to install and expose to Testbox; empty skips Go setup.
     required: false
 
+  android:
+    description: Prepare the pinned Android toolchain and native generation dependencies for focused Gradle proof.
+    required: false
+    default: "false"
+
 runs:
   using: composite
   steps:
@@ -53,6 +58,26 @@ runs:
         exec /usr/local/bin/corepack pnpm "$@"
         PNPM
         sudo chmod 0755 /usr/local/bin/pnpm
+
+    - name: Prepare Android proof prerequisites
+      if: inputs.android == 'true'
+      id: android
+      uses: ./.github/actions/setup-android-toolchain
+      with:
+        cache-mode: restore
+        install-native-deps: "true"
+
+    - name: Expose Android tools to Testbox commands
+      if: inputs.android == 'true'
+      shell: bash
+      env:
+        ANDROID_GRADLE_JAVA_HOME: ${{ steps.android.outputs.gradle-java-home }}
+      run: |
+        set -euo pipefail
+        # SSH commands do not inherit GITHUB_ENV or need a login shell.
+        sudo ln -sf "$ANDROID_GRADLE_JAVA_HOME/bin/java" /usr/local/bin/java
+        mkdir -p "$HOME/.gradle"
+        printf 'org.gradle.java.home=%s\n' "$ANDROID_GRADLE_JAVA_HOME" >> "$HOME/.gradle/gradle.properties"
 
     - name: Setup Go environment
       if: inputs.go-version != ''

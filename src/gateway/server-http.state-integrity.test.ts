@@ -1,11 +1,12 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
-import type { SqliteWorkerReply } from "../infra/sqlite-worker-contract.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabaseAsync,
@@ -121,7 +122,13 @@ describe("Gateway shared-state integrity readiness", () => {
         event: string | symbol,
         ...args: unknown[]
       ) {
-        if (event === "message" && !(args[0] as SqliteWorkerReply).ok) {
+        const reply = args[0];
+        if (
+          event === "message" &&
+          isRecord(reply) &&
+          typeof reply.id === "number" &&
+          reply.ok === false
+        ) {
           replies.mockRestore();
           releaseReply = () => originalEmit.call(this, event, ...args);
           replyReady.resolve();
@@ -129,6 +136,12 @@ describe("Gateway shared-state integrity readiness", () => {
         }
         return originalEmit.call(this, event, ...args);
       });
+      // Other worker control frames must not be mistaken for a SQLite refusal.
+      const control = new Worker('require("node:worker_threads").parentPort.postMessage(null)', {
+        eval: true,
+        execArgv: [],
+      });
+      await once(control, "exit");
       const pending = read();
       const outcome = Promise.allSettled([pending]);
       try {

@@ -1,6 +1,5 @@
-// Pure-logic tests for the OpenClaw Chrome extension. Runs under the
-// extension-browser vitest glob (extensions/browser/**/*.test.ts).
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { storageArea } from "./browser.test-support.js";
 import {
   createPairingConfigStore,
   parsePairingString,
@@ -9,6 +8,13 @@ import {
 } from "./relay-core.js";
 
 const RELAY_SECRET = "a".repeat(64);
+const localPairing = { relayUrl: "ws://127.0.0.1:18797/extension", token: RELAY_SECRET };
+const pairingKeys = ["relayUrl", "gatewayUrl", "token", "authVersion"];
+
+function pairingStore(stored: Record<string, unknown> = {}) {
+  const storage = storageArea(stored);
+  return { stored: storage.values, ...storage, store: createPairingConfigStore(storage) };
+}
 
 describe("parsePairingString", () => {
   it("retains and canonicalizes the profile auth binding while stripping the Gateway hint", () => {
@@ -69,163 +75,71 @@ describe("parsePairingString", () => {
   });
 });
 
-async function readStoredPairing(stored: Record<string, unknown>) {
-  const config = await createPairingConfigStore({
-    get: async () => stored,
-    set: async () => undefined,
-    remove: async () => undefined,
-  }).read();
-  if (!config.relayUrl) {
-    return null;
-  }
-  return {
-    relayUrl: config.relayUrl,
-    token: config.token,
-    ...(config.gatewayUrl ? { gatewayUrl: config.gatewayUrl } : {}),
-  };
-}
-
 describe("persisted pairing storage", () => {
-  it.each([
-    {
-      label: "an exact direct relay with its matching trailing-slash Gateway hint",
-      stored: {
-        relayUrl: "wss://gateway.example.com/browser/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com/",
-      },
-    },
-  ])("accepts $label", async ({ stored }) => {
-    expect(await readStoredPairing(stored)).toEqual(stored);
+  it("accepts an exact direct relay with its matching trailing-slash Gateway hint", async () => {
+    const stored = {
+      relayUrl: "wss://gateway.example.com/browser/extension",
+      token: RELAY_SECRET,
+      gatewayUrl: "wss://gateway.example.com/",
+    };
+    await expect(pairingStore(stored).store.read()).resolves.toMatchObject(stored);
   });
 
   it("migrates a canonical existing pairing to authVersion 2 without re-pairing", async () => {
-    const stored = {
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
-      gatewayUrl: "",
-      groupColor: "orange",
-    };
-    const set = vi.fn(async (values: Record<string, unknown>) => {
-      Object.assign(stored, values);
-    });
-    const config = await createPairingConfigStore({
-      get: async () => stored,
-      set,
-      remove: async () => undefined,
-    }).read();
+    const { store, set } = pairingStore({ ...localPairing, gatewayUrl: "", groupColor: "orange" });
+    const config = await store.read();
     expect(set).toHaveBeenCalledWith({ authVersion: 2, accessMode: "selected" });
     expect(config).toMatchObject({
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
+      ...localPairing,
       authVersion: 2,
       accessMode: "selected",
     });
   });
 
   it("defaults a newly saved pairing to all tabs", async () => {
-    const stored: Record<string, unknown> = {};
-    const set = vi.fn(async (values: Record<string, unknown>) => {
-      Object.assign(stored, values);
-    });
-    const store = createPairingConfigStore({
-      get: async () => stored,
-      set,
-      remove: async () => undefined,
-    });
-
-    await store.save({ relayUrl: "ws://127.0.0.1:18797/extension", token: RELAY_SECRET }, "orange");
+    const { store, stored } = pairingStore();
+    await store.save(localPairing, "orange");
 
     expect(stored.accessMode).toBe("all");
     await expect(store.read()).resolves.toMatchObject({ accessMode: "all" });
   });
 
   it("persists an explicitly selected-tabs pairing", async () => {
-    const stored: Record<string, unknown> = {};
-    const store = createPairingConfigStore({
-      get: async () => stored,
-      set: async (values) => {
-        Object.assign(stored, values);
-      },
-      remove: async () => undefined,
-    });
-    await store.save(
-      { relayUrl: "ws://127.0.0.1:18797/extension", token: RELAY_SECRET },
-      "orange",
-      "selected",
-    );
+    const { store } = pairingStore();
+    await store.save(localPairing, "orange", "selected");
     await expect(store.read()).resolves.toMatchObject({ accessMode: "selected" });
   });
 
   it("clears the access mode when unpairing", async () => {
-    const remove = vi.fn(async () => undefined);
-    const store = createPairingConfigStore({
-      get: async () => ({}),
-      set: async () => undefined,
-      remove,
-    });
+    const { store, remove } = pairingStore();
     await store.clear();
-    expect(remove).toHaveBeenCalledWith([
-      "relayUrl",
-      "gatewayUrl",
-      "token",
-      "authVersion",
-      "accessMode",
-      "pairingStatus",
-    ]);
+    expect(remove).toHaveBeenCalledWith([...pairingKeys, "accessMode", "pairingStatus"]);
   });
 
   it("rejects and clears an unsupported stored auth version", async () => {
-    const remove = vi.fn(async () => undefined);
-    const config = await createPairingConfigStore({
-      get: async () => ({
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "",
-        authVersion: 1,
-      }),
-      set: async () => undefined,
-      remove,
-    }).read();
+    const { store, remove } = pairingStore({ ...localPairing, gatewayUrl: "", authVersion: 1 });
+    const config = await store.read();
     expect(config.relayUrl).toBe("");
-    expect(remove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token", "authVersion"]);
+    expect(remove).toHaveBeenCalledWith(pairingKeys);
   });
 
-  it.each([
-    {
+  it("clears stored proxy-prefixed direct pairing with safe guidance", async () => {
+    const storage = pairingStore({
       relayUrl: "ws://127.0.0.1:18789/proxy/browser/extension",
       gatewayUrl: "ws://127.0.0.1:18789/proxy",
-    },
-  ])("clears stored proxy-prefixed direct pairing $relayUrl with safe guidance", async (route) => {
-    const stored: Record<string, unknown> = {
-      relayUrl: route.relayUrl,
       token: RELAY_SECRET,
-      gatewayUrl: route.gatewayUrl,
       authVersion: 2,
-    };
-    const set = vi.fn(async (values: Record<string, unknown>) => {
-      Object.assign(stored, values);
     });
-    const remove = vi.fn(async (keys: string[]) => {
-      for (const key of keys) {
-        delete stored[key];
-      }
-    });
-    const store = createPairingConfigStore({ get: async () => stored, set, remove });
-
+    const { store, set, remove } = storage;
     const config = await store.read();
 
     expect(config).toMatchObject({ relayUrl: "", token: "", authVersion: undefined });
     expect(config.pairingStatusHint).toContain("no path prefix");
     expect(config.pairingStatusHint).not.toContain(RELAY_SECRET);
-    expect(remove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token", "authVersion"]);
+    expect(remove).toHaveBeenCalledWith(pairingKeys);
     expect(set).toHaveBeenCalledWith({ pairingStatus: "proxy-prefix-unsupported" });
 
-    const afterWorkerRestart = await createPairingConfigStore({
-      get: async () => stored,
-      set,
-      remove,
-    }).read();
+    const afterWorkerRestart = await createPairingConfigStore(storage).read();
     expect(afterWorkerRestart.pairingStatusHint).toContain("openclaw browser extension pair");
   });
 
@@ -249,7 +163,7 @@ describe("persisted pairing storage", () => {
       },
     ],
   ])("rejects %s", async (_label, stored) => {
-    expect(await readStoredPairing(stored)).toBeNull();
+    expect((await pairingStore(stored).store.read()).relayUrl).toBe("");
   });
 });
 

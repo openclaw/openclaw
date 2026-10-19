@@ -61,7 +61,7 @@ export function parseNodeWorkerBundleInstallInput(
 export function parseNodeWorkerBundleInstallResult(
   value: unknown,
 ): NodeWorkerBundleInstallResult | null {
-  return validateWorkerAdmissionHandshake(value) ? structuredClone(value) : null;
+  return validateWorkerAdmissionHandshake(value) ? value : null;
 }
 
 export function nodeWorkerBundleTransferPath(bundleHash: string): string {

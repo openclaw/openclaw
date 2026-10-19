@@ -95,6 +95,37 @@ only its service scope, leaving the CLI scheduler available to other work.
 
 ## Gateway and node namespaces
 
+### Session control
+
+The session controller owns turn admission, queued input, and Stop. Gateway
+handler context does not expose writable `chatAbortControllers` or
+`chatQueuedTurns` maps. Reading either removed property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and migration guidance.
+
+An authenticated plugin handler can compose existing Gateway methods through
+`dispatchGatewayMethod` from `openclaw/plugin-sdk/gateway-method-runtime` when its manifest declares
+`contracts: { gatewayMethodDispatch: ["authenticated-request"] }`. The call
+retains the current client and its scopes; the declaration grants no additional
+authority. Use `chat.send` for input, `chat.abort` with `{ sessionKey, runId? }`
+for chat cancellation, `sessions.abort` with `{ key, runId?, clearQueued? }` for
+session cancellation, and `agent.wait` to await a run. There is no public
+controller mutation API.
+
+For status displays, use `sessions.list` to observe aggregate activity. Bundled
+or trusted official plugins can also use `api.runtime.gateway.request(...)`,
+`readSessionFacts(...)`, and `subscribeSessionChanges(...)` as described below.
+These runtime capabilities retain their existing trust restriction. A projection
+or run ID is an observation, not permission to mutate or cancel work.
+
+Consumers of `context.createAgentTurnFacade` receive a captured start owner
+through `onStartOwner`. Its observation uses optional nullable
+`startDeadlineAtMs`, replacing `expiresAtMs` without an alias. A finite value is
+the execution-start deadline; `null` means a live controller wait has no finite
+deadline, and an absent field means no deadline is available yet. An absent
+observation means that owner is no longer current. Once `executionStarted` is
+true, the start watch is complete. See the
+[migration details](/plugins/sdk-migration#agent-turn-start-observation).
+
 ### Session resource methods
 
 A plugin can declare `sessionAccess` when registering an additive Gateway method:
@@ -226,8 +257,10 @@ applicable policy also requires fresh publication admission.
     }
     ```
 
-    Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
-    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
+    Requests default to `operator.write` scope. Trusted plugins can request a method-specific scope,
+    such as `operator.approvals` for `plugin.approval.request`, through the third argument; this does
+    not exceed an authenticated caller's scopes. Calls from arbitrary external plugins are rejected.
+    Failed methods throw a `GatewayClientRequestError`, preserving structured
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
 
@@ -503,6 +536,13 @@ before dispatch and each frame. Closing the service cancels open channels.
 Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Cron operations that require an agent owner reject with error code
+`AGENT_SELECTION_REQUIRED` when no explicit or ambient owner resolves. The
+in-process service handle preserves the error object and its `code` property.
+Pass an explicit `agentId` or configure `agents.defaults.systemAgent.agentId`;
+optional background services can handle this code to defer creation until an
+owner is available. Match the code rather than the human-readable message.
 
 Current service handles also expose `enqueueRun(id, mode)` for service-owned
 work. It uses the normal cron admission queue with the service's live authority,

@@ -37,6 +37,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status check does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.
 
+    Permission or I/O errors while inspecting systemd units or legacy backups are not treated as missing services. Doctor reports incomplete inspection or skipped cleanup; restore access to the reported path and rerun Doctor before retrying cleanup. The service audit also reports backups it cannot inspect without exposing their contents.
+
     On Linux, if the user-level gateway service is missing but a system-level OpenClaw gateway service exists, doctor does not install a second user-level service automatically. Inspect with `openclaw gateway status --deep` or `openclaw doctor --deep`, then remove the duplicate or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when a system supervisor owns the gateway lifecycle.
 
   </Accordion>

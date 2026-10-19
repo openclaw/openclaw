@@ -110,6 +110,10 @@ describePosix("prior-CI whole REST observation fallback", () => {
     const recalculating = ["stability", "final authority", "recalculated status"].includes(stage);
     const main = recalculating ? f.commit(f.tree("before\n", "advanced\n"), [f.base]) : f.base;
     if (recalculating) {
+      state.projectionSettlement = {
+        seconds: 4,
+        pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+      };
       state.restObservations = [
         ...Array.from({ length: stage === "final authority" ? 3 : 1 }, () => ({})),
         { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
@@ -194,6 +198,10 @@ describePosix("prior-CI whole REST observation fallback", () => {
     f.save({
       ...f.state(),
       mode: "unapplied",
+      projectionSettlement: {
+        seconds: 4,
+        pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+      },
       restObservations: [
         {},
         {},
@@ -418,6 +426,12 @@ describePosix("prior-CI whole REST observation fallback", () => {
           },
         ];
       } else {
+        if (fault !== "persistent" && fault !== "same main") {
+          state.projectionSettlement = {
+            seconds: 4,
+            pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+          };
+        }
         state.restObservations = [
           {},
           {
@@ -474,6 +488,10 @@ describePosix("prior-CI whole REST observation fallback", () => {
         state.restObservation = { advanceMain: true, afterRestMainReads: 7 };
       } else {
         const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+        state.projectionSettlement = {
+          seconds: 4,
+          pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+        };
         state.restObservations = [
           {},
           {},

@@ -2,7 +2,11 @@ import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asRecord,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
 import type { browserAct } from "../../browser/client-actions.js";
 import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
@@ -40,6 +44,7 @@ export async function runBrowserAction(params: {
       defaultRuntime.error(danger(`batch failed: ${failures.join("; ")}`));
     }
     if (result.blockedByDialog) {
+      const profile = normalizeOptionalString(parent.browserProfile);
       const pending = asRecord(asRecord(result.browserState).dialogs).pending;
       const ids = Array.isArray(pending)
         ? pending.flatMap((dialog) => {
@@ -48,7 +53,7 @@ export async function runBrowserAction(params: {
           })
         : [];
       defaultRuntime.log(
-        `Action blocked by a modal dialog${ids.length ? ` (${ids.join(", ")})` : ""}. Use openclaw browser dialog --accept or --dismiss${ids.length ? " --dialog-id <id>" : ""} to continue.`,
+        `Action blocked by a modal dialog${ids.length ? ` (${ids.join(", ")})` : ""}. Use openclaw browser dialog${profile ? ` --browser-profile=${profile}` : ""} --accept or --dismiss${ids.length ? " --dialog-id <id>" : ""} to continue.`,
       );
     } else if (result.aborted) {
       const { reason, afterAction, skipped } = result.aborted;

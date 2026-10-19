@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import { t } from "../i18n/index.ts";
+import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import {
   SessionHovercardAutomations,
@@ -93,7 +93,10 @@ export function SessionHovercardContext(
         }
       : undefined,
   );
-  const machineParts = createMemo(() => sessionMachineParts(props.row?.placementMachine));
+  const machineParts = createMemo(() => {
+    i18nRevision();
+    return sessionMachineParts(props.row?.placementMachine);
+  });
   const machineSummary = () => machineParts().filter(Boolean).join(" · ");
   return (
     <div class="session-hovercard__context">

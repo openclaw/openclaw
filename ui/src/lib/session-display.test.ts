@@ -2,11 +2,31 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import {
+  isSessionTitlePending,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "./session-display.ts";
+
+describe("isSessionTitlePending", () => {
+  const key = "agent:main:dashboard:naming";
+
+  it("uses naming settlement, not the lifetime of the first reply", () => {
+    expect(isSessionTitlePending(key, { titlePending: true })).toBe(true);
+    expect(isSessionTitlePending(key, { titlePending: false })).toBe(false);
+    expect(isSessionTitlePending(key, {})).toBe(false);
+    expect(isSessionTitlePending("agent:main:main", { titlePending: true })).toBe(false);
+  });
+
+  it.each(["label", "displayName", "derivedTitle"] as const)("prefers a usable %s", (field) => {
+    expect(isSessionTitlePending(key, { titlePending: true, [field]: "Release readiness" })).toBe(
+      false,
+    );
+    expect(isSessionTitlePending(key, { titlePending: true, [field]: "  " })).toBe(true);
+    expect(isSessionTitlePending(key, { titlePending: true, [field]: key })).toBe(true);
+  });
+});
 
 describe("resolveSessionDisplayName", () => {
   it.each(["Subagent [worker]:"])("treats translated prefix %s as literal text", (prefix) => {

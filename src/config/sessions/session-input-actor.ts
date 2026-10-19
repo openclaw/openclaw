@@ -159,7 +159,10 @@ export function withSessionInputActor<T>(
   return inputActor.run(binding, run);
 }
 
-export async function getSessionInputActor(scope: { agentId: string; sessionKey: string }) {
+export async function getSessionInputActor(
+  scope: { agentId: string; sessionKey: string },
+  targetPending = false,
+) {
   const binding = inputActor.getStore();
   if (!binding) {
     const memory = getSessionActorStorageBinding(scope);
@@ -197,6 +200,7 @@ export async function getSessionInputActor(scope: { agentId: string; sessionKey:
     return undefined;
   }
   if (
+    !targetPending &&
     acquired.target.target.canonicalKey !== resolveSqliteSessionKey(scope.sessionKey, scope.agentId)
   ) {
     throw new Error("Input actor differs from the recorder's admitted target");

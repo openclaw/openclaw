@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { BrowserContext, Page, Route } from "playwright";
 import { expect, it } from "vitest";
-import { isSupportedLocale, SUPPORTED_LOCALES } from "../i18n/lib/registry.ts";
+import { isSupportedLocale, SUPPORTED_LOCALES } from "../../../src/shared/control-ui-locale.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -202,18 +202,9 @@ suite.define(() => {
       await page
         .locator(".settings-row__title", { hasText: "Langue" })
         .waitFor({ timeout: 10_000 });
-      expect(await documentMarker(page)).toBeUndefined();
-      expect(documentRequestCount).toBe(1);
-      expect(
-        await page.evaluate(
-          () =>
-            JSON.parse(
-              sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null",
-            )?.buildId,
-        ),
-      ).toBe("e2e");
-      await page.waitForTimeout(500);
-      expect(documentRequestCount).toBe(1);
+      expect(await documentMarker(page)).toBe("same-document");
+      expect(documentRequestCount).toBe(0);
+      expect(await page.evaluate(() => document.documentElement.lang)).toBe("fr");
       expect(new URL(page.url()).pathname).toBe("/settings/appearance");
     } finally {
       await page.unroute(frenchLocaleModule, abortFrenchLocale);

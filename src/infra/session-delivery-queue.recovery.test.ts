@@ -187,7 +187,9 @@ describe("session-delivery queue recovery", () => {
         expect(await drain()).toEqual(
           expect.objectContaining(mode === "recovery" ? { failed: 0 } : { id }),
         );
-        expect(log.warn).not.toHaveBeenCalled();
+        expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+          `Session delivery: dead-letter decision for entry ${id}: ambiguous side effects`,
+        );
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
           expect.objectContaining({ id, settlementOutcome: "moved-to-failed" }),
@@ -196,7 +198,8 @@ describe("session-delivery queue recovery", () => {
         expect(await drain()).toEqual(
           mode === "recovery" ? expect.objectContaining({ failed: 1 }) : null,
         );
-        expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+        expect(log.warn).toHaveBeenNthCalledWith(
+          2,
           `Session delivery: entry ${id} was dead-lettered and moved to failed`,
         );
         expect(deliver).toHaveBeenCalledTimes(1);
@@ -206,7 +209,7 @@ describe("session-delivery queue recovery", () => {
           mode === "recovery" ? expect.objectContaining({ failed: 0 }) : null,
         );
         expect(deliver).toHaveBeenCalledTimes(1);
-        expect(log.warn).toHaveBeenCalledTimes(1);
+        expect(log.warn).toHaveBeenCalledTimes(2);
       });
     },
   );
@@ -435,7 +438,7 @@ describe("session-delivery queue recovery", () => {
 
   it("keeps failed entries queued with retry metadata for later recovery", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      await enqueueSessionDelivery(
+      const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
           sessionKey: "agent:main:main",
@@ -446,6 +449,7 @@ describe("session-delivery queue recovery", () => {
       );
 
       const onSettled = vi.fn(async () => undefined);
+      const log = createInfoWarnErrorLogger();
       const summary = await recoverPendingSessionDeliveries({
         deliver: vi.fn(async (entry) => {
           await markSessionDeliveryAttemptStarted(entry, queueContext);
@@ -453,7 +457,7 @@ describe("session-delivery queue recovery", () => {
         }),
         onSettled,
         queueContext,
-        log: createInfoWarnErrorLogger(),
+        log,
       });
 
       const [failedEntry] = await loadPendingSessionDeliveries(queueContext);
@@ -461,6 +465,9 @@ describe("session-delivery queue recovery", () => {
       expect(failedEntry?.retryCount).toBe(1);
       expect(failedEntry?.lastError).toBe("transient failure");
       expect(failedEntry?.deliveryStartedAt).toEqual(expect.any(Number));
+      expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+        `Session delivery retry failed for entry ${id}: transient failure`,
+      );
     });
   });
 
@@ -580,24 +587,37 @@ describe("session-delivery queue recovery", () => {
   });
 
   it.each(["recovery", "exact"] as const)(
-    "reports a finalized dead letter through %s",
+    "reports the redacted terminal reason and queue ID through %s without queue content",
     async (mode) => {
-      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+      await withSessionDeliveryQueue(async (stateDir, queueContext) => {
+        const token = "sk-abcdefghijklmnopqrstuv";
         const id = await enqueueSessionDelivery(
           {
             kind: "agentTurn",
-            sessionKey: "agent:main:main",
-            message: "generated image ready",
+            sessionKey: "agent:main:private-session",
+            message: "private queued message",
             messageId: "image:task-dead-lettered:agent-loop",
+            route: { channel: "test", to: "private-recipient", chatType: "direct" },
           },
           queueContext,
         );
+        const [entry] = await loadPendingSessionDeliveries(queueContext);
+        if (!entry) {
+          throw new Error("Expected queued session delivery");
+        }
+        seedDeliveryQueueEntry({
+          queueName: "session",
+          entry: { ...entry, lastError: "previous retry failure" },
+          stateDir,
+        });
 
         const onSettled = vi.fn(async () => undefined);
         const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
         const options = {
           deliver: vi.fn(async () => {
-            throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
+            throw new SessionDeliveryDeadLetteredError(
+              `ambiguous side effects; Authorization: Bearer ${token}`,
+            );
           }),
           onSettled,
           queueContext,
@@ -613,9 +633,26 @@ describe("session-delivery queue recovery", () => {
             await drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" }),
           ).toBeNull();
         }
-        expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+        expect(log.warn).toHaveBeenNthCalledWith(
+          1,
+          expect.stringContaining(
+            `Session delivery: dead-letter decision for entry ${id}: ambiguous side effects`,
+          ),
+        );
+        expect(log.warn).toHaveBeenNthCalledWith(
+          2,
           `Session delivery: entry ${id} was dead-lettered and moved to failed`,
         );
+        const warnings = log.warn.mock.calls.flat().join("\n");
+        for (const privateValue of [
+          token,
+          "agent:main:private-session",
+          "private queued message",
+          "private-recipient",
+          "previous retry failure",
+        ]) {
+          expect(warnings).not.toContain(privateValue);
+        }
         expect(onSettled).toHaveBeenCalledWith(
           expect.objectContaining({ id }),
           "moved-to-failed",
@@ -624,7 +661,7 @@ describe("session-delivery queue recovery", () => {
         expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
         expect((await recoverPendingSessionDeliveries(options)).failed).toBe(0);
         expect(options.deliver).toHaveBeenCalledTimes(1);
-        expect(log.warn).toHaveBeenCalledTimes(1);
+        expect(log.warn).toHaveBeenCalledTimes(2);
       });
     },
   );

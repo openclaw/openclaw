@@ -1,3 +1,4 @@
+import { listen } from "../lib/reactive/listener.ts";
 import type { Overlay, OverlayOptions } from "./overlay-types.ts";
 
 type OverlayRoot = Document | ShadowRoot;
@@ -19,6 +20,31 @@ export type OverlayRegistry = {
   events?: ReturnType<typeof createRegistryEvents>;
 };
 const registries = new WeakMap<Document, OverlayRegistry>();
+const modalSurfaces = new Set<HTMLElement>();
+
+/** Non-popover modal surfaces publish their owned element for keyboard admission. */
+export function registerModalSurface(surface: HTMLElement): () => void {
+  modalSurfaces.add(surface);
+  return () => modalSurfaces.delete(surface);
+}
+
+export function hasModalSurface(doc: Document): boolean {
+  if (doc.openClawModalLayers?.size) {
+    return true;
+  }
+  for (const surface of modalSurfaces) {
+    if (
+      surface.ownerDocument === doc &&
+      surface.isConnected &&
+      surface.matches("dialog[open], [aria-modal='true']")
+    ) {
+      return true;
+    }
+  }
+  return [...(registries.get(doc)?.members.keys() ?? [])].some(
+    (overlay) => overlay.open && overlay.surface.getAttribute("aria-modal") === "true",
+  );
+}
 
 export function containsComposed(container: Element | undefined, target: Node | null): boolean {
   if (!container) {
@@ -435,14 +461,14 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       ["focusin", events.focusinCapture, true],
       ["focusin", events.focusin, false],
     ] as const;
-    for (const [type, listener, capture] of listeners) {
+    const releaseListeners = listeners.map(([type, listener, capture]) =>
       // SAFETY: Each table entry pairs its native event name with that event's handler.
-      root.addEventListener(type, listener as EventListener, capture);
-    }
+      listen(root, type, listener as EventListener, capture),
+    );
     const observer = new MutationObserver(() => {
       for (const [entry, registration] of registry.members) {
         refreshOverlayRoots(registry, entry);
-        if (!registration.valid()) {
+        if (entry.phase !== "hidden" && !registration.valid()) {
           entry.retire();
         }
       }
@@ -452,10 +478,7 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       references: 1,
       release() {
         observer.disconnect();
-        for (const [type, listener, capture] of listeners) {
-          // SAFETY: These are the same native event/handler pairs installed above.
-          root.removeEventListener(type, listener as EventListener, capture);
-        }
+        releaseListeners.forEach((release) => release());
       },
     };
     registry.roots.set(root, binding);

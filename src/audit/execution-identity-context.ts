@@ -28,8 +28,8 @@ import {
   presentExecutionDecisionReceiptsInDatabase,
 } from "./execution-decision-receipts.js";
 import {
-  parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
+  type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionToken,
 } from "./execution-identity-admission.js";
 import {
@@ -129,25 +129,21 @@ function readRowByExecutionId(
   );
 }
 
-function readRowsByRunId(
+function selectRowsByRunId(
   db: EngineConnection,
   runId: string,
   now: number,
   offset: number,
   limit: number,
-): ExecutionIdentityRow[] {
-  return executeSqliteQuerySync(
-    db,
-    executionIdentityDb(db)
-      .selectFrom("execution_identity_contexts")
-      .selectAll()
-      .where("run_id", "=", runId)
-      .where("created_at", ">=", now - EXECUTION_IDENTITY_CONTEXT_RETENTION_MS)
-      .orderBy("created_at", "asc")
-      .orderBy("execution_id", "asc")
-      .offset(offset)
-      .limit(limit),
-  ).rows;
+) {
+  return executionIdentityDb(db)
+    .selectFrom("execution_identity_contexts")
+    .where("run_id", "=", runId)
+    .where("created_at", ">=", now - EXECUTION_IDENTITY_CONTEXT_RETENTION_MS)
+    .orderBy("created_at", "asc")
+    .orderBy("execution_id", "asc")
+    .offset(offset)
+    .limit(limit);
 }
 
 function deleteExpiredExecutionIdentityContexts(db: EngineConnection, now: number, limit: number) {
@@ -175,18 +171,19 @@ function pruneExecutionIdentityContextsAfterInsert(
   const expiredCount = Number(expired.numAffectedRows ?? 0n);
   const remainingPruneBudget = Math.max(0, limits.pruneBatchRows - expiredCount);
   if (remainingPruneBudget > 0) {
-    // Derive overflow from committed rows inside this transaction. A process-local
-    // count misses writes from the Gateway worker or a concurrent direct CLI.
-    const retainedIds = kysely
+    // The first overflow tuple bounds a range scan without materializing retained IDs.
+    const overflowBoundary = kysely
       .selectFrom("execution_identity_contexts")
-      .select("context_id")
+      .select(["created_at", "context_id"])
       .orderBy("created_at", "desc")
       .orderBy("context_id", "desc")
-      .limit(limits.maxRows);
+      .offset(limits.maxRows)
+      .limit(1)
+      .$asTuple("created_at", "context_id");
     const oldestOverflowIds = kysely
       .selectFrom("execution_identity_contexts")
       .select("context_id")
-      .where("context_id", "not in", retainedIds)
+      .where((eb) => eb(eb.refTuple("created_at", "context_id"), "<=", overflowBoundary))
       .orderBy("created_at", "asc")
       .orderBy("context_id", "asc")
       .limit(remainingPruneBudget);
@@ -225,12 +222,9 @@ export function pruneExpiredExecutionIdentityContextsInDatabase(params: {
 
 /** Worker-owned canonicalization and persistence for one accepted admission envelope. */
 function persistExecutionIdentityAdmissionEnvelope(
-  input: unknown,
+  envelope: ExecutionIdentityAdmissionEnvelope,
   options: ExecutionIdentityStoreOptions = {},
 ): ExecutionIdentityContextV1 {
-  // Structured clone removes the admission-side freeze. Revalidate all bounds
-  // before schema/key access so malformed messages never reach persistence.
-  const envelope = parseExecutionIdentityAdmissionEnvelope(input);
   ensureExecutionIdentityContextSchema(options);
   const executionId = envelope.executionId;
   const opened = openOpenClawStateDatabase(options);
@@ -535,7 +529,7 @@ function inspectRunSelector(
   const runId = ensureBoundedExecutionIdentityRef(params.runId, "run id");
   const now = params.now;
   const firstMatches = schema.executionIdentityContexts
-    ? readRowsByRunId(db, runId, now, 0, 2)
+    ? executeSqliteQuerySync(db, selectRowsByRunId(db, runId, now, 0, 2).selectAll()).rows
     : [];
   if (firstMatches.length === 1) {
     let context: ExecutionIdentityContextV1;
@@ -567,7 +561,14 @@ function inspectRunSelector(
   if (firstMatches.length > 1) {
     const offset = params.executionOffset ?? 0;
     const limit = params.executionLimit ?? 50;
-    const page = readRowsByRunId(db, runId, now, offset, limit + 1);
+    const page = executeSqliteQuerySync(
+      db,
+      selectRowsByRunId(db, runId, now, offset, limit + 1).select([
+        "execution_id",
+        "context_id",
+        "created_at",
+      ]),
+    ).rows;
     const candidates = page.slice(0, limit).map((row) => ({
       executionId: row.execution_id,
       contextId: row.context_id,

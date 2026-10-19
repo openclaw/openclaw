@@ -1,8 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  resolveAllowedModelRef,
-  resolveDefaultModelForAgent,
-} from "../../agents/model-selection.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { resolveAllowedModelRefCore as resolveAllowedModelRef } from "../../agents/model-selection-resolve.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogCreateTarget } from "../session-catalog.js";

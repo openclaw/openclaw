@@ -69,13 +69,15 @@ function source(
   } as ApplicationGatewaySnapshot);
 }
 
-async function mount(gateway: ApplicationGateway) {
+async function mount(gateway: ApplicationGateway, { attached = true } = {}) {
   const context = {
     gateway,
     channels: { state: { channelsLastSuccess: null }, subscribe: () => () => undefined },
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
-  document.body.append(provider);
+  if (attached) {
+    document.body.append(provider);
+  }
   const application = createSolidApplicationContextProvider(context);
   const view = mountSolid(() => createComponent(ConnectionPage, {}), {
     container: provider,
@@ -180,6 +182,22 @@ describe("ConnectionPage browser sign-in", () => {
 });
 
 describe("ConnectionPage ping", () => {
+  it("starts diagnostics for a bound lazy route before insertion and stops at disposal", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
+    const current = source({ request } as unknown as GatewayBrowserClient);
+    const { provider, unmount } = await mount(current.gateway, { attached: false });
+    expect(provider.isConnected).toBe(false);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["system.info"]);
+    document.body.append(provider);
+    flush();
+    expect(request).toHaveBeenCalledTimes(1);
+    unmount();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("shares six status reads per minute with a tray mounted between page polls", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("matchMedia", (query: string) => ({

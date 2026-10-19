@@ -15,11 +15,8 @@ describe("setJsonlOcPath — value replacement", () => {
       kind: "string",
       value: "final",
     });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const lines = r.ast.raw.split("\n");
-      expect(JSON.parse(lines[2] ?? "")).toEqual({ event: "final" });
-    }
+    const lines = r.raw.split("\n");
+    expect(JSON.parse(lines[2] ?? "")).toEqual({ event: "final" });
   });
 
   it("reads and edits $first while preserving blank and sentinel-bearing malformed lines", () => {
@@ -33,21 +30,17 @@ describe("setJsonlOcPath — value replacement", () => {
       node: { value: { kind: "string", value: "start" } },
     });
     const r = setJsonlOcPath(ast, path, { kind: "string", value: "replaced" });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toBe(
-        '\nbroken __OPENCLAW_REDACTED__\n{"event":"replaced"}\n{"event":"end"}\n',
-      );
-    }
+    expect(r.raw).toBe('\nbroken __OPENCLAW_REDACTED__\n{"event":"replaced"}\n{"event":"end"}\n');
   });
 
   it("reports unresolved for unknown line addresses", () => {
     const { ast } = parseJsonl(log);
-    const r = setJsonlOcPath(ast, parseOcPath("oc://session-events/L99/x"), {
-      kind: "number",
-      value: 1,
-    });
-    expect(r).toEqual({ ok: false, reason: "unresolved" });
+    expect(() =>
+      setJsonlOcPath(ast, parseOcPath("oc://session-events/L99/x"), {
+        kind: "number",
+        value: 1,
+      }),
+    ).toThrow(expect.objectContaining({ reason: "unresolved" }));
   });
 
   it.each([{ kind: "malformed", raw: "broken" }])(
@@ -59,11 +52,12 @@ describe("setJsonlOcPath — value replacement", () => {
         kind: "line",
         node: { kind, line: 2, raw },
       });
-      const r = setJsonlOcPath(ast, path, {
-        kind: "number",
-        value: 1,
-      });
-      expect(r).toEqual({ ok: false, reason: "not-a-value-line" });
+      expect(() =>
+        setJsonlOcPath(ast, path, {
+          kind: "number",
+          value: 1,
+        }),
+      ).toThrow(expect.objectContaining({ reason: "not-a-value-line" }));
     },
   );
 });
@@ -97,14 +91,11 @@ describe("setJsonlOcPath — $last positional field tokens", () => {
       kind: "number",
       value: 99,
     });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const firstLine = r.ast.raw.split("\n").find((l) => l.length > 0) ?? "";
-      expect(JSON.parse(firstLine)).toEqual({
-        items: [10, 20, 99],
-        events: { a: 1, b: 2 },
-      });
-    }
+    const firstLine = r.raw.split("\n").find((l) => l.length > 0) ?? "";
+    expect(JSON.parse(firstLine)).toEqual({
+      items: [10, 20, 99],
+      events: { a: 1, b: 2 },
+    });
   });
 });
 
@@ -116,15 +107,12 @@ describe("setJsonlOcPath — quoted field segments", () => {
       kind: "string",
       value: "new",
     });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      const lines = r.ast.raw.split("\n").filter((l) => l.length > 0);
-      expect(lines).toHaveLength(1);
-      expect(JSON.parse(lines[0] ?? "")).toEqual({
-        event: "start",
-        detail: { "github/repo": "new" },
-      });
-    }
+    const lines = r.raw.split("\n").filter((l) => l.length > 0);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "")).toEqual({
+      event: "start",
+      detail: { "github/repo": "new" },
+    });
   });
 });
 
@@ -139,16 +127,12 @@ describe("JSONL source edits", () => {
         value: "longer literal",
       },
     );
-    expect(first.ok).toBe(true);
-    if (!first.ok) {
-      return;
-    }
-    expect(first.ast.raw).toBe(original.replace('"literal"', '"longer literal"'));
-    const second = setJsonlOcPath(first.ast, parseOcPath("oc://x.jsonl/L1/items/$last"), {
+    expect(first.raw).toBe(original.replace('"literal"', '"longer literal"'));
+    const second = setJsonlOcPath(first, parseOcPath("oc://x.jsonl/L1/items/$last"), {
       kind: "array",
       items: [{ kind: "string", value: "line\nbreak" }],
     });
-    expect(second.ok && second.ast.raw).toBe(
+    expect(second.raw).toBe(
       '\uFEFF{ "$first":"longer literal", "items":[10,["line\\nbreak"]], "id":9007199254740993 } // note',
     );
   });

@@ -122,6 +122,46 @@ describe("session tab registry", () => {
     expect(results.reduce((total, closed) => total + closed, 0)).toBe(1);
   });
 
+  it("preserves lifecycle cleanup after activity cancels a shared sweep", async () => {
+    const tab = {
+      sessionKey: "agent:main:main",
+      targetId: "touched-during-sweep",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" } as const,
+    };
+    await trackSessionBrowserTab({ ...tab, now: 1_000 });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const closeTab = vi.fn(async () => {});
+    const sweep = sweepTrackedBrowserTabs({
+      now: 10_000,
+      idleMs: 1,
+      closeTab,
+      prepareCurrent: async () => {
+        entered.resolve();
+        await release.promise;
+        return true;
+      },
+    });
+    const lifecycle: Array<Promise<number>> = [];
+    try {
+      await entered.promise;
+      lifecycle.push(
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab }),
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab }),
+      );
+      await touchSessionBrowserTab({ ...tab, now: 11_000 });
+    } finally {
+      release.resolve();
+    }
+    await expect(sweep).resolves.toBe(0);
+    const results = await Promise.all(lifecycle);
+    expect(results.reduce((total, closed) => total + closed, 0)).toBe(1);
+    expect(closeTab).toHaveBeenCalledOnce();
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab }),
+    ).resolves.toBe(0);
+  });
+
   it.each(["lifecycle", "sweep"] as const)(
     "preserves %s activity semantics while cleanup authority prepares",
     async (kind) => {

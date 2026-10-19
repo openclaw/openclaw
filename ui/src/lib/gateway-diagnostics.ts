@@ -2,10 +2,7 @@ import type { getCommandLaneDiagnostics } from "../../../src/process/command-lan
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/types.ts";
 
-export type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
-
 export type CommandLaneDiagnostics = ReturnType<typeof getCommandLaneDiagnostics>;
-export type CommandLaneDynamicSummary = NonNullable<CommandLaneDiagnostics["dynamic"]>;
 
 type GatewayDiagnosticsSnapshot = CommandLaneDiagnostics & {
   status: StatusSummary;

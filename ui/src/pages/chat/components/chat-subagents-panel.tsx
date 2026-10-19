@@ -1,17 +1,18 @@
-import { Show, createEffect, createMemo, createSignal } from "solid-js";
+import { Show, createMemo, createSignal } from "solid-js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
-import { isSessionRunActive } from "../../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
 import { isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
 import {
   SessionPanelGroups,
+  syncSessionPanelInputs,
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
@@ -31,43 +32,48 @@ let panelSequence = 0;
 
 export const ChatSubagentsPanel = defineSolidBridge<Props>(
   "openclaw-chat-subagents-panel",
-  (props) => {
-    const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(null);
+  (props, host) => {
     const [finishedOpen, setFinishedOpen] = createSignal(true);
     const finishedId = `chat-subagents-finished-${++panelSequence}`;
-    const data = useSessionPanel(props, SubagentsPanelData, () => setSelected(null));
-    const subagentAgentId = (key: string) =>
-      data().rows.find((row) => row.session.key === key)?.session.agentId ??
-      parseAgentSessionKey(key)?.agentId ??
-      props.agentId;
-    createEffect(
-      () => props.showRequest,
-      (request) => {
-        const key = request?.();
-        if (key !== undefined) {
-          setSelected(key ? { key, agentId: subagentAgentId(key) } : null);
-        }
-      },
+    const data = useSessionPanel(
+      host,
+      () => ({ sessionKey: host.sessionKey, agentId: host.agentId, presented: host.presented }),
+      SubagentsPanelData,
+      syncSelection,
     );
-    createEffect(
-      () => {
-        const value = selected();
+    // An applied request must not reopen detail after the user returns to the list.
+    let appliedRequest: Props["showRequest"];
+    // Keep a local choice until the authoritative roster removes it or denies access.
+    const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(
+      (previous) => {
         const owner = data();
-        return (
-          value &&
+        return previous &&
           !owner.loading &&
           ((owner.error && !owner.rows.length) ||
             (owner.hasResult &&
               !owner.error &&
-              !owner.rows.some((row) => row.session.key === value.key)))
-        );
-      },
-      (removed) => {
-        if (removed) {
-          setSelected(null);
-        }
+              !owner.rows.some((row) => row.session.key === previous.key)))
+          ? null
+          : (previous ?? null);
       },
     );
+    const subagentAgentId = (key: string) =>
+      data().rows.find((row) => row.session.key === key)?.session.agentId ??
+      parseAgentSessionKey(key)?.agentId ??
+      host.agentId;
+    function syncSelection(identityChanged: boolean): void {
+      if (identityChanged) {
+        setSelected(null);
+      }
+      const request = host.showRequest;
+      if (request !== appliedRequest) {
+        appliedRequest = request;
+        const key = request?.();
+        if (key !== undefined) {
+          setSelected(key ? { key, agentId: subagentAgentId(key) } : null);
+        }
+      }
+    }
     const unfinished = (row: SubagentsPanelRow) =>
       row.session.status === "queued" || isUnfinishedSubagent(row.session);
     const running = createMemo(() => data().rows.filter(unfinished));
@@ -77,7 +83,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     );
     const renderElapsed = (row: SubagentsPanelRow) => {
       const session = row.session;
-      const active = isSessionRunActive(session);
+      const active = isSessionRunStateActive(session);
       if (session.runtimeMs != null) {
         return active && session.runtimeSampledAt != null ? (
           <openclaw-elapsed-time prop:startMs={session.runtimeSampledAt - session.runtimeMs} />
@@ -130,7 +136,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               >
                 {(row) => {
                   const title = () => resolveSessionDisplayName(row().session.key, row().session);
-                  const active = () => isSessionRunActive(row().session);
+                  const active = () => isSessionRunStateActive(row().session);
                   const activity = () =>
                     row().session.status === "queued"
                       ? t("common.queued")
@@ -243,6 +249,16 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     );
   },
   {
+    propertyChanged: (host, key) => {
+      if (
+        key === "sessionKey" ||
+        key === "agentId" ||
+        key === "presented" ||
+        key === "showRequest"
+      ) {
+        syncSessionPanelInputs(host);
+      }
+    },
     properties: {
       sessionKey: { default: "", attribute: false },
       agentId: { default: "main", attribute: false },

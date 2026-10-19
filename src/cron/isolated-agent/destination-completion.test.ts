@@ -2,6 +2,8 @@ import path from "node:path";
 import { assert, describe, expect, it, vi } from "vitest";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { initSessionState } from "../../auto-reply/reply/session.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntryReadOnly,
@@ -43,6 +45,93 @@ import { messageToolOutcome } from "./delivery-dispatch.test-fixtures.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 describe("destination-owned completion", () => {
+  it("keeps the destination session for a reply to a delivered cron question", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const fixture = await createCompletionFixture(state, "isolated");
+      const registry = captureActivePluginRegistrySnapshot();
+      const lastHumanAt = Date.now() - 185 * 60_000;
+      const destination = { ...fixture.scope, sessionKey: "agent:main:telegram:direct:12345" };
+      const generation = {
+        sessionId: "recipient-session",
+        lifecycleRevision: "recipient-generation",
+      };
+      await replaceSessionEntry(destination, {
+        ...generation,
+        updatedAt: lastHumanAt,
+        sessionStartedAt: lastHumanAt,
+        lastInteractionAt: lastHumanAt,
+      });
+      fixture.params.cfgWithAgentDefaults.session = {
+        ...fixture.params.cfgWithAgentDefaults.session,
+        dmScope: "per-channel-peer",
+        reset: { mode: "idle", idleMinutes: 180 },
+      };
+      const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "cron-question" }));
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: "telegram" }),
+              outbound: { deliveryMode: "direct", sendText },
+            },
+          },
+        ]),
+      );
+      try {
+        fixture.job.delivery = { mode: "announce", channel: "telegram", to: "12345" };
+        fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.job);
+        fixture.params.resolvedDelivery = await resolveDeliveryTarget(
+          fixture.params.cfgWithAgentDefaults,
+          "main",
+          { ...fixture.job, ...fixture.params.deliveryPlan },
+        );
+        fixture.params.deliveryPayloads = [{ text: "Approve the scheduled transaction?" }];
+        fixture.params.synthesizedText = "Approve the scheduled transaction?";
+
+        const deliveryStartedAt = Date.now();
+        const delivered = await dispatchCronDelivery(fixture.params);
+        expect(delivered, JSON.stringify(delivered)).toMatchObject({ delivered: true });
+        const entry = loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" });
+        expect(entry).toMatchObject(generation);
+        expect(entry?.lastInteractionAt).toBeGreaterThanOrEqual(deliveryStartedAt);
+
+        expect(await dispatchCronDelivery(fixture.params)).toMatchObject({ delivered: true });
+        expect(sendText).toHaveBeenCalledOnce();
+        expect(
+          loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" })
+            ?.lastInteractionAt,
+        ).toBe(entry?.lastInteractionAt);
+
+        const reply = await initSessionState({
+          cfg: fixture.params.cfgWithAgentDefaults,
+          commandAuthorized: false,
+          ctx: finalizeInboundContext({
+            Body: "ok",
+            ChatType: "direct",
+            SessionKey: destination.sessionKey,
+            Provider: "telegram",
+            From: "telegram:12345",
+          }),
+        });
+        expect(reply).toMatchObject({
+          isNewSession: false,
+          sessionId: generation.sessionId,
+          sessionEntry: generation,
+        });
+        const messages = await readConversationMessages(destination);
+        expect(messages).toHaveLength(1);
+        expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
+          { type: "text", text: "Approve the scheduled transaction?" },
+        ]);
+      } finally {
+        restoreActivePluginRegistrySnapshot(registry);
+        await fixture.dispose();
+      }
+    });
+  });
+
   it("sends a native-only Discord embed without inventing conversation text", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const fixture = await createCompletionFixture(state, "isolated");
@@ -568,9 +657,12 @@ describe("destination-owned completion", () => {
               { ...fixture.job, ...fixture.params.deliveryPlan },
             );
           }
-          const text = mode === "silent" ? "NO_REPLY" : "Final creator report";
-          fixture.params.deliveryPayloads = [{ text }];
+          const text = mode === "silent" ? undefined : "Final creator report";
+          fixture.params.deliveryPayloads = text ? [{ text }] : [];
           fixture.params.synthesizedText = text;
+          if (mode === "silent") {
+            fixture.params.skipDelivery = "silent";
+          }
           const result = await dispatchCronDelivery(fixture.params);
           if (mode === "no-route") {
             expect(result.delivered).toBe(true);

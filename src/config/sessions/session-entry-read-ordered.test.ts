@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -143,10 +144,19 @@ it("derives lifecycle and current runtime targets from committed facts and retir
     await readSessionEntriesFromStoreInWorker(input);
     const requests = observeEntryReaderRequests();
     try {
-      expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
-        lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
-        runtimeTarget: { ...runtimeTarget, storePath: database.path },
-      });
+      const stat = vi.spyOn(fs, "statSync");
+      const realpath = vi.spyOn(fs.realpathSync, "native");
+      try {
+        expect(readRetainedSessionEntryFacts(owner, request)).toMatchObject({
+          lifecycleTimestamps: { sessionStartedAt: 100, lastInteractionAt: 200 },
+          runtimeTarget: { ...runtimeTarget, storePath: database.path },
+        });
+        expect(stat).not.toHaveBeenCalled();
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        stat.mockRestore();
+        realpath.mockRestore();
+      }
       expect(
         (await readSessionEntriesFromStoreInWorker({ ...input, lifecycleSessionKey: sessionKey }))
           .lifecycleTimestamps,

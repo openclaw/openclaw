@@ -5,16 +5,16 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   resizeObservers,
   threadProps,
@@ -22,7 +22,7 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-function mountThread(container: HTMLElement, transcript: ChatTranscriptController) {
+function mountThread(container: HTMLElement, transcript: ChatTranscript) {
   const [props, setProps] = createSignal<ChatThreadProps | null>(null);
   const view = mountSolid(
     () => (
@@ -65,7 +65,11 @@ describe("conversation position rail", () => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
             return (
               <div class="chat-thread" tabindex="0">
-                <div class="chat-bubble" data-entry-id="message-79">
+                <div
+                  ref={session.messageElements.forKey("message-79")}
+                  class="chat-bubble"
+                  data-entry-id="message-79"
+                >
                   Latest message
                 </div>
                 <ChatPositionRail
@@ -133,9 +137,24 @@ describe("conversation position rail", () => {
         expect(document.activeElement).toBe(current());
         root.focus();
         expect(tabStops()).toEqual([current()]);
+        if (scenario === "off-window") {
+          tabStops()[0]!.focus();
+          for (const [key, index] of [
+            ["End", 79],
+            ["Home", 0],
+          ] as const) {
+            const focusedMarker = document.activeElement;
+            assert(focusedMarker instanceof HTMLButtonElement);
+            focusedMarker.dispatchEvent(
+              new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+            );
+            expect(document.activeElement).toBe(marker(`message-${index}`));
+            expect(tabStops()).toEqual([document.activeElement]);
+          }
+        }
       } finally {
         view.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -160,7 +179,11 @@ describe("conversation position rail", () => {
       () =>
         transcript.renderSession("agent:main:rail-overflow", (session) => (
           <div class="chat-thread" tabindex="0">
-            <div class="chat-bubble" data-entry-id="short">
+            <div
+              ref={session.messageElements.forKey("short")}
+              class="chat-bubble"
+              data-entry-id="short"
+            >
               A short question
             </div>
             <ChatPositionRail positions={positions} transcript={session} />
@@ -206,7 +229,7 @@ describe("conversation position rail", () => {
       expect(rail.hasAttribute("data-overflow")).toBe(false);
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -253,7 +276,11 @@ describe("conversation position rail", () => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
             return (
               <div class="chat-thread" tabindex="0">
-                <div class="chat-bubble" data-entry-id="message-79">
+                <div
+                  ref={session.messageElements.forKey("message-79")}
+                  class="chat-bubble"
+                  data-entry-id="message-79"
+                >
                   Latest message
                 </div>
                 <ChatPositionRail positions={currentPositions()} transcript={session} />
@@ -383,7 +410,7 @@ describe("conversation position rail", () => {
             root.scrollTop = 0;
             activeMessage.mockReturnValue("message-0");
           }
-          adjustTextareaHeight(textarea);
+          adjustTextareaHeight(textarea, { getTranscriptElement: () => root });
           expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
           // The goal header regrows the composer before any observer or frame runs.
           height = 576;
@@ -466,12 +493,12 @@ describe("conversation position rail", () => {
         }
       } finally {
         view.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
 
-  it("keeps stream edits off target scans while reconciling bubble mounts and identities", async () => {
+  it("keeps stream edits off target scans while reconciling registered bubble mounts", async () => {
     const observed = new Set<Element>();
     vi.stubGlobal(
       "IntersectionObserver",
@@ -495,16 +522,15 @@ describe("conversation position rail", () => {
     const view = mountThread(container, transcript);
     const rerender = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
     const settleFrames = () =>
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
-    props.onRequestUpdate = rerender;
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       const root = container.querySelector<HTMLElement>(".chat-thread");
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks");
       const original = container.querySelector<HTMLElement>(
@@ -530,53 +556,47 @@ describe("conversation position rail", () => {
       }
       expect(targetScans()).toBe(0);
 
+      const elements = transcript.renderSession(
+        props.sessionKey,
+        (session) => session.messageElements,
+      );
+      const entry = [...elements.elements].find(([, element]) => element === original);
+      assert(entry);
+      const bubbleRef = elements.forKey(entry[0]);
+      bubbleRef(original);
+      bubbleRef();
       original.remove();
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(original)).toBe(false);
-      query.mockClear();
 
       const replacement = original.cloneNode(true) as HTMLElement;
       root.append(replacement);
+      bubbleRef(replacement);
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(replacement)).toBe(true);
-      query.mockClear();
+      bubbleRef();
       replacement.remove();
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(replacement)).toBe(false);
-      query.mockClear();
 
       const wrapper = document.createElement("section");
       wrapper.append(replacement);
       root.append(wrapper);
-      await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
-      expect(observed.has(replacement)).toBe(true);
-      query.mockClear();
-      wrapper.remove();
-      await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
-      expect(observed.has(replacement)).toBe(false);
-      query.mockClear();
-
-      replacement.removeAttribute("data-entry-id");
-      root.append(replacement);
+      bubbleRef(replacement);
       await settleFrames();
       expect(targetScans()).toBe(0);
-      replacement.dataset.entryId = "question";
-      await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
       expect(observed.has(replacement)).toBe(true);
-      query.mockClear();
-      replacement.removeAttribute("data-entry-id");
+      bubbleRef();
+      wrapper.remove();
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(replacement)).toBe(false);
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -617,7 +637,7 @@ describe("conversation position rail", () => {
       expect(session.activeMessageId(ids)).toBe("row-39");
       expect(session.activeMessageId(["missing"])).toBeNull();
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -638,16 +658,15 @@ describe("conversation position rail", () => {
     const view = mountThread(container, transcript);
     const rerender = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
-    props.onRequestUpdate = rerender;
     const markers = () => [
       ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
     ];
     const preview = () => container.querySelector(".chat-position-rail__preview-copy")?.textContent;
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       expect(markers()).toHaveLength(40);
       // Rail wheel input belongs to its scrollport, never transcript history.
       for (const type of ["wheel", "touchstart", "touchmove"]) {
@@ -697,6 +716,18 @@ describe("conversation position rail", () => {
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
       );
       expect(preview()).toBeUndefined();
+      const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+      expect(document.activeElement).toBe(thread);
+      markers()[2]!.dispatchEvent(new Event("pointerenter"));
+      expect(preview()).toContain("Checkpoint 2");
+      const hoverEscape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        cancelable: true,
+      });
+      window.dispatchEvent(hoverEscape);
+      expect(hoverEscape.defaultPrevented).toBe(true);
+      expect(preview()).toBeUndefined();
+      expect(document.activeElement).toBe(thread);
       markers()[0]!.focus();
       expect(preview()).toBeDefined();
       view.render(null);
@@ -714,15 +745,15 @@ describe("conversation position rail", () => {
       rerender();
       expect(preview()).toBeUndefined();
       const state = getTranscriptState(props.paneId);
-      state.searchOpen = true;
-      state.searchQuery = "Checkpoint 5";
+      state.search.toggle();
+      state.search.setQuery("Checkpoint 5");
       rerender();
       expect(markers()).toHaveLength(1);
-      state.searchQuery = "not present";
+      state.search.setQuery("not present");
       rerender();
       expect(markers()).toHaveLength(0);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -752,12 +783,11 @@ describe("conversation position rail", () => {
       const view = mountThread(container, transcript);
       const rerender = () => {
         view.render(props);
-        transcript.hostUpdated();
+        transcript.update();
       };
-      props.onRequestUpdate = rerender;
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
         const preview = container.querySelector(".chat-position-rail__preview-copy")!;
         expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
@@ -793,7 +823,7 @@ describe("conversation position rail", () => {
         expect(preview.closest("[inert]")).not.toBeNull();
       } finally {
         view.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -837,13 +867,13 @@ describe("conversation position rail", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const view = mountThread(container, transcript);
-    props.onRequestUpdate = () => {
+    const renderCurrent = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
     try {
-      props.onRequestUpdate();
-      transcript.hostConnected();
+      renderCurrent();
+      transcript.start();
       const markers = container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker");
       expect(markers).toHaveLength(1);
       markers[0]!.focus();
@@ -855,7 +885,7 @@ describe("conversation position rail", () => {
       ).not.toContain("Styles loaded");
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -887,14 +917,13 @@ describe("conversation position rail", () => {
     const view = mountThread(container, transcript);
     const rerender = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
-    props.onRequestUpdate = rerender;
     const marker = () =>
       container.querySelector<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(1);
       props.stream = "Draft response";
       rerender();
@@ -922,26 +951,6 @@ describe("conversation position rail", () => {
       expect(query.mock.calls.filter(([selector]) => selector.includes(".chat-bubble"))).toEqual(
         [],
       );
-      const streamParent = streamBubble.parentNode!;
-      const streamNext = streamBubble.nextSibling;
-      streamBubble.remove();
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(false);
-      const wrapper = document.createElement("section");
-      wrapper.append(streamBubble);
-      root.append(wrapper);
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(true);
-      const streamId = streamBubble.dataset.messageId!;
-      delete streamBubble.dataset.messageId;
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(false);
-      streamBubble.dataset.messageId = streamId;
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(true);
-      streamParent.insertBefore(streamBubble, streamNext);
-      wrapper.remove();
-      await settleFrames();
       provisional.click();
       // Reveal settles the committed target's geometry on the render lifecycle's layout phase.
       await settleFrames();
@@ -960,13 +969,16 @@ describe("conversation position rail", () => {
       const persistedBubble = container.querySelector<HTMLElement>(
         '[data-entry-id="persisted-answer"]',
       )!;
+      await settleFrames();
+      expect(observed.has(streamBubble)).toBe(false);
+      expect(observed.has(persistedBubble)).toBe(true);
       marker().click();
       await settleFrames();
       expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
       expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 });

@@ -5,14 +5,86 @@ import {
   commandRpcMocks,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogControlFactory,
+  createCodexTestBindingStore,
+  createGatewayApi,
+  createRuntime,
   config,
   idleThread,
+  registerCodexSessionCatalog,
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("Codex catalog resident home sharing", () => {
+  it("discovers visible entries after hidden native pages without rereading the resident head", async () => {
+    const hiddenCount = 32;
+    const visibleCount = 3;
+    const total = hiddenCount + visibleCount;
+    commandRpcMocks.codexControlRequest.mockImplementation(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        request: { cursor?: string; limit: number },
+      ) => {
+        const offset = Number(request.cursor ?? 0);
+        const count = Math.min(request.limit, total - offset);
+        return {
+          data: Array.from({ length: count }, (_, index) => {
+            const position = offset + index;
+            return idleThread({
+              id: `thread-${position}`,
+              source: "cli",
+              originator: position >= hiddenCount ? "codex" : "openclaw",
+              path: `/synthetic/sessions/thread-${position}.jsonl`,
+              recencyAt: 10_000 - position,
+              updatedAt: 10_000 - position,
+            });
+          }),
+          ...(offset + count < total ? { nextCursor: String(offset + count) } : {}),
+        };
+      },
+    );
+    const factory = createCodexSessionCatalogControlFactory({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+      now: () => 1_000,
+    });
+    const primary = (await factory.homesForAgent("main"))[0]!;
+    const home = { ...primary, localSessionsRoot: "/synthetic/sessions" };
+    const { runtime } = createRuntime();
+    const { api, getProvider } = createGatewayApi(runtime, config);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: { ...factory, homesForAgent: async () => [home] },
+      getRuntimeConfig: () => config,
+    });
+    const provider = getProvider()!;
+    const list = (cursor?: string) =>
+      provider.list({
+        agentId: "main",
+        hostIds: [home.hostId],
+        limitPerHost: 2,
+        ...(cursor ? { cursors: { [home.hostId]: cursor } } : {}),
+      });
+
+    await factory.forRequest("main", home).initialize();
+    const nativeCalls = commandRpcMocks.codexControlRequest.mock.calls.length;
+    expect(nativeCalls).toBeGreaterThan(1);
+    const first = await list();
+    expect(first[0]?.sessions.map((session) => session.threadId)).toEqual([
+      "thread-32",
+      "thread-33",
+    ]);
+    expect(first[0]?.nextCursor).toBeDefined();
+    const tail = await list(first[0]!.nextCursor);
+    expect(tail[0]?.sessions.map((session) => session.threadId)).toEqual(["thread-34"]);
+    expect(tail[0]?.nextCursor).toBeUndefined();
+    expect(await list()).toEqual(first);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(nativeCalls);
+  });
+
   it("shares one home inventory across agents, filters, and arbitrary clock advances", async () => {
     let now = 1_000;
     commandRpcMocks.codexControlRequest.mockResolvedValue({
@@ -112,7 +184,7 @@ describe("Codex catalog resident home sharing", () => {
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("bounds fleet config snapshots across agents and homes until config identity changes", async () => {
+  it("captures the current config for requests across agents and homes", async () => {
     let runtimeConfig: OpenClawConfig = {
       agents: { defaults: { workspace: "/workspace/a" } },
     };
@@ -127,22 +199,27 @@ describe("Codex catalog resident home sharing", () => {
         factory.forRequest(agentId, { ...home, sourceHomeId }),
       ),
     );
-    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     const initialConfig = runtimeConfig;
 
     for (const control of controls) {
       await control.readThread("thread-1");
       await control.readThread("thread-1");
     }
-    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
+    expect(commandRpcMocks.codexControlRequest.mock.calls).toHaveLength(8);
+    for (const call of commandRpcMocks.codexControlRequest.mock.calls) {
+      expect(call[3]?.config).toEqual(initialConfig);
+    }
 
     runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } };
     const reloadedControls = ["main", "another"].map((agentId) => factory.forRequest(agentId));
     for (const control of reloadedControls) {
       await control.readThread("thread-1");
     }
-    expect(cloneSpy.mock.calls.filter(([value]) => value === runtimeConfig)).toHaveLength(1);
-    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
+    expect(commandRpcMocks.codexControlRequest.mock.calls).toHaveLength(10);
+    for (const call of commandRpcMocks.codexControlRequest.mock.calls.slice(8)) {
+      expect(call[3]?.config).toEqual(runtimeConfig);
+    }
+    expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]?.config).toEqual(initialConfig);
   });
 
   it("reports a failed initializer and permits its immediate retry", async () => {
@@ -246,7 +323,7 @@ describe("Codex catalog resident home sharing", () => {
     });
 
     await expect(control.initialize()).rejects.toThrow(
-      `invalid Codex session catalog ${cursorField === "nextCursor" ? "next" : "backwards"} response cursor`,
+      "Codex catalog response contains an invalid cursor",
     );
   });
 });

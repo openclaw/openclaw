@@ -160,16 +160,19 @@ describe("canonical shared-state worker admission", () => {
     "keeps typed %s errors from the existing shared worker",
     async (phase) => {
       const captured = context();
-      await executeOpenClawStateWorker(captured, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      });
-      const database = openOpenClawStateDatabase(databaseOptions(captured));
-      database.db.exec("PRAGMA user_version = 999999");
-      if (phase === "open") {
-        await closeOpenClawStateDatabaseAsync();
+      mkdirSync(path.dirname(captured.admission.databasePath), { recursive: true });
+      const database = nodeSqlite.openNodeSqliteDatabase(captured.admission.databasePath);
+      try {
+        database.exec("PRAGMA user_version = 999999");
+      } finally {
+        database.close();
       }
       const current = captureOpenClawStateWorkerContext(databaseOptions(captured));
+      if (phase === "execute") {
+        await runOpenClawStateWorkerOperation(current, async () => undefined, {
+          existingOnly: true,
+        });
+      }
       const record: NativeHookRelayBridgeRecord = {
         relayId: "caller-errors",
         pid: 100,
@@ -253,49 +256,33 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it.each(["Web Push", "GitHub publication"] as const)(
-    "keeps writer inspection and the first %s operation in the same actor",
-    async (operation) => {
-      const captured = context();
-      await seedMetadata(captured);
-      const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
-      const messages = vi.spyOn(Worker.prototype, "postMessage");
-      await runOpenClawStateWorkerOperation(
-        reopened,
-        async (scope) => {
-          expect(await scope.execute(readBindingApprovals)).toEqual([]);
-          const actorWorker = messages.mock.contexts[0];
-          expect(actorWorker).toBeInstanceOf(Worker);
-          messages.mockClear();
-          if (operation === "Web Push") {
-            expect(
-              await scope.execute({
-                type: "webPush.listTerminalWebPushApprovalDeliveryIds",
-                input: {},
-              }),
-            ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
-          } else {
-            expect(
-              await scope.execute({
-                type: "githubRepository.personalPending",
-                input: {
-                  ownerProfileId: "profile-first-use",
-                  sessionKey: "agent:main:github-first-use",
-                  agentId: "main",
-                },
-              }),
-            ).toBeUndefined();
-          }
-          expect(messages.mock.contexts.length).toBeGreaterThan(0);
-          expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
-          expect(await scope.execute(readBindingApprovals)).toEqual([]);
-        },
-        { existingOnly: true },
-      );
-      await closeOpenClawStateDatabaseAsync();
-      messages.mockRestore();
-    },
-  );
+  it("keeps writer inspection and the first Web Push operation in the same actor", async () => {
+    const captured = context();
+    await seedMetadata(captured);
+    const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    await runOpenClawStateWorkerOperation(
+      reopened,
+      async (scope) => {
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+        const actorWorker = messages.mock.contexts[0];
+        expect(actorWorker).toBeInstanceOf(Worker);
+        messages.mockClear();
+        expect(
+          await scope.execute({
+            type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+            input: {},
+          }),
+        ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+        expect(messages.mock.contexts.length).toBeGreaterThan(0);
+        expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+      },
+      { existingOnly: true },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    messages.mockRestore();
+  });
 
   it("leaves a missing database absent for existing-only inspection", async () => {
     const captured = context();
@@ -376,9 +363,14 @@ describe("canonical shared-state worker admission", () => {
         expect(
           await executeOpenClawStateWorker(alias, {
             type: "audit.writer.prune",
-            input: "events",
+            input: undefined,
           }),
-        ).toMatchObject({ status: "settled", error: expect.any(String) });
+        ).toEqual([
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+        ]);
       } else {
         await expect(
           executeOpenClawStateWorker(
@@ -551,14 +543,18 @@ describe("canonical shared-state worker admission", () => {
           );
         }
         const relocated = relocatedDuringCallback ?? relocatedDuringAliasCallback ?? relocate();
-        if (!healthyActor) {
-          await write(relocated);
-        }
-
         expect(existsSync(originalPath)).toBe(false);
         if (survivingAlias) {
           survivingAlias.admission.assertCurrent();
           expect(original.admission.assertCurrent).toThrow(/read admission changed/);
+        }
+        if (!healthyActor) {
+          // Relocation ends the old actor; reopen explicitly after its callbacks settle.
+          await closeOpenClawStateDatabaseAsync();
+          const current = relocatedMaintenance.run(() =>
+            captureOpenClawStateWorkerContext(databaseOptions(relocated)),
+          );
+          await write(current);
         }
         // Checkpoint the actor's opening path before inspecting its hardlink through B.
         await closeOpenClawStateDatabaseAsync();

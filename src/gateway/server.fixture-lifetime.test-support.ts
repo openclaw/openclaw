@@ -5,11 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type TestContext } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
 import { hasErrnoCode } from "../infra/errno.js";
 
 export function createGatewayFixtureFork(
+  workerRun: VitestWorkerRun,
   registerCleanup: (cleanup: () => Promise<void>) => unknown,
   maxBytes = 4 * 1024 * 1024,
 ) {
@@ -83,6 +85,7 @@ export default defineConfig({
         const reportFile = path.join(root, "report.json");
         let child: ChildProcess | undefined;
         const output = await runVitestShutdownCommand({
+          workerRun,
           args: [
             path.join(vitestPackageDir, "vitest.mjs"),
             "run",

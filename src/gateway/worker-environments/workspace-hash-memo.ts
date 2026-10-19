@@ -10,18 +10,6 @@ export type WorkspaceHashMetrics = {
 
 export type WorkspaceHashMemo = Map<string, string>;
 
-export type WorkspaceReconcileMetrics = {
-  gateway: WorkspaceHashMetrics;
-  remoteManifestCalls: number;
-  remoteContentHashCount: number;
-  remoteMemoHitCount: number;
-  remoteMemoTruncatedCount: number;
-  remoteHashDurationMs: number;
-  remoteManifestDurationMs: number;
-  remoteManifestWallDurationMs: number;
-  localReconciliationDurationMs: number;
-};
-
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
 export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 25_000;
 
@@ -79,24 +67,6 @@ type WorkspaceHashContext = {
 };
 
 const workspaceHashContext = new AsyncLocalStorage<WorkspaceHashContext>();
-
-export function createWorkspaceReconcileMetrics(): WorkspaceReconcileMetrics {
-  return {
-    gateway: {
-      contentHashCount: 0,
-      contentHashDurationMs: 0,
-      memoHitCount: 0,
-    },
-    remoteManifestCalls: 0,
-    remoteContentHashCount: 0,
-    remoteMemoHitCount: 0,
-    remoteMemoTruncatedCount: 0,
-    remoteHashDurationMs: 0,
-    remoteManifestDurationMs: 0,
-    remoteManifestWallDurationMs: 0,
-    localReconciliationDurationMs: 0,
-  };
-}
 
 export function activeWorkspaceHashContext(): WorkspaceHashContext | undefined {
   return workspaceHashContext.getStore();
@@ -217,27 +187,4 @@ export function serializeRemoteWorkspaceHashMemo(
   return JSON.stringify(
     selectWorkerWorkspaceHashMemoEntries(memo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, maxBytes),
   );
-}
-
-export function recordRemoteWorkspaceHashMetrics(
-  aggregate: WorkspaceReconcileMetrics,
-  metrics: RemoteWorkspaceManifestEnvelope["metrics"],
-): void {
-  aggregate.remoteContentHashCount += metrics.contentHashCount;
-  aggregate.remoteMemoHitCount += metrics.memoHitCount;
-  aggregate.remoteMemoTruncatedCount += metrics.memoTruncatedCount;
-  aggregate.remoteHashDurationMs += metrics.contentHashDurationMs;
-  aggregate.remoteManifestDurationMs += metrics.totalDurationMs;
-}
-
-export async function measureLocalWorkspaceReconciliation<T>(
-  metrics: WorkspaceReconcileMetrics,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const startedAt = performance.now();
-  try {
-    return await operation();
-  } finally {
-    metrics.localReconciliationDurationMs += performance.now() - startedAt;
-  }
 }

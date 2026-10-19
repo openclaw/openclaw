@@ -77,10 +77,6 @@ final class ChatSessionSidebarCatalogs {
                 self.reloadPreferences()
                 self.connection = connection
                 self.scheduleRefresh()
-            case let .changed(agent):
-                if self.connection?.changedEvents == true, agent == nil || agent?.lowercased() == self.agentID {
-                    self.scheduleRefresh()
-                }
             case .disconnected: self.stop()
             case .unavailable:
                 self.stop()
@@ -117,10 +113,9 @@ final class ChatSessionSidebarCatalogs {
             return
         }
         self.refreshTask?.cancel()
-        guard let connection else { return }
+        guard self.connection != nil else { return }
         let generation = self.generation
         self.refreshTask = Task {
-            // app-sidebar-session-catalog-live.ts:494: advertised events retain a ten-minute safety refresh.
             while self.current(generation) {
                 self.refreshPhase = .reading
                 await self.refresh()
@@ -128,7 +123,7 @@ final class ChatSessionSidebarCatalogs {
                 let invalidated = self.refreshPhase == .invalidated
                 self.refreshPhase = .idle
                 if invalidated { continue }
-                do { try await self.sleep(.seconds(connection.changedEvents ? 600 : 30)) } catch { return }
+                do { try await self.sleep(.seconds(120)) } catch { return }
             }
         }
     }
@@ -202,7 +197,7 @@ final class ChatSessionSidebarCatalogs {
             }
             guard self.current(generation) else { return }
             let retained = self.catalogs.filter { !eligible($0.id) }
-            // A skipped window still owns the event invalidation; retry once paging settles, not on its safety timer.
+            // Retry skipped windows once paging settles instead of waiting for the next poll.
             self.refreshAfterPages = self.refreshAfterPages || !retained.isEmpty
             self.catalogs = fresh.compactMap { catalog in
                 eligible(catalog.id) ? self.resumeDiscovery(catalog) : retained.first { $0.id == catalog.id }

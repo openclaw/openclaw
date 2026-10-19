@@ -11,7 +11,6 @@ import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["chrome-devtools-mcp@1.10.1", "patches/chrome-devtools-mcp@1.10.1.patch"],
-  ["@awesome.me/webawesome@3.14.0", "patches/@awesome.me__webawesome@3.14.0.patch"],
   ["@novnc/novnc@1.7.0", "patches/@novnc__novnc@1.7.0.patch"],
   ["vitest@5.0.3", "patches/vitest@5.0.3.patch"],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],

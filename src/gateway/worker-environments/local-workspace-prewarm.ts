@@ -40,7 +40,10 @@ export async function prewarmLocalWorkspaceTemplates(params: {
   try {
     for (const agentId of listAgentIds(config)) {
       const sandbox = resolveSandboxConfigForAgent(config, agentId);
-      if (sandbox.backend !== "docker" && sandbox.backend !== "podman") {
+      if (
+        sandbox.mode === "off" ||
+        (sandbox.backend !== "docker" && sandbox.backend !== "podman")
+      ) {
         continue;
       }
       try {

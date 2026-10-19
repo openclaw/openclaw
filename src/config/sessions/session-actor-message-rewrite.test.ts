@@ -6,6 +6,7 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
   appendTranscriptEventInTransaction,
+  appendTranscriptEventsInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { withActor, type Fixture } from "./session-actor-worker.test-support.js";
@@ -14,6 +15,7 @@ import {
   prepareSessionMessageRewrite,
 } from "./session-message-rewrite.worker.js";
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionMessageRewriteSelection } from "./session-transcript-mutation.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 
@@ -33,7 +35,7 @@ const question = {
   message,
 };
 
-function fixture(f: Fixture, pretty = false) {
+function fixture(f: Fixture, pretty = false, sideEvents = 0) {
   const header = {
     type: "session",
     id: f.scope.sessionId,
@@ -45,6 +47,21 @@ function fixture(f: Fixture, pretty = false) {
   runSqliteImmediateTransactionSync(f.database.db, () => {
     appendTranscriptEventInTransaction(f.database, f.scope, header);
     appendTranscriptEventInTransaction(f.database, f.scope, question, { eventJson });
+    appendTranscriptEventsInTransaction(
+      f.database,
+      f.scope,
+      Array.from({ length: sideEvents }, (_, index) => ({
+        type: "custom",
+        id: `side-${index}`,
+        parentId: index === 0 ? question.id : `side-${index - 1}`,
+        appendMode: "side",
+        data: { synthetic: true },
+      })),
+      { scheduleProjectionReconcile: false },
+    );
+    if (sideEvents > 0) {
+      reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId);
+    }
   });
   f.read();
   const anchor = readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, {
@@ -118,6 +135,24 @@ it("reuses resident metadata while preserving exact payload bytes and observing 
       rewrite.header,
       { ...question, message: finalMessage },
     ]);
+  });
+});
+
+it("rewrites an active anchor older than the resident transcript window", async () => {
+  await withActor((f) => {
+    const rewrite = fixture(f, false, 520);
+    const expected = rewrite.prepare();
+    expect(expected.eventJson).toBe(rewrite.eventJson);
+    const updated = { ...message, __openclaw: { steerTargetRunId: "historical-run" } };
+    expect(rewrite.commit(expected, updated).result).toMatchObject({
+      messageId: question.id,
+      message: updated,
+    });
+    expect(rewrite.prepare().event.message).toEqual(updated);
+    const rows = rewrite.rows();
+    expect(rows).toHaveLength(522);
+    expect(JSON.parse(rows[1]!.eventJson)).toEqual({ ...question, message: updated });
+    expect(JSON.parse(rows.at(-1)!.eventJson)).toMatchObject({ id: "side-519" });
   });
 });
 

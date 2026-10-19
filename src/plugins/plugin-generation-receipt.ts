@@ -4,8 +4,8 @@ import {
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
 import { hashPluginSourceFile } from "./plugin-source-file.js";
+import type { PluginCapturedSourceFact as PluginSourceContent } from "./plugin-source-verification.js";
 
-type PluginSourceContent = { contentHash: string; sizeBytes: number };
 type PluginGenerationReceipt = { signature: string; sourceDigest: string };
 type PluginReceiptFile = {
   target: string;

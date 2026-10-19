@@ -33,7 +33,7 @@ const RAW_REPLY_SEND_METHODS = {
   final: "sendFinalReply",
 } as const;
 
-type LedgerQueuedSend = {
+export type LedgerQueuedSend = {
   queued: boolean;
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
   hasPendingDelivery?: () => boolean;
@@ -82,7 +82,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       return;
     }
     outcomes.add(outcome);
-    if (kind === "tool" || !isReplyPayloadTerminalContent(payload)) {
+    const terminalFailureNotice =
+      kind === "final" && payload.isError === true && payload.isStatusNotice === true;
+    if (kind === "tool" || (!isReplyPayloadTerminalContent(payload) && !terminalFailureNotice)) {
       return;
     }
     if (outcome === "delivered" && !pending) {
@@ -179,7 +181,6 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
     hasObservedDelivery: () => outcomes.has("delivered"),
     canAttemptFallback: () =>
       !mayHaveDelivered() && !pendingDelivery && !outcomes.has("recovery-owned"),
-    hasPendingDelivery: () => pendingDelivery,
     resolveTerminalDelivery: () => terminalDelivery,
   };
 }

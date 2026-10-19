@@ -3,7 +3,7 @@ import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createContext, createGateway, operatorHello } from "./cron-page.test-support.tsx";
-import { CronEventEditorController } from "./event-editor.ts";
+import { createCronEventEditor } from "./event-editor.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
 // No mounted page or timer is needed: the controller receives the same live
@@ -38,7 +38,7 @@ describe("event editor scope hydration", () => {
       eventServer: "reviews",
     };
     const connection = { client, epoch: 1 };
-    const editor = new CronEventEditorController({
+    const editor = createCronEventEditor({
       currentCronState: () => cron,
       context: () => context,
       canManage: () => true,
@@ -89,7 +89,7 @@ describe("event editor discovery lifetime", () => {
     Object.defineProperty(context.runtimeConfig, "state", { get: configRead });
     const cron = createInitialCronState({ client, connected: true });
     const connection = { client, epoch: 1 };
-    const editor = new CronEventEditorController({
+    const editor = createCronEventEditor({
       currentCronState: () => cron,
       context: () => context,
       canManage: () => true,
@@ -154,7 +154,7 @@ describe("event definition replacement", () => {
         eventName: "changed",
       };
       const connection = { client, epoch: 1 };
-      const editor = new CronEventEditorController({
+      const editor = createCronEventEditor({
         currentCronState: () => cron,
         context: () => context,
         canManage: () => true,

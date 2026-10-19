@@ -219,6 +219,5 @@ async function performCreatedComposerAdmission(
       void resumeStoredChatOutboxes(host);
     }
   }
-  host.requestUpdate?.();
   return true;
 }

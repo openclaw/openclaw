@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ControlUiDisposer,
   ControlUiHost,
@@ -119,11 +120,18 @@ export function createControlUiPluginHost(
     request: (method, params = {}) => call(() => owner.client.request(method, params)),
     onEvent(event, listener) {
       return retain(
-        current().gateway.subscribeEvents((frame) => {
-          if (runtime.isCurrent(owner) && frame.event === event) {
-            listener(frame.payload);
-          }
-        }),
+        current().gateway.subscribeEvents(
+          (frame) => {
+            if (
+              runtime.isCurrent(owner) &&
+              frame.event === event &&
+              (event !== "session.message" || asOptionalRecord(frame.payload)?.message != null)
+            ) {
+              listener(frame.payload);
+            }
+          },
+          { includeMessageBodies: event === "session.message" },
+        ),
       );
     },
     subscribe(listener) {
@@ -203,7 +211,8 @@ export function createControlUiPluginHost(
       open({ sessionKey, agentId }) {
         openPreferredApplicationSession(current(), sessionKey, agentId);
       },
-      create: (params) => call((context) => context.sessions.create(params)),
+      create: (params) =>
+        call((context) => context.sessions.create(params, { signal: owner.abort.signal })),
       patch: ({ sessionKey, agentId }, patch) =>
         call(async (context) => {
           // A plugin query may target another global owner. Its mutation does not

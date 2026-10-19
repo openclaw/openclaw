@@ -199,7 +199,7 @@ function createContainerSandboxBackendHandle(params: {
       browser: params.engine.id === "docker",
       readOnlyResourceMounts: true,
     },
-    async buildExecSpec({ command, workdir, env: requestedEnv, usePty }) {
+    async buildExecSpec({ command, workdir, env: requestedEnv, usePty, stdin }) {
       await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
       const identity = params.githubIdentity;
       const githubProfileDir = identity?.localIdentityEnv.GH_CONFIG_DIR;
@@ -244,7 +244,7 @@ function createContainerSandboxBackendHandle(params: {
               })
             : argv,
           env: process.env,
-          stdinMode: usePty ? "pipe-open" : "pipe-closed",
+          stdinMode: usePty || stdin ? "pipe-open" : "pipe-closed",
           finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
         };
       } catch (error) {

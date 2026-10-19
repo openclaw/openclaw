@@ -120,6 +120,7 @@ public struct OpenClawChatView: View {
     @State private var contentWidth: CGFloat = 0
     @State private var scrollerBottomID = UUID()
     @State private var scrollCommand = ChatScrollCommand()
+    @State private var dismissedProgressCards: Set<String> = []
     @State private var hasPerformedInitialScroll = false
     @State private var lastTurnStartID: UUID?
     @State private var hasNewerContentBelow = false
@@ -349,10 +350,20 @@ extension OpenClawChatView {
     @ViewBuilder
     private var progressCard: some View {
         if let progressCard = self.viewModel.progressCard {
-            ChatProgressCard(
-                steps: progressCard.steps ?? [],
-                markdown: progressCard.markdown,
-                isInline: self.usesInlineProgressCard)
+            // Dismissal lasts until the card changes: an update is worth showing again.
+            let signature = String(describing: progressCard)
+            if !self.dismissedProgressCards.contains(signature) {
+                ChatProgressCard(
+                    steps: progressCard.steps ?? [],
+                    markdown: progressCard.markdown,
+                    isInline: self.usesInlineProgressCard,
+                    isRefreshing: self.viewModel.progressCardRefreshPending,
+                    onRefresh: self.viewModel.progressCardRefreshAvailable
+                        ? { self.viewModel.requestProgressCardRefresh() } : nil,
+                    onClearSaved: self.viewModel.progressCardStoreAvailable == true
+                        ? { self.viewModel.clearSavedProgressCard() } : nil,
+                    onDismiss: { self.dismissedProgressCards.insert(signature) })
+            }
         }
     }
 

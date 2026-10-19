@@ -3,15 +3,19 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PersonalInstructions } from "./personal-instructions.tsx";
-import { createConnectedContext, mountProfilePage } from "./profile-page.test-support.tsx";
+import {
+  createConnectedContext,
+  modelAccountProfile,
+  mountProfilePage,
+} from "./profile-page.test-support.tsx";
+import { disconnectedGitHub, mockRpc } from "./profile-rpc.test-support.ts";
 
 const file = {
   agentId: "main",
@@ -28,9 +32,7 @@ const hello = {
   policy: { hasMultipleSessionSharingIdentities: true },
   auth: { role: "operator", scopes: ["operator.read"] },
 } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
-beforeEach(async () => {
-  await i18n.setLocale("en");
-});
+beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -41,59 +43,28 @@ function createContext(
   signedIn = true,
   multipleProfiles = true,
 ) {
-  const base = createConnectedContext(
+  const harness = createConnectedContext(
     request,
     signedIn ? { id: "profile-1", name: "Ada" } : null,
-  ).context;
-  let snapshot: ApplicationGatewaySnapshot = {
-    ...base.gateway.snapshot,
-    hello: {
-      ...hello,
-      policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
-    },
-  };
-  const listeners = new Set<() => void>();
-  const agents: ApplicationContext["agents"] = {
-    ...base.agents,
-    state: {
-      ...base.agents.state,
-      agentsList: {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "other", name: "Other" },
-        ],
-      },
-    },
-  };
-  const selection = createAgentSelectionCapability(base.gateway, agents, undefined, undefined, {
-    requireConfiguredAgent: true,
+  );
+  const base = harness.context;
+  harness.emitHello({
+    ...hello,
+    policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
   });
-  const context: ApplicationContext = {
-    ...base,
-    agents,
-    settingsAgentSelection: selection,
-    gateway: {
-      ...base.gateway,
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener) {
-        const notify = () => listener(snapshot);
-        listeners.add(notify);
-        return () => listeners.delete(notify);
-      },
-    },
+  const agents = base.agents;
+  agents.state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: ["main", "other"].map((id) => ({ id })),
   };
+  const selection = base.settingsAgentSelection;
+  selection.set("main");
   return {
-    context,
+    context: base,
     selection,
-    emit: (patch: Partial<ApplicationGatewaySnapshot>) => {
-      snapshot = { ...snapshot, ...patch };
-      listeners.forEach((listener) => listener());
-    },
+    emit: (patch: Parameters<typeof harness.emitSnapshot>[0]) => harness.emitSnapshot(patch),
   };
 }
 function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
@@ -103,6 +74,36 @@ function mount(request: GatewayBrowserClient["request"], signedIn = true, multip
     wrapper: provider.wrapper,
   });
   return { ...harness, element };
+}
+type PersonalFile = Omit<typeof file, "hash"> & { hash: string | null };
+function replies(...results: (Partial<PersonalFile> | Promise<PersonalFile> | Error)[]) {
+  const request = vi.fn();
+  for (const result of results) {
+    if (result instanceof Error) {
+      request.mockRejectedValueOnce(result);
+    } else if (result instanceof Promise) {
+      request.mockReturnValueOnce(result);
+    } else {
+      request.mockResolvedValueOnce({ ...file, ...result });
+    }
+  }
+  return request;
+}
+async function loaded(request = replies({})) {
+  const harness = mount(request);
+  await idle(harness.element);
+  return { ...harness, request };
+}
+function clientFile(result: Partial<PersonalFile>) {
+  return createTestGatewayClient(vi.fn().mockResolvedValue({ ...file, ...result }));
+}
+async function save(element: HTMLElement, content: string) {
+  await input(element, content);
+  button(element, "Save").click();
+  await idle(element);
+}
+function idle(element: HTMLElement) {
+  return waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
 }
 function button(element: HTMLElement, text: string) {
   return [...element.querySelectorAll("button")].find((el) => el.textContent?.trim() === text)!;
@@ -114,15 +115,11 @@ async function input(element: HTMLElement, value: string) {
   flush();
 }
 
-it.each([true])("saves the signed-in personal file (missing: %s)", async (missing) => {
-  const initial = missing ? { ...file, content: "", hash: null, missing } : file;
-  const content = missing ? "New file" : "Draft";
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(initial)
-    .mockResolvedValueOnce({ ...file, content, hash: "hash-2" });
-  const { element } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+it("creates the signed-in personal file", async () => {
+  const initial = { ...file, content: "", hash: null, missing: true };
+  const content = "New file";
+  const request = replies(initial, { content, hash: "hash-2" });
+  const { element } = await loaded(request);
   expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
   expect(button(element, "Save").disabled).toBe(true);
   expect(button(element, "Reload")).toBeUndefined();
@@ -134,15 +131,11 @@ it.each([true])("saves the signed-in personal file (missing: %s)", async (missin
   expect(editor?.getAttribute("aria-label")).toBe("Personal instructions");
   expect(editor?.getAttribute("aria-describedby")).toBe("personal-instructions-guidance");
   expect(editor?.rows).toBe(7);
-  if (missing) {
-    expect(element.textContent).toContain("created when you save");
-    await input(element, "x".repeat(4001));
-    expect(button(element, "Save").disabled).toBe(true);
-    expect(element.querySelector('[role="alert"]')?.textContent).toContain("4,000");
-  }
-  await input(element, content);
-  button(element, "Save").click();
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  expect(element.textContent).toContain("created when you save");
+  await input(element, "x".repeat(4001));
+  expect(button(element, "Save").disabled).toBe(true);
+  expect(element.querySelector('[role="alert"]')?.textContent).toContain("4,000");
+  await save(element, content);
   expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
     agentId: "main",
     content,
@@ -153,14 +146,14 @@ it.each([true])("saves the signed-in personal file (missing: %s)", async (missin
 });
 
 it.each([
-  { signedIn: false, multipleProfiles: true },
-  { signedIn: true, multipleProfiles: false },
+  [false, true],
+  [true, false],
 ])(
-  "never loads personal files with $signedIn sign-in and $multipleProfiles profiles",
-  async ({ signedIn, multipleProfiles }) => {
+  "never loads personal files with sign-in=%s and multiple profiles=%s",
+  async (signedIn, multipleProfiles) => {
     const request = signedIn ? vi.fn().mockResolvedValue(file) : vi.fn();
     const { element } = mount(request, signedIn, multipleProfiles);
-    await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+    await idle(element);
     expect(request).not.toHaveBeenCalled();
     expect(element.querySelector("textarea")).toBeNull();
     if (!multipleProfiles) {
@@ -170,74 +163,64 @@ it.each([
 );
 
 it("preserves a conflicting draft, confirms reload, and keeps it when reload fails", async () => {
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockRejectedValueOnce(new Error("Personal USER.md changed since read"))
-    .mockRejectedValueOnce(new Error("Offline"))
-    .mockResolvedValueOnce({ ...file, content: "External edit", hash: "hash-new" });
-  const { element } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
-  await input(element, "My draft");
-  button(element, "Save").click();
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  const request = replies(
+    {},
+    new Error("Personal USER.md changed since read"),
+    new Error("Offline"),
+    { content: "External edit", hash: "hash-new" },
+  );
+  const { element } = await loaded(request);
+  await save(element, "My draft");
   expect(element.querySelector("textarea")?.value).toBe("My draft");
   expect(element.querySelector('[role="alert"]')?.textContent).toContain("changed since read");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   button(element, "Reload").click();
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(request).toHaveBeenCalledTimes(2);
   confirm.mockReturnValue(true);
   button(element, "Reload").click();
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")?.value).toBe("My draft");
   button(element, "Reload").click();
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")?.value).toBe("External edit");
   expect(button(element, "Reload")).toBeUndefined();
 });
 
 it("never restores a former person's cached draft after an account change", async () => {
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other agent" });
-  const { element, selection, emit } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  const request = replies({}, { agentId: "other", content: "Other agent" });
+  const { element, selection, emit } = await loaded(request);
   await input(element, "Former person's draft");
   selection.set("other");
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   emit({
     selfUser: { id: "profile-2" },
-    client: createTestGatewayClient(
-      vi.fn().mockResolvedValue({
-        ...file,
-        profileId: "profile-2",
-        agentId: "other",
-        content: "New person",
-      }),
-    ),
+    client: clientFile({ profileId: "profile-2", agentId: "other", content: "New person" }),
   });
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   selection.set("main");
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")?.value).not.toBe("Former person's draft");
 });
 
-it.each(["agent", "profile", "connection hello"])(
-  "ignores a late read after changing %s",
-  async (change) => {
-    const old = createDeferred<typeof file>();
-    const current = {
-      ...file,
-      agentId: change === "agent" ? "other" : file.agentId,
-      profileId: change === "profile" ? "profile-2" : file.profileId,
-      content: "Current instructions",
-    };
+it.each([
+  ["agent", "other", "profile-1", false],
+  ["profile", "main", "profile-2", false],
+  ["connection hello", "main", "profile-1", false],
+  ["connection hello", "main", "profile-1", true],
+] as const)(
+  "retires the old read after %s targeting %s/%s (replacement pending: %s)",
+  async (change, agentId, profileId, pending) => {
+    const old = createDeferred<PersonalFile>();
+    const replacement = createDeferred<PersonalFile>();
+    const current = { ...file, agentId, profileId, content: "Current instructions" };
     const request =
       change === "profile"
         ? vi.fn().mockReturnValue(old.promise)
-        : vi.fn().mockReturnValueOnce(old.promise).mockResolvedValueOnce(current);
+        : vi
+            .fn()
+            .mockReturnValueOnce(old.promise)
+            .mockReturnValueOnce(pending ? replacement.promise : Promise.resolve(current));
     const { element, selection, emit } = mount(request);
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
@@ -246,50 +229,37 @@ it.each(["agent", "profile", "connection hello"])(
     if (change === "agent") {
       selection.set("other");
     } else if (change === "profile") {
-      emit({
-        client: createTestGatewayClient(vi.fn().mockResolvedValue(current)),
-        selfUser: { id: "profile-2" },
-      });
+      emit({ client: clientFile(current), selfUser: { id: "profile-2" } });
     } else {
       emit({ hello: { ...hello, server: { connId: "connection-2" } } });
     }
-    await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+    if (pending) {
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    } else {
+      await idle(element);
+    }
     old.resolve(file);
     await old.promise;
-    await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+    if (pending) {
+      flush();
+      expect(element.querySelector("textarea")).toBeNull();
+      expect(button(element, "Save").disabled).toBe(true);
+      replacement.resolve(current);
+    }
+    await idle(element);
     expect(element.querySelector("textarea")?.value).toBe(current.content);
+    if (pending) {
+      await input(element, "New draft");
+      expect(element.querySelector("textarea")).toMatchObject({ value: "New draft" });
+      expect(button(element, "Save").disabled).toBe(false);
+    }
   },
 );
 
-it("keeps a replacement load locked when the previous connection's read completes", async () => {
-  const old = createDeferred<typeof file>();
-  const current = createDeferred<typeof file>();
-  const request = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
-  const { element, emit } = mount(request);
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
-  emit({ hello: { ...hello, server: { connId: "connection-2" } } });
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-
-  old.resolve(file);
-  await old.promise;
-  flush();
-  expect(element.querySelector("textarea")).toBeNull();
-  expect(button(element, "Save").disabled).toBe(true);
-
-  current.resolve({ ...file, content: "Current instructions" });
-  await waitForSolid(() =>
-    expect(element.querySelector("textarea")?.value).toBe("Current instructions"),
-  );
-  await input(element, "New draft");
-  expect(element.querySelector("textarea")?.value).toBe("New draft");
-  expect(button(element, "Save").disabled).toBe(false);
-});
-
 it("retains the unsettled draft but ignores an old save completion after reconnecting", async () => {
   const saving = createDeferred<typeof file>();
-  const request = vi.fn().mockResolvedValueOnce(file).mockReturnValueOnce(saving.promise);
-  const { element, emit } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  const request = replies({}, saving.promise);
+  const { element, emit } = await loaded(request);
   await input(element, "Old draft");
   button(element, "Save").click();
   await waitForSolid(() => {
@@ -304,26 +274,24 @@ it("retains the unsettled draft but ignores an old save completion after reconne
     element.querySelector<HTMLButtonElement>(".personal-instructions__actions button")?.disabled,
   ).toBe(true);
   emit({
-    client: createTestGatewayClient(
-      vi.fn().mockResolvedValue({ ...file, content: "Current connection" }),
-    ),
+    client: clientFile({ content: "Current connection" }),
   });
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   saving.resolve({ ...file, content: "Old draft" });
   await saving.promise;
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")?.value).toBe("Old draft");
   expect(element.textContent).toContain("Unsaved changes");
 });
 
 it("preserves newer draft edits after returning to an agent with a pending save", async () => {
   const saving = createDeferred<typeof file>();
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockReturnValueOnce(saving.promise)
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" })
-    .mockResolvedValueOnce({ ...file, hash: "hash-3" });
+  const request = replies(
+    {},
+    saving.promise,
+    { agentId: "other", content: "Other instructions" },
+    { hash: "hash-3" },
+  );
   const { element, selection } = mount(request);
   await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe(file.content));
   await input(element, "First edit");
@@ -357,8 +325,7 @@ it("preserves newer draft edits after returning to an agent with a pending save"
 
 it("rejects a response for a different profile rather than enabling a save", async () => {
   const request = vi.fn().mockResolvedValue({ ...file, profileId: "someone-else" });
-  const { element } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  const { element } = await loaded(request);
   expect(element.querySelector("textarea")).toBeNull();
   expect(button(element, "Save").disabled).toBe(true);
   expect(element.querySelector('[role="alert"]')?.textContent).toContain("does not match");
@@ -380,51 +347,61 @@ it("retires a pending read after read access is revoked", async () => {
   });
   old.resolve(file);
   await old.promise;
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")).toBeNull();
 });
 
 it("retains drafts privately while offline and restores them only for the same profile", async () => {
   const request = vi.fn().mockResolvedValue(file);
-  const { element, emit } = mount(request);
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  const { element, emit } = await loaded(request);
   await input(element, "Keep my unsaved instructions");
   emit({ phase: "offline", selfUser: null });
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")).toBeNull();
   emit({ phase: "connected", selfUser: null });
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")).toBeNull();
   expect(request).toHaveBeenCalledTimes(1);
   emit({ phase: "connected", selfUser: { id: "profile-1" } });
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")?.value).toBe("Keep my unsaved instructions");
   expect(request).toHaveBeenCalledTimes(1);
   emit({ phase: "offline", selfUser: null });
   emit({ phase: "connected", selfUser: null });
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")).toBeNull();
   const otherRequest = vi
     .fn()
     .mockResolvedValue({ ...file, profileId: "profile-2", content: "Other person" });
   emit({ client: createTestGatewayClient(otherRequest), selfUser: { id: "profile-2" } });
-  await waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(element);
   expect(element.querySelector("textarea")?.value).toBe("Other person");
 });
 
 it("keeps the actual Profile editor mounted across an offline transition", async () => {
-  const { context, emit } = createContext(vi.fn().mockResolvedValue(file));
+  const request = mockRpc({
+    "users.self": () => ({ profile: modelAccountProfile }),
+    "users.personalFile.get": () => file,
+    "users.listModelAccounts": () => ({
+      profileId: modelAccountProfile.id,
+      accounts: [],
+      links: [],
+    }),
+    "users.github.status": () => disconnectedGitHub,
+  });
+  const client = createTestGatewayClient(request);
+  const { context, emit } = createContext(client.request.bind(client));
   const page = mountProfilePage(context);
   flush();
   const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;
-  await waitForSolid(() => expect(editor.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(editor);
   await input(editor, "Keep this draft across a network interruption");
   emit({ phase: "reconnecting" });
   flush();
   expect(page.querySelector("openclaw-personal-instructions")).toBe(editor);
   emit({ phase: "connected" });
   flush();
-  await waitForSolid(() => expect(editor.querySelector('[aria-busy="true"]')).toBeNull());
+  await idle(editor);
   expect(editor.querySelector("textarea")?.value).toBe(
     "Keep this draft across a network interruption",
   );

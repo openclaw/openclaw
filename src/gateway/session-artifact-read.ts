@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -16,6 +15,7 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
@@ -335,7 +335,7 @@ function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { 
 }
 
 const summaryLists = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   Map<string, { revision: string; artifacts: ArtifactRecord[] }>
 >();
 

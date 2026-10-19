@@ -1,6 +1,3 @@
-/**
- * Codex CLI and app-server bundle MCP projection helpers.
- */
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";

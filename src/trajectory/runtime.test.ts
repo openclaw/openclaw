@@ -1,4 +1,3 @@
-// Trajectory runtime tests cover event recording and runtime file handling.
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -25,6 +24,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+// Trajectory runtime tests cover event recording and runtime file handling.
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
 import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import {
@@ -155,8 +156,10 @@ describe("trajectory runtime", () => {
     const database = openOpenClawAgentDatabase(
       toDatabaseOptions(resolveSqliteReadScope({ sessionKey, storePath })),
     );
-    const statements = trackSqliteStatementExecutions(database.db, ["trajectory"], (sql) =>
-      sql.includes("trajectory_runtime_events") ? "trajectory" : null,
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["trajectory"],
+      (sql) => (sql.includes("trajectory_runtime_events") ? "trajectory" : null),
     );
     try {
       await runtimeRecorder.flush();
@@ -495,6 +498,86 @@ describe("trajectory runtime", () => {
     expect(parsed.data).toEqual(data);
     expect(JSON.stringify(parsed.data)).toBe(JSON.stringify(data));
     expect(parsed.data.truncated).toBeUndefined();
+  });
+
+  it("keeps structured tool output and usage below the event byte limit", async () => {
+    const writes: string[] = [];
+    const recorder = expectTrajectoryRuntimeRecorder(await createCapturedRuntimeRecorder(writes));
+    const contentItems = Array.from({ length: 64 }, (_, index) => ({
+      type: "inputText",
+      text: `line ${String(index)}`,
+    }));
+    const usage = { input: 120, output: 30, total: 150 };
+
+    recorder.recordEvent("tool.result", {
+      toolCallId: "call-1",
+      name: "exec",
+      success: true,
+      contentItems,
+    });
+    recorder.recordEvent("model.completed", { messagesSnapshot: contentItems, usage });
+    recorder.recordEvent("model.completed", { usage, messagesSnapshot: contentItems });
+
+    const events = writes.map((line) => JSON.parse(line));
+    expect(events[0].data.contentItems).toEqual(contentItems);
+    expect(events[1].data.usage).toEqual(usage);
+    expect(events[2].data.usage).toEqual(usage);
+    for (const line of writes) {
+      expect(Buffer.byteLength(line)).toBeLessThan(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES);
+      expect(line).not.toContain("[Truncated]");
+    }
+  });
+
+  it("retains explicit array and object capture-limit markers", async () => {
+    const writes: string[] = [];
+    const recorder = expectTrajectoryRuntimeRecorder(await createCapturedRuntimeRecorder(writes));
+    recorder.recordEvent("tool.result", {
+      contentItems: Array.from({ length: 65 }, () => ({ output: "line" })),
+      result: Object.fromEntries(
+        Array.from({ length: 65 }, (_, index) => [`field${String(index)}`, index]),
+      ),
+    });
+
+    const event = JSON.parse(expectDefined(writes[0], "captured event"));
+    expect(event.data.contentItems).toHaveLength(65);
+    expect(event.data.contentItems[0]).toEqual({ output: "line" });
+    expect(event.data.contentItems[64]).toMatchObject({
+      truncated: true,
+      reason: "trajectory-array-size-limit",
+      originalLength: 65,
+    });
+    expect(event.data.result["_truncated"]).toMatchObject({
+      truncated: true,
+      reason: "trajectory-object-size-limit",
+      originalKeys: 65,
+    });
+  });
+
+  it("preserves tool identity and outcome when oversized result content is dropped", async () => {
+    const writes: string[] = [];
+    const recorder = expectTrajectoryRuntimeRecorder(await createCapturedRuntimeRecorder(writes));
+    const outcome = {
+      toolCallId: "call-1",
+      name: "exec",
+      status: "completed",
+      success: true,
+      isError: false,
+    };
+    recorder.recordEvent("tool.result", {
+      ...outcome,
+      contentItems: Array.from({ length: 64 }, () => ({
+        type: "inputText",
+        text: "x".repeat(8192),
+      })),
+    });
+
+    const line = expectDefined(writes[0], "captured event");
+    expect(JSON.parse(line).data).toMatchObject({
+      ...outcome,
+      truncated: true,
+      droppedFields: ["contentItems"],
+    });
+    expect(Buffer.byteLength(line)).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES);
   });
 
   it("preserves usage when truncating oversized runtime events", async () => {

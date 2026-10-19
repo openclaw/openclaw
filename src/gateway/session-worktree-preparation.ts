@@ -343,7 +343,8 @@ export async function prepareSessionWorktree(params: {
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, commitGuard } = params;
   const context = captureWorktreeRunEndContext(process.env);
-  const worktrees = new ManagedWorktreeService({ env: { ...process.env, ...context.environment } });
+  const env = { ...process.env, ...context.environment };
+  const worktrees = new ManagedWorktreeService({ env, getConfig: () => params.cfg });
   const sandboxRequired =
     target.sandboxRequired === true ||
     target.entry?.sandbox === "required" ||
@@ -417,8 +418,7 @@ export async function prepareSessionWorktree(params: {
         target.projectId ??
         target.entry?.projectId ??
         (params.acceptedSource?.kind === "project" ? params.acceptedSource.id : undefined);
-      const pendingSource = selectSessionWorktreeProjectSource(projectId, params.signal);
-      const selected = pendingSource ? await pendingSource : undefined;
+      const selected = await selectSessionWorktreeProjectSource(projectId, params.signal);
       if (selected) {
         const expectedRoot = fs.realpathSync(workspace);
         withSource = async (run) =>
@@ -632,7 +632,7 @@ export async function prepareSessionWorktreeCreation(params: {
   signal?: AbortSignal;
   commitGuard: () => void;
   onTitleError: (error: unknown) => void;
-  onTitlePersisted: () => void;
+  onTitleStateChanged: () => void;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { cfg, target: lifecycleTarget, signal, commitGuard, name, baseRef } = params;
   commitGuard();
@@ -740,7 +740,7 @@ export async function prepareSessionWorktreeCreation(params: {
           commitGuard,
           withSource,
           onError: params.onTitleError,
-          onPersisted: params.onTitlePersisted,
+          onTitleStateChanged: params.onTitleStateChanged,
         })
       : undefined;
   const prepared = await prepareSessionWorktree({

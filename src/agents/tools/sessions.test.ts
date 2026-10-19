@@ -7,7 +7,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
@@ -571,38 +574,6 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
-  it("prefers sessionKey over a redundant label", async () => {
-    const tool = createMainSessionsSendTool();
-
-    const result = await tool.execute("call-session-key-label", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-      label: "stale-label",
-      message: "    indented body",
-      timeoutSeconds: 0,
-    });
-
-    const details = requireDetails(result);
-    expect(details).toMatchObject({
-      status: "accepted",
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-    });
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: MAIN_AGENT_SESSION_KEY,
-          message: expect.stringMatching(/\n {4}indented body$/u),
-        }),
-      }),
-    ]);
-    expect(callGatewayMock.mock.calls).not.toContainEqual([
-      expect.objectContaining({
-        method: "sessions.resolve",
-        params: expect.objectContaining({ label: "stale-label" }),
-      }),
-    ]);
-  });
-
   it.each([
     { targetKey: "agent:main:dashboard:child", timeoutSeconds: 0 },
     { targetKey: "agent:main:subagent:child", timeoutSeconds: 1 },
@@ -973,7 +944,7 @@ describe("sessions_send gating", () => {
   });
 
   it.each([true, false])(
-    "uses source delivery without reading history (visible text: %s)",
+    "uses source delivery without resending (visible text: %s)",
     async (hasText) => {
       const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
       vi.mocked(runSessionsSendA2AFlow).mockClear();
@@ -1002,6 +973,27 @@ describe("sessions_send gating", () => {
           return { runId: "run-source-reply", acceptedAt: 123 };
         }
         if (request.method === "agent.wait") {
+          if (hasText) {
+            await persistSessionTranscriptTurn(
+              { agentId: "main", sessionKey: targetSessionKey, sessionId: targetSessionKey },
+              {
+                runId: "run-source-reply",
+                expectedSessionId: targetSessionKey,
+                touchSessionEntry: false,
+                updateMode: "none",
+                messages: [
+                  {
+                    message: {
+                      role: "assistant",
+                      phase: "final_answer",
+                      stopReason: "stop",
+                      content: [{ type: "text", text: "Already delivered to the source" }],
+                    },
+                  },
+                ],
+              },
+            );
+          }
           return {
             runId: "run-source-reply",
             status: "ok",
@@ -1010,7 +1002,7 @@ describe("sessions_send gating", () => {
               : { disposition: "empty" },
             terminalReceipt: {
               runId: "run-source-reply",
-              sessionId: "target-session",
+              sessionId: targetSessionKey,
               turnId: "target-turn",
               requested: { provider: "provider", model: "model" },
               effective: { provider: "provider", model: "model", responseModel: "model" },

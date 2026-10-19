@@ -112,7 +112,9 @@ export async function ensureMatrixStartupVerification(params: {
   if (verification.verified || mode === "off") {
     await createStartupVerificationStore(stateLocation)
       .delete(stateKey)
-      .catch(() => {});
+      .catch(() => {
+        // Cooldown cleanup cannot invalidate an already verified or disabled outcome.
+      });
     return {
       kind: verification.verified ? "verified" : "disabled",
       verification,
@@ -182,11 +184,13 @@ export async function ensureMatrixStartupVerification(params: {
       kind: "requested",
       verification,
       requestId: request.id,
-      transactionId: request.transactionId ?? undefined,
+      transactionId: request.transactionId,
     };
   } catch (err) {
     const error = formatErrorMessage(err);
-    await writeState({ outcome: "failed", error }).catch(() => {});
+    await writeState({ outcome: "failed", error }).catch(() => {
+      // Preserve the original verification error if its secondary failure record cannot be saved.
+    });
     return {
       kind: "request-failed",
       verification,

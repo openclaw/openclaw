@@ -16,7 +16,6 @@ import {
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import codexProviderDiscovery from "./provider-discovery.js";
-import { registerCodexAccountUsage } from "./src/account-usage.js";
 import { createCodexAuthProfileSelection } from "./src/app-server/auth-profile-selection.js";
 import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
 import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
@@ -84,21 +83,22 @@ export default definePluginEntry({
     noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
   },
   register(api) {
-    registerCodexAccountUsage(api);
+    api.registerGatewayMethod(
+      "codex.accountUsage",
+      async (options) => {
+        const { handleCodexAccountUsage } = await import("./src/account-usage-runtime.js");
+        await handleCodexAccountUsage(options);
+      },
+      { scope: "operator.admin" },
+    );
     api.registerService(codexNativeProfileRecoveryService);
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
     setManagedCodexPluginRoot(api.rootDir);
     api.registerProvider(codexProviderDiscovery);
-    const resolveCurrentConfig = () =>
-      api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
-    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
+    const resolveCurrentConfig = () => api.runtime.config.current() as OpenClawConfig;
+    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig) => {
       const liveConfig = resolveConfig();
-      // Codex plugin config can change at runtime. A missing live entry is an
-      // explicit removal, while an unavailable runtime snapshot uses startup config.
-      if (!liveConfig) {
-        return api.pluginConfig;
-      }
       const livePluginConfig = resolveLivePluginConfigObject(
         () => liveConfig,
         "codex",
@@ -154,6 +154,10 @@ export default definePluginEntry({
     const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
       // Final effect guards retain raw SDK revocations through 2026-12-31.
       lookup: (key) => openBindingStateStore().lookup(key),
+      prepareRead: async (key) => {
+        const { preparePluginStateRead } = await import("openclaw/plugin-sdk/plugin-state-runtime");
+        return await preparePluginStateRead(openBindingMutationStore(), key);
+      },
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
         lookupMany: (keys) => openBindingMutationStore().lookupMany(keys),
@@ -267,7 +271,7 @@ export default definePluginEntry({
       nativeCompaction: createCodexAppServerNativeCompaction(agentHarnessOptions),
     });
     api.registerMediaUnderstandingProvider(
-      buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
+      buildCodexMediaUnderstandingProvider({ pluginConfig: registrationConfig }),
     );
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
@@ -335,7 +339,7 @@ export default definePluginEntry({
           codexPluginsManagementIo: {
             readConfig: () => {
               const codexPlugins =
-                resolveCurrentConfig()?.plugins?.entries?.codex?.config?.codexPlugins;
+                resolveCurrentConfig().plugins?.entries?.codex?.config?.codexPlugins;
               if (!codexPlugins || typeof codexPlugins !== "object") {
                 return Promise.resolve({});
               }
@@ -376,7 +380,7 @@ export default definePluginEntry({
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
       }),
     );
-    api.onConversationBindingResolved?.((event) =>
+    api.onConversationBindingResolved((event) =>
       handleCodexConversationBindingResolved(event, { bindingStore }),
     );
     api.on("session_end", async (event, ctx) => {
@@ -415,7 +419,7 @@ export default definePluginEntry({
           sessionId: event.sessionId,
           ...(sessionKey ? { sessionKey } : {}),
           ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-          ...(config ? { config } : {}),
+          config,
         }),
         mode: "retire",
       });

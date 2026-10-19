@@ -1,8 +1,8 @@
-// Grouped auth-choice prompt tests cover configured-provider setup affordances.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import { isKeepCurrentAuthChoice, promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const buildAuthChoiceGroups = vi.hoisted(() => vi.fn());
 const compareAuthChoiceGroups = vi.hoisted(() =>
@@ -19,44 +19,6 @@ vi.mock("./auth-choice-options.js", () => ({
   compareAuthChoiceGroups,
   isFeaturedAuthChoiceGroup,
 }));
-
-function createPromptHarness(
-  onSelect: (params: WizardSelectParams<unknown>) => Promise<unknown>,
-): WizardPrompter {
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: vi.fn(onSelect) as WizardPrompter["select"],
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => true),
-    progress: vi.fn(() => ({
-      update: vi.fn(),
-      stop: vi.fn(),
-    })),
-  };
-}
-
-function openAIGroup(options?: Partial<AuthChoiceGroup>): AuthChoiceGroup {
-  return {
-    value: "openai",
-    label: "OpenAI",
-    providerIds: ["openai"],
-    options: [
-      {
-        value: "openai",
-        label: "ChatGPT Login",
-        onboardingFeatured: true,
-      },
-      {
-        value: "openai-api-key",
-        label: "OpenAI API Key",
-      },
-    ],
-    ...options,
-  };
-}
 
 function authChoiceGroup(
   value: string,
@@ -75,81 +37,86 @@ function authChoiceGroup(
   };
 }
 
+function openAIGroup(): AuthChoiceGroup {
+  const methods: Array<readonly [string, string]> = [
+    ["openai", "ChatGPT Login"],
+    ["openai-api-key", "OpenAI API Key"],
+  ];
+  return {
+    ...authChoiceGroup("openai", "OpenAI", methods, true),
+    providerIds: ["openai"],
+  };
+}
+
+function mockGroups(groups: AuthChoiceGroup[]) {
+  buildAuthChoiceGroups.mockReturnValue({
+    groups,
+    skipOption: { value: "skip", label: "Skip for now" },
+  });
+}
+
+function scriptedPrompter(steps: Array<string | readonly [message: string, answer: string]>) {
+  const prompts: WizardSelectParams<unknown>[] = [];
+  const select = async (params: WizardSelectParams<unknown>) => {
+    const step = steps[prompts.length];
+    if (!step || (typeof step !== "string" && step[0] !== params.message)) {
+      throw new Error(`unexpected prompt ${params.message}`);
+    }
+    prompts.push(params);
+    return typeof step === "string" ? step : step[1];
+  };
+  const prompter = makePrompter({
+    select: vi.fn(select) as WizardPrompter["select"],
+    confirm: vi.fn(async () => true),
+  });
+  return { prompter, prompts };
+}
+
+function optionValues(prompt: WizardSelectParams<unknown> | undefined) {
+  return prompt?.options.map((option) => option.value);
+}
+
 describe("promptAuthChoiceGrouped", () => {
   beforeEach(() => {
     buildAuthChoiceGroups.mockReset();
     compareAuthChoiceGroups
       .mockReset()
-      .mockImplementation((a: AuthChoiceGroup, b: AuthChoiceGroup) =>
-        a.label.localeCompare(b.label),
-      );
-    isFeaturedAuthChoiceGroup
-      .mockReset()
-      .mockImplementation((group: AuthChoiceGroup) =>
-        ["openai", "anthropic", "xai", "google", "openrouter"].includes(group.value),
-      );
+      .mockImplementation((a, b) => a.label.localeCompare(b.label));
+    isFeaturedAuthChoiceGroup.mockClear();
   });
 
   it("marks the configured provider and offers keep current config first", async () => {
-    buildAuthChoiceGroups.mockReturnValue({
-      groups: [
-        openAIGroup(),
-        {
-          value: "anthropic",
-          label: "Anthropic",
-          providerIds: ["anthropic"],
-          options: [
-            {
-              value: "apiKey",
-              label: "Anthropic API Key",
-              onboardingFeatured: true,
-            },
-          ],
-        },
-      ],
-      skipOption: { value: "skip", label: "Skip for now" },
-    });
-    let providerOptions: Array<{ value: unknown; label: string; hint?: string }> = [];
-    let methodOptions: Array<{ value: unknown; label: string; hint?: string }> = [];
-    const prompter = createPromptHarness(async (params) => {
-      if (params.message === "Model/auth provider") {
-        providerOptions = params.options;
-        return "openai";
-      }
-      if (params.message === "OpenAI auth method") {
-        methodOptions = params.options;
-        return "__keep-current";
-      }
-      throw new Error(`unexpected prompt ${params.message}`);
-    });
+    mockGroups([
+      openAIGroup(),
+      {
+        ...authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API Key"]], true),
+        providerIds: ["anthropic"],
+      },
+    ]);
+    const { prompter, prompts } = scriptedPrompter([
+      ["Model/auth provider", "openai"],
+      ["OpenAI auth method", "__keep-current"],
+    ]);
 
     const result = await promptAuthChoiceGrouped({
       prompter,
       includeSkip: true,
       allowKeepCurrentProvider: true,
-      config: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5",
-            },
-          },
-        },
-      },
+      config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
     });
 
     expect(isKeepCurrentAuthChoice(result)).toBe(true);
-    expect(providerOptions).toContainEqual({
+    expect(prompts[0]?.options).toContainEqual({
       value: "openai",
       label: "OpenAI (currently configured)",
       hint: undefined,
     });
-    expect(methodOptions[0]).toEqual({
+    expect(prompts[1]?.options[0]).toEqual({
       value: "__keep-current",
       label: "Keep current config",
       hint: "Keep openai/gpt-5.5",
     });
-    expect(methodOptions.map((option) => option.value)).toEqual([
+    expect(optionValues(prompts[1])).toEqual([
       "__keep-current",
       "openai",
       "openai-api-key",
@@ -167,37 +134,21 @@ describe("promptAuthChoiceGrouped", () => {
       const priorityB = featuredOrder.get(b.value) ?? Number.POSITIVE_INFINITY;
       return priorityA - priorityB || a.label.localeCompare(b.label);
     });
-    buildAuthChoiceGroups.mockReturnValue({
-      groups: [
-        authChoiceGroup("minimax", "MiniMax", [
-          ["minimax-global-oauth", "MiniMax OAuth (Global)"],
-          ["minimax-cn-api", "MiniMax API key (CN)"],
-          ["minimax-legacy", "Legacy MiniMax login"],
-        ]),
-        authChoiceGroup("meta", "Meta", [["meta-api-key", "Meta API key"]], true),
-        openAIGroup(),
-        authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
-      ],
-      skipOption: { value: "skip", label: "Skip for now" },
-    });
-    let providerOptions: Array<{ value: unknown; label: string }> = [];
-    let moreProviderOptions: Array<{ value: unknown; label: string }> = [];
-    let minimaxOptions: Array<{ value: unknown; label: string }> = [];
-    const prompter = createPromptHarness(async (params) => {
-      if (params.message === "Model/auth provider" && !providerOptions.length) {
-        providerOptions = params.options;
-        return "__more";
-      }
-      if (params.message === "Model/auth provider") {
-        moreProviderOptions = params.options;
-        return "minimax";
-      }
-      if (params.message === "MiniMax auth method") {
-        minimaxOptions = params.options;
-        return "minimax-cn-api";
-      }
-      throw new Error(`unexpected prompt ${params.message}`);
-    });
+    mockGroups([
+      authChoiceGroup("minimax", "MiniMax", [
+        ["minimax-global-oauth", "MiniMax OAuth (Global)"],
+        ["minimax-cn-api", "MiniMax API key (CN)"],
+        ["minimax-legacy", "Legacy MiniMax login"],
+      ]),
+      authChoiceGroup("meta", "Meta", [["meta-api-key", "Meta API key"]], true),
+      openAIGroup(),
+      authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
+    ]);
+    const { prompter, prompts } = scriptedPrompter([
+      ["Model/auth provider", "__more"],
+      ["Model/auth provider", "minimax"],
+      ["MiniMax auth method", "minimax-cn-api"],
+    ]);
 
     const result = await promptAuthChoiceGrouped({
       prompter,
@@ -212,42 +163,22 @@ describe("promptAuthChoiceGrouped", () => {
       ]),
     });
 
-    expect(providerOptions.map((option) => option.value)).toEqual([
-      "openai",
-      "anthropic",
-      "__more",
-      "skip",
-    ]);
-    expect(moreProviderOptions.map((option) => option.value)).toEqual([
-      "meta",
-      "minimax",
-      "__back",
-    ]);
-    expect(minimaxOptions.map((option) => option.value)).toEqual([
-      "minimax-global-oauth",
-      "minimax-cn-api",
-      "__back",
-    ]);
+    expect(optionValues(prompts[0])).toEqual(["openai", "anthropic", "__more", "skip"]);
+    expect(optionValues(prompts[1])).toEqual(["meta", "minimax", "__back"]);
+    expect(optionValues(prompts[2])).toEqual(["minimax-global-oauth", "minimax-cn-api", "__back"]);
     expect(result).toBe("minimax-cn-api");
   });
 
   it("features caller-supplied groups first and excludes them from More", async () => {
-    buildAuthChoiceGroups.mockReturnValue({
-      groups: [
-        openAIGroup(),
-        authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
-        authChoiceGroup("minimax", "MiniMax", [["minimax-api", "MiniMax API key"]]),
-      ],
-      skipOption: { value: "skip", label: "Skip for now" },
-    });
-    const providerPrompts: Array<Array<{ value: unknown; label: string }>> = [];
-    const prompter = createPromptHarness(async (params) => {
-      if (params.message !== "Model/auth provider") {
-        throw new Error(`unexpected prompt ${params.message}`);
-      }
-      providerPrompts.push(params.options);
-      return providerPrompts.length === 1 ? "__more" : "minimax";
-    });
+    mockGroups([
+      openAIGroup(),
+      authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
+      authChoiceGroup("minimax", "MiniMax", [["minimax-api", "MiniMax API key"]]),
+    ]);
+    const { prompter, prompts } = scriptedPrompter([
+      ["Model/auth provider", "__more"],
+      ["Model/auth provider", "minimax"],
+    ]);
 
     const result = await promptAuthChoiceGrouped({
       prompter,
@@ -263,7 +194,7 @@ describe("promptAuthChoiceGrouped", () => {
       ],
     });
 
-    expect(providerPrompts[0]?.map((option) => option.value)).toEqual([
+    expect(optionValues(prompts[0])).toEqual([
       "detected-ai",
       "recommended-ai",
       "anthropic",
@@ -271,25 +202,17 @@ describe("promptAuthChoiceGrouped", () => {
       "__more",
       "skip",
     ]);
-    expect(providerPrompts[0]?.[0]).toMatchObject({
+    expect(prompts[0]?.options[0]).toMatchObject({
       value: "detected-ai",
       hint: "Codex CLI",
     });
-    expect(providerPrompts[1]?.map((option) => option.value)).toEqual(["minimax", "__back"]);
+    expect(optionValues(prompts[1])).toEqual(["minimax", "__back"]);
     expect(result).toBe("minimax-api");
   });
 
   it("marks a detected provider in the provider picker", async () => {
-    const ollama = authChoiceGroup("ollama", "Ollama", [["ollama", "Ollama"]]);
-    buildAuthChoiceGroups.mockReturnValue({
-      groups: [ollama],
-      skipOption: { value: "skip", label: "Skip for now" },
-    });
-    let providerOptions: Array<{ value: unknown; label: string }> = [];
-    const prompter = createPromptHarness(async (params) => {
-      providerOptions = params.options;
-      return "skip";
-    });
+    mockGroups([authChoiceGroup("ollama", "Ollama", [["ollama", "Ollama"]])]);
+    const { prompter, prompts } = scriptedPrompter(["skip"]);
 
     await promptAuthChoiceGrouped({
       prompter,
@@ -297,7 +220,7 @@ describe("promptAuthChoiceGrouped", () => {
       detectedProviderIds: new Set(["ollama"]),
     });
 
-    expect(providerOptions).toContainEqual({
+    expect(prompts[0]?.options).toContainEqual({
       value: "ollama",
       label: "Ollama (detected)",
       hint: undefined,
@@ -320,25 +243,14 @@ describe("promptAuthChoiceGrouped", () => {
   ])(
     "keeps method Back on its provider page and returns More to the root (featured=$featured)",
     async ({ featured, answers, searchable, notes }) => {
-      buildAuthChoiceGroups.mockReturnValue({
-        groups: [
-          ...(featured ? [openAIGroup()] : []),
-          authChoiceGroup("minimax", "MiniMax", [
-            ["minimax-global-api", "Global API key"],
-            ["minimax-cn-api", "CN API key"],
-          ]),
-        ],
-        skipOption: { value: "skip", label: "Skip for now" },
-      });
-      const prompts: WizardSelectParams<unknown>[] = [];
-      const prompter = createPromptHarness(async (params) => {
-        prompts.push(params);
-        const answer = answers[prompts.length - 1];
-        if (!answer) {
-          throw new Error("Unexpected additional provider prompt");
-        }
-        return answer;
-      });
+      mockGroups([
+        ...(featured ? [openAIGroup()] : []),
+        authChoiceGroup("minimax", "MiniMax", [
+          ["minimax-global-api", "Global API key"],
+          ["minimax-cn-api", "CN API key"],
+        ]),
+      ]);
+      const { prompter, prompts } = scriptedPrompter(answers);
 
       expect(await promptAuthChoiceGrouped({ prompter, includeSkip: true })).toBe("skip");
       expect(prompts.map((prompt) => prompt.searchable)).toEqual(searchable);

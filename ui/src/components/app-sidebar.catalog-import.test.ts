@@ -16,6 +16,14 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import "./app-sidebar.tsx";
 
+const importSelector = 'openclaw-catalog-session-menu [data-value="import"]';
+const visitorSelector = '[data-session-key="agent:main:visitor-notes"]';
+async function settle(sidebar: { updateComplete: Promise<unknown> }, ms = 0) {
+  await sidebar.updateComplete;
+  await vi.advanceTimersByTimeAsync(ms);
+  await sidebar.updateComplete;
+}
+
 const result: SessionsCatalogImportResult = {
   sessionKey: "agent:main:imported-transcript",
   importedItems: 2,
@@ -51,9 +59,7 @@ async function fixture(scopes = ["operator.read", "operator.write"]) {
     .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
   const selectImport = async () => {
-    const item = sidebar.querySelector<HTMLButtonElement>(
-      'openclaw-catalog-session-menu [data-value="import"]',
-    );
+    const item = sidebar.querySelector<HTMLButtonElement>(importSelector);
     expect(item).not.toBeNull();
     item!.click();
     await vi.advanceTimersByTimeAsync(0);
@@ -114,11 +120,7 @@ describe("AppSidebar catalog import", () => {
       authority === "read-only" ? ["operator.read"] : ["operator.read", "operator.write"],
     );
     if (authority === "read-only") {
-      expect(
-        sidebar.querySelector<HTMLButtonElement>(
-          'openclaw-catalog-session-menu [data-value="import"]',
-        ),
-      ).toBeNull();
+      expect(sidebar.querySelector(importSelector)).toBeNull();
     } else {
       gateway.publish({
         hello: gatewayHelloForMethods(["sessions.catalog.list"], ["operator.read"]),
@@ -142,7 +144,6 @@ describe("AppSidebar catalog authority", () => {
         );
       const gateway = createGatewayHarness(createTestGatewayClient(request));
       const hello = gatewayHelloForMethods(["sessions.catalog.list"]);
-      hello.features!.events = ["sessions.catalog.changed"];
       gateway.publish({ hello });
       const { sidebar, provider } = await mountSidebar(
         gateway.gateway,
@@ -150,13 +151,9 @@ describe("AppSidebar catalog authority", () => {
       );
       try {
         sidebar.connected = true;
-        await sidebar.updateComplete;
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
+        await settle(sidebar);
         expect(sidebar.textContent).toContain("Retained catalog session");
-        expect(
-          sidebar.querySelector('[data-session-key="agent:main:visitor-notes"]'),
-        ).not.toBeNull();
+        expect(sidebar.querySelector(visitorSelector)).not.toBeNull();
         request.mockReturnValueOnce(pending.promise);
         const loading =
           pendingKind === "page"
@@ -169,21 +166,20 @@ describe("AppSidebar catalog authority", () => {
           hello: { ...hello, auth: { role: "operator", scopes: ["operator.sessions.write"] } },
         });
         // No Lit render or promise turn separates authority loss from these events.
+        const stalePage = catalogPage([{ threadId: "stale", name: "Late catalog session" }]);
         gateway.publishEvent("sessions.catalog.host", {
           progressId,
           agentId: "main",
-          catalog: catalogPage([{ threadId: "stale", name: "Late catalog session" }]).catalogs[0],
+          catalog: stalePage.catalogs[0],
         });
-        gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+        document.dispatchEvent(new Event("visibilitychange"));
         if (pendingKind === "error") {
           pending.reject(new Error("Stale catalog failure"));
         } else {
-          pending.resolve(catalogPage([{ threadId: "stale", name: "Late catalog session" }]));
+          pending.resolve(stalePage);
         }
         await loading;
-        await sidebar.updateComplete;
-        await vi.advanceTimersByTimeAsync(600_000);
-        await sidebar.updateComplete;
+        await settle(sidebar, 600_000);
         expect(sidebar.textContent).not.toContain("Retained catalog session");
         expect(sidebar.textContent).not.toContain("Late catalog session");
         expect(sidebar.querySelector(".sidebar-session-catalog-error")).toBeNull();
@@ -192,14 +188,10 @@ describe("AppSidebar catalog authority", () => {
         expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
         expect(sidebar.sessionData.sessionCatalogLive.timer).toBeNull();
         expect(request).toHaveBeenCalledTimes(2);
-        expect(
-          sidebar.querySelector('[data-session-key="agent:main:visitor-notes"]'),
-        ).not.toBeNull();
+        expect(sidebar.querySelector(visitorSelector)).not.toBeNull();
 
         gateway.publish({ hello });
-        await sidebar.updateComplete;
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
+        await settle(sidebar);
         expect(request).toHaveBeenCalledTimes(3);
         expect(sidebar.textContent).toContain("Retained catalog session");
       } finally {

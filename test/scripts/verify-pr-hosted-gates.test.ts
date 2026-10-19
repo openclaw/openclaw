@@ -26,7 +26,17 @@ const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
 const scheduledFallbackSha = "ad620a11e5d9ed3888b6afb3c35c4c30e8054f4e";
 const pr = 100606;
 const nowMs = Date.parse("2026-06-17T10:55:00Z");
+const ARM = "Blacksmith ARM Testbox";
+const BOX = "Blacksmith Testbox";
+const SANITY = "Workflow Sanity";
 const BUILD_ARTIFACTS_WORKFLOW = "Blacksmith Build Artifacts Testbox";
+const queuedArtifactCoverage = [
+  {
+    name: BUILD_ARTIFACTS_WORKFLOW,
+    coveredBy: "CI release gate",
+    reason: "scheduled workflow is queued",
+  },
+];
 const requiredCliArgs = [
   "--repo",
   "openclaw/openclaw",
@@ -43,6 +53,7 @@ const requiredCliArgs = [
 type WorkflowRunFixture = {
   id: number;
   run_number: number;
+  run_attempt?: number;
   name: string;
   event: string;
   status: string;
@@ -58,10 +69,10 @@ type WorkflowRunFixture = {
   display_title?: string;
 };
 
-function successfulRun(
+function makeRun(
   name: string,
   id: number,
-  updatedAt: string,
+  updatedAt: string | number,
   overrides: Partial<WorkflowRunFixture> = {},
 ): WorkflowRunFixture {
   return {
@@ -77,52 +88,51 @@ function successfulRun(
     pull_requests: [{ number: pr }],
     path: ".github/workflows/ci.yml",
     created_at: "2026-06-17T10:46:24Z",
-    updated_at: updatedAt,
+    updated_at:
+      typeof updatedAt === "number"
+        ? `2026-06-17T10:${String(updatedAt).padStart(2, "0")}:00Z`
+        : updatedAt,
     html_url: `https://github.com/openclaw/openclaw/actions/runs/${id}`,
     ...overrides,
   };
 }
 
-function releaseGateRun(id: number, updatedAt: string) {
-  return successfulRun(`CI release gate ${sha}`, id, updatedAt, {
+function releaseGateRun(id: number, updatedAt: string | number) {
+  return makeRun(`CI release gate ${sha}`, id, updatedAt, {
     event: "workflow_dispatch",
     display_title: `CI release gate ${sha}`,
   });
 }
 
-function pendingCiRun(id: number, updatedAt: string, status = "queued") {
-  return { ...successfulRun("CI", id, updatedAt), status, conclusion: null };
+function pendingCiRun(id: number, updatedAt: string | number, status = "queued") {
+  return makeRun("CI", id, updatedAt, { status, conclusion: null });
 }
 
 function queuedBuildArtifactFallbackRuns() {
   return [
-    releaseGateRun(1, "2026-06-17T10:49:00Z"),
-    successfulRun("CI", 3, "2026-06-17T10:51:00Z"),
-    successfulRun("Blacksmith Testbox", 4, "2026-06-17T10:52:00Z"),
-    successfulRun("Blacksmith ARM Testbox", 5, "2026-06-17T10:53:00Z"),
-    successfulRun("Workflow Sanity", 6, "2026-06-17T10:54:00Z"),
-    successfulRun(BUILD_ARTIFACTS_WORKFLOW, 2, "2026-06-17T10:50:00Z", {
-      status: "queued",
-      conclusion: null,
-    }),
+    releaseGateRun(1, 49),
+    makeRun("CI", 3, 51),
+    makeRun(BOX, 4, 52),
+    makeRun(ARM, 5, 53),
+    makeRun(SANITY, 6, 54),
+    makeRun(BUILD_ARTIFACTS_WORKFLOW, 2, 50, { status: "queued", conclusion: null }),
   ];
 }
 
 function collectHostedGateEvidence(
-  options: Omit<CollectHostedGateOptions, "nowMs" | "pr" | "mainSha">,
+  workflowRuns: CollectHostedGateOptions["workflowRuns"],
+  options: Omit<CollectHostedGateOptions, "nowMs" | "pr" | "mainSha" | "sha" | "workflowRuns"> & {
+    sha?: string;
+  } = {},
 ) {
-  return collectHostedGateEvidenceRaw({ nowMs, pr, mainSha, ...options });
+  return collectHostedGateEvidenceRaw({ nowMs, pr, mainSha, sha, workflowRuns, ...options });
 }
 
 type GitExec = (args: string[], options?: { input?: string }) => string;
 type CollectHostedGateOptions = Parameters<typeof collectHostedGateEvidenceRaw>[0];
 
 function priorSuccessfulCiRun(overrides: Partial<WorkflowRunFixture> = {}): WorkflowRunFixture {
-  return {
-    ...successfulRun("CI", 101, "2026-06-17T09:55:00Z"),
-    head_sha: previousSha,
-    ...overrides,
-  };
+  return makeRun("CI", 101, "2026-06-17T09:55:00Z", { head_sha: previousSha, ...overrides });
 }
 
 type PatchIdExecOptions = {
@@ -179,10 +189,7 @@ function patchReuseOptions(
   candidate: WorkflowRunFixture = priorSuccessfulCiRun(),
   execGit = createPatchIdExec().execGit,
 ) {
-  return {
-    loadCiReuseCandidates: () => [candidate],
-    execGit,
-  };
+  return { loadCiReuseCandidates: () => [candidate], execGit };
 }
 
 describe("verify-pr-hosted-gates", () => {
@@ -268,10 +275,7 @@ describe("verify-pr-hosted-gates", () => {
       const result = spawnSync(
         testNodeExecPath,
         [join(process.cwd(), "scripts/verify-pr-hosted-gates.mjs"), "--older-cwd-startup-probe"],
-        {
-          cwd: targetRoot,
-          encoding: "utf8",
-        },
+        { cwd: targetRoot, encoding: "utf8" },
       );
 
       expect(result.status).toBe(1);
@@ -283,20 +287,16 @@ describe("verify-pr-hosted-gates", () => {
 
   it("derives hosted-gate applicability from declared workflow path filters", () => {
     expect(notApplicableScheduledHostedWorkflows([".github/workflows/ci.yml"])).toEqual([
-      "Blacksmith Testbox",
-      "Blacksmith ARM Testbox",
-      "Blacksmith Build Artifacts Testbox",
+      BOX,
+      ARM,
+      BUILD_ARTIFACTS_WORKFLOW,
     ]);
     expect(
       notApplicableScheduledHostedWorkflows([".github/actions/setup-node-env/action.yml"]),
     ).toEqual([]);
     expect(
       notApplicableScheduledHostedWorkflows(["test/e2e/qa-lab/runtime/script-evidence.ts"]),
-    ).toEqual([
-      "Blacksmith Testbox",
-      "Blacksmith ARM Testbox",
-      "Blacksmith Build Artifacts Testbox",
-    ]);
+    ).toEqual([BOX, ARM, BUILD_ARTIFACTS_WORKFLOW]);
     expect(notApplicableScheduledHostedWorkflows(["CHANGELOG.md"])).toEqual(
       SCHEDULED_HOSTED_WORKFLOWS,
     );
@@ -304,34 +304,31 @@ describe("verify-pr-hosted-gates", () => {
 
   it("requires an authoritative ARM run when declared workflow paths apply", () => {
     const workflowRuns = [
-      successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
-      successfulRun("Blacksmith Testbox", 2, "2026-06-17T10:48:00Z"),
-      successfulRun("Blacksmith Build Artifacts Testbox", 3, "2026-06-17T10:49:00Z"),
-      successfulRun("Workflow Sanity", 4, "2026-06-17T10:50:00Z"),
+      makeRun("CI", 1, 47),
+      makeRun(BOX, 2, 48),
+      makeRun(BUILD_ARTIFACTS_WORKFLOW, 3, 49),
+      makeRun(SANITY, 4, 50),
     ];
 
     expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns,
-        notApplicableScheduledWorkflows: [],
-      }),
+      collectHostedGateEvidence(workflowRuns, { notApplicableScheduledWorkflows: [] }),
     ).toThrow(`Missing successful recent Blacksmith ARM Testbox workflow for ${sha}`);
   });
 
   it("records path-filtered hosted gates as not applicable for QA-only changes", () => {
-    const evidence = collectHostedGateEvidence({
-      sha,
-      workflowRuns: [
-        successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
-        successfulRun("Workflow Sanity", 2, "2026-06-17T10:48:00Z"),
+    const evidence = collectHostedGateEvidence(
+      [
+        makeRun("CI", 1, "2026-06-17T10:47:00Z"),
+        makeRun("Workflow Sanity", 2, "2026-06-17T10:48:00Z"),
       ],
-      notApplicableScheduledWorkflows: [
-        "Blacksmith Testbox",
-        "Blacksmith ARM Testbox",
-        "Blacksmith Build Artifacts Testbox",
-      ],
-    });
+      {
+        notApplicableScheduledWorkflows: [
+          "Blacksmith Testbox",
+          "Blacksmith ARM Testbox",
+          "Blacksmith Build Artifacts Testbox",
+        ],
+      },
+    );
 
     expect(evidence.workflows).toEqual([
       expect.objectContaining({ name: "CI", id: 1 }),
@@ -345,23 +342,13 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it("does not require path-inapplicable ARM proof for queued artifact fallback", () => {
-    const workflowRuns = queuedBuildArtifactFallbackRuns().filter(
-      (run) => run.name !== "Blacksmith ARM Testbox",
-    );
-    const evidence = collectHostedGateEvidence({
-      sha,
-      workflowRuns,
-      notApplicableScheduledWorkflows: ["Blacksmith ARM Testbox"],
+    const workflowRuns = queuedBuildArtifactFallbackRuns().filter((run) => run.name !== ARM);
+    const evidence = collectHostedGateEvidence(workflowRuns, {
+      notApplicableScheduledWorkflows: [ARM],
     });
 
-    expect(evidence.fallbackCoveredWorkflows).toEqual([
-      {
-        name: BUILD_ARTIFACTS_WORKFLOW,
-        coveredBy: "CI release gate",
-        reason: "scheduled workflow is queued",
-      },
-    ]);
-    expect(evidence.notApplicableWorkflows).toEqual(["Blacksmith ARM Testbox"]);
+    expect(evidence.fallbackCoveredWorkflows).toEqual(queuedArtifactCoverage);
+    expect(evidence.notApplicableWorkflows).toEqual([ARM]);
   });
 
   it.each([
@@ -377,11 +364,7 @@ describe("verify-pr-hosted-gates", () => {
     ({ options, fetch }) => {
       const { calls, execGit } = createPatchIdExec(options);
       expect(() =>
-        collectHostedGateEvidence({
-          sha,
-          workflowRuns: [],
-          ...patchReuseOptions(priorSuccessfulCiRun(), execGit),
-        }),
+        collectHostedGateEvidence([], { ...patchReuseOptions(priorSuccessfulCiRun(), execGit) }),
       ).toThrow(`Missing successful recent CI workflow for ${sha}`);
       if (fetch) {
         expect(calls).toContain(`fetch origin ${previousSha}`);
@@ -403,9 +386,7 @@ describe("verify-pr-hosted-gates", () => {
     ];
     let gitCalled = false;
     expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns: [],
+      collectHostedGateEvidence([], {
         loadCiReuseCandidates: () => invalidCandidates,
         execGit: () => {
           gitCalled = true;
@@ -423,13 +404,7 @@ describe("verify-pr-hosted-gates", () => {
       path: ".github/workflows/ci.yml",
       display_title: `CI release gate ${previousSha}`,
     });
-    expect(
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns: [],
-        ...patchReuseOptions(candidate),
-      }),
-    ).toEqual({
+    expect(collectHostedGateEvidence([], { ...patchReuseOptions(candidate) })).toEqual({
       headSha: sha,
       workflows: [expect.objectContaining({ id: 102, event: "workflow_dispatch" })],
       reusedFromSha: previousSha,
@@ -440,9 +415,7 @@ describe("verify-pr-hosted-gates", () => {
 
   it("short-circuits reuse discovery when exact-head CI already succeeds", () => {
     let reuseCalled = false;
-    const evidence = collectHostedGateEvidence({
-      sha,
-      workflowRuns: [successfulRun("CI", 1, "2026-06-17T10:47:00Z")],
+    const evidence = collectHostedGateEvidence([makeRun("CI", 1, 47)], {
       loadCiReuseCandidates: () => {
         reuseCalled = true;
         throw new Error("exact-head success must not inspect reuse candidates");
@@ -460,133 +433,71 @@ describe("verify-pr-hosted-gates", () => {
     expect(reuseCalled).toBe(false);
   });
 
-  it("accepts an in-progress CI run whose own attempt's ci-gate job succeeded", () => {
-    const inProgressRun = {
-      ...successfulRun("CI", 42, "2026-06-17T10:52:00Z"),
-      status: "in_progress",
-      conclusion: null,
-      run_attempt: 2,
-    };
-    const gateJob = {
-      name: "openclaw/ci-gate",
-      run_id: 42,
-      run_attempt: 2,
-      status: "completed",
-      conclusion: "success",
-      completed_at: "2026-06-17T10:51:30Z",
-    };
-
-    const evidence = collectHostedGateEvidence({
-      sha,
-      workflowRuns: [inProgressRun],
-      ciGateJobs: [gateJob],
-    });
-    expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
-
-    // A prior attempt's gate (same run id, older run_attempt) cannot vouch for
-    // a partial rerun in progress.
-    expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns: [inProgressRun],
-        ciGateJobs: [{ ...gateJob, run_attempt: 1 }],
-      }),
-    ).toThrow(/Missing successful recent CI workflow/);
-
-    // A gate job from a different run, a failed gate, and a missing gate all
-    // fall back to requiring run completion.
-    expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns: [inProgressRun],
-        ciGateJobs: [{ ...gateJob, run_id: 41 }],
-      }),
-    ).toThrow(/Missing successful recent CI workflow/);
-    expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns: [inProgressRun],
-        ciGateJobs: [{ ...gateJob, conclusion: "failure" }],
-      }),
-    ).toThrow(/Missing successful recent CI workflow/);
-    expect(() =>
-      collectHostedGateEvidence({ sha, workflowRuns: [inProgressRun], ciGateJobs: [] }),
-    ).toThrow(/Missing successful recent CI workflow/);
-  });
-
-  it("lets a gate-proven pending rerun win over an older terminal failure", () => {
-    const failedRun = successfulRun("CI", 40, "2026-06-17T10:40:00Z", {
-      conclusion: "failure",
-    });
-    const pendingRerun = {
-      ...successfulRun("CI", 42, "2026-06-17T10:52:00Z"),
-      status: "in_progress",
-      conclusion: null,
-      run_attempt: 1,
-      created_at: "2026-06-17T10:50:00Z",
-    };
-    const gateJob = {
-      name: "openclaw/ci-gate",
-      run_id: 42,
-      run_attempt: 1,
-      status: "completed",
-      conclusion: "success",
-      completed_at: "2026-06-17T10:51:30Z",
-    };
-
-    // The newer pending run is re-resolving the failure; its successful gate
-    // proves the selected lanes, so the stale failure must not block.
-    const evidence = collectHostedGateEvidence({
-      sha,
-      workflowRuns: [failedRun, pendingRerun],
-      ciGateJobs: [gateJob],
-    });
-    expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
-
-    // Without gate proof the pending run still blocks (no early acceptance),
-    // and a failure that IS the latest scheduled run still blocks outright.
-    expect(() =>
-      collectHostedGateEvidence({ sha, workflowRuns: [failedRun, pendingRerun], ciGateJobs: [] }),
-    ).toThrow(/Missing successful recent CI workflow/);
-    expect(() =>
-      collectHostedGateEvidence({ sha, workflowRuns: [failedRun], ciGateJobs: [gateJob] }),
-    ).toThrow(/Missing successful recent CI workflow/);
-
-    // A stalled OLDER run's gate must not mask a newer terminal failure.
-    const stalledOlderRun = { ...pendingRerun, created_at: "2026-06-17T10:40:00Z" };
-    expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns: [failedRun, stalledOlderRun],
-        ciGateJobs: [gateJob],
-      }),
-    ).toThrow(/Missing successful recent CI workflow/);
-  });
-
-  it.each(["Blacksmith ARM Testbox"])(
-    "retains the newest non-skipped %s decision by creation order",
-    (workflowName) => {
-      const evidence = collectHostedGateEvidence({
-        sha,
-        workflowRuns: [
-          successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
-          successfulRun(workflowName, 10, "2026-06-17T10:54:00Z"),
-          successfulRun(workflowName, 20, "2026-06-17T10:53:00Z"),
-          {
-            ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
-            conclusion: "skipped",
-          },
-        ],
+  it.each([
+    { earlierFailure: false, attempt: 2 },
+    { earlierFailure: true, attempt: 1 },
+  ])(
+    "accepts only current-attempt gate proof for pending CI (earlier failure: $earlierFailure)",
+    ({ earlierFailure, attempt }) => {
+      const failedRun = makeRun("CI", 40, 40, { conclusion: "failure" });
+      const inProgressRun = makeRun("CI", 42, 52, {
+        status: "in_progress",
+        conclusion: null,
+        run_attempt: attempt,
+        created_at: "2026-06-17T10:50:00Z",
       });
+      const workflowRuns = earlierFailure ? [failedRun, inProgressRun] : [inProgressRun];
+      const gateJob = {
+        name: "openclaw/ci-gate",
+        run_id: 42,
+        run_attempt: attempt,
+        status: "completed",
+        conclusion: "success",
+        completed_at: "2026-06-17T10:51:30Z",
+      };
 
-      expect(evidence.workflows).toEqual([
-        expect.objectContaining({ name: "CI", id: 1 }),
-        expect.objectContaining({ name: workflowName, id: 20 }),
-      ]);
+      const evidence = collectHostedGateEvidence(workflowRuns, { ciGateJobs: [gateJob] });
+      expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
+
+      for (const ciGateJobs of [
+        [{ ...gateJob, run_attempt: attempt - 1 }],
+        [{ ...gateJob, run_id: 41 }],
+        [{ ...gateJob, conclusion: "failure" }],
+        [],
+      ]) {
+        expect(() => collectHostedGateEvidence(workflowRuns, { ciGateJobs })).toThrow(
+          /Missing successful recent CI workflow/,
+        );
+      }
+      if (earlierFailure) {
+        expect(() => collectHostedGateEvidence([failedRun], { ciGateJobs: [gateJob] })).toThrow(
+          /Missing successful recent CI workflow/,
+        );
+        expect(() =>
+          collectHostedGateEvidence(
+            [failedRun, { ...inProgressRun, created_at: "2026-06-17T10:40:00Z" }],
+            { ciGateJobs: [gateJob] },
+          ),
+        ).toThrow(/Missing successful recent CI workflow/);
+      }
     },
   );
 
-  it.each(["Blacksmith ARM Testbox"])(
+  it.each([ARM])("retains the newest non-skipped %s decision by creation order", (workflowName) => {
+    const evidence = collectHostedGateEvidence([
+      makeRun("CI", 1, 47),
+      makeRun(workflowName, 10, 54),
+      makeRun(workflowName, 20, 53),
+      makeRun(workflowName, 30, 50, { conclusion: "skipped" }),
+    ]);
+
+    expect(evidence.workflows).toEqual([
+      expect.objectContaining({ name: "CI", id: 1 }),
+      expect.objectContaining({ name: workflowName, id: 20 }),
+    ]);
+  });
+
+  it.each([ARM])(
     "covers queued artifacts after a skipped duplicate of supporting %s",
     (workflowName) => {
       const workflowRuns = queuedBuildArtifactFallbackRuns();
@@ -594,75 +505,49 @@ describe("verify-pr-hosted-gates", () => {
         workflowRuns.find((run) => run.name === workflowName),
         "successful supporting workflow",
       );
-      const evidence = collectHostedGateEvidence({
-        sha,
-        workflowRuns: [
-          ...workflowRuns,
-          {
-            ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
-            conclusion: "skipped",
-          },
-        ],
-      });
+      const evidence = collectHostedGateEvidence([
+        ...workflowRuns,
+        makeRun(workflowName, 30, 50, { conclusion: "skipped" }),
+      ]);
 
       expect(evidence.workflows).toContainEqual(
         expect.objectContaining({ name: workflowName, id: supportingRun.id }),
       );
-      expect(evidence.fallbackCoveredWorkflows).toEqual([
-        {
-          name: BUILD_ARTIFACTS_WORKFLOW,
-          coveredBy: "CI release gate",
-          reason: "scheduled workflow is queued",
-        },
-      ]);
+      expect(evidence.fallbackCoveredWorkflows).toEqual(queuedArtifactCoverage);
     },
   );
 
-  it.each(["Blacksmith ARM Testbox"])(
-    "does not look past a non-skipped unsuccessful %s decision",
-    (workflowName) => {
-      for (const [status, conclusion] of [
-        ["completed", "failure"],
-        ["completed", "cancelled"],
-        ["completed", "timed_out"],
-        ["completed", "action_required"],
-        ["completed", "neutral"],
-        ["completed", "unknown"],
-        ["completed", null],
-        ["queued", null],
-        ["in_progress", null],
-        ["unknown", "skipped"],
-        ["in_progress", "skipped"],
-      ] as const) {
-        expect(
-          () =>
-            collectHostedGateEvidence({
-              sha,
-              workflowRuns: [
-                successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
-                successfulRun(workflowName, 10, "2026-06-17T10:54:00Z"),
-                {
-                  ...successfulRun(workflowName, 20, "2026-06-17T10:53:00Z"),
-                  run_attempt: 2,
-                  status,
-                  conclusion,
-                },
-                {
-                  ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
-                  conclusion: "skipped",
-                },
-              ],
-            }),
-          `${status}/${conclusion}`,
-        ).toThrow(`Missing successful recent ${workflowName} workflow`);
-      }
-    },
-  );
+  it.each([ARM])("does not look past a non-skipped unsuccessful %s decision", (workflowName) => {
+    for (const [status, conclusion] of [
+      ["completed", "failure"],
+      ["completed", "cancelled"],
+      ["completed", "timed_out"],
+      ["completed", "action_required"],
+      ["completed", "neutral"],
+      ["completed", "unknown"],
+      ["completed", null],
+      ["queued", null],
+      ["in_progress", null],
+      ["unknown", "skipped"],
+      ["in_progress", "skipped"],
+    ] as const) {
+      expect(
+        () =>
+          collectHostedGateEvidence([
+            makeRun("CI", 1, 47),
+            makeRun(workflowName, 10, 54),
+            makeRun(workflowName, 20, 53, { run_attempt: 2, status, conclusion }),
+            makeRun(workflowName, 30, 50, { conclusion: "skipped" }),
+          ]),
+        `${status}/${conclusion}`,
+      ).toThrow(`Missing successful recent ${workflowName} workflow`);
+    }
+  });
 
-  it.each(["Blacksmith ARM Testbox"])(
+  it.each([ARM])(
     "requires eligible recent %s success before a skipped duplicate",
     (workflowName) => {
-      const success = successfulRun(workflowName, 10, "2026-06-17T10:54:00Z");
+      const success = makeRun(workflowName, 10, 54);
       const cases: Array<[string, WorkflowRunFixture[]]> = [
         ["skip only", []],
         ["stale", [{ ...success, updated_at: "2026-06-16T10:54:59Z" }]],
@@ -677,70 +562,42 @@ describe("verify-pr-hosted-gates", () => {
       for (const [label, earlierRuns] of cases) {
         expect(
           () =>
-            collectHostedGateEvidence({
-              sha,
-              workflowRuns: [
-                successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
-                ...earlierRuns,
-                {
-                  ...successfulRun(workflowName, 30, "2026-06-17T10:50:00Z"),
-                  conclusion: "skipped",
-                },
-              ],
-            }),
+            collectHostedGateEvidence([
+              makeRun("CI", 1, 47),
+              ...earlierRuns,
+              makeRun(workflowName, 30, 50, { conclusion: "skipped" }),
+            ]),
           label,
         ).toThrow(`Missing successful recent ${workflowName} workflow`);
       }
     },
   );
 
-  it("keeps skipped artifact history ineligible for queued-artifact coverage", () => {
-    for (const id of [0, 30]) {
-      expect(() =>
-        collectHostedGateEvidence({
-          sha,
-          workflowRuns: [
-            ...queuedBuildArtifactFallbackRuns(),
-            {
-              ...successfulRun(BUILD_ARTIFACTS_WORKFLOW, id, "2026-06-17T10:50:00Z"),
-              conclusion: "skipped",
-            },
-          ],
-        }),
-      ).toThrow("Missing successful recent Blacksmith Build Artifacts Testbox workflow");
-    }
-  });
-
   it("requires the latest scheduled workflow run to pass", () => {
-    const evidence = collectHostedGateEvidence({
-      sha,
-      workflowRuns: [
-        successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
-        successfulRun("Blacksmith Testbox", 2, "2026-06-17T10:47:30Z", {
-          event: "workflow_dispatch",
-        }),
-        successfulRun("Blacksmith Testbox", 3, "2026-06-17T10:48:00Z"),
-        successfulRun("Blacksmith ARM Testbox", 4, "2026-06-17T10:49:00Z"),
-        successfulRun("Blacksmith Build Artifacts Testbox", 5, "2026-06-17T10:50:00Z"),
-        successfulRun("Workflow Sanity", 6, "2026-06-17T10:51:00Z"),
-      ],
-    });
+    const evidence = collectHostedGateEvidence([
+      makeRun("CI", 1, 47),
+      makeRun(BOX, 2, "2026-06-17T10:47:30Z", { event: "workflow_dispatch" }),
+      makeRun(BOX, 3, 48),
+      makeRun(ARM, 4, 49),
+      makeRun(BUILD_ARTIFACTS_WORKFLOW, 5, 50),
+      makeRun(SANITY, 6, 51),
+    ]);
 
     expect(evidence).toEqual({
       headSha: sha,
       workflows: [
         expect.objectContaining({ name: "CI", id: 1 }),
-        expect.objectContaining({ name: "Blacksmith Testbox", id: 3 }),
-        expect.objectContaining({ name: "Blacksmith ARM Testbox", id: 4 }),
-        expect.objectContaining({ name: "Blacksmith Build Artifacts Testbox", id: 5 }),
-        expect.objectContaining({ name: "Workflow Sanity", id: 6 }),
+        expect.objectContaining({ name: BOX, id: 3 }),
+        expect.objectContaining({ name: ARM, id: 4 }),
+        expect.objectContaining({ name: BUILD_ARTIFACTS_WORKFLOW, id: 5 }),
+        expect.objectContaining({ name: SANITY, id: 6 }),
       ],
     });
   });
 
   it("rejects a failed rerun of a workflow that was scheduled for the exact head", () => {
     const workflowRuns = ["CI", ...SCHEDULED_HOSTED_WORKFLOWS].map((name, index) =>
-      successfulRun(name, index + 1, `2026-06-17T10:4${index}:00Z`),
+      makeRun(name, index + 1, `2026-06-17T10:4${index}:00Z`),
     );
     workflowRuns[2] = {
       ...expectDefined(workflowRuns[2], "Blacksmith ARM Testbox workflow run"),
@@ -748,7 +605,7 @@ describe("verify-pr-hosted-gates", () => {
       updated_at: "2026-06-17T10:50:00Z",
     };
 
-    expect(() => collectHostedGateEvidence({ sha, workflowRuns })).toThrow(
+    expect(() => collectHostedGateEvidence(workflowRuns)).toThrow(
       "Missing successful recent Blacksmith ARM Testbox workflow",
     );
   });
@@ -756,13 +613,19 @@ describe("verify-pr-hosted-gates", () => {
   it.each([
     {
       name: "scheduled CI at the age boundary",
-      runs: [successfulRun("CI", 1, "2026-06-16T10:55:00Z")],
+      runs: [makeRun("CI", 1, "2026-06-16T10:55:00Z")],
       selected: { name: "CI", id: 1 },
+    },
+    {
+      name: "changelog-only head without CI",
+      runs: [],
+      selected: undefined,
+      changelogOnly: true,
     },
     {
       name: "manual CI at the age boundary",
       runs: [
-        successfulRun(`CI release gate ${sha}`, 1, "2026-06-16T10:55:00Z", {
+        makeRun(`CI release gate ${sha}`, 1, "2026-06-16T10:55:00Z", {
           event: "workflow_dispatch",
           path: ".github/workflows/ci.yml@refs/heads/release-controls",
           display_title: `CI release gate ${sha}`,
@@ -772,74 +635,66 @@ describe("verify-pr-hosted-gates", () => {
     },
     {
       name: "later success after failure",
-      runs: [
-        successfulRun("CI", 1, "2026-06-17T10:50:00Z", { conclusion: "failure" }),
-        successfulRun("CI", 2, "2026-06-17T10:52:00Z"),
-      ],
+      runs: [makeRun("CI", 1, 50, { conclusion: "failure" }), makeRun("CI", 2, 52)],
       selected: { name: "CI", id: 2, headSha: sha },
     },
     {
       name: "target success before obsolete-head failure",
       runs: [
-        successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
-        successfulRun("CI", 2, "2026-06-17T10:54:00Z", {
-          head_sha: previousSha,
-          conclusion: "failure",
-        }),
+        makeRun("CI", 1, 50),
+        makeRun("CI", 2, 54, { head_sha: previousSha, conclusion: "failure" }),
       ],
       selected: { name: "CI", id: 1, headSha: sha },
     },
     ...(
       [
-        ["stale", successfulRun("CI", 1, "2026-06-16T10:54:59Z")],
-        ["cancelled", successfulRun("CI", 1, "2026-06-17T10:50:00Z", { conclusion: "cancelled" })],
-        ["skipped", successfulRun("CI", 1, "2026-06-17T10:50:00Z", { conclusion: "skipped" })],
+        ["stale", makeRun("CI", 1, "2026-06-16T10:54:59Z")],
+        ["cancelled", makeRun("CI", 1, 50, { conclusion: "cancelled" })],
+        ["skipped", makeRun("CI", 1, 50, { conclusion: "skipped" })],
       ] satisfies Array<[string, WorkflowRunFixture]>
     ).map(([state, run]) => ({
       name: `manual fallback after ${state}`,
-      runs: [run, releaseGateRun(2, "2026-06-17T10:49:00Z")],
+      runs: [run, releaseGateRun(2, 49)],
       selected: { name: `CI release gate ${sha}`, id: 2 },
     })),
     {
       name: "newer manual over older pending",
-      runs: [
-        pendingCiRun(1, "2026-06-17T10:48:00Z", "in_progress"),
-        releaseGateRun(2, "2026-06-17T10:49:00Z"),
-      ],
+      runs: [pendingCiRun(1, 48, "in_progress"), releaseGateRun(2, 49)],
       selected: { name: `CI release gate ${sha}`, id: 2 },
     },
-  ])("selects $name", ({ runs, selected }) => {
-    expect(collectHostedGateEvidence({ sha, workflowRuns: runs })).toEqual({
+  ])("selects $name", ({ runs, selected, changelogOnly }) => {
+    expect(collectHostedGateEvidence(runs, { changelogOnly })).toEqual({
       headSha: sha,
-      workflows: [expect.objectContaining(selected)],
+      workflows: selected ? [expect.objectContaining(selected)] : [],
     });
   });
 
   it("accepts a recent green fork head when GitHub omits pull request links", () => {
     const headBranch = "fix/token-listener";
     const headRepository = "contributor/openclaw";
-    const priorRun = successfulRun("CI", 1, "2026-06-17T10:50:00Z", {
+    const priorRun = makeRun("CI", 1, 50, {
       head_sha: previousSha,
       head_branch: headBranch,
       head_repository: { full_name: headRepository },
       pull_requests: [],
     });
-    const evidence = collectHostedGateEvidence({
-      sha,
-      pullRequestCommitShas: [previousSha, sha],
-      pullRequestHeadBranch: headBranch,
-      pullRequestHeadRepository: headRepository,
-      workflowRuns: [
+    const evidence = collectHostedGateEvidence(
+      [
         priorRun,
-        successfulRun("CI", 2, "2026-06-17T10:54:00Z", {
+        makeRun("CI", 2, 54, {
           head_branch: headBranch,
           head_repository: { full_name: headRepository },
           pull_requests: [],
           conclusion: "failure",
         }),
       ],
-      ...patchReuseOptions(priorRun),
-    });
+      {
+        pullRequestCommitShas: [previousSha, sha],
+        pullRequestHeadBranch: headBranch,
+        pullRequestHeadRepository: headRepository,
+        ...patchReuseOptions(priorRun),
+      },
+    );
 
     expect(evidence).toEqual({
       headSha: sha,
@@ -863,34 +718,32 @@ describe("verify-pr-hosted-gates", () => {
     const headBranch = "fix/token-listener";
     const headRepository = "contributor/openclaw";
     const collect = () =>
-      collectHostedGateEvidence({
-        sha,
-        pullRequestCommitShas: commits,
-        pullRequestHeadBranch: headBranch,
-        pullRequestHeadRepository: headRepository,
-        workflowRuns: [
-          successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
-          successfulRun("Blacksmith ARM Testbox", 2, "2026-06-17T10:54:00Z", {
-            status: "queued",
-            conclusion: null,
-          }),
-          successfulRun("Blacksmith ARM Testbox", 3, "2026-06-17T10:53:00Z", {
+      collectHostedGateEvidence(
+        [
+          makeRun("CI", 1, 50),
+          makeRun(ARM, 2, 54, { status: "queued", conclusion: null }),
+          makeRun(ARM, 3, 53, {
             head_sha: previousSha,
             head_branch: headBranch,
             head_repository: { full_name: headRepository },
             pull_requests: links,
           }),
         ],
-      });
+        {
+          pullRequestCommitShas: commits,
+          pullRequestHeadBranch: headBranch,
+          pullRequestHeadRepository: headRepository,
+        },
+      );
 
     if (accepted) {
       expect(collect()).toEqual({
         headSha: sha,
-        evidenceHeadSha: previousSha,
         workflows: [
           expect.objectContaining({ name: "CI", id: 1, headSha: sha }),
-          expect.objectContaining({ name: "Blacksmith ARM Testbox", id: 3, headSha: previousSha }),
+          expect.objectContaining({ name: ARM, id: 3, headSha: previousSha }),
         ],
+        evidenceHeadSha: previousSha,
       });
     } else {
       expect(collect).toThrow(
@@ -986,44 +839,27 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it("requires recent evidence for scheduled gates observed on the target head", () => {
-    const targetArmRun = successfulRun("Blacksmith ARM Testbox", 3, "2026-06-17T10:54:00Z", {
-      status: "queued",
-      conclusion: null,
-    });
+    const targetArmRun = makeRun(ARM, 3, 54, { status: "queued", conclusion: null });
     const workflowRuns = [
-      successfulRun("CI", 1, "2026-06-17T10:50:00Z", {
-        head_sha: previousSha,
-      }),
-      successfulRun("CI", 2, "2026-06-17T10:54:00Z", {
-        status: "in_progress",
-        conclusion: null,
-      }),
+      makeRun("CI", 1, 50, { head_sha: previousSha }),
+      makeRun("CI", 2, 54, { status: "in_progress", conclusion: null }),
       targetArmRun,
     ];
 
     expect(() =>
-      collectHostedGateEvidence({
-        sha,
+      collectHostedGateEvidence(workflowRuns, {
         recentSha: previousSha,
-        workflowRuns,
         ...patchReuseOptions(workflowRuns[0]),
       }),
     ).toThrow(`Missing successful recent Blacksmith ARM Testbox workflow for ${previousSha}`);
 
-    const evidence = collectHostedGateEvidence({
-      sha,
-      recentSha: previousSha,
-      workflowRuns: [
-        ...workflowRuns,
-        successfulRun("Blacksmith ARM Testbox", 4, "2026-06-17T10:51:00Z", {
-          head_sha: previousSha,
-        }),
-      ],
-      ...patchReuseOptions(workflowRuns[0]),
-    });
+    const evidence = collectHostedGateEvidence(
+      [...workflowRuns, makeRun(ARM, 4, 51, { head_sha: previousSha })],
+      { recentSha: previousSha, ...patchReuseOptions(workflowRuns[0]) },
+    );
     expect(evidence.workflows).toEqual([
       expect.objectContaining({ name: "CI", headSha: previousSha }),
-      expect.objectContaining({ name: "Blacksmith ARM Testbox", headSha: previousSha }),
+      expect.objectContaining({ name: ARM, headSha: previousSha }),
     ]);
     expect(evidence).toMatchObject({
       reusedFromSha: previousSha,
@@ -1034,38 +870,26 @@ describe("verify-pr-hosted-gates", () => {
 
   it("keeps the existing scheduled-workflow fallback after CI reuses another head", () => {
     const priorCiRun = priorSuccessfulCiRun({ id: 1 });
-    const evidence = collectHostedGateEvidence({
-      sha,
-      workflowRuns: [
+    const evidence = collectHostedGateEvidence(
+      [
         priorCiRun,
-        successfulRun("CI", 2, "2026-06-17T10:54:00Z", {
-          status: "in_progress",
-          conclusion: null,
-        }),
-        successfulRun("Blacksmith ARM Testbox", 3, "2026-06-17T10:54:00Z", {
-          status: "queued",
-          conclusion: null,
-        }),
-        successfulRun("Blacksmith ARM Testbox", 4, "2026-06-17T10:53:00Z", {
-          head_sha: scheduledFallbackSha,
-        }),
+        makeRun("CI", 2, 54, { status: "in_progress", conclusion: null }),
+        makeRun(ARM, 3, 54, { status: "queued", conclusion: null }),
+        makeRun(ARM, 4, 53, { head_sha: scheduledFallbackSha }),
       ],
-      ...patchReuseOptions(priorCiRun),
-    });
+      { ...patchReuseOptions(priorCiRun) },
+    );
 
     expect(evidence).toMatchObject({
       headSha: sha,
+      workflows: [
+        expect.objectContaining({ name: "CI", headSha: previousSha }),
+        expect.objectContaining({ name: ARM, headSha: scheduledFallbackSha }),
+      ],
       evidenceHeadSha: scheduledFallbackSha,
       reusedFromSha: previousSha,
       reusedRunId: 1,
       patchIdMatched: true,
-      workflows: [
-        expect.objectContaining({ name: "CI", headSha: previousSha }),
-        expect.objectContaining({
-          name: "Blacksmith ARM Testbox",
-          headSha: scheduledFallbackSha,
-        }),
-      ],
     });
   });
 
@@ -1073,33 +897,31 @@ describe("verify-pr-hosted-gates", () => {
     {
       name: "13-hour evidence with a pending run",
       updatedAt: "2026-06-16T21:55:00Z",
-      current: [pendingCiRun(2, "2026-06-17T10:54:00Z", "in_progress")],
+      current: [pendingCiRun(2, 54, "in_progress")],
     },
     {
       name: "failed scheduled run",
       updatedAt: "2026-06-17T10:50:00Z",
-      current: [successfulRun("CI", 2, "2026-06-17T10:54:00Z", { conclusion: "failure" })],
+      current: [makeRun("CI", 2, 54, { conclusion: "failure" })],
     },
     {
       name: "skipped scheduled run",
       updatedAt: "2026-06-17T10:50:00Z",
-      current: [successfulRun("CI", 2, "2026-06-17T10:54:00Z", { conclusion: "skipped" })],
+      current: [makeRun("CI", 2, 54, { conclusion: "skipped" })],
     },
     {
       name: "failed manual gate",
       updatedAt: "2026-06-17T10:50:00Z",
       current: [
-        pendingCiRun(2, "2026-06-17T10:53:00Z", "in_progress"),
-        { ...releaseGateRun(3, "2026-06-17T10:54:00Z"), conclusion: "failure" },
+        pendingCiRun(2, 53, "in_progress"),
+        { ...releaseGateRun(3, 54), conclusion: "failure" },
       ],
     },
   ])("reuses patch-identical CI after $name", ({ updatedAt, current }) => {
     const priorRun = priorSuccessfulCiRun({ id: 1, updated_at: updatedAt });
     expect(
-      collectHostedGateEvidence({
-        sha,
+      collectHostedGateEvidence([priorRun, ...current], {
         recentSha: previousSha,
-        workflowRuns: [priorRun, ...current],
         ...patchReuseOptions(priorRun),
       }),
     ).toEqual({
@@ -1117,32 +939,24 @@ describe("verify-pr-hosted-gates", () => {
   ])("rejects a $name gate in the recorded head's cohort", ({ overrides }) => {
     const priorRun = priorSuccessfulCiRun({ id: 1, updated_at: "2026-06-17T10:50:00Z" });
     expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        recentSha: previousSha,
-        workflowRuns: [
+      collectHostedGateEvidence(
+        [
           priorRun,
-          successfulRun("Blacksmith ARM Testbox", 2, "2026-06-17T10:51:00Z", {
-            head_sha: previousSha,
-            ...overrides,
-          }),
-          pendingCiRun(3, "2026-06-17T10:54:00Z", "in_progress"),
-          successfulRun("Blacksmith ARM Testbox", 4, "2026-06-17T10:54:00Z", {
-            status: "queued",
-            conclusion: null,
-          }),
+          makeRun(ARM, 2, 51, { head_sha: previousSha, ...overrides }),
+          pendingCiRun(3, 54, "in_progress"),
+          makeRun(ARM, 4, 54, { status: "queued", conclusion: null }),
         ],
-        ...patchReuseOptions(priorRun),
-      }),
+        { recentSha: previousSha, ...patchReuseOptions(priorRun) },
+      ),
     ).toThrow(`Missing successful recent Blacksmith ARM Testbox workflow for ${previousSha}`);
   });
 
   it.each(["cancelled"])(
     "retains a recent scheduled success after a newer neutral run (%s)",
     (conclusion) => {
-      const success = successfulRun("CI", 1, "2026-06-17T10:47:00Z");
-      const neutral = { ...successfulRun("CI", 2, "2026-06-17T10:48:00Z"), conclusion };
-      const collect = () => collectHostedGateEvidence({ sha, workflowRuns: [success, neutral] });
+      const success = makeRun("CI", 1, 47);
+      const neutral = makeRun("CI", 2, 48, { conclusion });
+      const collect = () => collectHostedGateEvidence([success, neutral]);
       expect(collect()).toEqual({
         headSha: sha,
         workflows: [expect.objectContaining({ name: "CI", id: 1 })],
@@ -1155,101 +969,71 @@ describe("verify-pr-hosted-gates", () => {
   );
 
   it.each([
-    ["stale scheduled CI", [successfulRun("CI", 1, "2026-06-16T10:54:59Z")]],
+    ["missing CI", []],
+    ["stale scheduled CI", [makeRun("CI", 1, "2026-06-16T10:54:59Z")]],
     ["stale manual CI", [releaseGateRun(2, "2026-06-16T10:54:59Z")]],
-    [
-      "skipped-only scheduled CI",
-      [successfulRun("CI", 1, "2026-06-17T10:50:00Z", { conclusion: "skipped" })],
-    ],
-    [
-      "in-progress over older manual",
-      [
-        releaseGateRun(1, "2026-06-17T10:49:00Z"),
-        pendingCiRun(2, "2026-06-17T10:50:00Z", "in_progress"),
-      ],
-    ],
+    ["skipped-only scheduled CI", [makeRun("CI", 1, 50, { conclusion: "skipped" })]],
+    ["in-progress over older manual", [releaseGateRun(1, 49), pendingCiRun(2, 50, "in_progress")]],
     [
       "pending over neutral and manual",
-      [
-        successfulRun("CI", 1, "2026-06-17T10:48:00Z", { conclusion: "skipped" }),
-        releaseGateRun(2, "2026-06-17T10:49:00Z"),
-        pendingCiRun(3, "2026-06-17T10:50:00Z"),
-      ],
+      [makeRun("CI", 1, 48, { conclusion: "skipped" }), releaseGateRun(2, 49), pendingCiRun(3, 50)],
     ],
     [
       "newer failure despite inverted completion times",
-      [
-        successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
-        successfulRun("CI", 2, "2026-06-17T10:49:00Z", { conclusion: "failure" }),
-      ],
+      [makeRun("CI", 1, 54), makeRun("CI", 2, 49, { conclusion: "failure" })],
     ],
     [
       "scheduled failure before manual fallback",
-      [
-        successfulRun("CI", 1, "2026-06-16T10:54:59Z", { conclusion: "failure" }),
-        releaseGateRun(2, "2026-06-17T10:49:00Z"),
-      ],
+      [makeRun("CI", 1, "2026-06-16T10:54:59Z", { conclusion: "failure" }), releaseGateRun(2, 49)],
     ],
     [
       "scheduled failure before skipped run and fallback",
       [
-        successfulRun("CI", 1, "2026-06-17T10:47:00Z", { conclusion: "failure" }),
-        successfulRun("CI", 2, "2026-06-17T10:48:00Z", { conclusion: "skipped" }),
-        releaseGateRun(3, "2026-06-17T10:49:00Z"),
+        makeRun("CI", 1, 47, { conclusion: "failure" }),
+        makeRun("CI", 2, 48, { conclusion: "skipped" }),
+        releaseGateRun(3, 49),
       ],
     ],
     [
       "scheduled failure before pending rerun and fallback",
       [
-        successfulRun("CI", 1, "2026-06-17T10:47:00Z", { conclusion: "failure" }),
-        pendingCiRun(2, "2026-06-17T10:48:00Z", "in_progress"),
-        releaseGateRun(3, "2026-06-17T10:49:00Z"),
+        makeRun("CI", 1, 47, { conclusion: "failure" }),
+        pendingCiRun(2, 48, "in_progress"),
+        releaseGateRun(3, 49),
       ],
     ],
-    [
-      "unmarked manual run",
-      [{ ...releaseGateRun(1, "2026-06-17T10:47:00Z"), display_title: "CI" }],
-    ],
+    ["unmarked manual run", [{ ...releaseGateRun(1, 47), display_title: "CI" }]],
     [
       "manual title on another workflow",
-      [
-        {
-          ...releaseGateRun(1, "2026-06-17T10:47:00Z"),
-          path: ".github/workflows/something-else.yml",
-        },
-      ],
+      [{ ...releaseGateRun(1, 47), path: ".github/workflows/something-else.yml" }],
     ],
   ] satisfies Array<[string, WorkflowRunFixture[]]>)("rejects %s", (_name, workflowRuns) => {
-    expect(() => collectHostedGateEvidence({ sha, workflowRuns })).toThrow(
+    expect(() => collectHostedGateEvidence(workflowRuns)).toThrow(
       `Missing successful recent CI workflow for ${sha}`,
     );
   });
 
   it("covers a queued artifact Testbox only with a completed exact CI fallback", () => {
-    expect(
-      collectHostedGateEvidence({
-        sha,
-        workflowRuns: queuedBuildArtifactFallbackRuns(),
-      }),
-    ).toEqual({
+    expect(collectHostedGateEvidence(queuedBuildArtifactFallbackRuns())).toEqual({
       headSha: sha,
       workflows: [
         expect.objectContaining({ name: "CI", id: 3 }),
-        expect.objectContaining({ name: "Blacksmith Testbox", id: 4 }),
-        expect.objectContaining({ name: "Blacksmith ARM Testbox", id: 5 }),
-        expect.objectContaining({ name: "Workflow Sanity", id: 6 }),
+        expect.objectContaining({ name: BOX, id: 4 }),
+        expect.objectContaining({ name: ARM, id: 5 }),
+        expect.objectContaining({ name: SANITY, id: 6 }),
       ],
-      fallbackCoveredWorkflows: [
-        {
-          name: BUILD_ARTIFACTS_WORKFLOW,
-          coveredBy: "CI release gate",
-          reason: "scheduled workflow is queued",
-        },
-      ],
+      fallbackCoveredWorkflows: queuedArtifactCoverage,
     });
   });
 
   it.each([
+    ...[0, 30].map((id) => ({
+      name: `skipped artifact history at run ${id}`,
+      runs: [
+        ...queuedBuildArtifactFallbackRuns(),
+        makeRun(BUILD_ARTIFACTS_WORKFLOW, id, 50, { conclusion: "skipped" }),
+      ],
+    })),
     ...(
       [
         ["release gate", 0],
@@ -1266,58 +1050,35 @@ describe("verify-pr-hosted-gates", () => {
       name: "an older failed artifact run",
       runs: [
         ...queuedBuildArtifactFallbackRuns(),
-        successfulRun(BUILD_ARTIFACTS_WORKFLOW, 7, "2026-06-16T10:54:59Z", {
-          conclusion: "failure",
-        }),
+        makeRun(BUILD_ARTIFACTS_WORKFLOW, 7, "2026-06-16T10:54:59Z", { conclusion: "failure" }),
       ],
     },
     {
       name: "missing supporting gates",
       runs: [
-        releaseGateRun(1, "2026-06-17T10:49:00Z"),
-        successfulRun(BUILD_ARTIFACTS_WORKFLOW, 2, "2026-06-17T10:50:00Z", {
-          status: "queued",
-          conclusion: null,
-        }),
+        releaseGateRun(1, 49),
+        makeRun(BUILD_ARTIFACTS_WORKFLOW, 2, 50, { status: "queued", conclusion: null }),
       ],
     },
     ...[
-      successfulRun(BUILD_ARTIFACTS_WORKFLOW, 2, "2026-06-17T10:50:00Z", {
-        status: "in_progress",
-        conclusion: null,
-      }),
-      successfulRun(BUILD_ARTIFACTS_WORKFLOW, 3, "2026-06-17T10:51:00Z", { conclusion: "failure" }),
+      makeRun(BUILD_ARTIFACTS_WORKFLOW, 2, 50, { status: "in_progress", conclusion: null }),
+      makeRun(BUILD_ARTIFACTS_WORKFLOW, 3, 51, { conclusion: "failure" }),
     ].map((run) => ({
       name: `artifact ${run.status}/${run.conclusion}`,
-      runs: [releaseGateRun(1, "2026-06-17T10:49:00Z"), run],
+      runs: [releaseGateRun(1, 49), run],
     })),
     {
       name: "failure before a queued artifact retry",
       runs: [
-        releaseGateRun(1, "2026-06-17T10:49:00Z"),
-        successfulRun(BUILD_ARTIFACTS_WORKFLOW, 4, "2026-06-17T10:52:00Z", {
-          conclusion: "failure",
-        }),
-        successfulRun(BUILD_ARTIFACTS_WORKFLOW, 5, "2026-06-17T10:53:00Z", {
-          status: "queued",
-          conclusion: null,
-        }),
+        releaseGateRun(1, 49),
+        makeRun(BUILD_ARTIFACTS_WORKFLOW, 4, 52, { conclusion: "failure" }),
+        makeRun(BUILD_ARTIFACTS_WORKFLOW, 5, 53, { status: "queued", conclusion: null }),
       ],
     },
   ])("rejects queued-artifact fallback with $name", ({ runs }) => {
-    expect(() => collectHostedGateEvidence({ sha, workflowRuns: runs })).toThrow(
+    expect(() => collectHostedGateEvidence(runs)).toThrow(
       "Missing successful recent Blacksmith Build Artifacts Testbox workflow",
     );
-  });
-
-  it("requires CI for docs unless the head changes only CHANGELOG.md", () => {
-    expect(() => collectHostedGateEvidence({ sha, workflowRuns: [] })).toThrow(
-      "Missing successful recent CI workflow",
-    );
-    expect(collectHostedGateEvidence({ sha, workflowRuns: [], changelogOnly: true })).toEqual({
-      headSha: sha,
-      workflows: [],
-    });
   });
 
   it("parses required CLI arguments", () => {
@@ -1358,6 +1119,18 @@ describe("verify-pr-hosted-gates", () => {
     }
     expect(() => parseArgs(requiredCliArgs.with(7, "-h"))).toThrow("Expected --output <value>.");
     expect(() => parseArgs(requiredCliArgs.with(9, "origin/main"))).toThrow("Usage:");
+    const duplicateCases = [
+      ["--repo", [...requiredCliArgs, "--repo", "fork/openclaw"]],
+      ["--sha", [...requiredCliArgs, "--sha", "other-sha"]],
+      ["--pr", [...requiredCliArgs, "--pr", "7"]],
+      ["--recent-sha", [...requiredCliArgs, "--recent-sha", "one", "--recent-sha", "other"]],
+      ["--output", [...requiredCliArgs, "--output", "two.json"]],
+      ["--changelog-only", [...requiredCliArgs, "--changelog-only", "--changelog-only"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once.`);
+    }
   });
 
   it("rejects malformed PR numbers before invoking GitHub", () => {
@@ -1390,21 +1163,6 @@ describe("verify-pr-hosted-gates", () => {
         headRepository: { nameWithOwner: "openclaw/openclaw" },
       }),
     ).toThrow(value.error);
-  });
-
-  it("rejects duplicate hosted gate verifier CLI arguments", () => {
-    const duplicateCases = [
-      ["--repo", [...requiredCliArgs, "--repo", "fork/openclaw"]],
-      ["--sha", [...requiredCliArgs, "--sha", "other-sha"]],
-      ["--pr", [...requiredCliArgs, "--pr", "7"]],
-      ["--recent-sha", [...requiredCliArgs, "--recent-sha", "one", "--recent-sha", "other"]],
-      ["--output", [...requiredCliArgs, "--output", "two.json"]],
-      ["--changelog-only", [...requiredCliArgs, "--changelog-only", "--changelog-only"]],
-    ] satisfies Array<[string, string[]]>;
-
-    for (const [flag, args] of duplicateCases) {
-      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once.`);
-    }
   });
 
   it("accepts one workflow-runs page emitted through a colorizing GitHub CLI shim", () => {

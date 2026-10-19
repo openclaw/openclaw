@@ -6,11 +6,17 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { waitForBrowserStartup } from "../sdk-node-runtime.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import {
+  isLocalManagedProfile,
+  type ResolvedBrowserConfig,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -160,17 +166,10 @@ function combineSignals(lifecycleSignal: AbortSignal, callerSignal?: AbortSignal
 
 /** Observe shared lifecycle work without transferring cancellation ownership. */
 export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return promise;
-  }
-  signal.throwIfAborted();
-  let onAbort!: () => void;
-  const waiting = new Promise<T>((resolve, reject) => {
-    onAbort = () => reject(toLifecycleError(signal.reason, "Browser operation aborted."));
-    signal.addEventListener("abort", onAbort, { once: true });
-    void promise.then(resolve, reject);
-  });
-  return waiting.finally(() => signal.removeEventListener("abort", onAbort));
+  signal?.throwIfAborted();
+  return racePromiseWithAbortSignal(promise, signal, (aborted) =>
+    toLifecycleError(aborted.reason, "Browser operation aborted."),
+  );
 }
 
 function createLease(actor: ProfileLifecycleActor): () => void {
@@ -268,7 +267,12 @@ export async function withProfileOperationLease<T>(params: {
 
   const lifecycleSignal = actor.controller.signal;
   assertProfileCurrent(params);
-  await waitForProfileOperation(actor.tail, params.signal);
+  const waitForTail = () => waitForProfileOperation(actor.tail, params.signal);
+  if (actor.starts.size > 0 && isLocalManagedProfile(params.runtime.profile)) {
+    await waitForBrowserStartup(waitForTail);
+  } else {
+    await waitForTail();
+  }
   const signal =
     params.ownership === "lifecycle"
       ? lifecycleSignal

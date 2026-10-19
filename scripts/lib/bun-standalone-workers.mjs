@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-/** Keep launcher ownership in the runtime manifest; discover additional built plugin workers. */
-export function discoverStandaloneWorkers({ runtimeRoot, moduleEntries, runtimeEntrypoints }) {
+/** Keep launcher ownership in the runtime manifest; discover additional module workers. */
+export function discoverStandaloneWorkers({
+  runtimeRoot,
+  moduleEntries,
+  runtimeEntrypoints,
+  parse,
+}) {
   const entries = new Set(
     Object.values(runtimeEntrypoints).map(({ distWorkerPath }) => `dist/${distWorkerPath}`),
   );
@@ -14,6 +19,18 @@ export function discoverStandaloneWorkers({ runtimeRoot, moduleEntries, runtimeE
       entry === "dist/telegram-ingress-worker.runtime.js"
     ) {
       entries.add(entry);
+    } else if (/\.[cm]?js$/.test(entry) && !entry.split(/[\\/]/).includes("node_modules")) {
+      const contents = fs.readFileSync(path.join(runtimeRoot, entry), "utf8");
+      if (
+        contents.includes("import.meta") &&
+        /\b(?:Worker|createCpuTrackedWorker|createRetainedNativeWorker)\b/.test(contents) &&
+        hasSelfTargetedWorker(
+          contents,
+          parse(contents, { ecmaVersion: "latest", sourceType: "module" }),
+        )
+      ) {
+        entries.add(entry);
+      }
     }
   }
   const workers = [...entries].toSorted((left, right) =>
@@ -41,7 +58,7 @@ function visitNodes(node, visit) {
 }
 
 // Resolve fixed programs without executing an application module during the build.
-function fixedProgramEvaluator(contents, ast) {
+function fixedProgramEvaluator(contents, ast, isModuleBinding) {
   const bindings = new Map();
   const declared = new Set();
   for (const statement of ast.body) {
@@ -67,7 +84,8 @@ function fixedProgramEvaluator(contents, ast) {
       node.type === "AssignmentExpression" &&
       node.operator === "=" &&
       node.left.type === "Identifier" &&
-      declared.has(node.left.name)
+      declared.has(node.left.name) &&
+      isModuleBinding(node.left)
     ) {
       const candidates = assignments.get(node.left.name) ?? [];
       candidates.push(node.right);
@@ -86,7 +104,12 @@ function fixedProgramEvaluator(contents, ast) {
     if (node?.type === "Literal") {
       return node.value;
     }
-    if (node?.type === "Identifier" && bindings.has(node.name) && !resolving.has(node.name)) {
+    if (
+      node?.type === "Identifier" &&
+      isModuleBinding(node) &&
+      bindings.has(node.name) &&
+      !resolving.has(node.name)
+    ) {
       resolving.add(node.name);
       try {
         return evaluate(bindings.get(node.name));
@@ -131,7 +154,10 @@ function fixedProgramEvaluator(contents, ast) {
         return JSON.stringify(evaluate(node.arguments[0]));
       }
       if (property.name === "toString" && node.arguments.length === 0) {
-        const target = object.type === "Identifier" ? bindings.get(object.name) : object;
+        const target =
+          object.type === "Identifier"
+            ? isModuleBinding(object) && bindings.get(object.name)
+            : object;
         if (
           ["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"].includes(
             target?.type,
@@ -148,7 +174,7 @@ function fixedProgramEvaluator(contents, ast) {
   return evaluate;
 }
 
-function workerCalls(contents, ast) {
+function workerBindings(contents, ast) {
   const scopes = new WeakMap();
   const root = { bindings: new Map(), functionScope: true };
   const lookup = (name, scope) => {
@@ -302,12 +328,50 @@ function workerCalls(contents, ast) {
     }
   };
   visit(ast, root);
-  return (node) => kind(node.callee, scopes.get(node)) === "worker";
+  return {
+    isWorkerCall: (node) => kind(node.callee, scopes.get(node)) === "worker",
+    isModuleBinding(node) {
+      for (let scope = scopes.get(node); scope; scope = scope.parent) {
+        if (scope.bindings.has(node.name)) {
+          return scope === root;
+        }
+      }
+      return false;
+    },
+  };
 }
 
-function inlineWorkerPrograms(contents, ast) {
-  const evaluate = fixedProgramEvaluator(contents, ast);
-  const isWorkerCall = workerCalls(contents, ast);
+function hasSelfTargetedWorker(contents, ast) {
+  const { isWorkerCall } = workerBindings(contents, ast);
+  let found = false;
+  visitNodes(ast, (node) => {
+    if (!["CallExpression", "NewExpression"].includes(node.type) || !isWorkerCall(node)) {
+      return;
+    }
+    let target = node.arguments[0];
+    if (
+      target?.type === "NewExpression" &&
+      target.callee.name === "URL" &&
+      target.arguments.length === 1
+    ) {
+      target = target.arguments[0];
+    }
+    if (
+      target?.type === "MemberExpression" &&
+      !target.computed &&
+      target.property.name === "url" &&
+      target.object.type === "MetaProperty" &&
+      target.object.meta.name === "import" &&
+      target.object.property.name === "meta"
+    ) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+function inlineWorkerPrograms(contents, ast, bindings) {
+  const evaluate = fixedProgramEvaluator(contents, ast, bindings.isModuleBinding);
   const programs = [];
   visitNodes(ast, (node) => {
     if (!["CallExpression", "NewExpression"].includes(node.type)) {
@@ -325,7 +389,7 @@ function inlineWorkerPrograms(contents, ast) {
         property.value.type === "Literal" &&
         property.value.value === true,
     );
-    if (!flag || !isWorkerCall(node)) {
+    if (!flag || !bindings.isWorkerCall(node)) {
       return;
     }
     const source = evaluate(node.arguments[0]);
@@ -337,8 +401,8 @@ function inlineWorkerPrograms(contents, ast) {
   return programs;
 }
 
-function fixedEvalChildren(contents, ast) {
-  const evaluate = fixedProgramEvaluator(contents, ast);
+function fixedEvalChildren(contents, ast, bindings) {
+  const evaluate = fixedProgramEvaluator(contents, ast, bindings.isModuleBinding);
   const programs = [];
   const text = (node) =>
     node?.type === "Literal"
@@ -406,8 +470,9 @@ export function prepareStandaloneWorkers({
     let children;
     try {
       const ast = parse(contents, { ecmaVersion: "latest", sourceType: "module" });
-      programs = inlineWorkerPrograms(contents, ast);
-      children = fixedEvalChildren(contents, ast);
+      const bindings = workerBindings(contents, ast);
+      programs = inlineWorkerPrograms(contents, ast, bindings);
+      children = fixedEvalChildren(contents, ast, bindings);
     } catch (error) {
       inlineResiduals.push({ file: entry, error: String(error) });
       throw new Error(`Cannot embed inline worker in ${entry}: ${error.message}`, { cause: error });
@@ -546,8 +611,9 @@ module.exports = { ...native, Worker };
       return contents;
     }
     const parsed = ast ?? parse(contents, { ecmaVersion: "latest", sourceType: "module" });
+    const bindings = workerBindings(contents, parsed);
     const edits = [];
-    for (const { node, flag, source } of inlineWorkerPrograms(contents, parsed)) {
+    for (const { node, flag, source } of inlineWorkerPrograms(contents, parsed, bindings)) {
       const record = inlineBySource.get(source);
       if (!record) {
         throw new Error(`Uncaptured inline worker in ${filename}`);
@@ -559,7 +625,7 @@ module.exports = { ...native, Worker };
       ]);
       edits.push([flag.value.start, flag.value.end, "false"]);
     }
-    const children = fixedEvalChildren(contents, parsed);
+    const children = fixedEvalChildren(contents, parsed, bindings);
     for (const { node, source } of children) {
       const record = evalChildBySource.get(source);
       if (!record) {

@@ -109,48 +109,32 @@ it.each([
     );
   }
   vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
+    const result = { code: 0, termination: "exit" as const, stdout: "", stderr: "" };
     if (command === "busctl") {
-      return {
-        code: 1,
-        termination: "exit",
-        stdout: "",
-        stderr:
-          "Failed to connect to user scope bus via local transport: No such file or directory",
-      };
-    }
-    if (command === "systemctl") {
-      return {
-        code: 0,
-        termination: "exit",
-        stdout: args.includes("show") ? "ActiveState=active\nMainPID=1234" : "enabled",
-        stderr: "",
-      };
-    }
-    if (command === "launchctl") {
+      result.code = 1;
+      result.stderr =
+        "Failed to connect to user scope bus via local transport: No such file or directory";
+    } else if (command === "systemctl") {
+      result.stdout = args.includes("show") ? "ActiveState=active\nMainPID=1234" : "enabled";
+    } else if (command === "launchctl") {
       const system = args[1]?.startsWith("system/");
       if (system && scenario.reason === "launchd-system-owned") {
-        return { code: 0, termination: "exit", stdout: "state = running\npid = 1234", stderr: "" };
+        result.stdout = "state = running\npid = 1234";
+      } else {
+        result.code = 125;
+        result.stderr = "Could not print domain: 125: Domain does not support specified action";
       }
-      return {
-        code: 125,
-        termination: "exit",
-        stdout: "",
-        stderr: "Could not print domain: 125: Domain does not support specified action",
-      };
+    } else {
+      throw new Error(`Unexpected native command: ${command}`);
     }
-    throw new Error(`Unexpected native command: ${command}`);
+    return result;
   });
   const service = resolveGatewayService();
+  const command = service.readCommand(process.env, { requireEffective: true });
   if (scenario.platform === "linux") {
-    await expect
-      .soft(service.readCommand(process.env, { requireEffective: true }))
-      .rejects.toMatchObject({
-        reason: scenario.reason,
-      });
+    await expect.soft(command).rejects.toMatchObject({ reason: scenario.reason });
   } else {
-    await expect(
-      service.readCommand(process.env, { requireEffective: true }),
-    ).resolves.toMatchObject({
+    await expect(command).resolves.toMatchObject({
       programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
     });
   }

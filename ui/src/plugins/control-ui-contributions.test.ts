@@ -256,6 +256,23 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it("replaces placement subscriptions and resumes current session presentation", async () => {
+    const { element, sessions } = await mountActions();
+    expect(element.querySelector("button")?.textContent).toBe("Review Ready");
+
+    element.kind = "composer";
+    await element.updateComplete;
+    expect(element.querySelector("button")).toBeNull();
+    sessions.patchRowLocal(sessionKey, { label: "Updated while hidden" });
+
+    element.kind = "header";
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Updated while hidden");
+    sessions.patchRowLocal(sessionKey, { label: "Live again" });
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Live again");
+  });
+
   it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
     const { element, sessions, run, resolve, request } = await mountActions({
       placement: "header",

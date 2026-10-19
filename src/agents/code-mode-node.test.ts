@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
-import { PerformanceObserver } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
@@ -230,8 +229,8 @@ describe("Node Code Mode executor", () => {
       result: { error: expect.stringContaining("Inspect any completed actions before retrying") },
     });
   });
-  // Bun lacks perf_hooks GC entries and V8's --expose_gc; native OOM is covered above.
-  it.skipIf(!PerformanceObserver.supportedEntryTypes.includes("gc"))(
+  // Bun lacks V8's GCProfiler and --expose_gc; native OOM is covered above.
+  it.skipIf(Boolean(process.versions.bun))(
     "stops sustained near-limit major collections even with zero reported duration and recovers",
     async () => {
       // Keep retained allocations live and measure occupancy after native collections.

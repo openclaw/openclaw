@@ -10,6 +10,7 @@ import {
 } from "./chat-flow.test-support.ts";
 
 type ColdLoadFrame = {
+  title?: string | null;
   top: number;
   max: number;
   duration: boolean;
@@ -146,7 +147,7 @@ suite.define(() => {
     },
   );
 
-  it("paints the cached tail, reply metadata, and progress before hello and reconciles in place", async () => {
+  it("paints the cached tail, title, reply metadata, and progress before hello and reconciles in place", async () => {
     await suite.withPage(
       {
         viewport: { width: 1200, height: 900 },
@@ -225,7 +226,20 @@ suite.define(() => {
           sessions: [session],
           sessionInfo: session,
           historyMessages,
-          methodResponses: { "progressCard.get": { card: progressCard } },
+          methodResponses: {
+            "sessions.list": {
+              ...chatSessionListResponse(
+                Array.from({ length: 200 }, (_, index) => ({
+                  key: `agent:main:recent-${index}`,
+                  kind: "direct",
+                  label: `Recent conversation ${index}`,
+                  updatedAt: session.updatedAt + index + 1,
+                })),
+              ),
+              count: 300,
+            },
+            "progressCard.get": { card: progressCard },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("connect");
@@ -262,6 +276,8 @@ suite.define(() => {
             const cardRect = card?.getBoundingClientRect();
             const threadRect = thread.getBoundingClientRect();
             return {
+              title:
+                pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? null,
               top: thread.scrollTop,
               max: thread.scrollHeight - thread.clientHeight,
               duration: thread.textContent.includes("Worked for 3 minutes"),
@@ -308,7 +324,8 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         expect(samples).toHaveLength(20);
         for (const frame of samples) {
-          expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
+          expect(frame.title).toBe(session.label);
+          expect(Math.abs(frame.max - frame.top), JSON.stringify(samples)).toBeLessThanOrEqual(1);
           expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
         }
         await gateway.waitForRequest("connect");
@@ -347,6 +364,7 @@ suite.define(() => {
         expect(reconciled.frames.length).toBeGreaterThanOrEqual(20);
         const cached = samples[0]!;
         for (const frame of [...samples, ...reconciled.frames]) {
+          expect(frame.title).toBe(session.label);
           expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
           expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
           for (const key of [

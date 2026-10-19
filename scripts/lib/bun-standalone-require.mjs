@@ -53,18 +53,26 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths }) {
       return Object.hasOwn(resolutions, key) ? path.join(root, resolutions[key]) : undefined;
     };
     // Keep physical filenames for admission/cache owners, while loading the mapped image entry.
-    const resolve = new Proxy(require.resolve, { apply(target, receiver, [specifier, ...rest]) {
-      return (rest[0] === undefined ? imageFilename(specifier) : undefined)
-        ?? Reflect.apply(target, receiver, [specifier, ...rest]);
-    }});
+    const resolve = new Proxy(require.resolve, {
+      get(target, property, receiver) {
+        if (property === "paths") return (specifier) =>
+          globalThis.__openclawStandaloneNativeResolvePaths(parent, specifier) ?? target.paths(specifier);
+        return Reflect.get(target, property, receiver);
+      },
+      apply(target, receiver, [specifier, ...rest]) {
+        return (rest[0] === undefined ? globalThis.__openclawStandaloneNativeResolve(parent, specifier) ?? imageFilename(specifier) : undefined)
+          ?? Reflect.apply(target, receiver, [specifier, ...rest]);
+      }
+    });
     return new Proxy(require, {
       get(target, property, receiver) {
         return property === "resolve" ? resolve : Reflect.get(target, property, receiver);
       },
       apply(target, receiver, [specifier, ...rest]) {
         if (typeof specifier !== "string") return Reflect.apply(target, receiver, [specifier, ...rest]);
-        const entry = embedded(specifier) ?? embedded(imageFilename(specifier) ?? target.resolve(specifier));
-        const loaded = Reflect.apply(target, receiver, [entry ?? specifier, ...rest]);
+        const resolved = globalThis.__openclawStandaloneNativeResolve(parent, specifier);
+        const entry = embedded(specifier) ?? embedded(resolved ?? imageFilename(specifier) ?? target.resolve(specifier));
+        const loaded = Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
         return entry && commonJsEntries.has(entry) ? loaded.default ?? loaded : loaded;
       }
     });

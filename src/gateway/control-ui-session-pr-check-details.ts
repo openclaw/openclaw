@@ -41,10 +41,8 @@ type LoadSessionCheckDetailsDeps = {
   /** The request handler binds and rechecks session visibility, generation, and workspace. */
   sessionScope: string;
   assertCurrent: () => void;
-  fetchImpl?: typeof fetch;
   loadPullRequests: (
     params: ControlUiSessionPullRequestsParams,
-    deps: { fetchImpl?: typeof fetch },
   ) => Promise<ControlUiSessionPullRequests>;
 };
 
@@ -69,21 +67,17 @@ export async function loadControlUiSessionPullRequestChecks(
     candidate.number === number &&
     candidate.headSha === headSha;
   const { loadPullRequests } = deps;
-  const snapshot = await loadPullRequests(
-    { sessionKey: params.sessionKey, agentId: params.agentId },
-    { fetchImpl: deps.fetchImpl },
-  );
+  const snapshot = await loadPullRequests({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
   deps.assertCurrent();
   const pull = snapshot.pullRequests.find(matchesTarget);
   if (!pull || (pull.state !== "open" && pull.state !== "draft")) {
     return unavailable("The session pull request or head changed; reopen CI details");
   }
   const host = new URL(pull.url).hostname;
-  const read = prepareSessionPullRequestGitHubRead(
-    host,
-    deps.fetchImpl ?? fetch,
-    deps.assertCurrent,
-  );
+  const read = prepareSessionPullRequestGitHubRead(host, deps.assertCurrent);
   const assertCurrent = read.assertCurrent;
   const checkTarget = { ...target, host, apiBaseUrl: read.apiBaseUrl };
   const key = JSON.stringify([
@@ -110,12 +104,9 @@ export async function loadControlUiSessionPullRequestChecks(
       access: createGitHubReadGroup(),
     };
     releaseReader = pending.access.add(deps.assertCurrent);
-    const transportRead = prepareSessionPullRequestGitHubRead(
-      host,
-      deps.fetchImpl ?? fetch,
-      pending.access.assertCurrent,
-      { signal: pending.access.signal },
-    );
+    const transportRead = prepareSessionPullRequestGitHubRead(host, pending.access.assertCurrent, {
+      signal: pending.access.signal,
+    });
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
       const deadline = Date.now() + 25_000;
@@ -221,22 +212,6 @@ export async function loadControlUiSessionPullRequestChecks(
   try {
     const result = await entry.promise;
     assertCurrent();
-    // A summary refresh can replace the PR while this details request is in flight.
-    const current = await loadPullRequests(
-      { sessionKey: params.sessionKey, agentId: params.agentId },
-      { fetchImpl: deps.fetchImpl },
-    );
-    assertCurrent();
-    if (
-      !current.pullRequests.some(
-        (candidate) =>
-          matchesTarget(candidate) &&
-          new URL(candidate.url).hostname === host &&
-          (candidate.state === "open" || candidate.state === "draft"),
-      )
-    ) {
-      return unavailable("The session pull request or head changed; reopen CI details");
-    }
     return structuredClone({
       ...result,
       ...(result.retryAfterMs === undefined

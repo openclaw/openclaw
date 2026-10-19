@@ -12,7 +12,6 @@ import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-disp
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   isHiddenAssistantStreamText,
-  isSilentReplyStream,
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
@@ -41,7 +40,6 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId, replaceChatStream } from "./stream-causal-boundary.ts";
 import {
   appendTerminalAssistantMessage,
-  clearToolStreamSegments,
   terminalMessageReplacesVisibleStream,
 } from "./stream-reconciliation.ts";
 import {
@@ -268,7 +266,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     ) {
       return;
     }
-    clearToolStreamSegments(state);
+    state.chatStreamSegments = [];
     const sessionKeys = [state.sessionKey, payload.sessionKey];
     if (terminalStatus === "yielded") {
       reconcileChatRunLifecycle(state, {
@@ -293,6 +291,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     reconcileChatRunLifecycle(state, {
       outcome: terminalStatus === "completed" ? "done" : "interrupted",
       sessionStatus,
+      suppressErrorNotice: payload.suppressErrorNotice,
+      localModelMayStillBeFinishing:
+        payload.state === "aborted" && payload.localModelMayStillBeFinishing,
       errorMessage: payload.errorMessage?.trim()
         ? resolveGatewayErrorText(payload, null)
         : undefined,
@@ -319,6 +320,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       const diagnosticOwnerRunId =
         state.chatRunId ?? pendingRunId ?? state.lastLocalTerminalReconcile?.runId;
       if (
+        !payload.suppressErrorNotice &&
         diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
@@ -430,6 +432,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         }
       : payload.phase && {
           phase: payload.phase,
+          ...(payload.waitReason ? { waitReason: payload.waitReason } : {}),
           ...(payload.seq === undefined ? {} : { seq: payload.seq }),
         };
     if (status) {
@@ -463,8 +466,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
     if (typeof next === "string") {
-      const hidden =
-        isSilentReplyStream(next) || isAssistantHeartbeatAckForDisplay(payload.message);
+      const hidden = isAssistantHeartbeatAckForDisplay(payload.message);
       // A replacement retires the previous baseline even when its new text is hidden;
       // ignoring it would keep already-saved text visible beside its durable row.
       if (payload.replace) {
@@ -532,17 +534,19 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     // The shared Gateway projection owns timeout classification; preserve it
     // when publishing selected-session and sidebar terminal status.
     reconcileOwnedTerminalRun();
-    setChatRunError(
-      state,
-      resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
-      payload.runId,
-      errorKind,
-    );
+    if (!payload.suppressErrorNotice) {
+      setChatRunError(
+        state,
+        resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
+        payload.runId,
+        errorKind,
+      );
+    }
   }
   if (payload.state !== "delta") {
     // Terminal materialization transfers ownership into chatMessages; retaining
     // the stream segments would render the same run output a second time.
-    clearToolStreamSegments(state);
+    state.chatStreamSegments = [];
   }
   return payload.state;
 }

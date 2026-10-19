@@ -661,14 +661,6 @@ function formatMarketplaceDownloadError(url: string, detail: string): string {
   );
 }
 
-function hasStreamingResponseBody(
-  response: Response,
-): response is Response & { body: ReadableStream<Uint8Array> } {
-  return Boolean(
-    response.body && typeof (response.body as { getReader?: unknown }).getReader === "function",
-  );
-}
-
 function parseMarketplaceContentLength(raw: string): number {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) {
@@ -747,14 +739,6 @@ async function downloadUrlToTempFile(
           error: formatMarketplaceDownloadError(url, "empty response body"),
         };
       }
-      // Fail closed unless we can stream and enforce the archive size bound incrementally.
-      if (!hasStreamingResponseBody(response)) {
-        return {
-          ok: false,
-          error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
-        };
-      }
-
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
         const size = parseMarketplaceContentLength(contentLength);

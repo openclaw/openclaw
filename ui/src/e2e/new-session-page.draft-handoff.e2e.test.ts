@@ -77,9 +77,9 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       await page.reload();
       await expect.poll(() => composer.inputValue()).toBe(expected);
-      expect(await page.getByRole("button", { name: "Open image favicon-32.png" }).count()).toBe(
-        replacement ? 1 : 0,
-      );
+      await expect
+        .poll(() => page.getByRole("button", { name: "Open image favicon-32.png" }).count())
+        .toBe(replacement ? 1 : 0);
     });
   });
 

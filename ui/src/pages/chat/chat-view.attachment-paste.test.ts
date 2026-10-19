@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
@@ -19,9 +18,15 @@ import {
   renderSettledPastedTextAttachment,
 } from "./chat-attachment-picker.test-support.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps, createPasteEvent, requireElement } from "./chat-view.test-helpers.ts";
+import {
+  createChatProps,
+  createPasteEvent,
+  disposeChatView,
+  renderChatPropsInto,
+  requireElement,
+} from "./chat-view.test-helpers.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
@@ -36,19 +41,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
+function renderChatView(overrides: Partial<ChatProps>) {
   const container = createComposerContainer();
-  render(
-    renderChat(
-      createChatProps({
-        ...overrides,
-        onAttachmentsChange: (attachments) => {
-          payloads.push(...attachments);
-          overrides.onAttachmentsChange?.(attachments);
-        },
-      }),
-    ),
+  renderChatPropsInto(
     container,
+    createChatProps({
+      ...overrides,
+      onAttachmentsChange: (attachments) => {
+        payloads.push(...attachments);
+        overrides.onAttachmentsChange?.(attachments);
+      },
+    }),
   );
   return container;
 }
@@ -277,32 +280,30 @@ describe("chat attachment reading", () => {
     });
     const redraw = () => {
       const readSignal = reads.readSignal;
-      render(
-        renderChat(
-          createChatProps({
-            attachments,
-            draft,
-            getAttachments: () => attachments,
-            getDraft: () => draft,
-            getPendingAttachmentReads: () => reads.pendingReads,
-            onAttachmentsChange: (next) => {
-              attachments = next;
-            },
-            onPendingReadsChange: (delta) => reads.updatePending(readSignal, delta),
-            onSend,
-            attachmentReads: reads,
-            pendingAttachmentReads: reads.pendingReads,
-            readSignal,
-          }),
-        ),
+      renderChatPropsInto(
         container,
+        createChatProps({
+          attachments,
+          draft,
+          getAttachments: () => attachments,
+          getDraft: () => draft,
+          getPendingAttachmentReads: () => reads.pendingReads,
+          onAttachmentsChange: (next) => {
+            attachments = next;
+          },
+          onPendingReadsChange: (delta) => reads.updatePending(readSignal, delta),
+          onSend,
+          attachmentReads: reads,
+          pendingAttachmentReads: reads.pendingReads,
+          readSignal,
+        }),
       );
     };
     const reads = new ChatAttachmentReadLifecycle(redraw);
     onTestFinished(() => {
       reads.abortReads();
       releaseChatAttachmentPayloads(attachments);
-      render(null, container);
+      disposeChatView(container);
     });
     redraw();
 

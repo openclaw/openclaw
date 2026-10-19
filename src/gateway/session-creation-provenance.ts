@@ -42,6 +42,7 @@ export function resolveOperatorSessionCreation(
   if (options.allowTrustedHint && agentRuntimeIdentity?.sessionSpawnContext) {
     const {
       requesterProfileId,
+      gitContributorProfileId,
       completionOwnerSessionKey,
       requesterSenderIsOwner,
       inheritedToolPolicy,
@@ -54,6 +55,7 @@ export function resolveOperatorSessionCreation(
       actor: { type: "agent", id: agentRuntimeIdentity.agentId },
       requesterSessionKey: agentRuntimeIdentity.sessionKey,
       ...(requesterProfileId ? { requesterProfileId } : {}),
+      ...(gitContributorProfileId ? { gitContributorProfileId } : {}),
       ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
       requesterSenderIsOwner,
       inheritedToolPolicy,

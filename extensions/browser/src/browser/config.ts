@@ -406,7 +406,7 @@ export function resolveProfile(
   }
 
   if (driver === "existing-session") {
-    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs) ?? undefined;
+    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs);
     const existingSessionCdp = normalizeExistingSessionCdpUrl(
       normalizeChromeMcpOptions({ ...profile, mcpArgs }).browserUrl,
       profileName,

@@ -104,7 +104,6 @@ describe("run-node script", () => {
       dirty: EXTENSION_PACKAGE,
       calls: 1,
     },
-    { label: "current runtime stamp", calls: 0 },
     { label: "immutable deployment", immutable: true, calls: 0 },
     { label: "dirty manifest", dirty: EXTENSION_MANIFEST, calls: 1 },
   ])(

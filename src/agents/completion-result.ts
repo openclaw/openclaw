@@ -1,4 +1,3 @@
-// Defines task terminal outcome contracts used by completion handling.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 /** Terminal fields required when a mandatory detached task completion is invalid. */

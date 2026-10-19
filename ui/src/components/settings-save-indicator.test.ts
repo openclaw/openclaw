@@ -57,13 +57,17 @@ describe("settings save indicator", () => {
 
     expect(indicator.textContent?.trim()).toBe("");
     expect(indicator.querySelector('[role="status"]')).toBeNull();
+    await update(props({ status: "saved" }));
+    expect(indicator.textContent?.trim()).toBe("");
   });
 
   it("renders the shared working claw while saving", async () => {
     await update(props({ status: "saving" }));
 
     expect(indicator.textContent?.trim()).toBe("Saving…");
-    expect(indicator.querySelector(".settings-save-indicator__claw--saving svg")).not.toBeNull();
+    expect(
+      indicator.querySelector(".settings-save-indicator__claw--saving svg .claw-icon__jaw"),
+    ).not.toBeNull();
     expect(
       indicator.querySelector(".settings-save-indicator__claw")?.getAttribute("aria-hidden"),
     ).toBe("true");

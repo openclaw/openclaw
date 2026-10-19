@@ -11,6 +11,30 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("ingestMemoryWikiSource", () => {
+  it("rejects malformed source encodings without replacing the imported page", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-encoding-");
+    const inputPath = path.join(rootDir, "notes.txt");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+    const content = "\uFEFFNotes: café, 東京, 🦞\n";
+    await fs.writeFile(inputPath, content);
+    const result = await ingestMemoryWikiSource({ config, inputPath });
+    const pagePath = path.join(config.vault.path, result.pagePath);
+    const original = await fs.readFile(pagePath);
+    expect(original.toString("utf8")).toContain(content);
+
+    for (const bytes of [
+      Buffer.from([0xff, 0x41]),
+      Buffer.from([0xe2, 0x82]),
+      Buffer.from([0xed, 0xa0, 0x80]),
+      Buffer.concat([Buffer.from("valid UTF-8 café then Latin-1: "), Buffer.from([0xe9])]),
+    ]) {
+      await fs.writeFile(inputPath, bytes);
+      await expect(ingestMemoryWikiSource({ config, inputPath })).rejects.toThrow(/UTF-8/);
+      expect(await fs.readFile(pagePath)).toEqual(original);
+      expect(await fs.readFile(inputPath)).toEqual(bytes);
+    }
+  });
+
   it("copies a local text file into sources markdown", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");

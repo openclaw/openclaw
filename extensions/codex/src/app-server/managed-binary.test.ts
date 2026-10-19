@@ -6,6 +6,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { SemVer } from "semver";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMigrationProvider } from "../../migration-provider-api.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import * as desktopAppPaths from "./desktop-app-paths.js";
@@ -188,6 +189,17 @@ describe("managed Codex app-server binary", () => {
         platform: "linux",
       }),
     ).resolves.toMatchObject({ command: launcher });
+  });
+
+  it("resolves a managed start after loading only the public migration provider", async () => {
+    buildMigrationProvider();
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        preferInstalled: false,
+      }),
+    ).resolves.toMatchObject({ commandSource: "resolved-managed" });
   });
 
   it("preserves an explicit command override without managed discovery", async () => {

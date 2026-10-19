@@ -34,7 +34,7 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations and one shared runtime warning per plugin and capability family on legacy use",
     ],
     tests: [
-      "src/plugin-sdk/state-binding.released-compat.test.ts",
+      "test/type-contracts/state-binding.released-compat.ts",
       "src/infra/outbound/session-binding-service.async-read.test.ts",
       "src/infra/outbound/current-conversation-bindings.worker.test.ts",
       "src/infra/outbound/account-scoped-conversation-bindings.test.ts",
@@ -85,7 +85,7 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: ["TypeScript @deprecated annotation and the shared capability-family warning"],
     tests: [
       "src/gateway/server-instance-runtime.test.ts",
-      "src/plugin-sdk/state-binding.released-compat.test.ts",
+      "test/type-contracts/state-binding.released-compat.ts",
     ],
     releaseNote:
       "Gateway approval publication awaits native eligibility while retaining the released synchronous publisher type and old publisher objects.",

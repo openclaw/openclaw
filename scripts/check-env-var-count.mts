@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,7 +7,9 @@ import {
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetScalar,
+  resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
 const BUDGET_PATH = "config/env-var-count-budget.txt";
@@ -84,50 +86,28 @@ function parseBudget(source: string) {
   return parseRatchetScalar(source, BUDGET_PATH);
 }
 
-function readBaseBudget(root: string, ref: string) {
-  const resolved = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  if (resolved.status !== 0) {
-    throw new Error(`Could not resolve env-var count base ref: ${ref}`);
-  }
-  const mergeBase = spawnSync("git", ["merge-base", "HEAD", ref], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  const baselineRef = mergeBase.stdout.trim();
-  // Exit 1 with no output is git reporting no shared ancestor; a real failure exits 128.
-  // Shallow clones and grafted agent checkouts resolve the ref but truncate history, and
-  // only the growth comparison needs a baseline, so skip it rather than failing the gate.
-  if (mergeBase.status === 1 && !baselineRef) {
-    process.stderr.write(
-      `[env-var-count] ${ref} shares no reachable ancestor here; skipping the base-budget comparison\n`,
-    );
-    return null;
-  }
-  if (mergeBase.status !== 0 || !baselineRef) {
-    throw new Error(`Could not resolve env-var count merge base for: ${ref}`);
-  }
-  return loadRatchetReference(root, baselineRef, BUDGET_PATH, parseBudget);
-}
-
 export function main(
   argv: string[] = process.argv.slice(2),
   root = process.cwd(),
   preparedNames?: EnvVarNamesByPath,
 ) {
-  const baseIndex = argv.indexOf("--base");
-  const baseRef = baseIndex < 0 ? "origin/main" : argv[baseIndex + 1];
-  const staged = argv.includes("--staged");
-  const expectedLength = (baseIndex >= 0 ? 2 : 0) + (staged ? 1 : 0);
-  if (!baseRef || argv.length !== expectedLength) {
-    throw new Error(
-      "Usage: node --import tsx scripts/check-env-var-count.mts [--staged] [--base <git-ref>]",
-    );
+  const args = parseRatchetArgs(argv);
+  if (args.prune) {
+    throw new Error("The env-var budget must be updated explicitly; --prune is not supported.");
   }
+  const { staged } = args;
   const budget = loadRatchetSnapshot(root, BUDGET_PATH, staged, parseBudget);
-  const baseBudget = readBaseBudget(root, baseRef);
+  // Staging selects the source/budget snapshot, not the allowed budget: that
+  // still belongs to the origin/main fork unless the caller supplies a base.
+  const baseRef = resolveRatchetBase(root, {
+    ...args,
+    base: args.base ?? "origin/main",
+    staged: false,
+  });
+  if (!baseRef) {
+    throw new Error("Could not resolve env-var count budget base");
+  }
+  const baseBudget = loadRatchetReference(root, baseRef, BUDGET_PATH, parseBudget);
   const growth =
     baseBudget !== null && budget > baseBudget
       ? [

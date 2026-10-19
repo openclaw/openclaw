@@ -799,7 +799,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     const nextChild = await this.updateCard(child, {
       metadata: { ...child.metadata, links: nextChildLinks },
     });
-    return await this.promoteDependencyReady(nextChild.id);
+    return await this.promoteDependencyReady(nextChild);
   }
 
   protected async parentsDone(parentIds: readonly string[]): Promise<boolean> {
@@ -875,8 +875,10 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     return result.card;
   }
 
-  protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
-    const card = await this.requireCard(id);
+  protected async promoteDependencyReady(
+    card: WorkboardCard,
+    now = Date.now(),
+  ): Promise<WorkboardCard> {
     if (card.metadata?.archivedAt) {
       return card;
     }

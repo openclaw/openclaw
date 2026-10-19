@@ -69,6 +69,10 @@ function inspectAuthProfileTable(
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
+  // The selected PostgreSQL owner admits the complete generated schema before reads.
+  if (isPostgresSqlConnection(db)) {
+    return null;
+  }
   const tableName = authProfileTableName(target, databaseKind);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
@@ -220,7 +224,9 @@ export function readAuthProfileRows(
   let schemaObjects: Array<Record<string, unknown>>;
   try {
     const schema = authSchema ? undefined : getAdmittedSqliteSchemaFacts(database);
-    if (authSchema) {
+    if (isPostgresSqlConnection(database)) {
+      schemaObjects = [storeTable, stateTable].map((name) => ({ name, type: "table" }));
+    } else if (authSchema) {
       schemaObjects = [
         { name: storeTable, type: authSchema.store === "missing" ? undefined : authSchema.store },
         { name: stateTable, type: authSchema.state === "missing" ? undefined : authSchema.state },

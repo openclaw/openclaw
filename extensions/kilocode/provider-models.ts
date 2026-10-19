@@ -195,8 +195,5 @@ export async function discoverKilocodeModels(
 }
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
-  return {
-    ...KILOCODE_DEFAULT_MODEL,
-    input: [...KILOCODE_DEFAULT_MODEL.input],
-  };
+  return KILOCODE_DEFAULT_MODEL;
 }

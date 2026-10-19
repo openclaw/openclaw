@@ -1,6 +1,18 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGitHubItemTarget, type GitHubItemTarget } from "./targets.js";
 
+/** Host-prepared read identity; the plugin never discovers or selects managed credentials. */
+export type ControlUiGitHubPreviewIdentity = {
+  token: string | undefined;
+  cacheScope: string;
+  /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
+  optionalAuth?: true;
+  stale?: true;
+  signal?: AbortSignal;
+  revalidate: () => Promise<void>;
+  assertSelected: () => void;
+};
+
 // Shipped controlUi.githubPreview payload. The compatibility RPC retains these
 // provider-specific fields; new readers consume generic passive documents.
 /**

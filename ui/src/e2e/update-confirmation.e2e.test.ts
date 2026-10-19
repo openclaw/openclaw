@@ -288,9 +288,33 @@ suite.define(() => {
               });
             });
             await page.getByRole("button", { name: "Retry update", exact: true }).click();
-            await page
-              .getByRole("button", { name: "Update Mac app and restart", exact: true })
-              .waitFor();
+            try {
+              await page
+                .getByRole("button", { name: "Update Mac app and restart", exact: true })
+                .waitFor();
+            } catch (error) {
+              const state = await page
+                .evaluate(() => ({
+                  dialogs: Array.from(
+                    document.querySelectorAll("openclaw-modal-dialog"),
+                    (dialog) => ({
+                      label: dialog.getAttribute("label"),
+                      buttons: Array.from(dialog.querySelectorAll("button"), (button) => ({
+                        text: button.textContent,
+                        disabled: button.disabled,
+                      })),
+                      alerts: Array.from(
+                        dialog.querySelectorAll('[role="alert"]'),
+                        (alert) => alert.textContent,
+                      ),
+                    }),
+                  ),
+                  nativeUpdatePosted: document.documentElement.dataset.nativeUpdatePosted ?? null,
+                }))
+                .catch(() => null);
+              console.error("[update-confirmation-e2e] native retry state", state);
+              throw error;
+            }
             expect(await gateway.getRequests("update.run")).toHaveLength(0);
             expect(
               await gateway.getRequests("update.status", { refreshCheckout: true }),

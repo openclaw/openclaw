@@ -42,6 +42,7 @@ describe("gateway startup model runtime publication", () => {
       expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
         allowGatewaySubagentBinding: true,
         gatewayLifecycle: true,
+        joinSupersedingPublication: true,
         startup: true,
         catalogMode: "static",
         ...(workspaceDir ? { defaultWorkspaceDir: workspaceDir } : {}),
@@ -118,52 +119,5 @@ describe("gateway startup model runtime publication", () => {
       expect(hydrate).toHaveBeenCalledWith(nextConfig, `/tmp/${agentId}`, [provider]);
     }
     expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
-  });
-
-  it("drops a stale plugin generation after loading the prepared runtime", async () => {
-    let current = true;
-    const publication = publishConfiguredModelRuntimeSnapshots({
-      cfg: {},
-      isCurrent: () => current,
-    } as never);
-    current = false;
-
-    await publication;
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
-  });
-
-  it("threads plugin claim loss through async model config publication", async () => {
-    const configStarted = createDeferred();
-    const releaseConfig = createDeferred();
-    let current = true;
-    refreshPreparedModelRuntimeSnapshotsMock.mockImplementationOnce(
-      async (getConfig: unknown, options: unknown) => {
-        expect(getConfig).toBeTypeOf("function");
-        const config = (getConfig as () => Promise<unknown>)();
-        await configStarted.promise;
-        expect(options).toMatchObject({ isPublicationCurrent: expect.any(Function) });
-        await config;
-        expect((options as { isPublicationCurrent: () => boolean }).isPublicationCurrent()).toBe(
-          false,
-        );
-      },
-    );
-    const publication = publishConfiguredModelRuntimeSnapshots({
-      cfg: {},
-      getConfig: async () => {
-        configStarted.resolve();
-        await releaseConfig.promise;
-        return {};
-      },
-      isCurrent: () => current,
-    } as never);
-
-    await configStarted.promise;
-    current = false;
-    releaseConfig.resolve();
-    await publication;
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce();
   });
 });

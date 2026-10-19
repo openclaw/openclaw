@@ -89,23 +89,21 @@ function readFalVideoPayload(payload: unknown) {
     throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
   }
   return {
-    video: isRecord(video)
+    video: video
       ? {
           url: normalizeFalVideoUrl(video.url),
           content_type: normalizeOptionalString(video.content_type),
         }
       : undefined,
-    videos: Array.isArray(videos)
-      ? videos.map((entry) => {
-          if (!isRecord(entry)) {
-            throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
-          }
-          return {
-            url: normalizeFalVideoUrl(entry.url),
-            content_type: normalizeOptionalString(entry.content_type),
-          };
-        })
-      : undefined,
+    videos: videos?.map((entry) => {
+      if (!isRecord(entry)) {
+        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+      }
+      return {
+        url: normalizeFalVideoUrl(entry.url),
+        content_type: normalizeOptionalString(entry.content_type),
+      };
+    }),
     prompt: normalizeOptionalString(payload.prompt),
     seed: typeof payload.seed === "number" ? payload.seed : undefined,
   };
@@ -127,7 +125,7 @@ function readFalQueueResponse(payload: unknown) {
     detail: normalizeOptionalString(payload.detail),
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
     prompt: normalizeOptionalString(payload.prompt),
-    error: isRecord(error) ? { message: normalizeOptionalString(error.message) } : undefined,
+    error: error ? { message: normalizeOptionalString(error.message) } : undefined,
   };
 }
 
@@ -248,7 +246,7 @@ function applyFalSeedanceControls(
   if (duration) {
     body.duration = duration;
   }
-  if (isFalSeedance2Model(model) && typeof req.audio === "boolean") {
+  if (isFalSeedance2Model(model) && req.audio !== undefined) {
     body.generate_audio = req.audio;
   }
 }
@@ -341,14 +339,9 @@ async function fetchFalJson(params: {
   const { response, release } = await fetchWithSsrFGuard(request);
   try {
     await assertOkOrThrowHttpError(response, errorContext);
-    try {
-      return await readProviderJsonResponse<unknown>(response, errorContext);
-    } catch (error) {
-      if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
-        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE, { cause: error });
-      }
-      throw error;
-    }
+    return await readProviderJsonResponse<unknown>(response, errorContext, {
+      malformedResponseError: FAL_VIDEO_MALFORMED_RESPONSE,
+    });
   } finally {
     await release();
   }
@@ -540,7 +533,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         metadata: {
           ...(submitted.request_id ? { requestId: submitted.request_id } : {}),
           ...(videoPayload.prompt ? { prompt: videoPayload.prompt } : {}),
-          ...(typeof videoPayload.seed === "number" ? { seed: videoPayload.seed } : {}),
+          ...(videoPayload.seed !== undefined ? { seed: videoPayload.seed } : {}),
         },
       };
     },

@@ -85,7 +85,7 @@ export function createAgentRunAdmissionRevalidator(options: {
         keys: params.getOwnedAgentDedupeKeys(),
         agentId: params.admissionAgentId(),
         runId: params.runId,
-        stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",
+        stopReason: activeRunAbort.entry?.adapter.abortStopReason ?? "rpc",
       });
     }
   };

@@ -78,9 +78,34 @@ describe("diagnostics-prometheus service", () => {
       metrics.record(cron, untrusted);
       metrics.record({ ...cron, cronList: { ...cron.cronList, source: "internal" } });
       metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
+      for (const clientKind of [
+        "control-ui",
+        "macos",
+        "ios",
+        "android",
+        "cli",
+        "node",
+        "plugin",
+      ] as const) {
+        metrics.record({ type: "gateway.rpc", method: "health", phase: "received", clientKind });
+      }
       const rendered = metrics.render();
       expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="models.list"} 3\n');
-      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="health"} 1\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="health"} 8\n');
+      const clientSamples = rendered
+        .split("\n")
+        .filter(
+          (line) =>
+            line.startsWith("openclaw_gateway_rpc_client_requests_total{") &&
+            line.includes('method="health"'),
+        );
+      expect(clientSamples).toHaveLength(8);
+      expect(clientSamples).toContain(
+        'openclaw_gateway_rpc_client_requests_total{client_kind="other",method="health"} 1',
+      );
+      expect(clientSamples).toContain(
+        'openclaw_gateway_rpc_client_requests_total{client_kind="macos",method="health"} 1',
+      );
       expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="sessions.list"} 3\n');
       expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="cron.list"} 3\n');
       expect(rendered).toContain(
@@ -861,14 +886,14 @@ describe("diagnostics-prometheus service", () => {
         metrics.record(event);
       }
     }
-    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1365");
+    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1791");
     metrics.record({ ...queue, queueSize: 2 });
     const existing = metrics.render();
     expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
     expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
-    expect(existing).toContain("openclaw_prometheus_series_dropped_total 1365");
+    expect(existing).toContain("openclaw_prometheus_series_dropped_total 1791");
     metrics.record({ ...queue, lane: "later" });
-    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1367");
+    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1793");
     expect(metrics.render()).not.toContain('lane="later"');
     metrics.stop();
   });
@@ -1011,6 +1036,31 @@ describe("metrics HTTP handler", () => {
       expect(head.status).toBe(200);
       expect(head.headers.get("content-length")).toBe(String(getBodyBytes));
       expect(headBody.byteLength).toBe(0);
+
+      metrics.record({ type: "queue.lane.enqueue", lane: "main", queueSize: 2 });
+      await fetch(base).then((res) => res.text());
+      metrics.record({ type: "queue.lane.dequeue", lane: "main", queueSize: 0, waitMs: 10 });
+      const updated = await fetch(base);
+      const updatedBody = await updated.text();
+      expect(updatedBody).toContain('openclaw_queue_lane_size{lane="main"} 0\n');
+      expect(updatedBody).toContain(
+        'openclaw_queue_lane_wait_seconds_bucket{lane="main",le="0.005"} 0\n',
+      );
+      expect(updated.headers.get("content-length")).toBe(String(Buffer.byteLength(updatedBody)));
+
+      metrics.stop();
+      metrics.start();
+      metrics.record({ type: "webhook.received", channel: "test", updateType: "message" });
+      const restarted = await fetch(base);
+      const restartedBody = await restarted.text();
+      expect(restartedBody).toBe(
+        "# HELP openclaw_webhook_received_total Webhook requests received by channel and update type.\n" +
+          "# TYPE openclaw_webhook_received_total counter\n" +
+          'openclaw_webhook_received_total{channel="test",webhook="message"} 1\n',
+      );
+      expect(restarted.headers.get("content-length")).toBe(
+        String(Buffer.byteLength(restartedBody)),
+      );
     });
   });
 });

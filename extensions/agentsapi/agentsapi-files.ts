@@ -139,8 +139,6 @@ export async function prepareInputs(
         return { buffer: read.buffer, path: read.realPath, size: read.buffer.length };
       };
     }
-    assertCurrent();
-    signal.throwIfAborted();
     if (fact.sizeBytes !== undefined && fact.sizeBytes > maxFileBytes) {
       omitted.push({ attachment: index + 1, reason: "exceeds the 5 MiB file limit" });
       continue;

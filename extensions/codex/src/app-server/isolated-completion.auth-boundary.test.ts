@@ -1,18 +1,16 @@
 import path from "node:path";
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexModel, threadStartResult } from "./bounded-turn.test-harness.js";
 import { CodexAppServerClient } from "./client.js";
 import { turnStartResult } from "./codex-app-server.test-fixtures.js";
-import type { CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerStartOptions, CodexPluginConfig } from "./config.js";
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
+import { isolatedParams } from "./isolated-completion.params-test-support.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
-
-type IsolatedParams = Parameters<NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>>[0];
 
 const nativeAccount = "native-account-a";
 const profileAccount = "stored-account-b";
@@ -30,36 +28,8 @@ const storedProfile: AuthProfileStore = {
   },
 };
 
-function createParams(agentDir: string): IsolatedParams {
-  return {
-    authorization: {
-      owner: "harness",
-      plan: {
-        providerForAuth: "openai",
-        authProfileProviderForAuth: "openai",
-        forwardedAuthProfileId: "openai:stored-b",
-        modelRoute: {
-          provider: "openai",
-          modelId: "gpt-5.4",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "subscription",
-          requestTransportOverrides: "none",
-        },
-      },
-      authProfileStore: storedProfile,
-    },
-    config: {},
-    provider: "openai",
-    modelId: "gpt-5.4",
-    agentId: "main",
-    agentDir,
-    workspaceDir: agentDir,
-    systemPrompt: "Name the conversation.",
-    prompt: "Help me plan a garden.",
-    timeoutMs: 5_000,
-  } as IsolatedParams;
-}
+const createParams = (agentDir: string) =>
+  isolatedParams(storedProfile, "openai:stored-b", agentDir, agentDir);
 
 function createNativeBoundary(accountType = "chatgpt") {
   const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
@@ -78,85 +48,60 @@ function createNativeBoundary(accountType = "chatgpt") {
         return;
       }
       const respond = (result: unknown) => send({ id: request.id, result });
-      switch (request.method) {
-        case "initialize":
-          respond({ userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` });
-          return;
-        case "account/read":
-          respond({ account: { type: accountType, id: account }, requiresOpenaiAuth: true });
-          return;
-        case "account/login/start":
-          account = String(request.params?.chatgptAccountId);
-          respond({ type: "chatgptAuthTokens" });
-          return;
-        case "model/list":
-          respond({ data: [codexModel()], nextCursor: null });
-          return;
-        case "config/read":
-          respond({
+      if (request.method === "account/login/start") {
+        account = String(request.params?.chatgptAccountId);
+        return respond({ type: "chatgptAuthTokens" });
+      }
+      if (request.method === "turn/start") {
+        inferenceAccounts.push(account);
+        respond(turnStartResult("turn-boundary"));
+        queueMicrotask(() =>
+          send({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-finalizer",
+              turn: {
+                ...turnStartResult("turn-boundary", "completed").turn,
+                items: [
+                  { id: "answer", type: "agentMessage", text: `Garden Planning (${account})` },
+                ],
+              },
+            },
+          }),
+        );
+        return;
+      }
+      const cwd = (request.params?.cwds as string[] | undefined)?.[0];
+      const replies: Record<string, unknown> = {
+        initialize: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
+        "account/read": { account: { type: accountType, id: account }, requiresOpenaiAuth: true },
+        "model/list": { data: [codexModel()], nextCursor: null },
+        get "config/read"() {
+          const name = {
+            type: "user",
+            file: path.join(startedOptions!.env!.CODEX_HOME!, "config.toml"),
+          };
+          return {
             config: {
               mcp_servers: {},
               features: { hooks: true, plugins: false },
               project_root_markers: [],
             },
-            layers: [
-              {
-                name: {
-                  type: "user",
-                  file: path.join(startedOptions!.env!.CODEX_HOME!, "config.toml"),
-                },
-                config: {},
-              },
-            ],
-          });
-          return;
-        case "hooks/list":
-          respond({
-            data: [
-              {
-                cwd: (request.params?.cwds as string[] | undefined)?.[0],
-                hooks: [],
-                warnings: [],
-                errors: [],
-              },
-            ],
-          });
-          return;
-        case "configRequirements/read":
-          respond({ requirements: null });
-          return;
-        case "thread/start":
-          respond(threadStartResult("gpt-5.4"));
-          return;
-        case "mcpServerStatus/list":
-          respond({ data: [], nextCursor: null });
-          return;
-        case "turn/start": {
-          inferenceAccounts.push(account);
-          respond(turnStartResult("turn-boundary"));
-          queueMicrotask(() => {
-            send({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-finalizer",
-                turn: {
-                  ...turnStartResult("turn-boundary", "completed").turn,
-                  items: [
-                    { id: "answer", type: "agentMessage", text: `Garden Planning (${account})` },
-                  ],
-                },
-              },
-            });
-          });
-          return;
-        }
-        default:
-          send({ id: request.id, error: { code: -32601, message: request.method } });
+            layers: [{ name, config: {} }],
+          };
+        },
+        "hooks/list": { data: [{ cwd, hooks: [], warnings: [], errors: [] }] },
+        "configRequirements/read": { requirements: null },
+        "thread/start": threadStartResult("gpt-5.4"),
+        "mcpServerStatus/list": { data: [], nextCursor: null },
+      };
+      if (Object.hasOwn(replies, request.method)) {
+        respond(replies[request.method]);
+      } else {
+        send({ id: request.id, error: { code: -32601, message: request.method } });
       }
     },
   });
-  // Keep authorization, client startup, account verification, and turn execution
-  // real; replace only the native process/RPC boundary with synthetic principals.
   const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation(async (options) => {
     startedOptions = options;
     return harness.client;
@@ -175,18 +120,14 @@ function createPluginConfig(root: string, homeScope: "user" | "agent", proxy = f
       transport: "stdio",
       homeScope,
     },
-  };
+  } satisfies CodexPluginConfig;
 }
 
-function readStart(
-  boundary: ReturnType<typeof createNativeBoundary>,
-): Partial<CodexAppServerStartOptions> {
+function readStart(boundary: ReturnType<typeof createNativeBoundary>) {
   expect(boundary.start).toHaveBeenCalledTimes(1);
-  const options = boundary.start.mock.calls[0]?.[0];
-  if (!options) {
-    throw new Error("expected native startup options");
-  }
-  return options;
+  const options = boundary.start.mock.calls[0]![0];
+  expect(options).toBeDefined();
+  return options!;
 }
 
 describe("isolated completion account and daemon ownership", () => {
@@ -196,38 +137,30 @@ describe("isolated completion account and daemon ownership", () => {
     vi.unstubAllEnvs();
   });
 
-  it("keeps native account A authoritative despite a stored profile for B", async () => {
-    await withTempDir("codex-isolated-auth-", async (root) => {
-      const boundary = createNativeBoundary();
-      const pluginConfig = createPluginConfig(root, "user");
-      const result = await runCodexIsolatedCompletion(createParams(root), {
-        pluginConfig,
+  it.each(["chatgpt", "apiKey"])(
+    "keeps native %s authoritative over stored profile B",
+    async (accountType) => {
+      await withTempDir("codex-isolated-auth-", async (root) => {
+        const boundary = createNativeBoundary(accountType);
+        const pluginConfig = createPluginConfig(root, "user");
+        const pending = runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+        if (accountType === "apiKey") {
+          await expect(pending).rejects.toThrow("requires ChatGPT auth in the native Codex home");
+        } else {
+          expect((await pending).assistant.content).toEqual([
+            { type: "text", text: `Garden Planning (${nativeAccount})` },
+          ]);
+          expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
+          expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
+          expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
+        }
+        expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
+        expect(boundary.inferenceAccounts).toEqual(
+          accountType === "chatgpt" ? [nativeAccount] : [],
+        );
       });
-
-      expect(result.assistant.content).toEqual([
-        { type: "text", text: `Garden Planning (${nativeAccount})` },
-      ]);
-      expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
-      expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
-      expect(boundary.inferenceAccounts).toEqual([nativeAccount]);
-      expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
-      expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
-    });
-  });
-
-  it("rejects an incompatible native account before inference without logging in stored B", async () => {
-    await withTempDir("codex-isolated-auth-", async (root) => {
-      const boundary = createNativeBoundary("apiKey");
-      await expect(
-        runCodexIsolatedCompletion(createParams(root), {
-          pluginConfig: createPluginConfig(root, "user"),
-        }),
-      ).rejects.toThrow("requires ChatGPT auth in the native Codex home");
-
-      expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
-      expect(boundary.inferenceAccounts).toEqual([]);
-    });
-  });
+    },
+  );
 
   it.each(["user", "agent"] as const)(
     "retains the configured stdio proxy and its %s authentication contract",

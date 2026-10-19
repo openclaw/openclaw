@@ -1,17 +1,19 @@
 import type { JSX } from "@solidjs/web";
 import { showToast } from "../lib/toast.ts";
 import { renderSidebarPluginNavigationMenu } from "./app-sidebar-nav-menus.tsx";
-import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
+import type { SidebarMenus } from "./sidebar-menus.tsx";
 
-export function renderSidebarPluginNavigationMenuForController(
-  controller: SidebarMenusController,
+export function renderSidebarPluginNavigationMenuForMenus(
+  menus: SidebarMenus,
+  host: SidebarMenusOwner,
+  position: NonNullable<SidebarMenus["pluginNavigationMenuPosition"]>,
 ): JSX.Element {
-  const position = controller.pluginNavigationMenuPosition;
-  if (!position || position.entry.signal.aborted) {
+  if (position.entry.signal.aborted) {
     return undefined;
   }
   const { entry } = position;
-  const trigger = controller.pluginNavigationMenuTrigger;
+  const trigger = menus.triggers.get("pluginNavigation");
   const actions = entry.value.actions ?? [];
   return renderSidebarPluginNavigationMenu({
     get position() {
@@ -21,11 +23,11 @@ export function renderSidebarPluginNavigationMenuForController(
       return entry.value;
     },
     onSelect: async (id) => {
-      if (controller.pluginNavigationMenuPosition !== position) {
+      if (menus.pluginNavigationMenuPosition !== position) {
         return;
       }
       const action = actions.find((candidate) => candidate.id === id);
-      controller.closePositionedMenu("pluginNavigation", { restoreFocus: true });
+      menus.closePositionedMenu("pluginNavigation", { restoreFocus: true });
       if (!action || entry.signal.aborted || !trigger?.isConnected) {
         return;
       }
@@ -33,11 +35,11 @@ export function renderSidebarPluginNavigationMenuForController(
         await action.run();
       } catch (error) {
         if (!entry.signal.aborted) {
-          controller.host.sessionDataContext?.plugins.reportError(entry.pluginId, error);
+          host.sessionDataContext?.plugins.reportError(entry.pluginId, error);
           showToast({ message: error instanceof Error ? error.message : String(error) });
         }
       }
     },
-    ...controller.positionedMenuHandlers("pluginNavigation"),
+    ...menus.positionedMenuHandlers("pluginNavigation"),
   });
 }

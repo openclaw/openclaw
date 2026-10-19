@@ -23,6 +23,11 @@ import type {
   PluginMetadataRegistryView,
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
+import {
+  resolvePluginOwnedProviderAuthWith,
+  resolveProviderAuthScope,
+  type ProviderAuthScopeLookup,
+} from "./provider-auth-scope.js";
 import { hasConfiguredModelProvider } from "./provider-config-owner.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
@@ -125,7 +130,8 @@ function toolSchemaHook<K extends "normalizeToolSchemas" | "inspectToolSchemas">
         : ensureProviderRuntimePluginHandle(params).plugin;
     // SAFETY: Hook derives both argument and result from the selected tool-schema method.
     const hook = plugin?.[name] as ((context: Parameters<Hook>[0]) => ReturnType<Hook>) | undefined;
-    return hook?.call(plugin, params.context) ?? undefined;
+    // Avoid invoking the managed function's own call wrapper.
+    return hook ? (Reflect.apply(hook, plugin, [params.context]) ?? undefined) : undefined;
   };
 }
 
@@ -672,7 +678,16 @@ function* resolveSyntheticAuthProviders(
   }
 }
 
+export function resolvePluginOwnedProviderAuth(
+  params: ProviderAuthScopeLookup & { profileId?: string; preferredProfile?: string },
+) {
+  return resolvePluginOwnedProviderAuthWith(params, resolveProviderRuntimePlugin);
+}
+
 export function resolveProviderSyntheticAuthWithPlugin(params: ProviderSyntheticAuthParams) {
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -707,6 +722,9 @@ export async function prepareProviderSyntheticAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -715,6 +733,10 @@ export async function prepareProviderSyntheticAuthWithPlugin(
 }
 
 function resolveExternalSyntheticAuthProviders(params: ProviderSyntheticAuthParams) {
+  // Instance-owned credentials cannot become transferable worker bearer facts.
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return [];
+  }
   const providers = [...resolveSyntheticAuthProviders(params)];
   return providers.some((provider) => provider.prepareSyntheticAuth) ? providers : [];
 }
@@ -724,6 +746,9 @@ export async function prepareProviderExternalAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   return captured
     ? (captured.result ?? undefined)

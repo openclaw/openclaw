@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { describe, expect, it } from "vitest";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import { createGatewayStoreTestStore } from "../app/gateway-store.test-support.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
@@ -26,6 +27,7 @@ describe("native session pages", () => {
       const sessions = createTestSessionCapability(gateway);
       const context = Object.assign(pageContext(gateway, agents, { sessions }), {
         basePath: "",
+        config: createApplicationConfigCapability({ resourceBasePath: "" }),
         channels,
         runtimeConfig,
         navigation: createNavigationPreferencesFixture(),

@@ -328,6 +328,7 @@ describe("worker live events", () => {
   it("settles accepted writes before returning a synchronous diagnostic failure", async () => {
     const failure = new Error("synthetic diagnostic failure");
     const diagnostic = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+      beginApprovalWait: () => undefined,
       record: () => {
         throw failure;
       },
@@ -462,6 +463,7 @@ describe("worker live events", () => {
     const record = vi.fn();
     const finishing = live(1, lifecycle({ phase: "finishing", aborted: true, endedAt: 200 }));
     const owner = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+      beginApprovalWait: () => undefined,
       isCancelled: () => true,
       isCancelledFinishing: (request) => request === finishing,
       record,
@@ -736,13 +738,14 @@ describe("worker live events", () => {
       });
       const diagnostic = vi.fn();
       const recorder = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+        beginApprovalWait: () => undefined,
         record: diagnostic,
         isCancelled: () => false,
         isCancelledFinishing: () => false,
       });
       const stop = onAgentRuntimeEvent((event) => {
         if (event.runId === RUN && event.stream === stream) {
-          rx.clearEnvironment(ID.environmentId, EPOCH);
+          rx.clearEnvironment(ID.environmentId);
         }
       });
       try {
@@ -774,9 +777,8 @@ describe("worker live events", () => {
   it("clears on detach", async () => {
     await ack(msg(1, "delivered"));
     await ack(msg(3, "buffered", 1), 1);
-    rx.clearEnvironment(ID.environmentId, EPOCH);
+    rx.clearEnvironment(ID.environmentId);
     expect(getAgentRunContext(RUN)).toBeUndefined();
-    await fail(msg(1, "pending", 0, "run-pending"), "invalid-event");
   });
 
   it("clears an ownerless Gateway run context on terminal process turnover", async () => {

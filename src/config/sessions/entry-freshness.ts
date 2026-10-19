@@ -101,7 +101,6 @@ export async function resolveSessionEntryResetFreshnessAsync(
   return withSessionEntriesFromStoresInWorker(
     [{ ...scope, sessionKeys: [sessionKey], lifecycleSessionKey: sessionKey }],
     ([read]) => {
-      read!.assertCurrent();
       return resolvePreparedSessionEntryResetFreshness(
         params,
         read!.result.entries[0]?.entry,

@@ -47,12 +47,12 @@ export function projectPluginCommandNativeMetadata(
   const descriptionLocalizations = command.descriptionLocalizations
     ? Object.freeze({ ...command.descriptionLocalizations })
     : undefined;
-  return Object.freeze({
+  return {
     name,
     description: command.description.trim(),
     ...(descriptionLocalizations ? { descriptionLocalizations } : {}),
     acceptsArgs: command.acceptsArgs ?? false,
     requireAuth: command.requireAuth !== false,
     ...(progressMessage ? { progressMessage } : {}),
-  });
+  };
 }

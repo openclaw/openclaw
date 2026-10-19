@@ -33,6 +33,7 @@ import {
   writeSync,
   watch,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -617,8 +618,10 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
   });
 }
 
-function sealTree(root) {
+async function sealTree(root) {
   const pending = [root];
+  const files = [], directories = [];
+  let bytes = 0;
   while (pending.length) {
     const pathname = pending.pop();
     const metadata = lstatSync(pathname);
@@ -626,18 +629,47 @@ function sealTree(root) {
       continue;
     }
     if (metadata.isDirectory()) {
+      directories.push(pathname);
       for (const name of readdirSync(pathname)) {
         pending.push(join(pathname, name));
       }
     } else if (!metadata.isFile()) {
       reject(`cannot seal unsupported release entry: ${pathname}`);
+    } else {
+      files.push(pathname);
+      bytes += metadata.size;
     }
     chmodSync(pathname, metadata.isDirectory() || (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
   }
-  // GNU sync -f uses syncfs: persist all data, modes and directory entries before publication.
-  const synced = spawnSync("sync", ["-f", "--", root], { encoding: "utf8" });
-  if (synced.status !== 0) {
-    reject(`cannot sync sealed release filesystem: ${synced.error?.message ?? synced.stderr.trim()}`);
+  // Budget our tree at 100 entries/s and 8 MiB/s, never the filesystem's dirty data.
+  const budgetMs = 120_000 + (files.length + directories.length) * 10 + bytes / 8192;
+  const timeout = setTimeout(() => {
+    process.stderr.write("openclaw-team-release: sealed release durability deadline exceeded\n");
+    process.exit(124);
+  }, budgetMs);
+  const persist = async (paths) => {
+    let next = 0;
+    const results = await Promise.allSettled(Array.from({ length: Math.min(8, paths.length) }, async () => {
+      while (next < paths.length) {
+        const descriptor = await open(paths[next++], constants.O_RDONLY);
+        try {
+          await descriptor.sync();
+        } finally {
+          await descriptor.close();
+        }
+      }
+    }));
+    const failure = results.find(result => result.status === "rejected");
+    if (failure) {
+      throw failure.reason;
+    }
+  };
+  try {
+    await persist(files);
+    // Persist symlinks and directory entries without following links outside the tree.
+    await persist(directories);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -2355,6 +2387,11 @@ function policy(pathname) {
   if (typeof model !== "string" || !model.includes("/") || model.trim() !== model) {
     reject("configured deployment model is invalid");
   }
+  const fallbacks = typeof modelValue === "object" ? modelValue?.fallbacks ?? [] : [];
+  if (!Array.isArray(fallbacks) || fallbacks.some(value =>
+    typeof value !== "string" || !value.includes("/") || value.trim() !== value)) {
+    reject("configured deployment model fallbacks are invalid");
+  }
   return {
     mode: config.tools.exec.mode,
     appServer: server,
@@ -2362,6 +2399,7 @@ function policy(pathname) {
     updateAuto: config.update.auto.enabled,
     clickclackCommandMenu: config.channels?.clickclack?.commandMenu,
     model,
+    fallbacks,
   };
 }
 
@@ -4554,10 +4592,19 @@ try {
         result = "RECOVERING";
         break;
       }
-      if (readinessCode !== "200" || readiness.ready !== true ||
-          !Array.isArray(readiness.failing) || readiness.failing.length ||
+      if (!Array.isArray(readiness.failing) ||
+          readiness.failing.some(value => typeof value !== "string" || !value) ||
           !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
-        reject("Gateway marker readyz is not ready");
+        reject("Gateway marker readyz is malformed");
+      }
+      // Convergence is a snapshot, not a promise that channel readiness stays
+      // green. Wait for native readiness again within the same startup deadline.
+      if (readinessCode === "503" && readiness.ready === false && readiness.failing.length) {
+        result = "RECOVERING";
+        break;
+      }
+      if (readinessCode !== "200" || readiness.ready !== true || readiness.failing.length) {
+        reject("Gateway marker readyz is inconsistent");
       }
       // CPU/utilization alone can reflect useful startup work. Native delay evidence
       // and a bounded system.info response determine whether dispatch may proceed.
@@ -4730,15 +4777,12 @@ try {
     }
     case "suspension-prepare": {
       const response = jsonArgument(args[0]);
-      const expectedId = args[1];
-      const priorExpiry = args[2];
       if (!suspensionContract.validateGatewaySuspendPrepareResult(response))
         reject("Gateway suspension prepare result is malformed");
       if (response?.status === "busy") {
         const custody = suspensionWriteCustody(response);
         suspensionRetryDelay(response.retryAfterMs);
         const blockers = suspensionBlockers(response, "Gateway suspension busy result", custody);
-        if (expectedId !== undefined) reject("owned Gateway suspension renewal became busy");
         result = `BUSY - 0 ${response.activeCount} ${response.retryAfterMs} 0 ${blockers} ${custody}`;
         break;
       }
@@ -4753,15 +4797,6 @@ try {
         response.expiresAtMs <= Date.now() + 5_000
       ) {
         reject("terminal-preserving drain lease is expired or has insufficient headroom");
-      }
-      if (expectedId !== undefined && response.suspensionId !== expectedId) {
-        reject("renewed Gateway suspension identity changed");
-      }
-      if (
-        priorExpiry !== undefined &&
-        response.expiresAtMs <= integer(priorExpiry, "prior suspension expiry")
-      ) {
-        reject("renewed Gateway suspension expiry did not advance");
       }
       const blockers = suspensionBlockers(response, "Gateway suspension prepare result", custody);
       const retryAfterMs = draining ? suspensionRetryDelay(response.retryAfterMs) : 0;
@@ -5047,7 +5082,7 @@ try {
       syncPath(args[0]);
       break;
     case "seal-tree":
-      sealTree(args[0]);
+      await sealTree(args[0]);
       break;
     case "list-releases": {
       const root = args[0];

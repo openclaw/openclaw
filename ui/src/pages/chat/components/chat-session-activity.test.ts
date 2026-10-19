@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { renderMessageGroup } from "./chat-message-group.test-support.ts";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -16,6 +16,7 @@ const sessionKey = "agent:main:dashboard:activity-preview";
 const sourceKey = "agent:main:dashboard:icon-work";
 const options = { sessionKey, runWorking: false, searchActive: false };
 const container = document.createElement("div");
+const view = createMessageGroupHarness(container);
 
 function update(id: string, source = sourceKey) {
   return {
@@ -43,7 +44,7 @@ function chain(messages: unknown[], searchActive = false) {
   );
 }
 afterEach(() => {
-  render(null, container);
+  view.unmount();
   resetChatThreadState();
 });
 
@@ -71,19 +72,16 @@ describe("session activity", () => {
     }
     const expanded = new Map<string, boolean>();
     const draw = () =>
-      render(
-        renderMessageGroup(group, {
-          showReasoning: false,
-          showToolCalls: false,
-          agentId: "main",
-          isToolMessageExpanded: (id) => expanded.get(id),
-          onToggleToolMessageExpanded: (id, previous) => {
-            expanded.set(id, !previous);
-            draw();
-          },
-        }),
-        container,
-      );
+      view.render(group, {
+        showReasoning: false,
+        showToolCalls: false,
+        agentId: "main",
+        isToolMessageExpanded: (id) => expanded.get(id),
+        onToggleToolMessageExpanded: (id, previous) => {
+          expanded.set(id, !previous);
+          draw();
+        },
+      });
     draw();
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
     expect(disclosure).not.toBeNull();
@@ -159,7 +157,7 @@ describe("session activity", () => {
     if (group?.kind !== "group") {
       throw new Error("expected input group");
     }
-    render(renderMessageGroup(group, { showReasoning: false }), container);
+    view.render(group, { showReasoning: false });
     expect(container.querySelector(".chat-session-activity")).toBeNull();
   });
 
@@ -217,20 +215,17 @@ describe("session activity", () => {
     }
     const expanded = new Map<string, boolean>();
     const draw = () =>
-      render(
-        renderMessageGroup(group, {
-          showReasoning: false,
-          showToolCalls: false,
-          assistantName: "OpenClaw",
-          agentId: "main",
-          isToolMessageExpanded: (id) => expanded.get(id),
-          onToggleToolMessageExpanded: (id, previous) => {
-            expanded.set(id, !previous);
-            draw();
-          },
-        }),
-        container,
-      );
+      view.render(group, {
+        showReasoning: false,
+        showToolCalls: false,
+        assistantName: "OpenClaw",
+        agentId: "main",
+        isToolMessageExpanded: (id) => expanded.get(id),
+        onToggleToolMessageExpanded: (id, previous) => {
+          expanded.set(id, !previous);
+          draw();
+        },
+      });
     draw();
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
     const summary = disclosure?.querySelector("summary");
@@ -277,14 +272,11 @@ describe("session activity", () => {
       if (group?.kind !== "group") {
         throw new Error("expected activity group");
       }
-      render(
-        renderMessageGroup(group, {
-          showReasoning: false,
-          isToolMessageExpanded: () => true,
-          onReply,
-        }),
-        container,
-      );
+      view.render(group, {
+        showReasoning: false,
+        isToolMessageExpanded: () => true,
+        onReply,
+      });
     };
     document.body.append(container);
     try {
@@ -338,15 +330,12 @@ describe("session activity", () => {
       ]),
       { assistantName: "Assistant" },
     );
-    render(
-      renderMessageGroup(group, {
-        showReasoning: false,
-        isToolMessageExpanded: () => true,
-        resolveReplyPreview,
-        onOpenReply,
-      }),
-      container,
-    );
+    view.render(group, {
+      showReasoning: false,
+      isToolMessageExpanded: () => true,
+      resolveReplyPreview,
+      onOpenReply,
+    });
     const target = container.querySelector<HTMLButtonElement>(
       '.chat-reply-attribution button[aria-label="Replying to Alice"]',
     );
@@ -361,14 +350,11 @@ describe("session activity", () => {
     if (group?.kind !== "group") {
       throw new Error("expected search group");
     }
-    render(
-      renderMessageGroup(group, {
-        showReasoning: false,
-        searchResult: true,
-        isToolMessageExpanded: () => false,
-      }),
-      container,
-    );
+    view.render(group, {
+      showReasoning: false,
+      searchResult: true,
+      isToolMessageExpanded: () => false,
+    });
     expect(container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(true);
     expect(container.textContent).toContain("END search");
     expect(container.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);

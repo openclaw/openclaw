@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -11,32 +10,21 @@ import type { BrowserTabTarget } from "../../../components/browser/browser-targe
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderActivityGroup } from "./chat-message-group.test-support.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 
 const hosts: HTMLElement[] = [];
-const templateUpdates = new Map<HTMLElement, (value: unknown) => void>();
+const activityGroups = new Map<HTMLElement, ReturnType<typeof createActivityGroupHarness>>();
 
-function renderTemplate(value: unknown, host: HTMLElement) {
-  const update = templateUpdates.get(host);
-  if (update) {
-    update(value);
-    flush();
-    return;
+function activityGroup(host: HTMLElement) {
+  let view = activityGroups.get(host);
+  if (!view) {
+    view = createActivityGroupHarness(host);
+    activityGroups.set(host, view);
   }
-  mountSolid(
-    () => {
-      const [template, setTemplate] = createSignal(value);
-      templateUpdates.set(host, (next) => setTemplate(() => next));
-      return <LitContent value={template()} />;
-    },
-    { container: host },
-  );
-  flush();
+  return view;
 }
 
 function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["messages"] {
@@ -46,7 +34,7 @@ function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["
 }
 
 afterEach(() => {
-  templateUpdates.clear();
+  activityGroups.clear();
   for (const host of hosts.splice(0)) {
     host.remove();
   }
@@ -64,7 +52,7 @@ function gatewayContext(
   const listeners = new Set<() => void>();
   const themeListeners = new Set<() => void>();
   const snapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
+    client: { request, connected: true } as unknown as GatewayBrowserClient,
     phase: "connected",
     hello: { features: { methods }, auth: { role: "operator", scopes } },
   } as ApplicationGatewaySnapshot;
@@ -144,14 +132,11 @@ async function drawActivity(
     timestamp: 1,
     messages: messageEntries(messages),
   };
-  renderTemplate(
-    renderActivityGroup([group], {
-      showReasoning: false,
-      latestBrowserTabs: latestBrowserTabCards(messages, []),
-      isToolMessageExpanded: () => expanded,
-    }),
-    host,
-  );
+  activityGroup(host).render([group], {
+    showReasoning: false,
+    latestBrowserTabs: latestBrowserTabCards(messages, []),
+    isToolMessageExpanded: () => expanded,
+  });
   const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
   for (const element of elements) {
     element.context = context;
@@ -165,64 +150,17 @@ async function card(
   latest = true,
   tab: BrowserTabTarget = { target: "host", profile: "managed", targetId: "tab-1" },
 ) {
-  const host = container();
-  renderTemplate(
-    renderToolPreview(
-      { kind: "browser-tab", ...tab, url: "https://example.com/page" },
-      "chat_tool",
-      {
-        browserTabRevision: "one",
-        browserTabLatest: latest,
-      },
-    ),
-    host,
-  );
-  const element = host.querySelector("openclaw-browser-tab-card")!;
+  const element = new BrowserTabCardHost.Element();
+  element.preview = { kind: "browser-tab", ...tab, url: "https://example.com/page" };
+  element.revision = "one";
+  element.latest = latest;
   element.context = context;
+  container().append(element);
   await element.updateComplete;
   return element;
 }
 
 describe("browser tab card", () => {
-  it("shows tweet author, text and media without truncating everything to a link chip", async () => {
-    vi.useFakeTimers();
-    const gateway = gatewayContext([], ["operator.read"], true);
-    gateway.request.mockResolvedValue({
-      title: "OpenClaw (@openclaw) on X",
-      description: "Readable posts keep the conversation in context.",
-      imageDataUrl: "data:image/png;base64,c29jaWFs",
-    });
-    const element = await card(gateway.context, false);
-    element.preview = {
-      ...element.preview!,
-      url: "https://x.com/openclaw/status/123456789",
-      title: "X",
-    };
-    await element.updateComplete;
-    await vi.runAllTimersAsync();
-    await element.updateComplete;
-    expect(element.querySelector(".tweet-author")?.textContent).toBe("OpenClaw");
-    expect(element.querySelector(".tweet-handle")?.textContent).toBe("@openclaw");
-    expect(element.querySelector(".tweet-text")?.textContent).toBe(
-      "Readable posts keep the conversation in context.",
-    );
-    expect(element.querySelector(".shot.social img")?.getAttribute("src")).toBe(
-      "data:image/png;base64,c29jaWFs",
-    );
-    expect(element.querySelector(".url")).toBeNull();
-    const toggle = vi.fn();
-    element.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);
-    element.querySelector<HTMLButtonElement>(".actions button")?.click();
-    expect(toggle).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        detail: {
-          open: true,
-          browserTab: { target: "host", profile: "managed", targetId: "tab-1" },
-        },
-      }),
-    );
-  });
-
   it("retains browser-title post text when metadata only supplies the author", async () => {
     vi.useFakeTimers();
     const gateway = gatewayContext([], ["operator.read"], true);
@@ -237,6 +175,7 @@ describe("browser tab card", () => {
     await vi.runAllTimersAsync();
     await element.updateComplete;
     expect(element.querySelector(".tweet-author")?.textContent).toBe("OpenClaw");
+    expect(element.querySelector(".tweet-handle")?.textContent).toBe("@openclaw");
     expect(element.querySelector(".tweet-text")?.textContent).toBe("Text from the browser title");
   });
 
@@ -685,7 +624,7 @@ describe("browser tab card", () => {
       timestamp: 1,
       messages: messageEntries(messages),
     };
-    renderTemplate(renderActivityGroup([group], { showReasoning: false }), host);
+    activityGroup(host).render([group], { showReasoning: false });
     const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
     expect(elements).toHaveLength(2);
     expect(elements.map((element) => element.preview?.targetId)).toEqual(["first", "second"]);
@@ -723,7 +662,7 @@ describe("browser tab card", () => {
         messages: messageEntries(messages),
       };
       const host = container();
-      renderTemplate(renderActivityGroup([group], { showReasoning: false }), host);
+      activityGroup(host).render([group], { showReasoning: false });
       const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
       expect(elements.map((element) => element.preview?.targetId)).toEqual(
         length === 2_046 ? ["second"] : ["first", "second"],

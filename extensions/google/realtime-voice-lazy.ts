@@ -90,7 +90,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     if (!lifecycle.isActive()) {
       return;
     }
-    if (typeof latestMediaTimestamp === "number") {
+    if (latestMediaTimestamp !== undefined) {
       loadedBridge.setMediaTimestamp(latestMediaTimestamp);
     }
     for (const audio of pendingAudio.drain()) {

@@ -19,6 +19,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
@@ -873,7 +874,7 @@ describe("memory manager reindex recovery", () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const reset = () =>
       resetMemoryDatabase({
-        targetDb: openOpenClawAgentDatabase({ agentId: "main" }).db,
+        targetDb: requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db),
         dbPath: databasePath,
         workspaceDir,
       });

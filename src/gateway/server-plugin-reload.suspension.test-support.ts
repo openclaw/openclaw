@@ -16,7 +16,11 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import {
+  createReloadChannel,
+  expectChannelSignals,
+  observeSettlement,
+} from "./server-plugin-reload.active-call.test-support.js";
 import {
   createRecoveryChannelManager,
   type RecoveryFixtureFactory,
@@ -45,17 +49,9 @@ export async function verifyReversibleFenceRecovery(
     },
     register: (api, owner) => {
       api.registerChannel({
-        plugin: {
-          ...createChannelTestPluginBase({ id: channelIds[owner] }),
-          gateway: {
-            startAccount: async ({ abortSignal }) => {
-              signals[owner].push(abortSignal);
-              await new Promise<void>((resolve) => {
-                abortSignal.addEventListener("abort", () => resolve(), { once: true });
-              });
-            },
-          },
-        },
+        plugin: createReloadChannel(channelIds[owner], (_account, signal) => {
+          signals[owner].push(signal);
+        }),
       });
     },
   });
@@ -64,8 +60,7 @@ export async function verifyReversibleFenceRecovery(
   const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
   assert(instance);
   let releaseFence: (() => void) | undefined;
-  let reloading: Promise<unknown> | undefined;
-  let reloadSettled = false;
+  let reloading: ReturnType<typeof observeSettlement> | undefined;
   try {
     await manager.startChannel(channelIds.first);
     await manager.startChannel(channelIds.sibling);
@@ -73,15 +68,14 @@ export async function verifyReversibleFenceRecovery(
       expect(signals.first).toHaveLength(1);
       expect(signals.sibling).toHaveLength(1);
     });
-    reloading = runWithGatewayIndependentRootWorkAdmission(() => fixture.reload(), "plugins.reload")
-      .catch((error: unknown) => error)
-      .then((result) => {
-        reloadSettled = true;
-        return result;
-      });
+    reloading = observeSettlement(
+      runWithGatewayIndependentRootWorkAdmission(() => fixture.reload(), "plugins.reload").catch(
+        (error: unknown) => error,
+      ),
+    );
     await Promise.race([
       stopEntered.promise,
-      reloading.then((error) => {
+      reloading.promise.then((error) => {
         throw error;
       }),
     ]);
@@ -119,12 +113,14 @@ export async function verifyReversibleFenceRecovery(
       // Let candidate teardown settle while signal delivery still owns its fence.
       // Recovery's command work must wait for that owner to reopen admission.
       await setImmediate();
-      expect(reloadSettled).toBe(false);
+      expect(reloading.settled).toBe(false);
       expect(recoveryWork).not.toHaveBeenCalled();
       releaseFence();
       releaseFence = undefined;
     }
-    expect(await reloading).toMatchObject({ details: { phase: "activate", committed: false } });
+    expect(await reloading.promise).toMatchObject({
+      details: { phase: "activate", committed: false },
+    });
     if (releaseFence) {
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
       releaseFence();
@@ -143,17 +139,15 @@ export async function verifyReversibleFenceRecovery(
     assert(restored);
     expect(restored.run(() => "restored")).toBe("restored");
     await vi.waitFor(() => expect(signals.first).toHaveLength(2));
-    expect(signals.first[0]?.aborted).toBe(true);
-    expect(signals.first[1]?.aborted).toBe(false);
-    expect(signals.sibling).toHaveLength(1);
-    expect(signals.sibling[0]?.aborted).toBe(false);
+    expectChannelSignals(signals.first, [true, false]);
+    expectChannelSignals(signals.sibling, [false]);
   } finally {
     releaseStop.resolve();
     if (fence === "restart signal") {
       releaseFence?.();
       releaseFence = undefined;
     }
-    await reloading;
+    await reloading?.promise;
     releaseFence?.();
     resetGatewaySuspendCoordinatorForLifecycleRestart();
     await manager.stopChannel(channelIds.first);

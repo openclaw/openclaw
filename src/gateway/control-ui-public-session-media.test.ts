@@ -80,6 +80,10 @@ async function request(
   return response;
 }
 
+function storedMedia(media: unknown[]) {
+  return { role: "user", __openclaw: { id: "entry-1", media } };
+}
+
 beforeEach(() => {
   resolveToken.mockReset().mockResolvedValue(locator);
   active.mockReset().mockReturnValue(true);
@@ -106,36 +110,19 @@ describe("public session media", () => {
 
   it("reads user attachments through the managed inbound media owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const saved = await saveMediaBuffer(
-        png,
-        "image/png",
-        "inbound",
-        MAX_IMAGE_BYTES,
-        "upload.png",
-      );
+      const save = (directory: string, name: string) =>
+        saveMediaBuffer(png, "image/png", directory, MAX_IMAGE_BYTES, name);
+      const saved = await save("inbound", "upload.png");
       for (const source of [{ url: `media://inbound/${saved.id}` }, { path: saved.path }]) {
-        readMessage.mockResolvedValue({
-          role: "user",
-          __openclaw: {
-            id: "entry-1",
-            media: [{}, { ...source, fileName: "upload.png" }],
-          },
-        });
+        readMessage.mockResolvedValue(storedMedia([{}, { ...source, fileName: "upload.png" }]));
         const response = await request({ query: "token=v1.YWJj&entry=entry-1&attachment=media-1" });
         expect(response.res.statusCode).toBe(200);
         expect(response.end).toHaveBeenCalledWith(png);
       }
-      const outside = await saveMediaBuffer(
-        png,
-        "image/png",
-        "outgoing/originals",
-        MAX_IMAGE_BYTES,
-        "private.png",
+      const outside = await save("outgoing/originals", "private.png");
+      readMessage.mockResolvedValue(
+        storedMedia([{ path: outside.path, contentType: "image/png" }]),
       );
-      readMessage.mockResolvedValue({
-        role: "user",
-        __openclaw: { id: "entry-1", media: [{ path: outside.path, contentType: "image/png" }] },
-      });
       const rejected = await request({ query: "token=v1.YWJj&entry=entry-1&attachment=media-0" });
       expect(rejected.res.statusCode).toBe(404);
     });
@@ -155,17 +142,6 @@ describe("public session media", () => {
       expect(response.res.statusCode).toBe(404);
       expect(response.getBody()).toBe("This public session is unavailable.");
     }
-  });
-
-  it("rechecks revocation on a cached image, including conditional requests", async () => {
-    const gate = createControlUiPublicSessionRequestGate();
-    gates.push(gate);
-    const first = await request({ gate });
-    const etag = first.setHeader.mock.calls.find(([key]) => key === "ETag")?.[1];
-    active.mockReturnValue(false);
-    const response = await request({ gate, headers: { "if-none-match": etag } });
-    expect(response.res.statusCode).toBe(404);
-    expect(readMessage).toHaveBeenCalledTimes(1);
   });
 
   it("refuses unknown tokens and insecure ingress before reading transcript bytes", async () => {

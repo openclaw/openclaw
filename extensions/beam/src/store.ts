@@ -53,18 +53,16 @@ function decideBeamUpload(
 }
 
 export function createBeamStore(runtime: PluginRuntime): BeamStore {
-  const store = runtime.state.openKeyedStore<BeamStoredSession>({
+  const store = runtime.state.openKeyedStoreV2<BeamStoredSession>({
     namespace: "sessions",
     maxEntries: BEAM_MAX_SESSIONS,
     overflowPolicy: "evict-oldest",
     defaultTtlMs: BEAM_RETENTION_MS,
   });
-  let revision = 0;
   let inventory: Array<{ value: BeamSessionSummary; expiresAt?: number }> | undefined;
   let refreshing: Promise<void> | undefined;
   let lifetime: AbortSignal | undefined;
   const invalidate = () => {
-    revision++;
     inventory = undefined;
   };
   const refresh = (): Promise<void> => {
@@ -72,28 +70,22 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
       return Promise.reject(new Error("Beam catalog inventory is stopped"));
     }
     refreshing ??= (async () => {
-      for (;;) {
-        const observedRevision = revision;
-        const entries = await store.entries();
-        if (lifetime?.aborted) {
-          return;
-        }
-        if (observedRevision !== revision) {
-          continue;
-        }
-        inventory = entries.map(({ value, expiresAt }) => ({
-          value: {
-            beamId: value.beamId,
-            title: value.title,
-            source: value.source,
-            completed: value.completed,
-            createdAt: value.createdAt,
-            receivedAt: value.receivedAt,
-          },
-          expiresAt,
-        }));
+      const entries = await store.entries();
+      if (lifetime?.aborted) {
         return;
       }
+      // A refresh overtaken by an upload may show old metadata until the next poll.
+      inventory = entries.map(({ value, expiresAt }) => ({
+        value: {
+          beamId: value.beamId,
+          title: value.title,
+          source: value.source,
+          completed: value.completed,
+          createdAt: value.createdAt,
+          receivedAt: value.receivedAt,
+        },
+        expiresAt,
+      }));
     })().finally(() => {
       refreshing = undefined;
     });
@@ -110,7 +102,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
             invalidate();
             ctx.logger.warn(`beam catalog inventory refresh failed: ${String(error)}`);
           });
-        // Other processes can update SQLite without this instance's mutation revision.
+        // Refresh metadata periodically; local uploads and deletes also invalidate it.
         ctx.scheduler.schedule({ id: "inventory", delayMs: 30_000, everyMs: 30_000, run: update });
         await update();
       },
@@ -120,11 +112,8 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
       },
     },
     async upload(upload, { receivedAt, uploaderProfileId, revalidatePublisher }) {
-      if (!store.observe || !store.compareAndApply) {
-        throw new Error("Beam uploads require plugin-state observe and compareAndApply support");
-      }
       const snapshot = {
-        ...structuredClone(upload),
+        ...upload,
         // An anonymous replacement must not inherit a previous publisher's identity.
         ...(uploaderProfileId ? { uploaderProfileId } : {}),
         receivedAt,

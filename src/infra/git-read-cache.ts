@@ -2,6 +2,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
 import type { GitWorkerOperations } from "./git-worker-contract.js";
 import { runGitWorkerOperation } from "./git-worker.js";
@@ -21,61 +22,38 @@ type ReadEntry<T> = {
   expiresAt: number;
   promise: Promise<T>;
   controller: AbortController;
-  subscribers: number;
   pending: boolean;
   value?: T;
 };
 
-function subscribe<T>(
-  entry: ReadEntry<T>,
-  clone: (value: T) => T,
-  signal?: AbortSignal,
-): Promise<T> {
-  entry.subscribers += 1;
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const finish = (complete: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal?.removeEventListener("abort", abort);
-      entry.subscribers -= 1;
-      if (entry.pending && entry.subscribers === 0) {
-        entry.expiresAt = 0;
-        entry.controller.abort();
-        // Final cancellation remains joined to the owner's process teardown.
-        void entry.promise.then(complete, complete);
-        return;
-      }
-      complete();
-    };
-    const abort = () => finish(() => reject(toErrorObject(signal?.reason, "Git read aborted")));
-    signal?.addEventListener("abort", abort, { once: true });
-    entry.promise.then(
-      (value) => finish(() => resolve(clone(value))),
-      (error: unknown) => finish(() => reject(toErrorObject(error, "Git read failed"))),
-    );
-    if (signal?.aborted) {
-      abort();
-    }
-  });
+function gitEnvironmentKey(input: unknown): string {
+  return JSON.stringify([
+    input,
+    Object.entries(process.env)
+      .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  ]);
 }
 
 function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal) => Promise<Output>,
-  freshnessMs: number,
-  clone: (value: Output) => Output = structuredClone,
+  freshness: number | { milliseconds: number; joinPending?: true; versionedMilliseconds?: number },
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
   retain: (value: Output) => boolean = () => true,
+  maxEntries = MAX_CACHED_CHECKOUTS,
 ) {
+  const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
+  const joinPending = typeof freshness !== "number" && freshness.joinPending;
   // Versioned reads retain only the current inputs/revision per checkout. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadEntry<Output>>();
   const pending = new Set<ReadEntry<Output>>();
-  const revisions = new Map<AbortController, Promise<string | null>>();
+  const revisions = new Map<
+    string,
+    { controller: AbortController; promise: Promise<string | null> }
+  >();
   let refreshTail: Promise<unknown> = Promise.resolve();
   let closed = false;
   const remove = (key: string, entry: ReadEntry<Output>) => {
@@ -86,23 +64,31 @@ function createReadCache<Input, Output>(
   return {
     async read(input: Input, options: GitReadOptions = {}): Promise<Output> {
       options.signal?.throwIfAborted();
-      const prepared = structuredClone(input);
-      const key = keyOf(prepared);
+      const key = keyOf(input);
       let currentRevision: string | null | undefined;
       if (revision) {
-        const controller = new AbortController();
-        const check = revision(
-          prepared,
-          options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
-        );
-        revisions.set(controller, check);
-        try {
-          currentRevision = await check;
-        } finally {
-          revisions.delete(controller);
+        // Share only overlapping checks of identical inputs, never a settled revision.
+        const revisionInput = gitEnvironmentKey(input);
+        let check = revisions.get(revisionInput);
+        if (!check) {
+          const controller = new AbortController();
+          const promise = revision(input, controller.signal).finally(() => {
+            revisions.delete(revisionInput);
+          });
+          check = { controller, promise };
+          revisions.set(revisionInput, check);
         }
+        currentRevision = await racePromiseWithAbortSignal(
+          check.promise,
+          options.signal,
+          (signal) => toErrorObject(signal.reason, "Git read aborted"),
+        );
       }
-      const revisionKey = JSON.stringify([prepared, currentRevision]);
+      const retainedFreshnessMs =
+        typeof freshness !== "number" && typeof currentRevision === "string"
+          ? (freshness.versionedMilliseconds ?? freshnessMs)
+          : freshnessMs;
+      const revisionKey = JSON.stringify([input, currentRevision]);
       options.signal?.throwIfAborted();
       if (closed) {
         throw new Error("Git reads are unavailable while the Gateway is restarting");
@@ -112,22 +98,23 @@ function createReadCache<Input, Output>(
         (options.refresh && currentRevision === null) ||
         !entry ||
         entry.revision !== revisionKey ||
-        (entry.expiresAt <= Date.now() && (!snapshot || !entry.pending))
+        (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
       ) {
         if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
-          return clone(entry?.value ?? snapshot.empty());
+          return entry?.value ?? snapshot.empty();
         }
         const previousRefresh = refreshTail;
         const controller = new AbortController();
         const next: ReadEntry<Output> = {
           revision: revisionKey,
           expiresAt:
-            freshnessMs === 0
+            retainedFreshnessMs === 0
               ? Number.POSITIVE_INFINITY
               : Date.now() +
-                (currentRevision === null ? Math.min(freshnessMs, 75_000) : freshnessMs),
+                (currentRevision === null
+                  ? Math.min(retainedFreshnessMs, 75_000)
+                  : retainedFreshnessMs),
           controller,
-          subscribers: 0,
           pending: true,
           value: entry?.value,
           promise: Promise.resolve().then(() =>
@@ -136,9 +123,9 @@ function createReadCache<Input, Output>(
                   // Serialize display batches; the worker probes four checkouts concurrently.
                   await previousRefresh;
                   controller.signal.throwIfAborted();
-                  return load(prepared, controller.signal);
+                  return load(input, controller.signal);
                 }, "runtime:project-discovery")
-              : load(prepared, controller.signal),
+              : load(input, controller.signal),
           ),
         };
         pending.add(next);
@@ -151,7 +138,7 @@ function createReadCache<Input, Output>(
               next.value = value;
               next.expiresAt = Date.now() + freshnessMs;
             }
-            if (freshnessMs === 0 || !retain(value)) {
+            if (retainedFreshnessMs === 0 || !retain(value)) {
               remove(key, next);
             }
             return value;
@@ -182,14 +169,17 @@ function createReadCache<Input, Output>(
       }
       entries.delete(key);
       entries.set(key, entry);
-      pruneMapToMaxSize(entries, MAX_CACHED_CHECKOUTS);
+      pruneMapToMaxSize(entries, maxEntries);
+      // Viewer cancellation stops waiting, not the shared bounded read.
       return snapshot
-        ? clone(entry.value ?? snapshot.empty())
-        : subscribe(entry, clone, options.signal);
+        ? (entry.value ?? snapshot.empty())
+        : racePromiseWithAbortSignal(entry.promise, options.signal, (signal) =>
+            toErrorObject(signal.reason, "Git read aborted"),
+          );
     },
     async close(): Promise<void> {
       closed = true;
-      for (const controller of revisions.keys()) {
+      for (const { controller } of revisions.values()) {
         controller.abort();
       }
       const retiring = [...pending];
@@ -198,7 +188,10 @@ function createReadCache<Input, Output>(
         entry.controller.abort();
       }
       entries.clear();
-      await Promise.allSettled([...revisions.values(), ...retiring.map((entry) => entry.promise)]);
+      await Promise.allSettled([
+        ...Array.from(revisions.values(), (check) => check.promise),
+        ...retiring.map((entry) => entry.promise),
+      ]);
     },
   };
 }
@@ -211,7 +204,6 @@ function createReadCaches() {
     (input, signal) =>
       runGitWorkerOperation({ type: "pull-request.branch-comparison", input }, { signal }),
     Number.POSITIVE_INFINITY,
-    structuredClone,
     (input, signal) =>
       runGitWorkerOperation(
         { type: "checkout.revision", input: { ...input, scope: "refs" } },
@@ -231,22 +223,14 @@ function createReadCaches() {
       // External Git config/relocations have no complete revision: refresh in the background
       // after one minute; checkout-set/environment changes select an independent snapshot.
       60_000,
-      structuredClone,
       undefined,
-      (input) =>
-        JSON.stringify([
-          input,
-          Object.entries(process.env)
-            .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-            .toSorted(([left], [right]) => left.localeCompare(right)),
-        ]),
+      gitEnvironmentKey,
       { empty: () => [] },
     ),
     context: createReadCache(
       (input: GitReadOperations["checkout.context"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.context", input }, { signal }),
       Number.POSITIVE_INFINITY,
-      structuredClone,
       (input, signal) =>
         runGitWorkerOperation(
           { type: "checkout.revision", input: { root: input.root, scope: "context" } },
@@ -273,7 +257,6 @@ function createReadCaches() {
       },
       // Unstaged edits do not advance the ref/index revision.
       5 * 60_000,
-      structuredClone,
       (input, signal) =>
         runGitWorkerOperation(
           {
@@ -287,14 +270,35 @@ function createReadCaches() {
     diff: createReadCache(
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
-      0,
-      // Callers mutate transport fields; immutable patch strings can stay shared.
-      (diff) => ({
-        ...diff,
-        files: diff.files.map((file) => ({ ...file })),
-        ...(diff.commits ? { commits: diff.commits.map((commit) => ({ ...commit })) } : {}),
-        ...(diff.mergeBase ? { mergeBase: { ...diff.mergeBase } } : {}),
-      }),
+      { milliseconds: 0, versionedMilliseconds: Number.POSITIVE_INFINITY },
+      (input, signal) =>
+        runGitWorkerOperation(
+          { type: "checkout.revision", input: { root: input.cwd, scope: "diff" } },
+          { signal },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
+      // Full results may retain 1.5 MB of patches each.
+      32,
+    ),
+    diffSummary: createReadCache(
+      (input: GitReadOperations["checkout.diff"]["input"], signal) =>
+        runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
+      // Visible clients share this short-lived summary; never duplicate a slow scan.
+      {
+        milliseconds: 10_000,
+        joinPending: true,
+        versionedMilliseconds: Number.POSITIVE_INFINITY,
+      },
+      (input, signal) =>
+        runGitWorkerOperation(
+          { type: "checkout.revision", input: { root: input.cwd, scope: "diff" } },
+          { signal },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
     ),
     branches: createReadCache(
       (input: GitReadOperations["repository.branches"]["input"], signal) =>
@@ -341,8 +345,8 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
   if (state.closing) {
     return Promise.reject(new Error("Git reads are unavailable while the Gateway is restarting"));
   }
-  const { context, branchFacts, diff, branches, baseline, identities } = (state.caches ??=
-    createReadCaches());
+  const { context, branchFacts, diff, diffSummary, branches, baseline, identities } =
+    (state.caches ??= createReadCaches());
   switch (operation.type) {
     case "repository.identities":
       return identities.read(operation.input, options);
@@ -353,7 +357,15 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
     case "pull-request.branch-facts":
       return branchFacts.read(operation.input, options);
     case "checkout.diff":
-      return diff.read(operation.input, options);
+      // Transport truncation mutates these envelopes, not the shared patch strings.
+      return (operation.input.summaryOnly ? diffSummary : diff)
+        .read(operation.input, options)
+        .then((value) => ({
+          ...value,
+          files: value.files.map((file) => ({ ...file })),
+          ...(value.commits ? { commits: value.commits.map((commit) => ({ ...commit })) } : {}),
+          ...(value.mergeBase ? { mergeBase: { ...value.mergeBase } } : {}),
+        }));
     case "repository.branches":
       return branches.read(operation.input, options);
     case "checkout.baseline":

@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   decodeWindowsOutputBuffer,
@@ -20,7 +22,6 @@ import {
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
 } from "../worker/node-workspace-protocol.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 
 const MAX_PROCESSES_PER_WORKSPACE = 32;
 const MAX_OUTPUT_CHARS = 4_096;
@@ -60,7 +61,7 @@ async function joinWorkspaceCleanup(operations: Promise<void>[]): Promise<void> 
   const failures = (await Promise.allSettled(operations)).flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : [],
   );
-  throwNodeHostCleanupErrors(failures, "Workspace process cleanup failed");
+  throwCollectedErrors(failures, "Workspace process cleanup failed");
 }
 
 /** A workspace owns preview processes across tool calls and joins their trees before retirement. */
@@ -153,9 +154,7 @@ export class NodeWorkerWorkspaceProcesses {
     }
     let process = owner?.processes.get(operation.processId);
     if (operation.action === "start") {
-      const fingerprint = createHash("sha256")
-        .update(JSON.stringify([input.argv, input.input ?? null]))
-        .digest("hex");
+      const fingerprint = sha256Hex(JSON.stringify([input.argv, input.input ?? null]));
       if (process && process.fingerprint !== fingerprint) {
         throw new Error("INVALID_REQUEST: processId already belongs to a different command");
       }

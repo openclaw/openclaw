@@ -7,7 +7,7 @@ import { mimeFromExtension } from "../shared/mime.js";
 import type { PathBinding } from "../shared/path-binding.js";
 import { listCanonicalDirectory } from "./dir-list-worker.js";
 import {
-  classifyFsSafeReadError,
+  createReadErrorClassifier,
   readAbsolutePath,
   resolveBoundReadDirectory,
   statRequiredDirectory,
@@ -33,20 +33,11 @@ function parsePageOffset(input: unknown): number {
   return parseStrictNonNegativeInteger(input) ?? 0;
 }
 
-function classifyFsError(err: unknown) {
-  const safeCode = classifyFsSafeReadError(err);
-  if (safeCode) {
-    return safeCode;
-  }
-  const code = (err as { code?: string } | null)?.code;
-  if (code === "ENOENT") {
-    return "NOT_FOUND";
-  }
-  if (code === "EACCES" || code === "EPERM") {
-    return "PERMISSION_DENIED";
-  }
-  return "READ_ERROR";
-}
+const classifyFsError = createReadErrorClassifier({
+  ENOENT: "NOT_FOUND",
+  EACCES: "PERMISSION_DENIED",
+  EPERM: "PERMISSION_DENIED",
+} as const);
 
 export async function handleDirList(params: DirListParams) {
   const requestedPath = readAbsolutePath(params.path);

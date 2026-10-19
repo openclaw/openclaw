@@ -83,7 +83,7 @@ describe("together video generation provider", () => {
 
     await vi.advanceTimersByTimeAsync(1_199_999);
     expect(error).toBeUndefined();
-    expect(release).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
     // Let the shared transport settle its bounded retry after the deadline.
     await vi.advanceTimersByTimeAsync(1_001);
 

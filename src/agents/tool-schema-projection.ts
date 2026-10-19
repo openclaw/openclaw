@@ -27,27 +27,6 @@ type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "para
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
 
-function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
-  tools: readonly TTool[],
-): (TTool | undefined)[] {
-  let length: number;
-  try {
-    length = tools.length;
-  } catch {
-    return [undefined];
-  }
-  // Snapshot every entry before schema getters can mutate the source array.
-  const entries: (TTool | undefined)[] = [];
-  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
-    try {
-      entries.push(tools.at(toolIndex));
-    } catch {
-      entries.push(undefined);
-    }
-  }
-  return entries;
-}
-
 function readToolProjectionField(
   tool: Pick<AnyAgentTool, "name" | "parameters">,
   field: "name" | "parameters",
@@ -107,7 +86,12 @@ function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameter
   const diagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const compatibleTools: TTool[] = [];
   for (let toolIndex = 0; toolIndex < entries.length; toolIndex += 1) {
-    const tool = entries[toolIndex];
+    let tool: TTool | undefined;
+    try {
+      tool = entries[toolIndex];
+    } catch {
+      tool = undefined;
+    }
     if (tool === undefined) {
       diagnostics.push({
         toolName: `tool[${toolIndex}]`,
@@ -130,19 +114,19 @@ function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameter
 export function inspectRuntimeToolInputSchemas(
   tools: readonly Pick<AnyAgentTool, "name" | "parameters">[],
 ): RuntimeToolSchemaDiagnostic[] {
-  return [...inspectToolEntries(readRuntimeToolEntries(tools), "runtime").diagnostics];
+  return [...inspectToolEntries(tools, "runtime").diagnostics];
 }
 
 /** Filters tools to those with schemas accepted by the runtime as-is. */
 export function filterRuntimeCompatibleTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
-  return inspectToolEntries(readRuntimeToolEntries(tools), "runtime");
+  return inspectToolEntries(tools, "runtime");
 }
 
 /** Filters tools to those that providers can normalize before dispatch. */
 export function filterProviderNormalizableTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
-  return inspectToolEntries(readRuntimeToolEntries(tools), "provider-normalizable");
+  return inspectToolEntries(tools, "provider-normalizable");
 }

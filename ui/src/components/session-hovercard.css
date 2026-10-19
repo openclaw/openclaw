@@ -225,15 +225,13 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__automation-link,
 .session-hovercard__plan-row,
-.session-hovercard__branch-row,
-.session-hovercard__pr-row {
+.session-hovercard__branch-row {
   grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
 }
 
 .session-hovercard__plan-step,
 .session-hovercard__branch-action,
-.session-hovercard__branch-label,
-.session-hovercard__pr-title {
+.session-hovercard__branch-label {
   overflow: hidden;
   color: var(--text);
   font-weight: 500;
@@ -371,7 +369,9 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__pr-row {
   margin-inline: calc(-1 * var(--space-2));
-  padding: var(--space-1) var(--space-2);
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
+  align-items: start;
+  padding: var(--space-2);
   border-radius: var(--radius-sm);
   transition: background-color 120ms ease;
 }
@@ -413,7 +413,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__pr-row .session-hovercard__diff {
   gap: 6px;
-  justify-self: end;
+  margin-left: auto;
   font-size: var(--control-ui-text-xs);
 }
 
@@ -623,4 +623,81 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   font-size: var(--control-ui-text-xs);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* PRs need readable identities without widening ordinary session previews. */
+.session-progress-hovercard:has(.session-hovercard__pr-list) {
+  width: min(380px, calc(100vw - 24px));
+}
+
+.session-hovercard__pr-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block: var(--space-2) var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.session-hovercard__pr-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-hovercard__pr-main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.session-hovercard__pr-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 550;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__pr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__pr-number {
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__pr-state {
+  color: var(--session-pr-state-color);
+}
+
+.session-hovercard__pr-source {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__pr-checks {
+  font-size: var(--control-ui-text-xs);
+  color: var(--muted);
+}
+
+.session-hovercard__pr-checks[data-checks="passing"] {
+  color: var(--ok);
+}
+
+.session-hovercard__pr-checks[data-checks="failing"] {
+  color: var(--danger);
+}
+
+.session-hovercard__pr-checks[data-checks="pending"] {
+  color: var(--warn);
 }

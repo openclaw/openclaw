@@ -15,6 +15,7 @@ import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
 import * as updateDatabaseRestore from "../infra/update-database-restore.js";
 import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -201,6 +202,10 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // Metadata process isolation has its own tests; keep real file and sidecar sizes here.
+    vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation(
+      (files, { signal }) => stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+    );
     // Service control is simulated; native artifact and database owners still run on the host OS.
     const inspectArtifacts = sourceArtifactPreflight.inspectSourceUpdateArtifacts;
     vi.spyOn(sourceArtifactPreflight, "inspectSourceUpdateArtifacts").mockImplementation(
@@ -231,7 +236,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       onHostPlatform(() => restoreDatabaseBackup(...args)),
     );
     retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
-    systemdPolicy.mockResolvedValue(false);
+    systemdPolicy.mockResolvedValue({ kind: "unchanged" });
     // Service simulations do not provide foreign-platform ACL libraries. Keep
     // real exclusive host creation; actual Windows runs retain the native DACL path.
     if (sqliteHostPlatform !== "win32") {

@@ -14,6 +14,7 @@ import {
   runSqliteImmediateTransactionSync,
   requestSqliteWorkerOperationAdmission,
   type SqliteWorkerBackend,
+  type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
 import { isLogbookWriteOperation } from "./store-contract.js";
@@ -21,7 +22,6 @@ import type {
   LogbookBatchInput,
   LogbookDay,
   LogbookFrameInput,
-  LogbookObservationInput,
   LogbookOperations,
   LogbookStandup,
   LogbookTimeline,
@@ -29,15 +29,10 @@ import type {
 import { createLogbookFrameQueries } from "./store-frame-queries.js";
 import { createLogbookDatabase, LOGBOOK_SQLITE_BUSY_TIMEOUT_MS } from "./store-schema-admission.js";
 import { toBatch, toCard, toFrame, type LogbookDatabase } from "./store-schema.js";
-import type {
-  LogbookBatch,
-  LogbookBatchStatus,
-  LogbookCard,
-  LogbookCardDraft,
-  LogbookFrame,
-  LogbookObservation,
-} from "./types.js";
+import type { LogbookBatch, LogbookCard, LogbookFrame, LogbookObservation } from "./types.js";
 
+// Twelve card columns keep each batch below SQLite’s parameter limit.
+const WRITE_BATCH_SIZE = 64;
 const FRAME_PRUNE_BATCH_SIZE = 64;
 class LogbookDatabaseStore {
   private readonly db: EngineConnection;
@@ -107,17 +102,6 @@ class LogbookDatabaseStore {
               })
               .returning("id"),
         ),
-        assignFrame: prepareSqliteQuerySync<{ batchId: number; frameId: number }>(db, (p) =>
-          this.query
-            .updateTable("frames")
-            .set({ batch_id: p((row) => row.batchId) })
-            .where(
-              "id",
-              "=",
-              p((row) => row.frameId),
-            )
-            .where("batch_id", "is", null),
-        ),
         setBatchStatus: prepareSqliteQuerySync<
           LogbookOperations["setBatchStatus"]["input"] & { now: number }
         >(db, (p) =>
@@ -157,17 +141,6 @@ class LogbookDatabaseStore {
             p((batchId) => batchId),
           ),
         ),
-        insertObservation: prepareSqliteQuerySync<
-          LogbookObservationInput & { batchId: number; day: string }
-        >(db, (p) =>
-          this.query.insertInto("observations").values({
-            batch_id: p((row) => row.batchId),
-            day: p((row) => row.day),
-            start_ms: p((row) => row.startMs),
-            end_ms: p((row) => row.endMs),
-            text: p((row) => row.text),
-          }),
-        ),
         deleteCards: prepareSqliteQuerySync<{ day: string; startMs: number; endMs: number }>(
           db,
           (p) =>
@@ -188,22 +161,6 @@ class LogbookDatabaseStore {
                 "<",
                 p((window) => window.endMs),
               ),
-        ),
-        insertCard: prepareSqliteQuerySync<LogbookCardDraft & { now: number }>(db, (p) =>
-          this.query.insertInto("cards").values({
-            day: p((row) => row.day),
-            start_ms: p((row) => row.startMs),
-            end_ms: p((row) => row.endMs),
-            title: p((row) => row.title),
-            summary: p((row) => row.summary),
-            detail: p((row) => row.detail),
-            category: p((row) => row.category),
-            app_primary: p((row) => row.appPrimary ?? null),
-            app_secondary: p((row) => row.appSecondary ?? null),
-            distractions: p((row) => JSON.stringify(row.distractions)),
-            keyframe_id: p((row) => row.keyframeId ?? null),
-            updated_ms: p((row) => row.now),
-          }),
         ),
         saveStandup: prepareSqliteQuerySync<{ day: string; text: string; now: number }>(db, (p) =>
           this.query
@@ -253,7 +210,12 @@ class LogbookDatabaseStore {
     return row ? { capturedAtMs: row.captured_at_ms, contentHash: row.content_hash } : null;
   }
 
-  unbatchedActiveFrames(limit: number): Pick<LogbookFrame, "id" | "capturedAtMs">[] {
+  unbatchedActiveFrames({
+    limit,
+  }: LogbookOperations["unbatchedActiveFrames"]["input"]): Pick<
+    LogbookFrame,
+    "id" | "capturedAtMs"
+  >[] {
     return executeSqliteQuerySync(
       this.db,
       this.frameMetadataQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
@@ -272,15 +234,18 @@ class LogbookDatabaseStore {
     return expectDefined(row, "Logbook unbatched frame count").n;
   }
 
-  frameById(id: number): LogbookFrame | null {
+  frameById({ id }: LogbookOperations["frameById"]["input"]): LogbookFrame | null {
     const row = executeSqliteQueryTakeFirstSync(this.db, this.framesQuery.where("id", "=", id));
     return row ? toFrame(row) : null;
   }
 
-  framesInRange(
-    startMs: number,
-    endMs: number,
-  ): Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[] {
+  framesInRange({
+    startMs,
+    endMs,
+  }: LogbookOperations["framesInRange"]["input"]): Pick<
+    LogbookFrame,
+    "id" | "capturedAtMs" | "idle"
+  >[] {
     return executeSqliteQuerySync(
       this.db,
       this.frameMetadataQuery
@@ -303,10 +268,22 @@ class LogbookDatabaseStore {
       () => {
         const result = this.statements.insertBatch({ ...params, now });
         const batchId = expectDefined(result.rows[0], "Logbook inserted batch").id;
-        for (const frameId of params.frameIds) {
-          const assigned = this.statements.assignFrame({ batchId, frameId });
-          if (expectDefined(assigned.numAffectedRows, "Logbook assigned frame count") !== 1n) {
-            throw new Error(`Logbook frame ${frameId} is missing or already batched`);
+        for (let offset = 0; offset < params.frameIds.length; offset += WRITE_BATCH_SIZE) {
+          const frameIds = params.frameIds.slice(offset, offset + WRITE_BATCH_SIZE);
+          const assigned = executeSqliteQuerySync(
+            this.db,
+            this.query
+              .updateTable("frames")
+              .set({ batch_id: batchId })
+              .where("id", "in", frameIds)
+              .where("batch_id", "is", null)
+              .returning("id"),
+          );
+          const assignedIds = new Set(assigned.rows.map((row) => row.id));
+          for (const frameId of frameIds) {
+            if (!assignedIds.delete(frameId)) {
+              throw new Error(`Logbook frame ${frameId} is missing or already batched`);
+            }
           }
         }
         return batchId;
@@ -319,13 +296,8 @@ class LogbookDatabaseStore {
     );
   }
 
-  setBatchStatus(
-    batchId: number,
-    status: LogbookBatchStatus,
-    error?: string,
-    model?: string,
-  ): void {
-    this.statements.setBatchStatus({ batchId, status, error, model, now: Date.now() });
+  setBatchStatus(input: LogbookOperations["setBatchStatus"]["input"]): void {
+    this.statements.setBatchStatus({ ...input, now: Date.now() });
   }
 
   latestBatch(): LogbookBatch | null {
@@ -359,19 +331,36 @@ class LogbookDatabaseStore {
     return row ? toBatch(row) : null;
   }
 
-  sampledBatchFrames(batchId: number): LogbookFrame[] {
+  sampledBatchFrames({
+    batchId,
+  }: LogbookOperations["sampledBatchFrames"]["input"]): LogbookFrame[] {
     // The ordinal scan and sampled payload read share one statement.
     return this.statements.sampledBatchFrames(batchId).rows.map(toFrame);
   }
 
   // Replace batch evidence atomically so manual retries cannot duplicate it.
-  replaceObservations(batchId: number, day: string, segments: LogbookObservationInput[]): void {
+  replaceObservations({
+    batchId,
+    day,
+    segments,
+  }: LogbookOperations["replaceObservations"]["input"]): void {
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
         this.statements.deleteObservations(batchId);
-        for (const segment of segments) {
-          this.statements.insertObservation({ ...segment, batchId, day });
+        for (let offset = 0; offset < segments.length; offset += WRITE_BATCH_SIZE) {
+          executeSqliteQuerySync(
+            this.db,
+            this.query.insertInto("observations").values(
+              segments.slice(offset, offset + WRITE_BATCH_SIZE).map((segment) => ({
+                batch_id: batchId,
+                day,
+                start_ms: segment.startMs,
+                end_ms: segment.endMs,
+                text: segment.text,
+              })),
+            ),
+          );
         }
       },
       {
@@ -382,12 +371,12 @@ class LogbookDatabaseStore {
     );
   }
 
-  observationsInRange(
-    day: string,
-    startMs: number,
-    endMs: number,
-    tailLimit?: number,
-  ): LogbookObservation[] {
+  observationsInRange({
+    day,
+    startMs,
+    endMs,
+    tailLimit,
+  }: LogbookOperations["observationsInRange"]["input"]): LogbookObservation[] {
     const direction = tailLimit === undefined ? "asc" : "desc";
     let query = this.query
       .selectFrom("observations")
@@ -415,7 +404,7 @@ class LogbookDatabaseStore {
     }));
   }
 
-  cardsForDay(day: string, window?: { startMs: number; endMs: number }): LogbookCard[] {
+  cardsForDay({ day, window }: LogbookOperations["cardsForDay"]["input"]): LogbookCard[] {
     let query = this.cardsQuery
       .selectAll()
       .where("day", "=", day)
@@ -427,7 +416,7 @@ class LogbookDatabaseStore {
     return executeSqliteQuerySync(this.db, query).rows.map(toCard);
   }
 
-  countCardsForDay(day: string): number {
+  countCardsForDay({ day }: LogbookOperations["countCardsForDay"]["input"]): number {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.cardsQuery.select((eb) => eb.fn.countAll<number>().as("count")).where("day", "=", day),
@@ -436,13 +425,13 @@ class LogbookDatabaseStore {
   }
 
   // Replace the overlapping window atomically so revision cannot expose partial timeline spans.
-  replaceCardsInWindow(
-    day: string,
-    startMs: number,
-    endMs: number,
-    drafts: LogbookCardDraft[],
+  replaceCardsInWindow({
+    day,
+    startMs,
+    endMs,
+    drafts,
     selectKeyframes = false,
-  ): void {
+  }: LogbookOperations["replaceCardsInWindow"]["input"]): void {
     const now = Date.now();
     runSqliteImmediateTransactionSync(
       this.db,
@@ -456,9 +445,26 @@ class LogbookDatabaseStore {
             ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))
           : undefined;
         this.statements.deleteCards({ day, startMs, endMs });
-        for (const draft of drafts) {
-          const keyframeId = frames ? pickKeyframeId(draft, frames) : draft.keyframeId;
-          this.statements.insertCard({ ...draft, keyframeId, now });
+        for (let offset = 0; offset < drafts.length; offset += WRITE_BATCH_SIZE) {
+          executeSqliteQuerySync(
+            this.db,
+            this.query.insertInto("cards").values(
+              drafts.slice(offset, offset + WRITE_BATCH_SIZE).map((draft) => ({
+                day: draft.day,
+                start_ms: draft.startMs,
+                end_ms: draft.endMs,
+                title: draft.title,
+                summary: draft.summary,
+                detail: draft.detail,
+                category: draft.category,
+                app_primary: draft.appPrimary ?? null,
+                app_secondary: draft.appSecondary ?? null,
+                distractions: JSON.stringify(draft.distractions),
+                keyframe_id: (frames ? pickKeyframeId(draft, frames) : draft.keyframeId) ?? null,
+                updated_ms: now,
+              })),
+            ),
+          );
         }
       },
       {
@@ -489,8 +495,8 @@ class LogbookDatabaseStore {
     }));
   }
 
-  timelineForDay(day: string): LogbookTimeline {
-    const cards = this.cardsForDay(day);
+  timelineForDay({ day }: LogbookOperations["timelineForDay"]["input"]): LogbookTimeline {
+    const cards = this.cardsForDay({ day });
     const categories = new Map<string, number>();
     const apps = new Map<string, number>();
     let trackedMs = 0;
@@ -521,7 +527,7 @@ class LogbookDatabaseStore {
     };
   }
 
-  getStandup(day: string): LogbookStandup | null {
+  getStandup({ day }: LogbookOperations["getStandup"]["input"]): LogbookStandup | null {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
       this.query.selectFrom("standups").selectAll().where("day", "=", day),
@@ -529,11 +535,13 @@ class LogbookDatabaseStore {
     return row ? { day: row.day, text: row.text, updatedMs: row.updated_ms } : null;
   }
 
-  saveStandup(day: string, text: string): void {
-    this.statements.saveStandup({ day, text, now: Date.now() });
+  saveStandup({ day, text }: LogbookOperations["saveStandup"]["input"]): LogbookStandup {
+    const updatedMs = Date.now();
+    this.statements.saveStandup({ day, text, now: updatedMs });
+    return { day, text, updatedMs };
   }
 
-  pruneFrames(olderThanMs: number): number {
+  pruneFrames({ olderThanMs }: LogbookOperations["pruneFrames"]["input"]): number {
     const rows = executeSqliteQuerySync(
       this.db,
       this.query
@@ -557,17 +565,6 @@ class LogbookDatabaseStore {
         for (let offset = 0; offset < rows.length; offset += FRAME_PRUNE_BATCH_SIZE) {
           const batch = rows.slice(offset, offset + FRAME_PRUNE_BATCH_SIZE);
           const ids = batch.map((row) => row.id);
-          const currentPaths = new Map(
-            executeSqliteQuerySync(
-              this.db,
-              this.query.selectFrom("frames").select(["id", "path"]).where("id", "in", ids),
-            ).rows.map((row) => [row.id, row.path]),
-          );
-          for (const row of batch) {
-            if (currentPaths.has(row.id) && currentPaths.get(row.id) !== row.path) {
-              throw new Error(`Logbook frame ${row.id} changed path while pruning`);
-            }
-          }
           // ON DELETE SET NULL clears surviving cards' keyframes in the same commit.
           const result = executeSqliteQuerySync(
             this.db,
@@ -598,78 +595,19 @@ export function createSqliteWorkerBackend(
   context: { databasePath: string },
 ): SqliteWorkerBackend<LogbookOperations> {
   const store = new LogbookDatabaseStore(input.dataDir, context.databasePath, input.postgresInput);
+  const operations: {
+    [Key in keyof LogbookOperations]: (
+      input: LogbookOperations[Key]["input"],
+    ) => LogbookOperations[Key]["output"];
+  } = store;
+  function dispatch<Key extends keyof LogbookOperations>(
+    command: SqliteWorkerCommand<Pick<LogbookOperations, Key>>,
+  ): LogbookOperations[Key]["output"] {
+    return operations[command.type](command.input);
+  }
   return {
     execute(command) {
-      const execute = () => {
-        switch (command.type) {
-          case "insertFrame":
-            return store.insertFrame(command.input);
-          case "lastFrame":
-            return store.lastFrame();
-          case "unbatchedActiveFrames":
-            return store.unbatchedActiveFrames(command.input.limit);
-          case "countUnbatchedActiveFrames":
-            return store.countUnbatchedActiveFrames();
-          case "frameById":
-            return store.frameById(command.input.id);
-          case "framesInRange":
-            return store.framesInRange(command.input.startMs, command.input.endMs);
-          case "createBatch":
-            return store.createBatch(command.input);
-          case "setBatchStatus":
-            return store.setBatchStatus(
-              command.input.batchId,
-              command.input.status,
-              command.input.error,
-              command.input.model,
-            );
-          case "latestBatch":
-            return store.latestBatch();
-          case "resetRunningBatches":
-            return store.resetRunningBatches();
-          case "resetErrorBatches":
-            return store.resetErrorBatches();
-          case "nextPendingBatch":
-            return store.nextPendingBatch();
-          case "sampledBatchFrames":
-            return store.sampledBatchFrames(command.input.batchId);
-          case "replaceObservations":
-            return store.replaceObservations(
-              command.input.batchId,
-              command.input.day,
-              command.input.segments,
-            );
-          case "observationsInRange":
-            return store.observationsInRange(
-              command.input.day,
-              command.input.startMs,
-              command.input.endMs,
-              command.input.tailLimit,
-            );
-          case "cardsForDay":
-            return store.cardsForDay(command.input.day, command.input.window);
-          case "countCardsForDay":
-            return store.countCardsForDay(command.input.day);
-          case "replaceCardsInWindow":
-            return store.replaceCardsInWindow(
-              command.input.day,
-              command.input.startMs,
-              command.input.endMs,
-              command.input.drafts,
-              command.input.selectKeyframes,
-            );
-          case "listDays":
-            return store.listDays();
-          case "timelineForDay":
-            return store.timelineForDay(command.input.day);
-          case "getStandup":
-            return store.getStandup(command.input.day);
-          case "saveStandup":
-            return store.saveStandup(command.input.day, command.input.text);
-          case "pruneFrames":
-            return store.pruneFrames(command.input.olderThanMs);
-        }
-      };
+      const execute = () => dispatch(command);
       return isLogbookWriteOperation(command.type)
         ? runEngineWorkerWrite(input.postgresInput, execute, (operation) => {
             requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });

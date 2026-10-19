@@ -44,7 +44,9 @@ const realGatewayFiles = [
   "chat-loading-performance.real-gateway",
   "chat-managed-media-order.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-reconnect-continuity.real-gateway",
   "chat-session-diff-folding.real-gateway",
+  "chat-steer-deferred-custody.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-stop-owned-exec.real-gateway",
   "chat-thinking-metadata.real-gateway",
@@ -55,6 +57,7 @@ const realGatewayFiles = [
   "command-palette-search.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
+  "deepseek-search.real-gateway",
   "desktop-resize.real-gateway",
   "device-alias-rename.real-gateway",
   "device-platform-family.real-gateway",
@@ -63,12 +66,15 @@ const realGatewayFiles = [
   "model-api-keys.real-gateway",
   "model-catalog-partial-refresh.real-gateway",
   "model-picker-search.real-gateway",
+  "peer-followup-restart.real-gateway",
   "profile-page.real-gateway",
   "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
   "session-pr-reader-lifetime.real-gateway",
   "session-progress-hovercard.real-gateway",
   "session-roster-request-rate.real-gateway",
+  "sidebar-running-counts.real-gateway",
+  "task-pull-requests.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
 ]
@@ -462,6 +468,13 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -490,6 +503,13 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -505,6 +525,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: mcpFile,
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
@@ -532,6 +559,20 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/sidebar-running-counts.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/task-pull-requests.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: workboardFile,
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -540,7 +581,7 @@ describe("Control UI E2E resource ownership", () => {
         },
       ]);
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(27);
+      expect(parallel).toHaveLength(28);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

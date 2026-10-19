@@ -1,32 +1,23 @@
-import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
-import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { LegacyContextEngine } from "./legacy.js";
 import * as health from "./quarantine-health.js";
-import { registerContextEngineInRegistry, resolveContextEngine } from "./registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
+import { createNativeSource } from "./registry-resources.test-support.js";
+import {
+  registerContextEngineInRegistry as registerEngine,
+  resolveContextEngine,
+} from "./registry.js";
+import { resetContextEngineRuntimeQuarantineForTests as resetQuarantine } from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
 
 it.each(["rejected-factory", "primary-failure", "shared"] as const)(
   "releases foreground factory resources after lazy fallback (%s)",
   async (mode) => {
-    const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    resources.attach(registry);
-    const database = new DatabaseSync(":memory:");
-    let sourceDisposals = 0;
-    resources.register("fixture", {
-      id: "native",
-      dispose() {
-        sourceDisposals++;
-        database.close();
-      },
-    });
+    const { registry, resources, database, read, state } = createNativeSource();
     const fallbackStarted = createDeferred();
     const fallbackGate = createDeferred();
     const cleanupGate = createDeferred();
@@ -48,7 +39,7 @@ it.each(["rejected-factory", "primary-failure", "shared"] as const)(
       }
       async dispose() {
         primaryDisposals++;
-        expect(database.prepare("SELECT 42 AS value").get()?.value).toBe(42);
+        expect(read()).toBe(42);
         if (mode === "primary-failure") {
           throw primaryFailure;
         }
@@ -57,11 +48,11 @@ it.each(["rejected-factory", "primary-failure", "shared"] as const)(
     class FallbackEngine extends LegacyContextEngine {
       async dispose() {
         fallbackDisposals++;
-        expect(database.prepare("SELECT 42 AS value").get()?.value).toBe(42);
+        expect(read()).toBe(42);
       }
     }
     const primary = new SelectedEngine();
-    registerContextEngineInRegistry(
+    registerEngine(
       registry,
       "legacy",
       async () => {
@@ -78,7 +69,7 @@ it.each(["rejected-factory", "primary-failure", "shared"] as const)(
         if (mode === "rejected-factory") {
           rawCleanup = trackAsyncWork(async () => {
             await cleanupGate.promise;
-            cleanupReads.push(Number(database.prepare("SELECT 42 AS value").get()?.value));
+            cleanupReads.push(read());
           });
           await fallbackGate.promise;
           throw factoryFailure;
@@ -88,17 +79,17 @@ it.each(["rejected-factory", "primary-failure", "shared"] as const)(
       "core",
     );
     const selectedId = `fallback-resources-${mode}`;
-    registerContextEngineInRegistry(registry, selectedId, () => primary, "plugin:fixture");
+    registerEngine(registry, selectedId, () => primary, "plugin:fixture");
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const params = { sessionId: "fallback-session", messages: [] };
     let engine: ContextEngine | undefined;
     let operation: Promise<unknown> | undefined;
     let cleanup: Promise<void> | undefined;
     try {
-      engine = await withPluginRuntimeRegistryScope(registry, () =>
+      engine = await withRegistry(registry, () =>
         resolveContextEngine({ plugins: { slots: { contextEngine: selectedId } } }),
       );
-      operation = withPluginRuntimeRegistryScope(registry, () => engine!.assemble(params));
+      operation = withRegistry(registry, () => engine!.assemble(params));
       if (mode === "rejected-factory") {
         operation = expect(operation).rejects.toThrow("configured store unavailable");
       }
@@ -116,18 +107,12 @@ it.each(["rejected-factory", "primary-failure", "shared"] as const)(
         (error: unknown) => error,
       );
       if (mode === "rejected-factory") {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect.soft(settled).toBe(false);
-        expect.soft(database.isOpen).toBe(true);
+        await nextEventLoopTurn();
+        expect.soft({ settled, open: database.isOpen }).toEqual({ settled: false, open: true });
         fallbackGate.resolve();
         await operation;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect.soft(settled).toBe(false);
-        expect.soft(database.isOpen).toBe(true);
+        await nextEventLoopTurn();
+        expect.soft({ settled, open: database.isOpen }).toEqual({ settled: false, open: true });
         cleanupGate.resolve();
         await rawCleanup;
       }
@@ -146,14 +131,11 @@ it.each(["rejected-factory", "primary-failure", "shared"] as const)(
       if (mode !== "rejected-factory") {
         expect.soft(fallbackClosedAfterDisposalStarted).toBe(true);
       }
-      expect.soft(sourceDisposals).toBe(1);
-      expect.soft(database.isOpen).toBe(false);
+      expect.soft(state).toMatchObject({ disposals: 1, open: false });
       await Promise.resolve(engine.dispose?.()).catch(() => {});
       expect.soft(primaryDisposals).toBe(1);
       // A saved ordinary method cannot reopen the lazy factory after its owner closes.
-      await expect(
-        withPluginRuntimeRegistryScope(registry, () => engine!.assemble(params)),
-      ).rejects.toThrow();
+      await expect(withRegistry(registry, () => engine!.assemble(params))).rejects.toThrow();
       expect(fallbackFactories).toBe(1);
     } finally {
       fallbackGate.resolve();
@@ -173,30 +155,25 @@ it.each(["rejected-factory", "primary-failure", "shared"] as const)(
 it.each(["missing", "factory", "guarded"] as const)(
   "retains a distinct fallback source while recording quarantine (%s)",
   async (mode) => {
-    const donor = createEmptyPluginRegistry();
+    const {
+      registry: donor,
+      resources,
+      database,
+      read,
+      state,
+    } = createNativeSource(":memory:", undefined, "fallback");
     const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    resources.attach(donor);
-    const database = new DatabaseSync(":memory:");
-    let sourceDisposals = 0;
-    resources.register("fallback", {
-      id: "native",
-      dispose() {
-        sourceDisposals++;
-        database.close();
-      },
-    });
     const fallback = vi.fn(() => {
-      expect(database.prepare("SELECT 42 AS value").get()?.value).toBe(42);
+      expect(read()).toBe(42);
       return new LegacyContextEngine();
     });
-    registerContextEngineInRegistry(donor, "legacy", fallback, "core");
+    registerEngine(donor, "legacy", fallback, "core");
     // A copied registration still belongs to the donor, not this unowned view.
     registry.contextEngines.set("legacy", donor.contextEngines.get("legacy")!);
     const id = `quarantine-source-${mode}`;
     const failure = new Error("configured engine failed");
     if (mode !== "missing") {
-      registerContextEngineInRegistry(
+      registerEngine(
         registry,
         id,
         () => {
@@ -227,12 +204,12 @@ it.each(["missing", "factory", "guarded"] as const)(
     let operation: Promise<unknown> | undefined;
     try {
       const resolve = () =>
-        withPluginRuntimeRegistryScope(registry, () =>
+        withRegistry(registry, () =>
           resolveContextEngine({ plugins: { slots: { contextEngine: id } } }),
         );
       if (mode === "guarded") {
         engine = await resolve();
-        operation = withPluginRuntimeRegistryScope(registry, () =>
+        operation = withRegistry(registry, () =>
           engine!.assemble({ sessionId: "recording-source", messages: [] }),
         );
       } else {
@@ -243,11 +220,10 @@ it.each(["missing", "factory", "guarded"] as const)(
       void operation.catch(() => {});
       await started.promise;
       await resources.release();
-      expect(database.isOpen).toBe(true);
-      expect(sourceDisposals).toBe(0);
+      expect(state).toMatchObject({ open: true, disposals: 0 });
       expect(fallback).not.toHaveBeenCalled();
       const replacement = vi.fn(() => new LegacyContextEngine());
-      registerContextEngineInRegistry(registry, "legacy", replacement, "core", {
+      registerEngine(registry, "legacy", replacement, "core", {
         allowSameOwnerRefresh: true,
       });
       gate.resolve();
@@ -255,8 +231,7 @@ it.each(["missing", "factory", "guarded"] as const)(
       expect(fallback).toHaveBeenCalledOnce();
       expect(replacement).not.toHaveBeenCalled();
       await engine?.dispose?.();
-      expect(sourceDisposals).toBe(1);
-      expect(database.isOpen).toBe(false);
+      expect(state).toMatchObject({ disposals: 1, open: false });
     } finally {
       gate.resolve();
       await operation?.catch(() => {});
@@ -267,7 +242,7 @@ it.each(["missing", "factory", "guarded"] as const)(
       }
       recording.mockRestore();
       warn.mockRestore();
-      await resetContextEngineRuntimeQuarantineForTests();
+      await resetQuarantine();
     }
   },
 );

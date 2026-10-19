@@ -34,7 +34,12 @@ const serviceInstallStartupPolicy: CliCommandCatalogEntry["policy"] = {
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["setup"],
-    policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
+    policy: {
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+    },
   },
   {
     commandPath: ["qa"],
@@ -335,7 +340,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", networkProxy: "bypass" },
   },
   { commandPath: ["backup"], policy: { configGuard: "skip", networkProxy: "bypass" } },
-  { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
+  // Local TUI aliases run the embedded agent in this process, like `agent --local`.
+  { commandPath: ["chat"], policy: { networkProxy: "default" } },
   { commandPath: ["config"], policy: { networkProxy: "bypass" } },
   { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
@@ -486,8 +492,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["security"], policy: { networkProxy: "bypass" } },
   { commandPath: ["system"], policy: { networkProxy: "bypass" } },
   { commandPath: ["resume"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["terminal"], policy: { networkProxy: "default" } },
+  {
+    commandPath: ["tui"],
+    policy: { networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass") },
+  },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
   ...updateCommandCatalog,
   {
@@ -522,7 +531,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["onboard"],
     exact: true,
-    policy: { loadPlugins: "never" },
+    policy: {
+      loadPlugins: "never",
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "run",
+    },
   },
   ...[["recommendations"], ["recommendations", "acknowledge"], ["recommendations", "refresh"]].map(
     (path): CliCommandCatalogEntry => ({
@@ -540,7 +553,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["channels", "logs"],
     exact: true,
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["remove", "resolve"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["channels", subcommand],
@@ -581,7 +594,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["memory"],
-    policy: { loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+    // The action owns state admission; pre-action validation must not observe config health.
+    policy: { configGuard: "validate", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
   },
   {
     commandPath: ["memory", "search"],
@@ -593,7 +607,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       configGuard: ({ argv }) =>
-        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "run" : "skip",
+        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "validate" : "skip",
     },
   },
   { commandPath: ["skills", "update"], exact: true },

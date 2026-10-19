@@ -60,31 +60,37 @@ const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   supportsBrowserSession: false,
 };
 
-// Retained for public synchronous SDK calls through 2026-12-31.
-function resolveOpenAIRealtimeVoiceConfig(
-  {
-    cfg,
-    rawConfig,
-    agentId,
-    surface,
-    autoRespondToAudio,
-    requiredCapabilities,
-  }: RealtimeVoiceProviderResolveConfigContext,
-  context: OpenAIRealtimeHost,
-): OpenAIRealtimeVoiceProviderConfig {
+function prepareOpenAIRealtimeVoiceConfig({
+  rawConfig,
+  surface,
+  autoRespondToAudio,
+  requiredCapabilities,
+}: RealtimeVoiceProviderResolveConfigContext): OpenAIRealtimeVoiceProviderConfig {
   const config = normalizeProviderConfig(rawConfig);
-  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
-    return config;
-  }
   // Live delegates natively; GA still owns manually triggered replies and video.
   if (
-    config.baseUrl ||
-    config.azureEndpoint ||
-    config.azureDeployment ||
-    autoRespondToAudio === false ||
-    requiredCapabilities?.supportsVideoFrames === true
+    !config.model &&
+    (surface === "browser-session" || surface === "gateway-relay") &&
+    (config.baseUrl ||
+      config.azureEndpoint ||
+      config.azureDeployment ||
+      autoRespondToAudio === false ||
+      requiredCapabilities?.supportsVideoFrames === true)
   ) {
     return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
+  }
+  return config;
+}
+
+// Retained for public synchronous SDK calls through 2026-12-31.
+function resolveOpenAIRealtimeVoiceConfig(
+  params: RealtimeVoiceProviderResolveConfigContext,
+  context: OpenAIRealtimeHost,
+): OpenAIRealtimeVoiceProviderConfig {
+  const { cfg, agentId, surface } = params;
+  const config = prepareOpenAIRealtimeVoiceConfig(params);
+  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
+    return config;
   }
   const platformConfigured = hasOpenAIRealtimePlatformAuthInput(
     { configuredApiKey: config.apiKey, cfg, agentId },
@@ -98,29 +104,13 @@ function resolveOpenAIRealtimeVoiceConfig(
 }
 
 async function resolveOpenAIRealtimeVoiceConfigAsync(
-  {
-    cfg,
-    rawConfig,
-    agentId,
-    surface,
-    autoRespondToAudio,
-    requiredCapabilities,
-  }: RealtimeVoiceProviderResolveConfigContext,
+  params: RealtimeVoiceProviderResolveConfigContext,
   context: OpenAIRealtimeHost,
 ): Promise<OpenAIRealtimeVoiceProviderConfig> {
-  const config = normalizeProviderConfig(rawConfig);
+  const { cfg, agentId, surface } = params;
+  const config = prepareOpenAIRealtimeVoiceConfig(params);
   if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
     return config;
-  }
-  // Live delegates natively; GA still owns manually triggered replies and video.
-  if (
-    config.baseUrl ||
-    config.azureEndpoint ||
-    config.azureDeployment ||
-    autoRespondToAudio === false ||
-    requiredCapabilities?.supportsVideoFrames === true
-  ) {
-    return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
   }
   const platformConfigured = await hasOpenAIRealtimePlatformAuthInputAsync(
     { configuredApiKey: config.apiKey, cfg, agentId },
@@ -221,7 +211,7 @@ async function createOpenAIRealtimeBrowserSession(
     const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
     return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
   }
-  if (req.gatewayControl) {
+  if (req.clientControl) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI realtime browser session broker is unavailable");
     }
@@ -291,16 +281,10 @@ async function createOpenAIRealtimeBrowserSession(
               },
               context,
             );
-            if (gatewayControl.bindControl) {
-              gatewayControl.bindControl({
-                submitToolResult: bridge.submitToolResult.bind(bridge),
-                sendUserMessage: bridge.sendUserMessage.bind(bridge),
-              });
-            } else {
-              // v2026.8.1 hosts expose only bindBridge. Remove this fallback when the
-              // minimum supported host includes bindControl; native negotiation never uses it.
-              gatewayControl.bindBridge(bridge);
-            }
+            gatewayControl.bindControl({
+              submitToolResult: bridge.submitToolResult.bind(bridge),
+              sendUserMessage: bridge.sendUserMessage.bind(bridge),
+            });
             return bridge;
           },
         },
@@ -373,7 +357,7 @@ async function createOpenAIRealtimeBrowserSession(
     ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,
-    ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
+    ...(clientSecret.expiresAt !== undefined ? { expiresAt: clientSecret.expiresAt } : {}),
   };
 }
 
@@ -547,7 +531,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
-        // Older hosts do not prepare this control claim, even when they own native delegations.
+        // Native delegation callbacks alone do not grant Gateway control of client media.
         const supportsGatewayControl =
           clientControl?.owner === "gateway" &&
           internalApi.isBrowserSessionConfigured({
@@ -586,7 +570,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
-        // Older hosts do not prepare this control claim, even when they own native delegations.
+        // Native delegation callbacks alone do not grant Gateway control of client media.
         const supportsGatewayControl =
           clientControl?.owner === "gateway" &&
           (await isBrowserSessionConfiguredAsync({

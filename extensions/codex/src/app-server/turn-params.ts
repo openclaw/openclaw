@@ -136,6 +136,7 @@ export async function buildTurnStartParams(
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           messageToolAvailable: options.messageToolAvailable === true,
           requireExplicitMessageTarget: options.requireExplicitMessageTarget,
+          messageToolFinalByDefault: params.messageToolFinalByDefault,
         }),
       ].join("\n"),
     },

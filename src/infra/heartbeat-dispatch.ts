@@ -166,6 +166,7 @@ async function prepareHeartbeatDispatchReply(
       heartbeatToolResponse: response,
       heartbeatTerminalToolFailure: failure,
       replyPayload: selected,
+      replyCompletion: runState.replyCompletion,
     },
     useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,

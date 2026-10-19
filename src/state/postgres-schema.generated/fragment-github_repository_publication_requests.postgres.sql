@@ -46,6 +46,7 @@ CREATE TABLE "github_repository_publication_requests" (
   "created_at_ms" bigint NOT NULL,
   "updated_at_ms" bigint NOT NULL,
   "reported_at_ms" bigint,
+  "draft" bigint,
   PRIMARY KEY ("request_id"),
   CHECK (("identity_source" IN ('system-detected', 'system-configured', 'agent-override', 'personal'))),
   CHECK (("status" IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed'))),

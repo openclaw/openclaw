@@ -2,7 +2,6 @@
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -16,7 +15,6 @@ import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
 
 const TLON_INGRESS_PAYLOAD_VERSION = 1;
-const TLON_INGRESS_POLL_INTERVAL_MS = 1_000;
 
 export type TlonIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -142,20 +140,15 @@ function resolveTlonIngressNonRetryableFailure(error: unknown) {
 
 export function createTlonIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<TlonIngressPayload>;
   dispatch: TlonIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
   const monitor = createChannelIngressMonitor<TlonIngressRaw, TlonIngressBody, TlonIngressPayload>({
-    queue:
-      options.queue ??
-      (() =>
-        getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
-          accountId: options.accountId,
-        })),
+    queue: () =>
+      getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
+        accountId: options.accountId,
+      }),
     inspect: (raw) => inspectTlonIngressEvent(raw.source, raw.event),
     payload: {
       version: TLON_INGRESS_PAYLOAD_VERSION,
@@ -176,7 +169,7 @@ export function createTlonIngressMonitor(options: {
         ),
     },
     deliver: (raw, lifecycle) => options.dispatch(raw.source, raw.event, lifecycle),
-    pollIntervalMs: options.pollIntervalMs ?? TLON_INGRESS_POLL_INTERVAL_MS,
+    pollIntervalMs: 1_000,
     // Preserve the retired process-local guard's full 2,000-message key window.
     retention: {
       completedTtlMs: undefined,
@@ -187,9 +180,6 @@ export function createTlonIngressMonitor(options: {
     appendRetryDelaysMs: [0],
     drain: {
       resolveNonRetryableFailure: resolveTlonIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.log?.(`tlon ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

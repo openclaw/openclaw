@@ -5,7 +5,8 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import * as runtimeConfig from "../config/config.js";
 import {
   saveExecApprovals,
   testing as approvalsTesting,
@@ -98,11 +99,12 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             const runCommand = vi.fn<Parameters<typeof handleSystemRunInvoke>[0]["runCommand"]>();
             const sendInvokeResult = vi.fn();
             const sendNodeEvent = vi.fn();
+            const config = vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue({});
+            onTestFinished(() => config.mockRestore());
             await handleSystemRunInvoke({
               params: { command, cwd: dir, sessionKey: "agent:main:proof" },
               skillBins: { current: async () => [] },
               preferMacAppExecHost: true,
-              getRuntimeConfig: () => ({}),
               runCommand,
               sendInvokeResult,
               sendNodeEvent,
@@ -111,12 +113,17 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             expect(failures).toEqual([]);
             expect(order).toEqual(["child-completed", "response-dropped"]);
             expect(runCommand).not.toHaveBeenCalled();
-            expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ ok: false }),
-            );
+            expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith({
+              ok: false,
+              error: {
+                code: "UNKNOWN",
+                message:
+                  "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+              },
+            });
             expect(sendNodeEvent).toHaveBeenCalledExactlyOnceWith(
               "exec.denied",
-              expect.objectContaining({ host: "node" }),
+              expect.objectContaining({ host: "node", reason: "response-lost" }),
             );
             expect(await fs.readFile(marker, "utf8")).toBe("START\nCOMPLETE\n");
           } finally {

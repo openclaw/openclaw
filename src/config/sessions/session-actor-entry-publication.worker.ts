@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
@@ -28,7 +27,7 @@ type PrepareEntryPatch = (
     }
   | undefined;
 
-const owners = new WeakMap<DatabaseSync, PrepareEntryPatch>();
+const owners = new WeakMap<OpenClawAgentDatabase["db"], PrepareEntryPatch>();
 type ParticipantDatabase = Pick<OpenClawAgentDatabase, "db">;
 type ParticipantOwner = {
   read: (
@@ -46,7 +45,7 @@ type ParticipantOwner = {
       }
     | undefined;
 };
-const participantOwners = new WeakMap<DatabaseSync, ParticipantOwner>();
+const participantOwners = new WeakMap<OpenClawAgentDatabase["db"], ParticipantOwner>();
 
 export function registerSessionActorParticipantOwner(
   database: ParticipantDatabase,

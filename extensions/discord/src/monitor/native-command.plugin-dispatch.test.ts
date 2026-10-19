@@ -24,15 +24,14 @@ import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
-import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import * as nativeCommandRoute from "./native-command-route.js";
+import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 import {
   createMockCommandInteraction as createInteraction,
   createRouteState,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 const runtimeModuleMocks = vi.hoisted(() => ({
@@ -134,12 +133,8 @@ async function createNativeCommand(
 ) {
   return createDiscordNativeCommand({
     command: commandSpec,
-    cfg,
-    discordConfig: cfg.channels?.discord ?? {},
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+    ...nativeCommandContext(cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
     dispatchReplyFromConfig,
   });
 }
@@ -244,12 +239,8 @@ async function createPluginCommand(params: {
   }
   return createDiscordNativeCommand({
     command: candidate,
-    cfg: params.cfg,
-    discordConfig: params.cfg.channels?.discord ?? {},
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+    ...nativeCommandContext(params.cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 
@@ -364,9 +355,9 @@ describe("Discord native plugin command dispatch", () => {
     vi.spyOn(nativeCommandRoute, "resolveDiscordNativeInteractionRouteState").mockImplementation(
       (params) =>
         createRouteState({
-          sessionKey: params.isDirectMessage
-            ? `agent:main:discord:dm:${params.directUserId ?? "owner"}`
-            : `agent:main:discord:channel:${params.conversationId}`,
+          sessionKey: params.channelContext.isDirectMessage
+            ? `agent:main:discord:dm:${params.interaction.user?.id ?? "owner"}`
+            : `agent:main:discord:channel:${params.conversationId ?? params.channelContext.rawChannelId}`,
           accountId: params.accountId,
         }),
     );
@@ -1143,7 +1134,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
+  it("preserves fetched thread parent metadata when interaction omits parentId", async () => {
     const cfg = {
       channels: {
         discord: {
@@ -1178,7 +1169,6 @@ describe("Discord native plugin command dispatch", () => {
       guildId: "345678901234567890",
       guildName: "Test Guild",
     });
-    defineThrowingDiscordChannelGetter(interaction.channel, "parentId");
     (interaction.client as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel = vi.fn(
       async (channelId: string) => {
         if (channelId === "partial-thread-123") {

@@ -95,10 +95,10 @@ it("keeps lazy reads with their captured generation when another generation disp
           const firstTransport = first.createTransport({ type: "backup.runs" });
           const secondTransport = second.createTransport({ type: "backup.runs" });
           try {
-            await expect(firstTransport.startRead(location, authority).result).resolves.toEqual({
+            await expect(firstTransport.startRead(location, authority)).resolves.toEqual({
               value: emptyReply,
             });
-            await expect(secondTransport.startRead(location, authority).result).resolves.toEqual({
+            await expect(secondTransport.startRead(location, authority)).resolves.toEqual({
               value: emptyReply,
             });
             expect(mock.create).toHaveBeenCalledTimes(2);
@@ -113,10 +113,7 @@ it("keeps lazy reads with their captured generation when another generation disp
               expect.objectContaining({ retainedTransport: true }),
             );
           } finally {
-            await Promise.all([
-              firstTransport.startClose().result,
-              secondTransport.startClose().result,
-            ]);
+            await Promise.all([firstTransport.startClose(), secondTransport.startClose()]);
           }
         },
         async () => {},
@@ -151,28 +148,20 @@ it("joins captured domain cleanup before retiring its pool and execution generat
     const task = queueTask();
     task.result.resolve(emptyReply);
     scope.run("accepted reader", () => {
-      const unregister = retainedSource.own(
-        () => {
-          expect(scope.getStore()).toBe("accepted reader");
-          events.push("reader serviced");
-          retainedSource.service();
-        },
-        async () => {
-          expect(scope.getStore()).toBe("accepted reader");
-          events.push("domain closing");
-          ownerCloseStarted.resolve();
-          await ownerMayClose.promise;
-          await transport.startRead(
-            { context, location: options.path, checkFreshAdmission: false },
-            { signal: new AbortController().signal, assertCurrent: () => {} },
-          ).result;
-          await transport.startClose().result;
-          unregister();
-          events.push("domain closed");
-        },
-      );
+      const unregister = retainedSource.own(async () => {
+        expect(scope.getStore()).toBe("accepted reader");
+        events.push("domain closing");
+        ownerCloseStarted.resolve();
+        await ownerMayClose.promise;
+        await transport.startRead(
+          { context, location: options.path, checkFreshAdmission: false },
+          { signal: new AbortController().signal, assertCurrent: () => {} },
+        );
+        await transport.startClose();
+        unregister();
+        events.push("domain closed");
+      });
     });
-    scope.run("later reader", () => retainedSource.service());
   }, releaseGeneration);
   try {
     await Promise.race([
@@ -181,22 +170,16 @@ it("joins captured domain cleanup before retiring its pool and execution generat
         throw new Error("Generation completed before domain cleanup");
       }),
     ]);
-    expect(events).toEqual(["reader serviced", "domain closing"]);
+    expect(events).toEqual(["domain closing"]);
     expect(mock.create).not.toHaveBeenCalled();
     expect(mock.closePool).not.toHaveBeenCalled();
     expect(releaseGeneration).not.toHaveBeenCalled();
-    expect(() =>
-      captured?.own(
-        () => {},
-        async () => {},
-      ),
-    ).toThrow(/closing/);
+    expect(() => captured?.own(async () => {})).toThrow(/closing/);
   } finally {
     ownerMayClose.resolve();
     await generation;
   }
   expect(events).toEqual([
-    "reader serviced",
     "domain closing",
     "domain closed",
     "resources closed",
@@ -205,7 +188,7 @@ it("joins captured domain cleanup before retiring its pool and execution generat
   ]);
 });
 
-it.each(["workerPlacements.changeSnapshot", "cron.activeReceiptOwners"] as const)(
+it.each(["workerPlacements.changeSnapshot", "agentDeletionJournal.status"] as const)(
   "captures and charges selectors before queued dispatch (%s)",
   async (type) => {
     const { pathname, options } = source();
@@ -230,7 +213,7 @@ it.each(["workerPlacements.changeSnapshot", "cron.activeReceiptOwners"] as const
         checkFreshAdmission: false,
       },
       { signal: new AbortController().signal, assertCurrent: () => {} },
-    ).result;
+    );
     try {
       const submitted = await task.submitted;
       dispatch.resolve();
@@ -245,10 +228,10 @@ it.each(["workerPlacements.changeSnapshot", "cron.activeReceiptOwners"] as const
       task.result.resolve(
         type === "workerPlacements.changeSnapshot"
           ? { ok: true, type, sourceAdmitted: true, placements: [] }
-          : { ok: true, type, sourceAdmitted: true, owners: [] },
+          : { ok: true, type, sourceAdmitted: true, status: "absent" },
       );
       await read;
-      await transport.startClose().result;
+      await transport.startClose();
     }
   },
 );

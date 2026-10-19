@@ -245,7 +245,16 @@ export function createMergeOutcomeFixtureHarness() {
         mergeStateStatus?: string;
       },
       settlementSleeps: [] as number[],
+      settlementCallOffsets: [] as number[],
+      projectionSettlement: null as null | {
+        seconds: number;
+        pr: { mergeable: string; mergeStateStatus: string };
+      },
       clockStep: 0,
+      mainProofDelaySeconds: 0,
+      mainProofDelayMain: "",
+      mainProofDelayAfterObservations: 2,
+      mainProofDelayedAt: null as number | null,
       observations: [] as Array<{
         pr?: Record<string, unknown>;
         priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
@@ -257,7 +266,7 @@ export function createMergeOutcomeFixtureHarness() {
         advanceMain?: boolean;
         advanceAfterRead?: boolean;
         reportedMain?: string;
-        tamperProviderCapture?: boolean;
+        tamperProviderCapture?: boolean | string;
       }>,
       mainAdvances: [] as string[],
       calls: [] as string[][],
@@ -341,7 +350,15 @@ if(route==="watch") {
   if(args[1]!==s.pr.headRefOid) fail("stale CI head");
   process.exit(s.ciExit);
 }
-if(route==="sleep") {s.settlementSleeps.push(Number(args[0]));save();process.exit(0);}
+if(route==="sleep") {
+  s.settlementSleeps.push(Number(args[0]));
+  s.settlementCallOffsets.push(s.calls.length);
+  if(s.projectionSettlement&&s.settlementSleeps.reduce((total,seconds)=>total+seconds,0)>=s.projectionSettlement.seconds) {
+    Object.assign(s.pr,s.projectionSettlement.pr);
+    s.projectionSettlement=null;
+  }
+  save();process.exit(0);
+}
 s.nodeArgs=process.execArgv;
 s.calls.push([route,...args]);save();
 let inputPayload;
@@ -433,7 +450,7 @@ const suiteChecks=(suite)=>{
 };
 const currentSuite=(suite)=>suite.id<30?suite:s.restUnseenSuite==="changed-suite"?{...suite,updated_at:"2026-09-20T00:02:00Z"}:
   ["changed-count","queued-empty-drift"].includes(s.restUnseenSuite)?{...suite,latest_check_runs_count:4}:suite;
-const paginated=(values,key,total=values.length)=>Array.from({length:Math.max(1,Math.ceil(values.length/100))},(_,index)=>({total_count:total,[key]:values.slice(index*100,index*100+100)}));
+const paginated=(values,key,total=values.length,size=100)=>Array.from({length:Math.max(1,Math.ceil(values.length/size))},(_,index)=>({total_count:total,[key]:values.slice(index*size,index*size+size)}));
 const advanceClock=(seconds)=>{
   const clock=process.env.FIXTURE_CLOCK;
   fs.writeFileSync(clock,String(Number(fs.readFileSync(clock,"utf8"))+seconds)+"\\n");
@@ -496,7 +513,16 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501"))) {
   const jobs=s.priorCi.jobs??[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}];
-  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:jobs.length,jobs}]);
+  const jobsEndpoint=args.find(arg=>arg.includes("/jobs?"));
+  if(jobsEndpoint) {
+    const size=Number(new URL("https://api.github.com/"+jobsEndpoint).searchParams.get("per_page")??30);
+    if(jobs.length>20&&size>20) fail("gh: Bad Gateway (HTTP 502)");
+    const pages=paginated(jobs,"jobs",jobs.length,size);
+    if(s.priorCi.jobPageFault==="truncated") pages.pop();
+    if(s.priorCi.jobPageFault==="duplicate") pages.at(-1).jobs[0]=pages[0].jobs[0];
+    if(s.priorCi.jobPageFault==="inconsistent-total") pages.at(-1).total_count++;
+    out(args.includes("--paginate")&&args.includes("--slurp")?pages:pages[0]);
+  }
   else out({id:501,run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
   if(s.restObservation?.afterHistoricalRead&&s.restMainReads>0) applyRestObservation();
 }
@@ -515,7 +541,8 @@ else if(args[0]==="api"&&args.includes("user")) {
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
   if(s.repoAuthorityUnavailable) fail("repository metadata unavailable");
-  if(s.restObservation&&!s.restObservation.afterPolicyRead&&!s.restObservation.afterHistoricalRead&&s.restObservation.afterRestMainReads===undefined&&
+  // Projection hints cannot trigger a fault scheduled inside a complete REST observation.
+  if(s.restMainReads>0&&s.restObservation&&!s.restObservation.afterPolicyRead&&!s.restObservation.afterHistoricalRead&&s.restObservation.afterRestMainReads===undefined&&
     (s.quotaTriggered||(s.graphqlMergeProjection&&s.observationReads>0))) {
     applyRestObservation();
   }
@@ -774,7 +801,8 @@ else if(args[0]==="pr"&&args[1]==="view") {
     out({data:{repository}});
     if(step?.tamperProviderCapture) {
       const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
-      for(const name of fs.readdirSync(local).filter(name=>/^merge-output\\..+\\.log$/.test(name))) fs.appendFileSync(local+name,"changed\\n");
+      for(const name of fs.readdirSync(local).filter(name=>/^merge-output\\..+\\.log$/.test(name)&&
+        (step.tamperProviderCapture===true||step.tamperProviderCapture===name))) fs.appendFileSync(local+name,"changed\\n");
       s.providerCaptureTampered=true;
     }
     if(step?.advanceAfterRead) advanceMain();
@@ -849,9 +877,13 @@ verify_crabbox_admin_merge_bypass() {
   [ "$(command jq -r .admin "$FIXTURE_STATE")" = true ] || return 1
   command jq --arg main "$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/main)" '{mainSha:$main,finalMainSha:$main,crabboxCheckUrl:"fixture",ciGateUrl:"fixture"}' "$FIXTURE_STATE" > .local/merge-crabbox-bypass.json
 }
-# Fault the Git boundary, not the outcome owner: crash after intent CAS, or
-# reject later receipt writes. All successful object/ref operations are real.
+# Fault the Git boundary, not the outcome owner: delay proof, crash after intent
+# CAS, or reject later receipt writes. Successful object/ref operations are real.
 pr_git() {
+  if [ "$1" = merge-tree ] && [ "\${2:-}" = --write-tree ] &&
+    [ "$(command jq -r --arg main "\${3:-}" '.mainProofDelaySeconds > 0 and (if .mainProofDelayMain == "" then .observationReads == .mainProofDelayAfterObservations else .mainProofDelayMain == $main end)' "$FIXTURE_STATE")" = true ]; then
+    command node -e 'const fs=require("node:fs");const path=process.env.FIXTURE_STATE;const state=JSON.parse(fs.readFileSync(path,"utf8"));const clock=process.env.FIXTURE_CLOCK;const now=Number(fs.readFileSync(clock,"utf8"));state.mainProofDelayedAt=now;fs.writeFileSync(clock,String(now+state.mainProofDelaySeconds)+"\\n");state.mainProofDelaySeconds=0;fs.writeFileSync(path,JSON.stringify(state));'
+  fi
   if [ "$1" = --no-lazy-fetch ] && [ "\${3:-}" = '--batch-check=%(objectname) %(objecttype)' ] &&
     [ -n "$(command jq -r .priorCi.localOnlyQueryFault "$FIXTURE_STATE")" ]; then
     local candidate; IFS= read -r candidate

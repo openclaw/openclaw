@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
 import { createComponent, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -22,8 +21,8 @@ it("keeps streaming text and open status details stable behind the dot preview",
   const transcript = createTestTranscript();
   let connected = false;
   onTestFinished(() => {
-    render(nothing, container);
-    transcript.hostDisconnected();
+    render(null, container);
+    transcript.dispose();
     container.remove();
   });
   const props: ChatThreadProps = {
@@ -40,10 +39,10 @@ it("keeps streaming text and open status details stable behind the dot preview",
   const draw = () => {
     render(renderChatThread(props, transcript), container);
     if (!connected) {
-      transcript.hostConnected();
+      transcript.start();
       connected = true;
     }
-    transcript.hostUpdated();
+    transcript.update();
   };
   draw();
   await waitForSolid(() => {
@@ -82,8 +81,8 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   const transcript = createTestTranscript();
   let connected = false;
   onTestFinished(() => {
-    render(nothing, container);
-    transcript.hostDisconnected();
+    render(null, container);
+    transcript.dispose();
     container.remove();
   });
   const props: ChatThreadProps = {
@@ -109,12 +108,12 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
     ],
   };
   const draw = () => {
-    render(renderChatThread({ ...props, onRequestUpdate: draw }, transcript), container);
+    render(renderChatThread(props, transcript), container);
     if (!connected) {
-      transcript.hostConnected();
+      transcript.start();
       connected = true;
     }
-    transcript.hostUpdated();
+    transcript.update();
   };
   draw();
   await waitForSolid(() => {

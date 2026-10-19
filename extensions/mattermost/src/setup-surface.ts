@@ -10,9 +10,9 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { inspectMattermostAccount } from "./mattermost/accounts.js";
+import { inspectMattermostAccount, isMattermostConfigured } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
-import { applyMattermostSetupConfigPatch, isMattermostConfigured } from "./setup-core.js";
+import { applyMattermostSetupConfigPatch } from "./setup-core.js";
 
 const t = createSetupTranslator();
 

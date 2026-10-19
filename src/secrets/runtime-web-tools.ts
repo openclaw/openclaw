@@ -163,7 +163,7 @@ function collectUnavailableWebProviders(params: {
         for (const key of Object.keys(params.metadata)) {
           delete (params.metadata as Record<string, unknown>)[key];
         }
-        Object.assign(params.metadata, structuredClone(activeMetadata));
+        Object.assign(params.metadata, activeMetadata);
       } catch {
         degradationState = "cold";
       }

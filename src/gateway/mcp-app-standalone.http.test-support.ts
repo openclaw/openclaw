@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { afterEach, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createStandaloneHostBrowserHarness,
   type StandaloneHostBrowserOptions,
@@ -117,7 +119,7 @@ async function request(params: {
   beforeBody?: () => void;
   socket?: EventEmitter;
 }) {
-  const { res, end, setHeader } = makeMockHttpResponse();
+  const { res, end } = makeMockHttpResponse();
   Object.assign(res, { socket: null });
   const serialized = params.body === undefined ? undefined : JSON.stringify(params.body);
   async function* body() {
@@ -140,7 +142,54 @@ async function request(params: {
     gatewayPort: 18_789,
     sandboxPort: 18_790,
   });
-  return { handled, res, end, setHeader };
+  return { handled, res, end };
+}
+
+export async function startStandaloneHttp(
+  options: Parameters<typeof handleMcpAppStandaloneHttpRequest>[2] = {
+    gatewayPort: 18_789,
+    sandboxPort: 18_790,
+  },
+) {
+  const entered = createDeferred();
+  const handled = createDeferred();
+  const state: { error: unknown; leakedCloseListeners: number } = {
+    error: undefined,
+    leakedCloseListeners: 0,
+  };
+  const server = createServer((req, res) => {
+    const originalListeners = new Set(req.socket.listeners("close"));
+    entered.resolve();
+    void handleMcpAppStandaloneHttpRequest(req, res, options)
+      .catch((error: unknown) => {
+        state.error = error;
+        res.destroy();
+      })
+      .finally(() => {
+        state.leakedCloseListeners = req.socket
+          .listeners("close")
+          .filter((listener) => !originalListeners.has(listener)).length;
+        handled.resolve();
+      });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return {
+    origin,
+    url: `${origin}/__openclaw__/mcp-app/view`,
+    entered: entered.promise,
+    handled: handled.promise,
+    state,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
 }
 
 async function createSerializedHost(options: StandaloneHostBrowserOptions = {}) {

@@ -12,6 +12,7 @@ import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
   getInternalBeforeToolBatch,
+  getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
 } from "./internal-hooks.js";
 import { isOpenClawSystemUpdateMessage } from "./operator-messages.js";
@@ -593,6 +594,7 @@ export class Agent {
     );
     return {
       model: this.mutableState.model,
+      repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
       reasoning: resolveAgentReasoningOption(
         this.mutableState.model,

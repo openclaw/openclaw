@@ -64,6 +64,7 @@ export function registerXAllowlistMethods(
   api: Pick<OpenClawPluginApi, "registerGatewayMethod" | "logger"> & {
     runtime: {
       state: Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStore" | "resolveStateDir">;
+      logging: Pick<OpenClawPluginApi["runtime"]["logging"], "getChildLogger">;
     };
   },
 ) {

@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { captureSessionWorkRunInterruptions } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionWorkRunInterruptions } from "../sessions/session-controller.lifecycle.js";
+import { isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import type { AgentTurnFrame, AgentTurnIo } from "./agent-turn/types.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
@@ -40,7 +43,7 @@ describe("Gateway close during agent admission", () => {
     },
   });
 
-  it("refuses provider execution when close overtakes acquired but unregistered WS work", async ({
+  it("refuses provider execution when close overtakes acquired WS work during preparation", async ({
     signal,
   }) => {
     await prepareGatewayReplyRuntimeForTest();
@@ -53,7 +56,8 @@ describe("Gateway close during agent admission", () => {
     let serviceCompletion: Promise<void> | undefined;
     let closing: Promise<void> | undefined;
     let observedTerminal = false;
-    let terminalAcceptance: unknown;
+    let terminalFrame: AgentTurnFrame | undefined;
+    let terminalMeta: Parameters<AgentTurnIo["emitAcceptance"]>[1];
     const release = () => {
       releaseAdmission.resolve();
       releaseCommand.resolve();
@@ -85,7 +89,8 @@ describe("Gateway close during agent admission", () => {
             emitAcceptance: (...frame) => {
               params.io.emitAcceptance(...frame);
               if (!frame[0][0] || (isRecord(frame[0][1]) && frame[0][1].status === "timeout")) {
-                terminalAcceptance = frame[0];
+                terminalFrame = frame[0];
+                terminalMeta = frame[1];
                 observedTerminal = true;
                 terminalObserved.resolve();
               }
@@ -105,7 +110,13 @@ describe("Gateway close during agent admission", () => {
     vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       commandStarted.resolve();
       await releaseCommand.promise;
-      return { payloads: [{ text: "late provider reply" }], meta: { durationMs: 1 } };
+      return {
+        payloads: [{ text: "late provider reply" }],
+        meta: {
+          durationMs: 1,
+          terminalReply: { disposition: "visible", text: "late provider reply" },
+        },
+      };
     });
     try {
       const { ws } = await harness.openClient();
@@ -115,14 +126,16 @@ describe("Gateway close during agent admission", () => {
           id: "late-admission",
           method: "agent",
           params: {
-            message: "hold before registering the run",
+            message: "hold while preparing the run",
             sessionKey: "main",
             idempotencyKey: "late-admission",
           },
         }),
       );
       await admissionHeld.promise;
-      expect(kernel.gatewayRequestContext.chatAbortControllers.size).toBe(0);
+      const acceptedSource = rpcSourceTesting.get("late-admission");
+      expect(acceptedSource).toBeDefined();
+      expect(isRpcSourceExecuting(acceptedSource)).toBe(false);
       const session = await loadSessionEntryAsync("main");
       expect(
         captureSessionWorkRunInterruptions({
@@ -155,17 +168,20 @@ describe("Gateway close during agent admission", () => {
       await closing;
       expect(observedTerminal).toBe(true);
       expect(agentCommandMock).not.toHaveBeenCalled();
-      expect(terminalAcceptance).toEqual([
+      expect(terminalMeta).toMatchObject({ cached: true });
+      expect(terminalFrame).toEqual([
         true,
         expect.objectContaining({
           runId: "late-admission",
           status: "timeout",
           summary: "aborted",
-          stopReason: "rpc",
+          stopReason: "restart",
+          timeoutPhase: "queue",
           providerStarted: false,
         }),
         undefined,
       ]);
+      expect(rpcSourceTesting.has("late-admission")).toBe(false);
     } finally {
       release();
       await Promise.allSettled([serviceCompletion]);

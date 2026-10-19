@@ -633,7 +633,7 @@ describe("Reef SQLite state", () => {
     }
   });
 
-  it("captures review identity and source while an earlier acknowledgement waits", async () => {
+  it("preserves review source while an earlier acknowledgement waits", async () => {
     const runtime = createRuntime(stateDir);
     const env = { OPENCLAW_STATE_DIR: stateDir };
     runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => {
@@ -668,8 +668,6 @@ describe("Reef SQLite state", () => {
       "after",
     );
     const request = reviews.request(review);
-    review.id = "changed";
-    review.approvalDigest = "c".repeat(64);
     await entered.promise;
     const decision = reviews.decide(original.approvalDigest, true);
     const lookup = reviews.lookupDecision(original.approvalDigest);
@@ -682,8 +680,9 @@ describe("Reef SQLite state", () => {
       await expect(decision).resolves.toEqual(original);
       await expect(lookup).resolves.toEqual({ approved: true });
       await expect(pending).resolves.toEqual([retained]);
-      const reopened = new ReviewApprovalStore(createRuntime(stateDir));
-      await expect(reopened.lookupDecision(review.approvalDigest)).resolves.toBe("none");
+      await expect(redirected.lookupDecision(original.approvalDigest)).resolves.toEqual({
+        approved: false,
+      });
     } finally {
       finish.resolve();
       await Promise.allSettled([request, decision, lookup, pending]);

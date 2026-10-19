@@ -196,6 +196,50 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it.each<{ parts: string[]; text: string; signedIndex?: number }>([
+    { parts: ["First part.", "Second part."], text: "First part.\nSecond part." },
+    { parts: ["NO_RE", "PLY\nFirst part.", "Second part."], text: "First part.\nSecond part." },
+    { parts: ["First part.", "Second part.\n\nNO_REPLY"], text: "First part.\nSecond part." },
+    { parts: ["First part.\n", "NO_", "REPLY"], text: "First part." },
+    {
+      parts: ["Legacy context.", "Signed answer."],
+      signedIndex: 1,
+      text: "Legacy context.\nSigned answer.",
+    },
+    {
+      parts: ["Legacy context.", "Signed answer.\n\nNO_REPLY"],
+      signedIndex: 1,
+      text: "Signed answer.",
+    },
+  ])("preserves native answer boundaries for $parts", ({ parts, text, signedIndex }) => {
+    const assistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      content: parts.map((part, index) => ({
+        type: "text",
+        text: part,
+        ...(index === signedIndex
+          ? { textSignature: JSON.stringify({ v: 1, id: "item_unphased" }) }
+          : {}),
+      })),
+    });
+    const result = completeResult({
+      currentAttemptCompletedAssistant: assistant,
+      assistantTexts: parts,
+      hasSuccessfulModelResponse: true,
+    });
+    expect(result.preparedTerminalReply).toEqual({
+      text,
+      terminalReply: { disposition: "visible", text },
+    });
+    expect(
+      buildPayloads({
+        ...result,
+        currentAssistant: assistant,
+        lastAssistant: assistant,
+      }),
+    ).toMatchObject([{ text }]);
+  });
+
   it.each([
     { name: "Write", allowedToolNames: ["write"], expected: true },
     { name: "functions.write", allowedToolNames: ["write"], expected: true },
@@ -211,12 +255,21 @@ describe("attempt result projection", () => {
     ).toBe(expected);
   });
 
-  it.each([false, true])(
-    "recognizes text-only terminal calls after a read (native terminal call=%s)",
-    (nativeCall) => {
+  it.each(
+    [false, true].flatMap((nativeCall) =>
+      [
+        '{"name":"write","arguments":{"path":"proof.txt"}}',
+        "<tool_call><function=write><parameter=path>proof.txt</parameter></function></tool_call>",
+        'Action: write\nAction Input: {"path":"proof.txt"}',
+        '[TOOL_CALL]{tool => "write", args => {"path":"proof.txt"}}[/TOOL_CALL]',
+      ].map((text) => ({ nativeCall, text })),
+    ),
+  )(
+    "recognizes text-only terminal calls after a read (native=$nativeCall): $text",
+    ({ nativeCall, text }) => {
       const assistant = makeAssistantMessageFixture({
         stopReason: "stop",
-        content: [{ type: "text", text: '{"name":"write","arguments":{"path":"proof.txt"}}' }],
+        content: [{ type: "text", text }],
       });
       if (nativeCall) {
         assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });
@@ -321,8 +374,8 @@ describe("attempt result projection", () => {
     {
       label: "an actually empty optional turn",
       assistant: undefined,
-      expectedStatus: "success",
-      terminalError: undefined,
+      expectedStatus: "error",
+      terminalError: "non_deliverable_terminal_turn",
     },
   ])(
     "records $label after transcript projection",
@@ -717,6 +770,10 @@ describe("trailing source progress at runtime settlement", () => {
     );
     expect(callIndex).toBe(calls.length);
     const fixture = createResultFixture();
+    Object.assign(fixture.input.attempt, {
+      messageChannel: "telegram",
+      terminalReplyExpectation: "required",
+    });
     fixture.input.preparedStreamRuntime.stream.subscription = subscription as never;
     const terminalAssistant = messages.findLast((message) => message.role === "assistant");
     fixture.settled.currentAttemptAssistant = terminalAssistant as never;
@@ -734,6 +791,7 @@ describe("trailing source progress at runtime settlement", () => {
       finalizerInstruction: resolveSettledToolTerminalContinuationInstruction({
         executionContract: "strict-agentic",
         allowEmptyStopContinuation: true,
+        replyDeliveryState: result.sourceReplyDeliveryState ?? "missing",
         payloadCount: 0,
         aborted: false,
         timedOut: false,
@@ -755,7 +813,8 @@ describe("trailing source progress at runtime settlement", () => {
     if (delivered) {
       expect(finalizerInstruction).toBeNull();
     } else {
-      expect(finalizerInstruction).toContain("did not produce a user-visible answer");
+      expect(finalizerInstruction).toContain("Your turn ended without a final reply.");
+      expect(finalizerInstruction).toContain("answer exactly NO_REPLY");
     }
   });
 });

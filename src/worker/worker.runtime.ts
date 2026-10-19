@@ -171,9 +171,45 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
+  let githubGeneration: number | undefined;
+  let githubRefresh: Awaited<
+    ReturnType<typeof import("./github-binding.runtime.js").prepareWorkerGitHubEnvironment>
+  >;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    heartbeatParams: () => (githubGeneration === undefined ? {} : { githubGeneration }),
+    onHeartbeat: async (result, assertCurrent) => {
+      if (
+        resultFenceAcked ||
+        !result.github ||
+        !githubRefresh ||
+        result.github.generation <= (githubGeneration ?? 0)
+      ) {
+        return;
+      }
+      const retired = new Error("Worker GitHub refresh retired after terminal acknowledgment");
+      const assertRefreshCurrent = () => {
+        assertCurrent();
+        if (resultFenceAcked) {
+          throw retired;
+        }
+      };
+      try {
+        await githubRefresh.refresh(result.github, assertRefreshCurrent);
+      } catch (error) {
+        // Terminal retirement stops credential publication without failing accepted work.
+        assertCurrent();
+        if (error === retired) {
+          return;
+        }
+        throw error;
+      }
+      assertCurrent();
+      if (!resultFenceAcked) {
+        githubGeneration = result.github.generation;
+      }
+    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -266,6 +302,7 @@ export async function runWorkerDescriptor(
             turnId: descriptor.assignment.turnId,
             modelRef: descriptor.assignment.modelRef,
             computerContextEpoch,
+            onCancelled: (reason) => abortController.abort(reason),
           });
     options.assertWorkspaceCurrent?.();
     const github = descriptor.assignment.github
@@ -280,6 +317,10 @@ export async function runWorkerDescriptor(
           });
         })
       : undefined;
+    githubRefresh = github;
+    if (github) {
+      githubGeneration = 0;
+    }
     try {
       turnStarted = true;
       const {
@@ -317,16 +358,13 @@ export async function runWorkerDescriptor(
             : {}),
           ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
           inference: { stream },
-          transcript: {
-            commit: async (messages) => {
-              await transcript.commit(messages);
-            },
-          },
+          transcript,
           live: {
             enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
             emitTerminal: async (event) => {
               await live.emitTerminal(descriptor.assignment.runId, event);
               resultFenceAcked = true;
+              githubGeneration = undefined;
             },
           },
           gatewayTools: connection,
@@ -396,11 +434,14 @@ export async function runWorkerDescriptor(
     if (forcedStopTimer) {
       clearTimeout(forcedStopTimer);
     }
+    githubRefresh = undefined;
     unsubscribeState();
     options.signal?.removeEventListener("abort", abortFromCaller);
     nativeRuntime?.close();
     inference.dispose();
     live.dispose();
+    // The environment/command owner removes profiles after admitted background
+    // commands settle; stop joins credential writes before handing cleanup back.
     await connection.stop();
     await environment?.close();
   }

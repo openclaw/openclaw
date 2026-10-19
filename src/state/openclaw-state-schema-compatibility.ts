@@ -1,9 +1,8 @@
 import {
-  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteNamedIndexNames,
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
@@ -11,9 +10,7 @@ import {
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
 import {
-  FIRST_USE_STATE_INDEXES,
   DOCTOR_OWNED_STATE_TABLES,
-  FIRST_USE_STATE_TABLES,
   LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
 } from "./openclaw-state-db-contract.js";
@@ -53,53 +50,12 @@ let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 
 function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
   openClawStateCanonicalNamedIndexSet ??= new Set(
-    getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).map((index) => index.name),
+    getCanonicalSqliteNamedIndexNames(OPENCLAW_STATE_SCHEMA_SQL),
   );
   return openClawStateCanonicalNamedIndexSet;
 }
 
-const runtimeSchemaCache = new Map<string, string>();
-
-/** Project canonical SQL to the tables the shared runtime may create during this open. */
-export function getOpenClawStateRuntimeSchema(options: {
-  includeVersionLazyAdditiveTables: boolean;
-  includeAgentDeletionJournal?: boolean;
-}): string {
-  const { includeVersionLazyAdditiveTables, includeAgentDeletionJournal = true } = options;
-  const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}`;
-  const cached = runtimeSchemaCache.get(key);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let schema = OPENCLAW_STATE_SCHEMA_SQL;
-  const omittedTables = [
-    ...(includeVersionLazyAdditiveTables ? FIRST_USE_STATE_TABLES : LAZY_ADDITIVE_STATE_TABLES),
-    ...(includeAgentDeletionJournal ? [] : DOCTOR_OWNED_STATE_TABLES),
-  ];
-  const omittedIndexes = includeVersionLazyAdditiveTables
-    ? FIRST_USE_STATE_INDEXES
-    : LAZY_ADDITIVE_STATE_INDEXES;
-  for (const tableName of omittedTables) {
-    schema = schema.replace(
-      extractSqliteTableSchema(schema, tableName, {
-        errorMessage: `lazy additive state schema block is missing for ${tableName}`,
-      }),
-      "",
-    );
-  }
-  for (const indexName of omittedIndexes) {
-    const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
-    const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
-    const start = plainStart >= 0 ? plainStart : uniqueStart;
-    const end = start >= 0 ? schema.indexOf(";", start) : -1;
-    if (start < 0 || end < 0) {
-      throw new Error(`lazy additive state schema index is missing for ${indexName}`);
-    }
-    schema = `${schema.slice(0, start)}${schema.slice(end + 1)}`;
-  }
-  runtimeSchemaCache.set(key, schema);
-  return schema;
-}
+export { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 
 const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowCompatibleAdditiveColumns: true,

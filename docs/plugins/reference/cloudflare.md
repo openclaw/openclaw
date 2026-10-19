@@ -15,7 +15,7 @@ Cloudflare R2 storage for named OpenClaw storage locations.
 ## Distribution
 
 - Package: `@openclaw/cloudflare`
-- Install route: included in OpenClaw, and also from npm or ClawHub: `clawhub:@openclaw/cloudflare`
+- Install route: included in OpenClaw, and also from npm or ClawHub: `@openclaw/cloudflare`
 
 ## Surface
 

@@ -396,9 +396,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     }
     next.observations = [{ pr: unknownProjection }];
     const persistent = fault.startsWith("persistent ");
-    if (persistent) {
-      next.clockStep = 20;
-    }
     if (fault === "persistent UNKNOWN mergeable") {
       next.observations = [{ pr: { mergeable: "UNKNOWN", mergeStateStatus: "CLEAN" } }];
     }
@@ -428,6 +425,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const state = f.state();
     if (persistent) {
       expect(run.output).toContain("60s");
+      expect(state.settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(60);
       expect(state.settlementSleeps.every((delay) => delay <= 8)).toBe(true);
     } else {
       expect(state.observationReads).toBe(finalRead || projectionDrift ? 3 : 2);

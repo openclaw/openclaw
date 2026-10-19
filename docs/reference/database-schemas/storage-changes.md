@@ -29,24 +29,36 @@ implements the agent-store portion of the
 [accepted column-promotion design](https://github.com/openclaw/openclaw/issues/169254).
 The JSON remains canonical. Each writer derives its query columns in TypeScript
 and commits them with the JSON in one statement; the session actor reuses that
-derivation. Runtime predicates use columns. No trigger, second persistence owner,
-or read-time backfill is introduced.
+derivation. Session-node and outbox predicates use stored columns. SQLite
+transcript predicates use stored classifications when available and otherwise
+derive them in the existing SQL query before predicate filters, counts, and
+`LIMIT`. Reads do not persist these derived values.
 
-The versioned migration uses SQLite JSON functions only to classify existing rows
-and publishes both schema markers after the complete backfill. It preserves
+The versioned migration eagerly backfills session-node and existing outbox rows,
+but leaves transcript classification lazy. SQLite can still check retained rows
+while adding columns to STRICT tables. It publishes both schema markers after the
+required migration work. Classification preserves
 first-member lookups, legacy last-member transcript navigation, SQLite integer-cast
 semantics, malformed-row handling, payload bytes, and existing retention rules.
 Schema admission and Doctor remain the only migration owners. Optional outbox
-storage stays lazy. Added text and integer fields translate to PostgreSQL text
-with C collation and bigint; supporting engines share the schema version and
-must supply their equivalent forward migration.
+storage stays lazy.
+
+New transcript payload writes and canonical payload rewrites materialize the
+predicate fields; metadata-only updates and byte-preserving copies do not. There
+is no background convergence job or new schema version. Existing beta stores with
+materialized predicates remain valid. SQLite-to-PostgreSQL ports normalize
+unclassified transcript predicates from payloads already being transferred, so
+PostgreSQL reads stored columns. Added text and integer fields translate to
+PostgreSQL text with C collation and bigint; supporting engines share the schema
+version and must supply their equivalent forward migration.
 
 SQL projections that bound large payloads before transfer stay in SQL. Current
-writer-authority comparisons also retain their existing implementation rather
-than weakening a real effect boundary. The migration adds storage proportional
-to retained rows, and first-upgrade proof measures time per database and across
-many-agent hosts. Older binaries refuse the new schema; recovery restores a
-verified pre-migration backup and its matching binary.
+writer-authority comparisons retain their existing implementation. Lazy transcript
+classification removes that eager backfill from candidate-side migration; other
+upgrade work and later transcript queries can still scale with retained data.
+First-upgrade proof measures time per database and across many-agent hosts.
+Older binaries refuse the new schema; recovery restores a verified pre-migration
+backup and its matching binary.
 
 <a id="canonical-writer-validation" />
 
@@ -120,6 +132,14 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+The transcript navigation CHECK keeps its JSON validation for present metadata.
+Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
+calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing
+the helper's CTE during unsuccessful SQL-function inlining attempts.
+Agent schema 29 applies these attributes to existing PostgreSQL stores through
+the migration owner without rewriting rows. Historical admission and rollback
+preserve the predecessor function attributes.
+
 For a manual state-schema check, run `psql` from the generated directory and
 supply the transaction and chosen schema explicitly:
 
@@ -139,7 +159,7 @@ COMMIT;
 Use a disposable schema for this readiness check; it does not enable shared-state
 PostgreSQL support or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 24). Every
+Both engines use the same shared-state schema version (currently 25). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
@@ -151,6 +171,14 @@ It contains forward DDL only; the caller supplies the transaction, namespace,
 and version publication. PostgreSQL conformance verifies the upgraded index
 definitions against a fresh schema and preserves retained rows and local indexes.
 This readiness artifact does not enable shared-state PostgreSQL runtime support.
+
+Schema 25 adds `state-v24-v25.postgres.sql`, a metadata-only forward migration
+registered with the existing PostgreSQL engine owner. It updates the shared-state
+version and content markers; the engine owner publishes its version in the same
+transaction. The catalog and retained rows are unchanged. Version publication
+fences older readers that would discard recovered subagent operator restrictions.
+Conformance checks cover catalog equivalence and upgrading a retained state-24
+database through the shared-state owner.
 
 Generation refuses unsupported shared-state tables, columns, defaults, CHECKs,
 indexes, and foreign keys with their exact source and reason. Text uses C
@@ -252,12 +280,15 @@ host reader retry and repair; SQLite workers never schedule that maintenance.
 Transcript bytes, session recovery rows, schemas, and update behavior are unchanged.
 
 Global projection preflight and search readiness use the projection maintenance
-owner's connection-local facts. Transactional TEMP triggers queue affected sessions
+owner's published readiness. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
-local SQL. An owning-writer receipt or schema change restarts bounded admission;
-indexed seeks skip whole session ranges instead of scanning transcript rows. Each
-maintenance transaction examines at most 128 sessions and deletes at most 512
-orphan rows per projection table. A status request stops after 32 batches;
+local SQL. A sibling-writer receipt or schema change restarts bounded admission;
+local changes consume only the queued sessions. A bounded recursive key query
+skips whole session ranges instead of scanning transcript rows, then a compound
+read classifies the batch using the projection owner's readiness predicate.
+Queue consumption and dirty-session publication are batched in the same
+transaction. Each maintenance transaction examines at most 128 sessions and
+deletes at most 512 orphan rows per projection table. A status request stops after 32 batches;
 incomplete admission remains pending and the existing reconcile cadence resumes it.
 Reconciliation yields between bounded batches until an ordered traversal completes,
 then gives the observed pending backlog to the scheduler and awaits its rebuild.
@@ -276,9 +307,12 @@ the workers serving committed history, reactions, and progress-card reads.
 A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
-Clean status reads reuse these facts without entering a write transaction or
-requesting write grants until a mutation invalidates them; connection close
-discards them. No durable tables or migration are added. Shipped synchronous
+After clean traversal commits, the owner publishes readiness with the physical
+database's committed write token. Search consumes that fact before borrowing a
+writer, without a TEMP-status query or write grants. Committed writes invalidate
+readiness; idle writer retirement preserves it while another native reader retains
+the database admission. Physical admission retirement discards it. No durable tables
+or migration are added. Shipped synchronous
 durable SDK callbacks and operator maintenance retain their native reconciliation
 adapter; moving those callbacks to another thread requires a separate SDK cutover.
 Their one-shot orphan cleanup retains ordered, indexed owner-set differences
@@ -311,8 +345,12 @@ admission without reentering SQLite on the host. These checks belong to each
 startup request; reusing the native actor for ordinary work does not retain them.
 Committed deletion invalidates the captured pending admission before observers
 run, while rollback and replacement admission owners remain unaffected. Startup
-migration preserves its pending-versus-completed cleanup diagnostics. No schema,
-retention, permission, or update migration changes are required.
+migration reads deletion status, retained paths, and registered owners once per
+startup pass through the shared-state worker, preserving pending-versus-completed
+cleanup diagnostics. A later startup reads fresh facts; an overlapping deletion
+is enforced by database admission and cleanup owners without repeating discovery
+between maintenance phases. No schema, retention, permission, or update migration
+changes are required.
 
 Callers should request domain operations, such as claiming a cron run or
 appending a transcript report, from the store that owns the invariant. That
@@ -610,8 +648,12 @@ authority after waiting, without copying the live database for each observation.
 Cold sources and unavailable or replaced native paths retain artifact-preserving
 snapshot preparation. Schema, permissions, and update behavior are unchanged.
 
-Project recents and observed checkout requests consume the Gateway's prepared
-session-row metadata, including archived rows. The existing selection owner maintains
+Project recents consume profile-scoped, recency-ordered candidates from the Gateway's
+session-row projection, including archived rows, until eight distinct results are found.
+Committed receipts maintain the creator index; uncertain metadata uses the existing
+worker admission. Ordinary recents do not reconstruct a combined session store.
+Observed checkout requests still consume the broader prepared metadata selection.
+The existing selection owner maintains
 physical-store and sentinel precedence through committed row and topology publications;
 listings do not reread or rebuild the durable session stores. Recent-project ties retain
 physical-store and SQLite binary key order. Incognito entries remain with the
@@ -700,8 +742,9 @@ avatar bytes are not part of enumeration. Mention directory preparation respects
 the existing profile-version invalidation, then evaluates current requester,
 session, and role policy and publishes the RPC response in one synchronous step.
 Prepared directory rows are descriptive
-facts, never permission or current alias authority. Project recents retain a narrow
-fresh primary-profile and alias query for their disclosure scope. Profile creation,
+facts, never permission or current alias authority. Project recents prepare aliases
+from the committed profile catalog and retain live merge-authority checks across
+their disclosure waits. Profile creation,
 display-name and role changes, explicit avatar uploads, identity merges, and final
 identity/permission lookups keep their existing native owners.
 
@@ -709,8 +752,9 @@ Chat startup prepares its requester from the profile catalog retained by the
 session projection. Metadata reads the current merge head after preparation
 waits and rejects a changed client identity or retired physical database. A
 missing catalog leaves optional metadata unavailable without opening SQLite.
-Legacy email clients resolve their alias through the read-only worker; only
-a missing alias enters the shared-state writer and existing profile transaction.
+Legacy email clients resolve their alias through the canonical profile owner,
+reusing its committed email bindings when resident and its existing profile
+transaction otherwise.
 Committed creation updates the same resident catalog before profile observers,
 including retained reconciliation when result delivery fails. Other profile
 mutation and authorization paths retain their existing owners. Schema, migration,
@@ -744,6 +788,31 @@ Eligible terminal session-state events share the row transaction. Unknown write
 outcomes fence affected rows until restoration from the store; they never authorize replay.
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
+
+Private requester-settle wakes retain `privateInput` (the dispatch run ID and raw
+prompt) inside their existing `subagent_runs.payload_json` wake state before
+Gateway dispatch. The same row transition owns retries; this adds no table,
+column, index, schema version, or scheduler. Accepted input can be transformed by
+transcript hooks or reduced to a hash/outcome receipt, so it cannot reconstruct
+the original raw request. Later descendant delivery and findings updates must
+not change that request under its existing idempotency key.
+
+The field is optional and needs no backfill. Wakes already dispatched by an older
+build retain their existing strict input comparison: if the original raw prompt
+cannot be reconstructed, a mismatch remains a refusal, never permission to
+replace accepted input. Older builds ignore the field and may discard it when
+writing wake state; rollback therefore loses this retry guarantee without
+changing transcript bytes or requiring reverse migration. Upgrading again
+cannot recover raw bytes already discarded by an older writer.
+
+The prompt has the same private scope as the existing child findings. It is
+retained only with the pending wake, removed when the wake settles or is
+cancelled, and cleared when its retry identity resets. New yield generations
+replace the wake. Each member of a frozen batch retains the shared wake value,
+so temporary storage grows with prompt size times the number of batch members;
+there is no extra payload read or write transaction. Registry deletion removes
+it with the row. Current requester, cohort, store, and execution authority still
+revalidate before dispatch; the saved prompt grants no authority.
 
 An ordinary follow-up to a completed child creates a new task and execution while
 retaining the completed row's pending parent delivery and receipt. The same row
@@ -1368,6 +1437,10 @@ and at transaction and commit admission; replies and preference-change events
 follow guarded completion. Device subscription mutations keep their deferred
 start after snapshot preparation.
 
+Background upload and removal replies use the asset metadata and preference
+already committed by their worker transaction, without reading either row again.
+The existing profile, expected-value, quota, and commit-authority checks remain.
+
 The shared read-only worker owner retains inherited snapshot and disposable-source
 scopes until the task acknowledges native reader cleanup. Fixed reads share two execution workers
 with the existing pending-task and captured-input byte limits. Successful reads
@@ -1626,27 +1699,25 @@ Task/flow lifecycle joins and writes remain retired. This migration adds no
 runtime Task reader, replacement ledger, or SQL schema change.
 
 Existing asynchronous config observation, recovery health records, and config
-audit appends run their SQLite work on this same actor. Observations capture a
-short-lived scope before awaited work; newer observations of the same database
-and config path supersede older scopes. Scopes end on return, and synchronous
-write invalidation waits for the outer transaction to commit. The worker checks
-each operation's scope at dispatch; a superseded read stops before logging or
-file work. Health writes carry the exact persisted facts from their original read
-and compare them again inside the
-write transaction. They merge only the selected path's changed fields when those
-facts still match; a failed read or stale observation cannot overwrite newer
-health state. Other paths and untouched JSON fields remain unchanged. Audit
-appends retain the same redaction, insertion ordering, scope limits, and atomic
-insertion-and-pruning transaction. Promotion and recovery return true when their
-file operation commits, even if newer health metadata supersedes their conditional
-update. Ordinary post-file metadata retirement uses the existing best-effort
-failure policy; ownership and maintenance refusals still propagate. Doctor uses
-the committed result to reread the changed file. Explicit prepared
-recovery re-runs the same planner at apply and rejects changed or no-longer-eligible
-candidates before file work. Unavailable health metadata retains the existing
-backup-based planning fallback. Health metadata remains best-effort; the file and
-health row are not one atomic transaction. Synchronous config readers and writers
-keep their existing APIs; config parsing, validation, and plugin preparation retain
+audit appends run their SQLite work on this same actor. Each operation retains
+its captured database and current admission rather than superseding other
+observations. Health writes carry the exact persisted facts from their original
+read and compare them inside the write transaction. They merge only the selected
+path's changed fields when those facts still match; a failed read cannot supply
+an authoritative comparison basis. Other paths and untouched JSON fields remain
+unchanged. Audit appends retain the same redaction, insertion ordering, scope
+limits, and atomic insertion-and-pruning transaction.
+
+Prepared recovery keeps its originally selected candidate instead of rerunning
+the planner at apply. The file effect rechecks the original source bytes and
+physical identity, caller authority, and current database admission before each
+rename attempt. A changed source refuses the write. Ordinary post-file metadata
+retirement uses the existing best-effort failure policy; ownership and
+maintenance refusals still propagate. Doctor uses the committed result to reread
+the changed file. Unavailable health metadata retains the existing backup-based
+planning fallback. Health metadata remains best-effort; the file and health row
+are not one atomic transaction. Synchronous config readers and writers keep
+their existing APIs; config parsing, validation, and plugin preparation retain
 their own execution paths.
 
 GitHub OAuth reconciliation loads persisted config through the asynchronous config
@@ -1658,14 +1729,13 @@ Each new operation uses current rows or facts invalidated by owning-writer recei
 These changes preserve
 schemas, retention, synchronous cold-load compatibility, and update behavior.
 
-The native Gateway host supplies snapshot preparation through its registered
-config owner. Those reads prepare deferred migration and plugin metadata with the
-existing shared-state actor. Each read captures one exact owner before awaiting
-preparation and rejects its result if that owner closes; failures never select a
-replacement or switch readers. Direct servers and standalone config readers keep
-their existing execution path unless their host explicitly supplies this operation.
+Gateway, direct-server, and standalone asynchronous config snapshots share the
+same validation, materialization, and plugin metadata preparation owners. Metadata
+reads use the existing asynchronous state reader without a host-supplied adapter.
+Unobserved snapshots preserve source artifacts through metadata completion;
+config writes retain their live source authority and runtime activation owner.
 Missing-file defaults still load plugin metadata only when those defaults need it.
-The operation changes no schema, persisted representation, or publication authority.
+This routing changes no schema, persisted representation, or publication authority.
 
 Meeting transcript identity, descriptor, notes, summary, utterance, and export-ownership reads use
 the shared-state worker. Typed commands call the existing synchronous query
@@ -1744,6 +1814,14 @@ and lease cleanup; explicit shutdown, deletion, quarantine, and replacement keep
 their existing close and revocation paths. Reuse preserves read admission and
 owning-writer invalidation, without changing schemas, stored retention, or update
 behavior. The idle window is an internal constant, not a configuration option.
+
+Agent database handles and executors hold a lease that Doctor maintenance waits
+for, and no owner can tell an idle holder in another process that an update is
+waiting. CLI processes therefore retire an unused agent handle, executor, or
+session reclamation Worker 30 seconds after its last use; the Gateway (including
+the bare `openclaw` TUI entry) and embedders that install no process role keep
+the 30-minute window. Borrowed handles, open transactions, and an executor's
+pinned Worker handle keep their lease until the work settles.
 
 Explicit artifact-preserving inspections, private snapshots, and extension-enabled or nested
 transaction reads retain their isolated connection and cleanup contracts.
@@ -2052,11 +2130,19 @@ post-writer lifecycle checks. Retention rules, cap buffering, forced cleanup,
 and active-work, ancestor, and lifecycle protection remain unchanged. No schema
 or migration change is required.
 
-After archive preparation, session deletion rereads its target before admitting
-the final reclamation worker. A missing or changed target returns the existing
-entry-mismatch result without starting that worker, while preserving archives
-already committed by the deletion. Admitted workers still recheck the target
-and current authority inside their deletion transaction.
+Session deletion checks its target and current authority inside the deletion
+transaction. A missing or changed target returns the existing entry-mismatch
+result while preserving archives already committed by the deletion. Exact
+metadata-only deletion with an expected entry uses the admitted session writer,
+without a separate planning read or archive worker. Cron run alias cleanup uses
+that path and keeps the stable session's transcript. Native-session participants,
+pending-delivery protection, and lease-loss refusal remain in the lifecycle owner.
+The transaction passes its validated rows to deletion instead of reading them again.
+Deletion planning uses a read snapshot on the admitted agent worker, including
+historical-generation planning and rechecks. Empty transcript plans use that
+writer for removal without starting a reclamation worker. Nonempty transcripts
+retain archive extraction and reclamation before publication; pending-archive
+recovery, retention, and final authority checks are unchanged.
 
 Prepared session-store updates, entry replacements, and lifecycle upserts use
 the same admission for cold snapshot reads and actual commits, retaining their
@@ -2174,15 +2260,18 @@ adopts newly established integrity verification only after operation cleanup and
 while its database claim remains current. These connection lifetimes are documented in the
 [accepted reclamation design](https://github.com/openclaw/openclaw/pull/140897#issuecomment-5647899202).
 
-Pressure sweeps and explicit deletion reuse one archive worker within their operation
-scope. The shared archive queue admits each materialization or publication separately;
+Pressure sweeps and explicit deletion reuse one archive worker across successful operation
+scopes. The shared archive queue admits each materialization or publication separately;
 every request opens a fresh read-only database and closes its database and file handles
 before acknowledging completion. No archive database connection or lease survives
 between requests. Each victim still commits and publishes before the next victim is
 deleted. A preparation or publication failure retires the worker and joins its native
-exit before returning the existing error. Scope completion and database retirement
-revoke queued requests, drain dispatched work, and join native exit. The process keeps
-at most one reusable archive worker; competing scopes retire the previous idle worker.
+exit before returning the existing error. Scope completion refuses further work under
+that scope while retaining a healthy idle worker. Database retirement revokes queued
+requests, drains dispatched work, and joins native exit. The process keeps at most one
+reusable archive worker; scopes in the same state directory transfer it with fresh
+authority. Different state directories and unhealthy workers require native exit
+before replacement.
 Cold preparation and mutations retain their separate one-shot workers; cold mutations
 join their existing page maintenance and native exit.
 
@@ -2329,7 +2418,8 @@ Shared-state database drainage also joins resources registered while an earlier
 resource is closing. Native retirement waits for those resources; failed cleanup
 remains owned for a later explicit retry.
 Maintenance cleanup joins work started by earlier cleanup phases before closing
-the resources it uses. Clients adopted by actor retirement share its cleanup result.
+the resources it uses. The broker joins every client's accepted commands and native
+close; shared-state owners await that result without a second adoption protocol.
 
 Memory managers admit writes on their exact borrowed agent connection. Provider
 calls and source preparation run before admission; generated-cache and source
@@ -2645,6 +2735,23 @@ or deduplication still precedes marker settlement. Failed event recording leaves
 the marker available for the next check. Schemas, stored bytes, retention, provider
 contracts, and update behavior are unchanged; no migration is required.
 
+## Trajectory payload compression
+
+The trajectory writer worker prepares Brotli quality 3 payloads before its
+existing transaction. Values of at least 1 KiB compress only when they save
+at least 64 bytes and 10%; values larger than 256 KiB remain text. New rows store
+a codec marker and exact logical UTF-8 size alongside compressed bytes. Bounded
+decoding preserves original strings without JSON reserialization. Narrow SQL
+projections decode inside SQLite so diagnostics do not transfer full event bodies.
+
+The schema migration keeps old text rows intact and replaces the retention index
+expression with `COALESCE(event_utf8_bytes, octet_length(event_json))`. This keeps
+retention indexed and leaves logical history limits unchanged. There is no eager
+conversion or new worker request. Native PostgreSQL uses raw JSON text and TOAST;
+engine ports decode compressed SQLite rows before copying them. See
+[trajectory payload storage](/reference/database-schemas/agent-schema-history#trajectory-payload-storage)
+for migration and rollback details.
+
 ## Trajectory retention covering index
 
 The accepted trajectory retention design keeps stored runtime events in the
@@ -2738,7 +2845,7 @@ consults after call closure, independently of the open-state check.
 
 Session usage retains its derived cache in the existing `cache_entries` owner.
 The `session-cost-usage-rollup-v3` scope holds the versioned transcript checkpoint
-and untimestamped contribution. The adjacent `session-cost-usage-projection-v1`
+and untimestamped contribution. The adjacent `session-cost-usage-projection-v2`
 scope stores UTC-month partitions containing quarter-hour session and model
 aggregates. The checkpoint and affected partitions commit atomically. This
 replaces the previous whole-history per-event cache body; no tables, indexes,
@@ -2747,6 +2854,12 @@ process-local, nonpersistent cache and create no month partitions. Projection
 version 2 packs sparse quarters into monthly compressed bodies; version 1 daily
 rows are ignored and replaced by the normal resumable refresh, without a schema
 migration. Checkpoint and partition replacement remain atomic.
+
+Projection envelope version 3 encodes the source as a JSON string before the
+month separator, so PostgreSQL text never receives the former NUL separator. Older `v1` cache
+rows remain inactive and rebuild from transcripts. Database port removes only
+those retired partitions from its private source copy before verification;
+other cache scopes, including durable voice sessions, remain unchanged.
 
 Usage-bearing transcript publications schedule advancement through the existing
 usage worker queue. Each dirty session waits for 30 seconds without another
@@ -2763,7 +2876,7 @@ yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
 rediscovers unfinished sessions from their committed checkpoints.
-Expected refresh cancellation during shutdown logs at debug level; refresh or cleanup failures still warn.
+Refresh or cleanup failures still warn.
 After in-process DDL, worker admission publishes its validated schema even if a
 retained reader adopted another wrapper of the previous shared receipt while it
 was pending. The received schema and physical database proof must remain valid;
@@ -2781,8 +2894,11 @@ writes or pruning invalidate rollup inputs. Worker retirement discards the worki
 set. Reports keep their independent read snapshots. A concurrent repair during a
 refresh can defer correction to the next refresh; it does not require another
 metadata comparison on the ordinary background path.
-Full refreshes submit pruning only when their metadata scan found stale rows;
-deletion still matches each observed row's checkpoint and update timestamp.
+Full refreshes transfer stale row snapshots in bounded batches under that
+reservation, then submit one prune request. Deletion still matches each observed
+row's checkpoint and update timestamp. Targeted refreshes do not prune other keys.
+Selected month deletion uses bounded key batches in the existing rollup write
+transaction.
 Doctor owns cleanup of retired cache scopes, so ordinary refreshes do not repeat
 legacy deletions. Retired rows may remain until `openclaw doctor --fix` runs.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
@@ -2798,6 +2914,53 @@ represented by the aggregate use canonical transcript reads. Partial backfill
 remains visible in the existing cache-status fields. An older implementation
 ignores the new representation's version and reconstructs its prior cache from
 transcripts, so rollback needs no reverse data migration.
+
+## Background exec notification obligations
+
+The exec completion owner stores `pendingExecNotifications` in the existing
+private session-row JSON when an eligible process becomes backgrounded. Each
+unique registry process-instance ID retains the public process ID, owning session ID and lifecycle revision, Gateway
+incarnation, start time, a generic command label, and the existing completion
+policy and route. Arguments, environment, output, operating-system handles, approvals,
+and execution authority are not persisted.
+
+This additive field needs no schema migration or index. The existing session
+writer commits it; startup filters the private fact in SQL and reads only matching
+session-list projections in pages of 64 through the existing worker after store
+admission. Unrelated entry payloads and saved prompts stay in SQLite. Storage grows
+with pending background completions. The notification uses current session
+admission and a stable source-turn identity; it cannot re-run the command. The
+fact remains until transcript adoption, explicit cancellation/removal, reset,
+archive, or rejection by current notification policy. Incognito sessions do not
+persist obligations. Normal session deletion removes the field with its row.
+
+Older binaries ignore this field and do not recover its notifications; a later
+upgrade can report the pending unknown outcome. Rollback does not alter history,
+execute commands, or require a database restore. The maintainer-authorized
+restart-continuity repair accepts this narrowly scoped durability change; owner
+and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
+
+## Memory index batch revisions
+
+Agent schema 31 removes the six row revision triggers on `memory_index_sources`
+and `memory_index_chunks`. The publication and Forget writers advance
+`memory_index_state.revision` once inside each transaction that changes the
+index, including source refresh, replacement, deletion, reset, shadow publication,
+and purge. Readers cannot observe committed index rows with a previous revision;
+rollback discards both the row changes and the revision advance. Revision values
+identify index changes, not the number of affected rows.
+
+The migration does not rewrite memory content, embeddings, source identities, or
+the current revision. SQLite and PostgreSQL advance together. PostgreSQL also
+retires the two obsolete revision trigger functions, while retaining vector and
+full-text projection triggers. Historical admission and rollback keep the old
+trigger definitions. Fresh and shadow memory stores use the same writer-owned
+revision contract.
+
+The declared SQLite backup covers the source and chunk tables and schema metadata.
+Other retained tables and planner statistics stay unchanged. Older binaries
+require the verified pre-upgrade backup and matching schema; manually lowering
+version markers cannot restore their revision-update contract.
 
 ## Review checkpoint for material changes
 

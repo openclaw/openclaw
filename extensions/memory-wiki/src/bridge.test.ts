@@ -2,11 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import {
   clearMemoryPluginState,
   type MemoryPluginPublicArtifact,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { root } from "openclaw/plugin-sdk/security-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
@@ -30,6 +32,7 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
     clearMemoryPluginState();
   });
@@ -134,6 +137,15 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(memoryPage).toContain("sourceType: memory-bridge");
     expect(memoryPage).toContain("## Bridge Source");
 
+    const retainedPages = new Set(first.pagePaths.map((pagePath) => path.join(vaultDir, pagePath)));
+    const openedPages: string[] = [];
+    __setFsSafeTestHooksForTest({
+      beforeOpen: (filePath) => {
+        if (retainedPages.has(filePath)) {
+          openedPages.push(filePath);
+        }
+      },
+    });
     const readFile = vi.spyOn(fs, "readFile");
     const second = await syncMemoryWikiBridgeSources({ config, appConfig });
 
@@ -146,6 +158,10 @@ describe("syncMemoryWikiBridgeSources", () => {
         ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
       ),
     ).toBe(false);
+    expect(openedPages).toEqual([]);
+    // Vault pages are read through fs-safe handles; prove the observer sees those reads.
+    await (await root(vaultDir)).readText(first.pagePaths[0] ?? "");
+    expect(openedPages).toEqual([path.join(vaultDir, first.pagePaths[0] ?? "")]);
 
     const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
       .trim()

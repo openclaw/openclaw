@@ -65,7 +65,16 @@ contains the codec. Flat configuration rows, including manual CI and exact-head
 PR release gates, use one packed group while retaining their original jobs and
 test selections. Targets without that capability retain their original flat
 fields or projected legacy `groups` JSON. Workflow tests keep the complete
-generated output under half of the cap. The smaller
+generated output under half of the cap. Large Node matrices share compressed
+group pools across rows instead of repeating independently compressed file
+lists. Each pool is at most 60,000 base64 characters, below Linux's per-string
+environment limit. Before execution, the workflow extracts the selected row
+and restores the same standalone descriptor consumed by the shard runner and
+timing collectors. Legacy targets without the codec retain their existing
+transport. Job placement, test selection, timing identities and resource
+settings are unchanged. The output cap protects
+[GitHub's per-job output limit](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idoutputs),
+not a workflow input or matrix-row limit. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
 and Android at four for upstream Blacksmith push and PR first attempts, including forks; the GitHub override, retries, manual dispatches, schedules, and other repositories retain two. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same

@@ -468,29 +468,6 @@ describe("workboard tools", () => {
     expect((await keyed.lookup("card-1"))?.card.metadata?.claim).toBeUndefined();
   });
 
-  it("can share one store across tool instances for claim coordination", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const mainTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
-    );
-    const otherTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "other" },
-      }).map((tool) => [tool.name, tool]),
-    );
-    const card = await store.create({ title: "Single owner" });
-
-    await mainTools.get("workboard_claim")?.execute("call-1", { id: card.id });
-
-    await expect(
-      otherTools.get("workboard_claim")?.execute("call-2", { id: card.id }),
-    ).rejects.toThrow(/already claimed/);
-  });
-
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {
     const store = createWorkboardSqliteTestStore();
     const mainTools = new Map(

@@ -56,6 +56,7 @@ async function seedRecallSources() {
     results,
     signalType: "grounded",
     nowMs,
+    timezone: "America/Los_Angeles",
   });
   const recalls = await readShortTermRecallEntries({ workspaceDir, nowMs });
   await recordDreamingPhaseSignals({
@@ -78,7 +79,7 @@ it("prunes archived corpus recalls and phase signals while preserving existing s
   const retained = await readShortTermRecallEntries({ workspaceDir, nowMs });
   expect(retained.map((entry) => entry.path).toSorted()).toEqual(livePaths.toSorted());
   const survivors = recalls.filter((entry) => entry.path !== corpusPath);
-  expect(retained).toEqual(survivors);
+  expect(new Set(retained)).toEqual(new Set(survivors));
   expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(
     Object.fromEntries(survivors.map((entry) => [entry.key, phases[entry.key]])),
   );
@@ -101,7 +102,9 @@ it("preserves recall and phase signals when the archive rename fails", async () 
   expect(repair.archivedSessionCorpus).toBe(false);
   expect(repair.warnings).toContain("synthetic archive rename denied");
   await expect(fs.stat(path.join(workspaceDir, corpusPath))).resolves.toBeDefined();
-  expect(await readShortTermRecallEntries({ workspaceDir, nowMs })).toEqual(recalls);
+  expect(new Set(await readShortTermRecallEntries({ workspaceDir, nowMs }))).toEqual(
+    new Set(recalls),
+  );
   expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(phases);
 });
 
@@ -126,7 +129,9 @@ it("rolls back interrupted archive pruning and lets nightly repair finish", asyn
     await expect(fs.stat(path.join(workspaceDir, corpusPath))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    expect(await readShortTermRecallEntries({ workspaceDir, nowMs })).toEqual(recalls);
+    expect(new Set(await readShortTermRecallEntries({ workspaceDir, nowMs }))).toEqual(
+      new Set(recalls),
+    );
     expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(phases);
   } finally {
     db.exec("DROP TRIGGER abort_archive_phase_delete");
@@ -137,7 +142,9 @@ it("rolls back interrupted archive pruning and lets nightly repair finish", asyn
     removedDanglingEntries: 1,
   });
   const survivors = recalls.filter((entry) => entry.path !== corpusPath);
-  expect(await readShortTermRecallEntries({ workspaceDir, nowMs })).toEqual(survivors);
+  expect(new Set(await readShortTermRecallEntries({ workspaceDir, nowMs }))).toEqual(
+    new Set(survivors),
+  );
   expect((await readPhaseSignalStore(workspaceDir, nowIso)).entries).toEqual(
     Object.fromEntries(survivors.map((entry) => [entry.key, phases[entry.key]])),
   );

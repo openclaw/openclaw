@@ -205,6 +205,59 @@ describe("prepared session fork provider boundary", () => {
     expect(recovered).not.toContain("Original full prefix");
   });
 
+  it("keeps review and verification available while the next parent request is being prepared", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+    await (await parent(model, context, {})).result();
+    const review = fork();
+    const preparing = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const nextParent = parent(
+      model,
+      { ...context, messages: [{ role: "user", content: "Next parent request", timestamp: 3 }] },
+      {
+        onPayload: async (payload) => {
+          preparing.resolve();
+          await releasePreparation.promise;
+          return payload;
+        },
+      },
+    );
+    try {
+      await preparing.promise;
+      await expect(review).resolves.toBe("Answer");
+      await expect(fork()).resolves.toBe("Answer");
+      expect(JSON.stringify(payloads.at(-1)?.input)).toContain("Parent question");
+      expect(JSON.stringify(payloads.at(-1)?.input)).not.toContain("Next parent request");
+    } finally {
+      releasePreparation.resolve();
+      await (await nextParent).result();
+    }
+    await expect(fork()).resolves.toBe("Answer");
+    expect(JSON.stringify(payloads.at(-1)?.input)).toContain("Next parent request");
+  });
+
+  it("does not restore a reset parent when pending request preparation finishes", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+    await (await parent(model, context, {})).result();
+    const preparing = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const nextParent = parent(model, context, {
+      onPayload: async (payload) => {
+        preparing.resolve();
+        await releasePreparation.promise;
+        return payload;
+      },
+    });
+    await preparing.promise;
+    cleanupSessionResources(identity.sessionId);
+    releasePreparation.resolve();
+    await (await nextParent).result();
+    await expect(fork()).rejects.toThrow("requires a parent turn");
+    expect(payloads).toHaveLength(2);
+  });
+
   it("keeps fork snapshots without retaining completed parent contexts or payload hooks", async () => {
     const callers = new AsyncLocalStorage<object>();
     const references: WeakRef<object>[] = [];
@@ -425,6 +478,42 @@ describe("prepared session fork provider boundary", () => {
     },
   );
 
+  it("preserves opaque publication details across isolated forks", async () => {
+    const values: { byte: number; blob: string | undefined }[] = [];
+    const replay = transport([], []);
+    const parent = wrapStreamFnWithSessionFork(async (requestModel, requestContext, options) => {
+      const details = requestContext.messages.find(
+        (message) => message.role === "toolResult",
+      )?.details;
+      if (isRecord(details) && details.bytes instanceof Uint8Array) {
+        values.push({
+          byte: details.bytes[0]!,
+          blob: details.blob instanceof Blob ? await details.blob.text() : undefined,
+        });
+        new Uint8Array(details.bytes.buffer).fill(99);
+      }
+      return replay(requestModel, requestContext, options);
+    }, identity);
+    await (await parent(model, context, {})).result();
+    const bytes = new Uint8Array([7]);
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      role: "toolResult",
+      toolCallId: "lookup",
+      toolName: "lookup",
+      content: [{ type: "text", text: "Result" }],
+      details: { bytes, blob: new Blob(["Opaque result"]) },
+      isError: false,
+      timestamp: 3,
+    });
+    bytes[0] = 42;
+    await expect(fork()).resolves.toBe("Answer");
+    await expect(fork()).resolves.toBe("Answer");
+    expect(values).toEqual([
+      { byte: 7, blob: "Opaque result" },
+      { byte: 7, blob: "Opaque result" },
+    ]);
+  });
+
   it.each([
     ["openai-responses", false],
     ["openai-responses", true],
@@ -503,16 +592,20 @@ describe("prepared session fork provider boundary", () => {
         api,
         provider,
       };
+      const replayContext: Context = {
+        ...context,
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      };
       const completed = await (
-        await parent(requestModel, context, { apiKey: "synthetic-key" })
+        await parent(requestModel, replayContext, { apiKey: "synthetic-key" })
       ).result();
       await (
         await parent(
           requestModel,
           {
-            ...context,
+            ...replayContext,
             messages: [
-              ...context.messages,
+              ...replayContext.messages,
               {
                 ...completed,
                 ...(api !== "openai-responses"

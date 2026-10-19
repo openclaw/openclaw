@@ -111,6 +111,14 @@ export function buildMessagingSection(params: {
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
+          messageToolOnly
+            ? "- Visible `message(send)` content: never repeat in final."
+            : suppressSilentTokenGuidance
+              ? "- Follow turn delivery: private final => visible via `message(send)`; otherwise normal reply once."
+              : `- After visible \`message(send)\`, final ONLY uppercase ${SILENT_REPLY_TOKEN}, with no punctuation or quotes.`,
+          !suppressSilentTokenGuidance
+            ? `Only the entire exact ${SILENT_REPLY_TOKEN} reply is silent. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`
+            : "",
           "- A confirmed final message or added final reaction to the current source completes the reply; never repeat it in text.",
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled

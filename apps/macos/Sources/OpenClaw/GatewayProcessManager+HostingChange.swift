@@ -96,6 +96,7 @@ extension GatewayProcessManager {
         self.hostingChangeInProgress = true
         defer { self.hostingChangeInProgress = false }
         let service = try await Self.hostingServiceCustody()
+        guard service.runtimePin?.status != .migrationPending else { return }
         guard isAuthorized() else { throw CancellationError() }
         let change = HostingChange(manager: self, service: service)
         defer {
@@ -165,10 +166,11 @@ extension GatewayProcessManager {
     func repairPreparedBundledRuntime(
         runtime: BundledRuntime,
         source: ActivationSource,
-        expectedService: ManagedNodeGatewayMigration.ServiceCustody) async throws -> BundledRuntimeUpdateResult
+        expectedService: ManagedNodeGatewayMigration.ServiceCustody,
+        preservedRuntime: BundledRuntime? = nil) async throws -> BundledRuntimeUpdateResult
     {
         let change = HostingChange(manager: self, service: expectedService)
-        change.runtime = runtime
+        change.runtime = preservedRuntime ?? runtime
         let environment = try self.appHostedEnvironment(
             runtime: runtime,
             capturedServiceEnvironment: change.previous == .service ? change.previousCLI?.environment ?? [:] : [:])
@@ -189,11 +191,26 @@ extension GatewayProcessManager {
                         runtime: runtime,
                         environment: environment,
                         expectedServiceAuthority: change.expectedService.serviceAuthority(),
-                        checkCurrent: { try await self.checkHostingChange(change, requiresActive: true) },
+                        checkCurrent: {
+                            try await self.checkHostingChange(change, requiresActive: true, acceptsPinMigration: true)
+                        },
                         statusHandler: { self.appendLog("[gateway] \($0)\n") })
                     if !output.isEmpty { self.appendLog("[gateway] recovery diagnostics: \(output.suffix(4000))\n") }
-                    try await self.startHostingChange(
-                        change, hosting: change.previous, restoring: false, runtimeEnvironment: environment)
+                    if preservedRuntime != nil, change.previous == .service {
+                        if let error = try await GatewayLaunchAgentManager.runDaemonCommand(
+                            ["start"],
+                            runtime: runtime,
+                            expectedServiceAuthority: change.expectedService.serviceAuthority(),
+                            checkCurrent: { try await self.checkHostingChange(change, requiresActive: true) })
+                        { throw GatewayHostingError(message: error) }
+                        self.hostingChangeInProgress = false
+                        self.startIfNeeded()
+                        change.generation = self.gatewayStartGeneration
+                        self.hostingChangeInProgress = true
+                    } else {
+                        try await self.startHostingChange(
+                            change, hosting: change.previous, restoring: false, runtimeEnvironment: environment)
+                    }
                     return true
                 },
                 recover: {
@@ -225,18 +242,25 @@ extension GatewayProcessManager {
 
     private static func hostingServiceCustody() async throws -> ManagedNodeGatewayMigration.ServiceCustody {
         let custody = try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false)
-        guard custody.definition.plist != nil || custody.runtimePin == nil else {
+        guard custody.definition.plist != nil || custody.runtimePin == nil ||
+            custody.runtimePin?.status == .migrationPending
+        else {
             throw GatewayHostingError(
                 message: "Gateway service or runtime pin changed; the newer selection was preserved.")
         }
         return custody
     }
 
-    private func checkHostingChange(_ change: HostingChange, requiresActive: Bool = false) async throws {
+    private func checkHostingChange(
+        _ change: HostingChange, requiresActive: Bool = false, acceptsPinMigration: Bool = false) async throws
+    {
         let service = try await Self.hostingServiceCustody()
         guard !self.isTerminating, self.gatewayStartGeneration == change.generation,
               !requiresActive || (self.desiredActive && !AppStateStore.shared.isPaused)
         else { throw CancellationError() }
+        if acceptsPinMigration, change.expectedService.runtimePin?.status == .migrationPending,
+           service.runtimePin?.status != .migrationPending, service.definition == change.expectedService.definition
+        { change.expectedService = service }
         guard service == change.expectedService,
               GatewayEnvironment.gatewayPort() == change.port,
               self.hostsLocalGatewayWithRemotePrimary == change.allowUnconfigured,
@@ -271,7 +295,7 @@ extension GatewayProcessManager {
         }
         change.expectedService = current
         if let failure = self.lastFailureReason { throw GatewayHostingError(message: failure) }
-        guard current.definition.plist == nil
+        guard current.definition.plist == nil || current.runtimePin?.status == .migrationPending
         else { throw GatewayHostingError(message: "The previous Gateway service was not removed.") }
     }
 
@@ -285,7 +309,7 @@ extension GatewayProcessManager {
         guard let runtime = change.runtime else { throw CancellationError() }
         if hosting == .app {
             self.hostingChangeInProgress = false
-            self.startIfNeeded()
+            self.startIfNeeded(appRuntime: runtime)
             change.generation = self.gatewayStartGeneration
             self.hostingChangeInProgress = true
             return

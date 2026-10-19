@@ -23,6 +23,8 @@ import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
 import * as ownerLease from "./gateway-owner-lease.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const lockOptions = { allowInTests: true, timeoutMs: 0 };
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -52,15 +54,13 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
         (await runStartupConfigPreflight({ gateway: true, observe: false })).snapshot.valid,
       ).toBe(true);
       expect(countReads()).toBe(1);
-      const lock = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
+      const lock = await acquireGatewayLock(lockOptions);
       expect(lock).not.toBeNull();
       await lock?.release();
       expect(countReads()).toBe(2);
       writeDatabasePortManifest(stateDir, makeDatabasePortManifest(stateDir), () => {});
       const beforeNewAdmission = countReads();
-      await expect(acquireGatewayLock({ allowInTests: true, timeoutMs: 0 })).rejects.toThrow(
-        fixedPath,
-      );
+      await expect(acquireGatewayLock(lockOptions)).rejects.toThrow(fixedPath);
       expect(countReads() - beforeNewAdmission).toBe(1);
     });
   });
@@ -81,24 +81,37 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       operationId: manifest.operationId,
       action: "resume",
     };
-    return { stateDir, databasePath, manifest, intent };
+    const lease = vi.spyOn(ownerLease, "assertGatewayOwnerLeaseStopped");
+    const runLocal = vi.fn(async ({ assertCurrent }: { assertCurrent: () => void }) => {
+      assertCurrent();
+      return "recovery admitted";
+    });
+    const onForeignOwner = vi.fn(async () => "foreign owner");
+    const recover = (withForeignOwner = false) =>
+      runWithLocalStateOwner({
+        method: "database.port",
+        params: {},
+        target: "synthetic workboard",
+        databasePortRecovery: intent,
+        runLocal,
+        ...(withForeignOwner ? { onForeignOwner } : {}),
+      });
+    return { stateDir, databasePath, manifest, intent, lease, runLocal, onForeignOwner, recover };
   }
 
   it.each(["CLI preflight", "direct Gateway", "embedded writer"] as const)(
     "refuses a corrupt port manifest before %s inspects partial state",
     async (entry) => {
-      const { databasePath, intent } = await fixture();
+      const { databasePath, intent, lease } = await fixture();
       await fs.writeFile(intent.manifestPath, "{broken");
       const reader = vi.spyOn(snapshots, "createConfigPreflightSnapshotReader");
-      const lease = vi.spyOn(ownerLease, "assertGatewayOwnerLeaseStopped");
-      const options = { allowInTests: true, timeoutMs: 0 };
       const attempt =
         entry === "CLI preflight"
           ? runStartupConfigPreflight({ gateway: true })
           : entry === "direct Gateway"
-            ? acquireGatewayLock(options)
+            ? acquireGatewayLock(lockOptions)
             : acquireEmbeddedStateLock({
-                options: { ...options, timeoutMs: 1000 },
+                options: { ...lockOptions, timeoutMs: 1000 },
                 formatActiveGatewayRefusal: () => "unexpected live Gateway",
               });
       await expect(attempt).rejects.toThrow(intent.manifestPath);
@@ -110,53 +123,30 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
     },
   );
 
-  it.each(["resume", "rollback"] as const)(
-    "admits a manifest-bound %s without inspecting an interrupted zero-byte database",
-    async (action) => {
-      const { databasePath, intent } = await fixture();
-      const lease = vi.spyOn(ownerLease, "assertGatewayOwnerLeaseStopped");
-      const runLocal = vi.fn(async ({ assertCurrent }: { assertCurrent: () => void }) => {
-        assertCurrent();
-        return "recovery admitted";
-      });
-      await expect(
-        runWithLocalStateOwner({
-          method: "database.port",
-          params: {},
-          target: "synthetic workboard",
-          databasePortRecovery: { ...intent, action },
-          runLocal,
-        }),
-      ).resolves.toBe("recovery admitted");
-      expect(runLocal).toHaveBeenCalledOnce();
-      expect(lease).not.toHaveBeenCalled();
-      expect(await fs.readFile(databasePath)).toEqual(Buffer.alloc(0));
-    },
-  );
-
-  it.each(["operation", "root", "path"] as const)(
-    "refuses a recovery intent bound to another %s",
-    async (mismatch) => {
-      const { intent, manifest } = await fixture();
-      if (mismatch === "operation") {
+  it.each(["resume", "rollback", "operation", "root", "path"] as const)(
+    "checks recovery identity before touching partial state: %s",
+    async (scenario) => {
+      const { databasePath, intent, manifest, lease, runLocal, recover } = await fixture();
+      const admitted = scenario === "resume" || scenario === "rollback";
+      if (scenario === "resume" || scenario === "rollback") {
+        intent.action = scenario;
+      } else if (scenario === "operation") {
         intent.operationId = randomUUID();
-      } else if (mismatch === "path") {
+      } else if (scenario === "path") {
         intent.manifestPath = path.join(path.dirname(intent.manifestPath), "other.json");
       } else {
         manifest.root.ino = String(BigInt(manifest.root.ino) + 1n);
         await fs.writeFile(intent.manifestPath, JSON.stringify(manifest));
       }
-      const runLocal = vi.fn(async () => {});
-      await expect(
-        runWithLocalStateOwner({
-          method: "database.port",
-          params: {},
-          target: "synthetic workboard",
-          databasePortRecovery: intent,
-          runLocal,
-        }),
-      ).rejects.toThrow("Database port recovery required");
-      expect(runLocal).not.toHaveBeenCalled();
+      if (admitted) {
+        await expect(recover()).resolves.toBe("recovery admitted");
+        expect(runLocal).toHaveBeenCalledOnce();
+        expect(lease).not.toHaveBeenCalled();
+        expect(await fs.readFile(databasePath)).toEqual(Buffer.alloc(0));
+      } else {
+        await expect(recover()).rejects.toThrow("Database port recovery required");
+        expect(runLocal).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -177,8 +167,7 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       acquireGatewayLock({
         env,
         role: "agent-embedded",
-        allowInTests: true,
-        timeoutMs: 0,
+        ...lockOptions,
         databasePortRecovery: intent,
         readProcessStartTime: () => 123,
       }),
@@ -187,26 +176,15 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
   });
 
   it("refuses hosted recovery before running either a local or foreign-owner callback", async () => {
-    const { intent, manifest, stateDir } = await fixture();
+    const { intent, manifest, stateDir, runLocal, onForeignOwner, recover } = await fixture();
     await fs.unlink(intent.manifestPath);
-    const owner = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
+    const owner = await acquireGatewayLock(lockOptions);
     if (!owner) {
       throw new Error("Expected retained Gateway ownership");
     }
     writeDatabasePortManifest(stateDir, manifest, () => owner.assertCurrent());
-    const runLocal = vi.fn(async () => {});
-    const onForeignOwner = vi.fn(async () => {});
     try {
-      await expect(
-        runWithLocalStateOwner({
-          method: "database.port",
-          params: {},
-          target: "synthetic workboard",
-          databasePortRecovery: intent,
-          onForeignOwner,
-          runLocal,
-        }),
-      ).rejects.toThrow("exclusive offline ownership");
+      await expect(recover(true)).rejects.toThrow("exclusive offline ownership");
       expect(runLocal).not.toHaveBeenCalled();
       expect(onForeignOwner).not.toHaveBeenCalled();
     } finally {

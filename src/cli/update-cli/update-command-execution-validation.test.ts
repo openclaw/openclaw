@@ -287,15 +287,16 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
   });
 
   it.each([
-    ["measured startup", undefined, true, undefined],
+    ["already ready", undefined, true, undefined],
+    ["measured startup", undefined, false, undefined],
     ...(process.platform === "win32"
       ? []
       : [["different service installation", undefined, true, undefined] as const]),
-    ["explicit allowance", 450_000, true, undefined],
+    ["explicit allowance", 450_000, false, undefined],
     ["explicit deadline", 30_000, false, undefined],
     ["terminal version mismatch", undefined, false, "version"],
   ] as const)(
-    "preserves previous Gateway verification through slow readiness (%s)",
+    "observes previous Gateway readiness before activation (%s)",
     async (allowance, timeoutMs, verified, failure) =>
       withTestDir({ prefix: "previous-gateway-readiness-" }, async (root) => {
         const installationDrift = allowance === "different service installation";
@@ -310,7 +311,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
             JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           );
         }
-        const readyAtMs = 400_000;
+        const readyAtMs = allowance === "already ready" ? 0 : 400_000;
         let elapsedMs = 0;
         const epochMs = Date.now();
         vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
@@ -517,16 +518,8 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
               verified: true,
             });
           }
-          if (verified) {
-            expect(readyObservedAtMs).toBeGreaterThanOrEqual(readyAtMs);
-            expect(stoppedAtMs).toBeGreaterThanOrEqual(readyObservedAtMs!);
-          } else {
-            expect(readyObservedAtMs).toBeUndefined();
-            expect(stoppedAtMs).toBeLessThan(readyAtMs);
-            if (failure === "version") {
-              expect(stoppedAtMs).toBe(0);
-            }
-          }
+          expect(readyObservedAtMs).toBe(verified ? readyAtMs : undefined);
+          expect(stoppedAtMs).toBe(installationDrift ? readyAtMs : 0);
         } finally {
           http.globalAgent = globalAgent;
           agent.destroy();

@@ -1,18 +1,15 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonObjectResponse,
-  resolveProviderHttpRequestConfig,
+  postJsonResponse,
+  resolveProviderApiKeyHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -119,16 +116,6 @@ const MODEL_CATALOG: Readonly<Record<string, VideoGenerationCatalogModelEntry>> 
   },
 };
 
-function nearestDuration(
-  value: number | undefined,
-  allowed: readonly [number, ...number[]],
-): number {
-  const requested = typeof value === "number" && Number.isFinite(value) ? value : allowed[0];
-  return allowed.reduce((best, current) =>
-    Math.abs(current - requested) < Math.abs(best - requested) ? current : best,
-  );
-}
-
 function resolveModel(req: VideoGenerationRequest): string {
   const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
   if (!Object.hasOwn(MODEL_CATALOG, model)) {
@@ -150,21 +137,6 @@ function resolveModel(req: VideoGenerationRequest): string {
   return images.length > 0 ? model.replace(/-t2v$/, "-i2v") : model;
 }
 
-function resolveImage(req: VideoGenerationRequest): string | undefined {
-  const image = req.inputImages?.[0];
-  if (!image) {
-    return undefined;
-  }
-  const url = normalizeOptionalString(image.url);
-  if (url) {
-    return url;
-  }
-  if (!image.buffer) {
-    throw new Error("Novita image-to-video input is missing image data.");
-  }
-  return toImageDataUrl({ ...image, buffer: image.buffer, defaultMimeType: "image/png" });
-}
-
 function resolveResolution(req: VideoGenerationRequest, wan: boolean): string {
   const resolution = normalizeOptionalString(req.resolution)?.toUpperCase();
   return resolution === "1080P" ? "1080P" : wan ? "720P" : "768P";
@@ -183,7 +155,10 @@ function resolveWanSize(req: VideoGenerationRequest): string {
 
 function buildBody(req: VideoGenerationRequest, model: string): Record<string, unknown> {
   const wan = model.startsWith("wan");
-  const image = resolveImage(req);
+  const image = resolveImageSourceUrl(
+    req.inputImages?.[0],
+    "Novita image-to-video input is missing image data.",
+  );
   const options = req.providerOptions ?? {};
   const mode = image ? "imageToVideo" : "generate";
   const schema = MODEL_CATALOG[model]?.capabilities?.[mode]?.providerOptions ?? {};
@@ -198,7 +173,7 @@ function buildBody(req: VideoGenerationRequest, model: string): Record<string, u
       `Novita ${model} supports ${wan ? "at most one" : "no"} audio reference input.`,
     );
   }
-  const duration = nearestDuration(req.durationSeconds, wan ? [5, 10, 15] : [6, 10]);
+  const duration = req.durationSeconds ?? (wan ? 5 : 6);
   const resolution = resolveResolution(req, wan);
   if (!wan) {
     if (duration === 10 && resolution === "1080P") {
@@ -280,15 +255,20 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
     async generateVideo(req) {
       const model = resolveModel(req);
       const body = buildBody(req, model);
-      const auth = await resolveApiKeyForProvider({
-        provider: "novita",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Novita API key missing");
-      }
+      const providerConfig = req.cfg.models?.providers?.novita;
+      const configuredBase = normalizeOptionalString(providerConfig?.baseUrl)
+        ?.replace(/\/+$/, "")
+        .replace(/\/openai\/v1$/, "");
+      const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "Novita API key missing",
+          baseUrl: configuredBase ?? DEFAULT_BASE_URL,
+          defaultBaseUrl: DEFAULT_BASE_URL,
+          provider: "novita",
+          capability: "video",
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
         label: "Novita video generation",
@@ -297,25 +277,8 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
       });
-      const providerConfig = req.cfg.models?.providers?.novita;
-      const configuredBase = normalizeOptionalString(providerConfig?.baseUrl)
-        ?.replace(/\/+$/, "")
-        .replace(/\/openai\/v1$/, "");
-      const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: configuredBase ?? DEFAULT_BASE_URL,
-          defaultBaseUrl: DEFAULT_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "novita",
-          capability: "video",
-          transport: "http",
-          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-        });
       const endpoint = `/v3/async/${model}`;
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse({
         url: `${baseUrl}${endpoint}`,
         headers,
         body,
@@ -323,25 +286,14 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "Novita video generation failed",
+        errorOptions: { bodyTimeoutMs: timeoutMs, requestHeaders: headers },
+        readOptions: { timeoutMs },
+        objectResponse: true,
       });
-      let taskId: string;
-      try {
-        await assertOkOrThrowHttpError(response, "Novita video generation failed", {
-          bodyTimeoutMs: timeoutMs,
-          requestHeaders: headers,
-        });
-        const submitted = await readProviderJsonObjectResponse(
-          response,
-          "Novita video generation failed",
-          { timeoutMs },
-        );
-        const id = normalizeOptionalString(submitted.task_id);
-        if (!id) {
-          throw new Error("Novita video generation response missing task_id");
-        }
-        taskId = id;
-      } finally {
-        await release();
+      const taskId = normalizeOptionalString(submitted.task_id);
+      if (!taskId) {
+        throw new Error("Novita video generation response missing task_id");
       }
       const pollUrl = new URL(`${baseUrl}/v3/async/task-result`);
       pollUrl.searchParams.set("task_id", taskId);

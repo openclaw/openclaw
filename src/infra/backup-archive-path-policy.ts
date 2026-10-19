@@ -60,6 +60,25 @@ export function isArchivePathWithin(child: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
 
+export function resolvePortableArchivePathKey(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
+export function findPortableArchiveEntryPathCollision(
+  entries: Array<{ normalized: string }>,
+): { first: string; second: string } | undefined {
+  const seen = new Map<string, string>();
+  for (const entry of entries) {
+    const key = resolvePortableArchivePathKey(entry.normalized);
+    const first = seen.get(key);
+    if (first && first !== entry.normalized) {
+      return { first, second: entry.normalized };
+    }
+    seen.set(key, entry.normalized);
+  }
+  return undefined;
+}
+
 export type BackupSymbolicLink = { entryPath: string; linkpath: string };
 
 export function recordArchiveSymbolicLink(params: {

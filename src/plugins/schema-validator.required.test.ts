@@ -13,6 +13,45 @@ function expectValidationFailure(
 }
 
 describe("schema validator", () => {
+  it("preserves exact value paths despite ambiguous display paths", () => {
+    const result = expectValidationFailure({
+      schema: {
+        type: "object",
+        properties: {
+          "dot.name": { type: "number" },
+          dot: { type: "object", properties: { name: { type: "number" } } },
+          "slash/name": { type: "number" },
+          "tilde~1name": { type: "number" },
+          "": { type: "number" },
+          "<root>": { type: "number" },
+          items: { type: "array", items: { type: "number" } },
+        },
+      },
+      value: {
+        "dot.name": "invalid",
+        dot: { name: "invalid" },
+        "slash/name": "invalid",
+        "tilde~1name": "invalid",
+        "": "invalid",
+        "<root>": "invalid",
+        items: ["invalid"],
+      },
+    });
+
+    expect(result.errors.map(({ valuePath }) => valuePath)).toEqual([
+      ["dot.name"],
+      ["dot", "name"],
+      ["slash/name"],
+      ["tilde~1name"],
+      [""],
+      ["<root>"],
+      ["items", "0"],
+    ]);
+    expect(
+      expectValidationFailure({ schema: { type: "number" }, value: "invalid" }).errors,
+    ).toMatchObject([{ path: "<root>", valuePath: [] }]);
+  });
+
   it.each([
     {
       title: "multiple nested fields",
@@ -24,11 +63,13 @@ describe("schema validator", () => {
       expectedErrors: [
         {
           path: "settings.endpoint",
+          valuePath: ["settings", "endpoint"],
           message: "must have required property 'endpoint'",
           text: "settings.endpoint: must have required property 'endpoint'",
         },
         {
           path: "settings.token",
+          valuePath: ["settings", "token"],
           message: "must have required property 'token'",
           text: "settings.token: must have required property 'token'",
         },
@@ -41,13 +82,60 @@ describe("schema validator", () => {
       expectedErrors: [
         {
           path: "endpoint",
+          valuePath: ["endpoint"],
           message: "must have required property 'endpoint'",
           text: "endpoint: must have required property 'endpoint'",
         },
         {
           path: "evil\nkey\t\x1b[31mred\x1b[0m",
+          valuePath: ["evil\nkey\t\x1b[31mred\x1b[0m"],
           message: "must have required property 'evil\nkey\t\x1b[31mred\x1b[0m'",
           text: "evil\\nkey\\tred: must have required property 'evil\\nkey\\tred'",
+        },
+      ],
+    },
+    {
+      title: "literal missing property names",
+      schema: {
+        type: "object",
+        properties: {
+          settings: {
+            type: "object",
+            required: ["dot.name", "slash/name", "tilde~1name", "", "<root>"],
+          },
+        },
+      },
+      value: { settings: {} },
+      expectedErrors: [
+        {
+          path: "settings.dot.name",
+          valuePath: ["settings", "dot.name"],
+          message: "must have required property 'dot.name'",
+          text: "settings.dot.name: must have required property 'dot.name'",
+        },
+        {
+          path: "settings.slash/name",
+          valuePath: ["settings", "slash/name"],
+          message: "must have required property 'slash/name'",
+          text: "settings.slash/name: must have required property 'slash/name'",
+        },
+        {
+          path: "settings.tilde~1name",
+          valuePath: ["settings", "tilde~1name"],
+          message: "must have required property 'tilde~1name'",
+          text: "settings.tilde~1name: must have required property 'tilde~1name'",
+        },
+        {
+          path: "settings",
+          valuePath: ["settings", ""],
+          message: "must have required property ''",
+          text: "settings: must have required property ''",
+        },
+        {
+          path: "settings.<root>",
+          valuePath: ["settings", "<root>"],
+          message: "must have required property '<root>'",
+          text: "settings.<root>: must have required property '<root>'",
         },
       ],
     },
@@ -73,6 +161,7 @@ describe("schema validator", () => {
         expectedErrors: [
           {
             path: "<root>",
+            valuePath: [],
             message: "must have properties b, c when property a is present",
             text: "<root>: must have properties b, c when property a is present",
           },
@@ -85,6 +174,7 @@ describe("schema validator", () => {
         expectedErrors: [
           {
             path: "<root>",
+            valuePath: [],
             message: "must have properties b, c when property a is present",
             text: "<root>: must have properties b, c when property a is present",
           },
@@ -115,21 +205,25 @@ describe("schema validator", () => {
         expectedErrors: [
           {
             path: "room.one",
+            valuePath: ["room/one"],
             message: "must have properties left, right when property literal is present",
             text: "room.one: must have properties left, right when property literal is present",
           },
           {
             path: "room.one",
+            valuePath: ["room", "one"],
             message: "must have properties left, right when property nested is present",
             text: "room.one: must have properties left, right when property nested is present",
           },
           {
             path: "room~1one",
+            valuePath: ["room~1one"],
             message: "must have properties left, right when property tilde is present",
             text: "room~1one: must have properties left, right when property tilde is present",
           },
           {
             path: "room%2Fone",
+            valuePath: ["room%2Fone"],
             message: "must have properties left, right when property percent is present",
             text: "room%2Fone: must have properties left, right when property percent is present",
           },

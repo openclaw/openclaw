@@ -69,29 +69,28 @@ describe("harness prompt failure presentation", () => {
         provider: "openai",
         model: "missing-model",
         agentHarnessId: "terminal-error-fixture",
+        terminalReplyExpectation: "result-required",
       });
 
       expect(runAttempt).toHaveBeenCalledOnce();
       expect(result.meta.error).toMatchObject({ message: error.message, fallbackSafe: false });
-      expect(result.payloads).toHaveLength(1);
-      expect(result.payloads?.[0]?.isError).toBe(true);
-      const text = result.payloads?.[0]?.text;
-      expect(text).toContain(
-        preflight
-          ? userMessage
-          : known
-            ? "This model was not found."
-            : "couldn't generate a response",
-      );
-      expect(text).not.toContain(error.message);
-      if (known) {
-        expect(text).toContain(
-          "Choose another model in the Control UI or run `openclaw configure`.",
-        );
-      }
-      if (hadPotentialSideEffects) {
-        expect(text).toContain("some tool actions may have already been executed");
-        expect(text).toContain("verify before retrying");
+      if (!known && !preflight) {
+        expect(result.payloads).toBeUndefined();
+      } else {
+        expect(result.payloads).toHaveLength(1);
+        expect(result.payloads?.[0]?.isError).toBe(true);
+        const text = result.payloads?.[0]?.text;
+        expect(text).toContain(preflight ? userMessage : "This model was not found.");
+        expect(text).not.toContain(error.message);
+        if (known) {
+          expect(text).toContain(
+            "Choose another model in the Control UI or run `openclaw configure`.",
+          );
+        }
+        if (hadPotentialSideEffects) {
+          expect(text).toContain("some tool actions may have already been executed");
+          expect(text).toContain("verify before retrying");
+        }
       }
     },
   );

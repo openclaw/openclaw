@@ -1,12 +1,11 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  parseSpeechDirectiveNumberOverride,
+  createSpeechDirectiveParser,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -40,7 +39,7 @@ function normalizeInworldTemperature(value: unknown): number | undefined {
 
 function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.inworld) ?? asOptionalRecord(rawConfig.inworld);
+  const raw = asOptionalRecord(providers?.inworld);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -55,7 +54,7 @@ function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>) {
 
 function readInworldProviderConfig(config: SpeechProviderConfig) {
   return normalizeInworldProviderConfig({
-    inworld: { ...config, apiKey: trimToUndefined(config.apiKey) },
+    providers: { inworld: { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
 }
 
@@ -84,27 +83,20 @@ async function synthesizeInworld(req: InworldSynthesisRequest): Promise<Buffer> 
   });
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
-  if (ctx.key === "temperature") {
-    return parseSpeechDirectiveNumberOverride({
-      ctx,
-      overrideKey: "temperature",
-      range: { min: 0, minExclusive: true, max: 2 },
-      warning: (value) => `invalid Inworld temperature "${value}"`,
-    });
-  }
-  const key = ["voice", "voiceid", "voice_id", "inworld_voice", "inworldvoice"].includes(ctx.key)
-    ? "voiceId"
-    : ["model", "modelid", "model_id", "inworld_model", "inworldmodel"].includes(ctx.key)
-      ? "modelId"
-      : undefined;
-  if (!key) {
-    return { handled: false };
-  }
-  return (key === "voiceId" ? ctx.policy.allowVoice : ctx.policy.allowModelId)
-    ? { handled: true, overrides: { [key]: ctx.value } }
-    : { handled: true };
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  temperature: [
+    "allowVoiceSettings",
+    ["temperature"],
+    {
+      number: {
+        range: { min: 0, minExclusive: true, max: 2 },
+        warning: (value) => `invalid Inworld temperature "${value}"`,
+      },
+    },
+  ],
+  voiceId: ["allowVoice", ["voice", "voiceid", "voice_id", "inworld_voice", "inworldvoice"]],
+  modelId: ["allowModelId", ["model", "modelid", "model_id", "inworld_model", "inworldmodel"]],
+});
 
 export function buildInworldSpeechProvider(): SpeechProviderPlugin {
   const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>

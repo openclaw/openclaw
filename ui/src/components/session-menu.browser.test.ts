@@ -1,7 +1,11 @@
 import { expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { mountMenu, selectMenuValue } from "../test-helpers/session-menu.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
+import {
+  mountMenu,
+  openSubmenu,
+  selectMenuValue,
+  settleSessionMenu,
+} from "../test-helpers/session-menu.ts";
 import "../test-helpers/load-styles.ts";
 
 it("dispatches compact archive with the existing A shortcut", async () => {
@@ -45,15 +49,19 @@ it("keeps compact custom snooze keyboard input inside its popover", async () => 
   await page.viewport(390, 844);
   const onAction = vi.fn();
   const menu = await mountMenu({ compact: true, snoozeAllowed: true, onAction });
-  selectMenuValue(menu, "compact:open-snooze");
+  await selectMenuValue(menu, "compact:open-snooze");
   await page.getByText("Choose another time", { exact: true }).click();
   const field = page.getByLabelText("Date and time", { exact: true });
-  const picker = page.elementLocator(
-    menu.querySelector<HTMLElement>(".session-menu__snooze-picker")!,
-  );
+  const picker = menu.querySelector<HTMLElement>(".session-menu__snooze-picker")!;
+  await expect.element(field).toHaveFocus();
+  await userEvent.tab();
+  await expect.element(page.getByRole("button", { name: "Cancel", exact: true })).toHaveFocus();
+  await userEvent.tab();
+  await expect.element(page.getByRole("button", { name: "Snooze", exact: true })).toHaveFocus();
+  await userEvent.tab();
   await expect.element(field).toHaveFocus();
   await userEvent.keyboard("{Escape}");
-  await expect.element(picker).not.toBeVisible();
+  await expect.poll(() => picker.checkVisibility({ checkVisibilityCSS: true })).toBe(false);
   await expect
     .element(page.getByRole("menuitem", { name: "Choose another time", exact: true }))
     .toHaveFocus();
@@ -65,5 +73,21 @@ it("keeps compact custom snooze keyboard input inside its popover", async () => 
     .toHaveTextContent("Choose a date and time in the future.");
   expect(onAction).not.toHaveBeenCalled();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect.element(picker).not.toBeVisible();
+  await expect.poll(() => picker.checkVisibility({ checkVisibilityCSS: true })).toBe(false);
+});
+
+it("recreates the custom snooze picker when the menu opens at another anchor", async () => {
+  const menu = await mountMenu({ snoozeAllowed: true });
+  await openSubmenu(menu, "Snooze");
+  await page.getByRole("menuitem", { name: "Choose another time", exact: true }).click();
+  const field = page.getByLabelText("Date and time", { exact: true });
+  await expect.element(field).toHaveFocus();
+  const previous = menu.querySelector(".session-menu__snooze-picker");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  menu.anchor = { x: 200, y: 150 };
+  await settleSessionMenu(menu);
+  await openSubmenu(menu, "Snooze");
+  await page.getByRole("menuitem", { name: "Choose another time", exact: true }).click();
+  await expect.element(field).toHaveFocus();
+  expect(menu.querySelector(".session-menu__snooze-picker")).not.toBe(previous);
 });

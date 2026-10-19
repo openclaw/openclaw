@@ -4,6 +4,7 @@ import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 import { createWorkboardWidget } from "./widgets.tsx";
+import { WorkboardWidgetModel } from "./widgets/runtime.ts";
 
 const disposers: (() => void)[] = [];
 afterEach(() => {
@@ -11,6 +12,7 @@ afterEach(() => {
     dispose();
   }
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 function mountWidget(canMutate = true, presented = true) {
@@ -45,6 +47,52 @@ it("renders the public card widget with read-only status controls", async () => 
   select!.value = "done";
   select!.dispatchEvent(new Event("change", { bubbles: true }));
   expect(widget.request.mock.calls).toHaveLength(1);
+});
+
+it("does not derive cards for unrelated host notifications but updates permission and card changes", async () => {
+  const widget = mountWidget();
+  await vi.waitFor(() => expect(widget.container.textContent).toContain(widget.card.title));
+  const select = widget.container.querySelector("select")!;
+  const deriveCards = vi.spyOn(WorkboardWidgetModel.prototype, "cards", "get");
+  for (let index = 0; index < 10; index += 1) {
+    widget.fixture.notify();
+    flush();
+  }
+  expect(deriveCards).not.toHaveBeenCalled();
+  expect(widget.container.querySelector("select")).toBe(select);
+  expect(widget.request).toHaveBeenCalledTimes(1);
+
+  Object.assign(widget.fixture.host, { locale: "es" });
+  widget.fixture.notify();
+  flush();
+  expect(select.getAttribute("aria-label")).toBe(`Estado: ${widget.card.title}`);
+  expect(deriveCards).not.toHaveBeenCalled();
+  Object.assign(widget.fixture.host, { locale: "en" });
+  widget.fixture.notify();
+  flush();
+
+  widget.fixture.connection.canWrite = false;
+  widget.fixture.notify();
+  flush();
+  expect(select.disabled).toBe(true);
+  widget.fixture.connection.canWrite = true;
+  widget.fixture.notify();
+  flush();
+  expect(select.disabled).toBe(false);
+
+  widget.request.mockResolvedValueOnce({ cards: [{ ...widget.card, title: "Changed card" }] });
+  widget.fixture.emit("plugin.workboard.changed", {});
+  await vi.waitFor(() => expect(widget.container.textContent).toContain("Changed card"));
+  expect(deriveCards).toHaveBeenCalled();
+  expect(widget.container.querySelector("select")).toBe(select);
+
+  widget.mounted?.update?.({ ...widget.context, presented: false });
+  flush();
+  deriveCards.mockClear();
+  widget.fixture.notify();
+  flush();
+  expect(deriveCards).not.toHaveBeenCalled();
+  expect(widget.fixture.listeners).toEqual(widget.initialListeners);
 });
 
 it("starts visible widgets and releases hidden widget subscriptions", async () => {

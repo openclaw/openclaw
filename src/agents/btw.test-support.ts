@@ -9,7 +9,6 @@ import {
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import {
   streamSimpleMock,
-  readFileMock,
   parseSessionEntriesMock,
   migrateSessionEntriesMock,
   buildSessionContextMock,
@@ -162,7 +161,9 @@ function mockCliOutput(output: { text: string; rawText?: string }) {
 }
 
 function registerCodexSideQuestionHarness(
-  overrides: Partial<Pick<AgentHarness, "authBootstrap" | "supports">> = {},
+  overrides: Partial<
+    Pick<AgentHarness, "authBootstrap" | "supports" | "resolveSessionRuntimeOwnershipAsync">
+  > = {},
 ) {
   const runHarnessSideQuestion = vi.fn().mockResolvedValue({ text: "Codex side answer." });
   registerAgentHarness({
@@ -400,7 +401,6 @@ export function setupBtwTestHooks() {
 
   beforeEach(() => {
     streamSimpleMock.mockReset();
-    readFileMock.mockReset();
     parseSessionEntriesMock.mockReset();
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
@@ -462,7 +462,6 @@ export function setupBtwTestHooks() {
     };
     preparedRuntimeSnapshotState.useSnapshotPluginRegistry = false;
 
-    readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
     mockTranscriptEntries([
       createTranscriptEntry({

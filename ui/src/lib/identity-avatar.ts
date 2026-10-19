@@ -1,8 +1,8 @@
 import {
   buildControlUiResourcePath,
+  canonicalizeControlUiUserAvatarPath,
   parseControlUiResourcePath,
 } from "../../../src/gateway/control-ui-resource-routes.js";
-import { canonicalizeControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
 import { configuredUiDevGateway, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";

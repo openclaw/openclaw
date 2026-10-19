@@ -1,4 +1,3 @@
-// Feishu plugin owns raw Lark event admission, replay, and turn adoption.
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -23,7 +22,7 @@ const FEISHU_DURABLE_EVENT_TYPES = new Set([
 ]);
 
 export type FeishuIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission"> & {
-  registerAbandonHandler?: (handler: () => void | Promise<void>) => () => void;
+  onBeforeAbandon?: () => void | Promise<void>;
 };
 
 type FeishuIngressPayload = {
@@ -331,18 +330,14 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         ),
     },
     deliver: async (rawEnvelope, lifecycle, claim) => {
-      const abandonHandlers = new Set<() => void | Promise<void>>();
-      // Feishu handlers can defer transport settlement across broadcast lanes.
-      // Keep their lifecycle registry local while the monitor owns the durable claim.
+      // The message debounce owner releases its logical claim before transport abandonment.
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
         onAbandoned: async () => {
-          await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
+          await Promise.resolve()
+            .then(() => wrappedLifecycle.onBeforeAbandon?.())
+            .catch(() => undefined);
           await lifecycle.onAbandoned();
-        },
-        registerAbandonHandler: (handler) => {
-          abandonHandlers.add(handler);
-          return () => abandonHandlers.delete(handler);
         },
       };
       activeLifecycles.set(claim.id, wrappedLifecycle);

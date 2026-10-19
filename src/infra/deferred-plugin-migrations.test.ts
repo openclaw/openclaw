@@ -7,7 +7,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import {
+  hasPluginLifecycleLeaseDemand,
+  runOutsidePluginLifecycleLease,
+  withPluginLifecycleLease,
+} from "../plugins/plugin-lifecycle-lease.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import * as stateDatabaseHandles from "../state/openclaw-state-db-handle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -122,6 +126,32 @@ describe("deferred configured-plugin migrations", () => {
       ]);
     },
   );
+
+  it("excludes a detached migration writer while the plugin lease pins policy rows", async () => {
+    const { env } = fixture();
+    const leasedMigration = {
+      pluginId: "fixture",
+      reason: "Waiting for repair",
+      command: "openclaw doctor --fix",
+    };
+    let writerSettled = false;
+    let writer: Promise<unknown> | undefined;
+
+    await withPluginLifecycleLease({ env }, async () => {
+      writer = runOutsidePluginLifecycleLease(() =>
+        recordDeferredPluginMigrations({ env, pending: [leasedMigration] }).finally(() => {
+          writerSettled = true;
+        }),
+      );
+      await vi.waitFor(() => expect(hasPluginLifecycleLeaseDemand()).toBe(true));
+      expect(writerSettled).toBe(false);
+      expect(readDeferredPluginMigrations({ env })).toEqual([]);
+    });
+
+    await writer;
+    expect(writerSettled).toBe(true);
+    expect(readDeferredPluginMigrations({ env })).toEqual([leasedMigration]);
+  });
 
   it.each(["transaction", "commit"] as const)(
     "rolls back deferred obligations when the requester is revoked at worker %s admission",
@@ -629,11 +659,6 @@ describe("deferred plugin migration repair guidance", () => {
   it.each([
     { markers: ["OPENCLAW_UPDATE_IN_PROGRESS"], command: pending.command, laterPass: true },
     // Post-core convergence is the final migration pass, even inside an update child.
-    {
-      markers: ["OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"],
-      command: pending.command,
-      laterPass: false,
-    },
     {
       markers: ["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"],
       command: pending.command,

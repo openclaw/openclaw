@@ -3,12 +3,12 @@ import {
   createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "openclaw/plugin-sdk/lazy-runtime";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import {
   createMoonshotThinkingWrapper,
   DEFAULT_CONTEXT_TOKENS,
@@ -222,10 +222,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
   const isNativeOllamaTransport = model?.api === "ollama";
 
   if (model) {
-    const providerId =
-      typeof model.provider === "string" && model.provider.trim().length > 0
-        ? model.provider
-        : ctx.provider;
+    const providerId = model.provider.trim() ? model.provider : ctx.provider;
     if (
       shouldInjectOllamaCompatNumCtx({
         model,

@@ -299,6 +299,31 @@ function readCurrentProducerJob(repository, jobId, runGh) {
   }
 }
 
+function jobExecution(job) {
+  return JSON.stringify([
+    job.status,
+    job.conclusion,
+    job.started_at,
+    job.completed_at,
+    (job.steps ?? []).map((step) => [
+      step.number,
+      step.name,
+      step.status,
+      step.conclusion,
+      step.started_at,
+      step.completed_at,
+    ]),
+  ]);
+}
+
+// Failed-job reruns list each retained green job again under the new attempt
+// with a fresh job ID; the copy keeps the original execution timestamps.
+export function sameJobExecution(left, right) {
+  return (
+    Boolean(left.started_at && left.completed_at) && jobExecution(left) === jobExecution(right)
+  );
+}
+
 function readAttemptJobs(repository, producer, runGh) {
   const jobs = [];
   for (let page = 1; page <= 10; page += 1) {
@@ -306,7 +331,8 @@ function readAttemptJobs(repository, producer, runGh) {
       repository,
       `actions/runs/${producer.runId}/attempts/${producer.runAttempt}/jobs?per_page=100&page=${page}`,
       runGh,
-      "{total_count,jobs:[.jobs[] | {id,name,run_id,run_attempt,head_sha,status,conclusion}]}",
+      // Keep the execution fields sameJobExecution compares.
+      "{total_count,jobs:[.jobs[] | {id,name,run_id,run_attempt,head_sha,status,conclusion,started_at,completed_at,steps:[(.steps // [])[] | {number,name,status,conclusion,started_at,completed_at}]}]}",
     );
     if (
       !Array.isArray(response.jobs) ||
@@ -429,7 +455,7 @@ export function verifyNpmBundleProducer({
     ) {
       throw new Error("Incomplete or mismatched npm producer attempt evidence.");
     }
-    if (jobs.some((entry) => entry.name === producer.jobName)) {
+    if (jobs.some((entry) => entry.name === producer.jobName && !sameJobExecution(job, entry))) {
       throw new Error("npm bundle producer job was superseded by a later attempt.");
     }
   }

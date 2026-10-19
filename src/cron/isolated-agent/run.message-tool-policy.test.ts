@@ -1,5 +1,16 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import {
+  buildDefaultTestCliBackend,
+  createCliRunnerPrepareFixture,
+} from "../../agents/cli-runner.test-helpers.js";
+import { prepareCliRunContext } from "../../agents/cli-runner/prepare.js";
+import {
+  resetCliRunnerPrepareTestDeps,
+  setCliRunnerPrepareTestDeps,
+} from "../../agents/cli-runner/prepare.test-support.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -224,10 +235,12 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
           },
           "CLI run params",
         );
-        const [{ buildCliMcpGrantContext }, { createMessageTool }] = await Promise.all([
-          import("../../agents/cli-runner/mcp-grant-context.js"),
-          import("../../agents/tools/message-tool-execution.js"),
-        ]);
+        const [{ buildCliMcpGrantContext }, { createMessageTool }, messageActionRunner] =
+          await Promise.all([
+            import("../../agents/cli-runner/mcp-grant-context.js"),
+            import("../../agents/tools/message-tool-execution.js"),
+            import("../../infra/outbound/message-action-runner.js"),
+          ]);
         const grant = buildCliMcpGrantContext({
           run: runParams as never,
           config: {},
@@ -236,13 +249,9 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
           modelProvider: "openai",
           modelId: "gpt-5.4",
         });
-        const tool = createMessageTool({
-          agentAccountId: grant.accountId,
-          currentChannelProvider: grant.messageProvider,
-          requireExplicitTarget: grant.requireExplicitMessageTarget,
-          preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
-          getRuntimeConfig: () => ({}),
-          runMessageAction: async (input) => {
+        const action = vi
+          .spyOn(messageActionRunner, "runMessageAction")
+          .mockImplementation(async (input) => {
             messageActionInput = requireRecord(input, "message action input");
             return {
               kind: "send",
@@ -253,14 +262,24 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
               payload: {},
               dryRun: false,
             };
-          },
-        });
-        await tool.execute("call-1", {
-          action: "send",
-          channel: "telegram",
-          target: "123",
-          message: "done",
-        });
+          });
+        try {
+          const tool = createMessageTool({
+            config: {},
+            agentAccountId: grant.accountId,
+            currentChannelProvider: grant.messageProvider,
+            requireExplicitTarget: grant.requireExplicitMessageTarget,
+            preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+          });
+          await tool.execute("call-1", {
+            action: "send",
+            channel: "telegram",
+            target: "123",
+            message: "done",
+          });
+        } finally {
+          action.mockRestore();
+        }
         return messageResult([{ tool: "message", provider: "telegram", to: "123" }]);
       });
       const result = await runCronIsolatedAgentTurn(
@@ -488,6 +507,93 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       expect(prompt).toContain('"channel":"topicchat","target":"room","threadId":"42"');
       expect(prompt).not.toMatch(/\bsummary\b/i);
     });
+
+    it.each(["chat", "isolated"] as const)(
+      "preserves the %s CLI binding across an announce wake",
+      async (kind) => {
+        cliBackendsTesting.setDepsForTest({
+          resolvePluginSetupCliBackend: () => undefined,
+          resolveRuntimeCliBackends: () => [buildDefaultTestCliBackend()],
+        });
+        setCliRunnerPrepareTestDeps({
+          isWorkspaceBootstrapPending: async () => false,
+          resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+          resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+          prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
+          loadManifestModelCatalog: () => [],
+        });
+        const cli = createCliRunnerPrepareFixture((params) =>
+          prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
+        );
+        const prepared: PreparedCliRunContext[] = [];
+        try {
+          const isolated = kind === "isolated";
+          const sessionKey = isolated ? "cron:message-tool-policy" : "agent:main:main";
+          const ordinaryPolicy = {
+            sourceReplyDeliveryMode: isolated ? undefined : ("automatic" as const),
+            requireExplicitMessageTarget: isolated,
+          };
+          const first = await cli.prepare({ sessionKey, ...ordinaryPolicy });
+          prepared.push(first);
+          const binding = {
+            sessionId: "native-cli-session",
+            extraSystemPromptHash: first.extraSystemPromptHash,
+            messageToolPolicyHash: first.messageToolPolicyHash,
+            promptToolNamesHash: first.promptToolNamesHash,
+            cwdHash: first.cwdHash,
+            mcpConfigHash: first.preparedBackend.mcpConfigHash,
+            mcpResumeHash: first.preparedBackend.mcpResumeHash,
+          };
+          mockCliAnnounce();
+          runCliAgentMock.mockImplementation(async (runParams: RunCliAgentParams) => {
+            const wake = await cli.prepare({
+              sessionKey: runParams.sessionKey,
+              trigger: runParams.trigger,
+              sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
+              requireExplicitMessageTarget: runParams.requireExplicitMessageTarget,
+              cliSessionBindingFacts: runParams.cliSessionBindingFacts,
+              cliSessionBinding: binding,
+            });
+            prepared.push(wake);
+            expect(wake.params.requireExplicitMessageTarget).toBe(true);
+            expect(wake.reusableCliSession).toEqual({
+              mode: "reuse",
+              sessionId: binding.sessionId,
+            });
+            binding.messageToolPolicyHash = wake.messageToolPolicyHash;
+            return { payloads: [{ text: "done" }], meta: { agentMeta: { usage } } };
+          });
+          const result = await runCronIsolatedAgentTurn({
+            ...makeParams(
+              makeJob(
+                announce,
+                {},
+                {
+                  sessionTarget: isolated ? "isolated" : `session:${sessionKey}`,
+                },
+              ),
+            ),
+            sessionKey,
+          });
+          expect(result.status, result.error).toBe("ok");
+          expect(runCliAgentMock).toHaveBeenCalledOnce();
+          const next = await cli.prepare({
+            sessionKey,
+            ...ordinaryPolicy,
+            cliSessionBinding: binding,
+          });
+          prepared.push(next);
+          expect(next.reusableCliSession).toEqual({ mode: "reuse", sessionId: binding.sessionId });
+        } finally {
+          for (const context of prepared) {
+            await context.preparedBackend.cleanup?.();
+          }
+          await cli.cleanup();
+          resetCliRunnerPrepareTestDeps();
+          cliBackendsTesting.resetDepsForTest();
+        }
+      },
+    );
 
     it.each([true])(
       "keeps a successful isolated turn at status ok when post-run delivery fails (bestEffort=%s)",

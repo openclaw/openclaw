@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { safeStatSync } from "@openclaw/fs-safe/path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
 import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
-import { hashText } from "./hash.js";
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
@@ -22,12 +22,12 @@ import {
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
-  isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
   prepareSessionEntriesInWorker,
+  prepareAssistantTranscriptText,
   readSessionEntrySnapshotInWorker,
   readRestoredSessionTranscript,
   readTranscriptStatsAsync,
@@ -435,9 +435,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   ) {
     return null;
   }
-  if (isSilentReplyPayloadText(normalized)) {
-    return null;
-  }
   // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
   // nothing to do" reply to a heartbeat tick. Drop on the assistant side
   // directly so we do not have to rely on cross-message coupling with the
@@ -483,7 +480,7 @@ function sqliteSessionFileState(
   };
 }
 
-/** @deprecated Await statSessionEntry. Final compatibility day: 2026-12-31; prepared statistics do not read SQLite. */
+/** @deprecated Await statSessionEntry. Final compatibility day: 2026-12-31; prepared statistics do not read SQLite. Removal in the first January 2027 stable release. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
@@ -691,7 +688,9 @@ async function buildSessionEntryFromSource(
       (sqliteIdentity
         ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
             // Observers require original messages and run only after the snapshot closes.
-            projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+            projectEvent: opts.onTranscriptMessage
+              ? undefined
+              : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
           })
         : null);
     const sqliteSource =
@@ -726,7 +725,7 @@ async function buildSessionEntryFromSource(
           absPath,
           mtimeMs: stat.mtimeMs,
           size: stat.size,
-          hash: hashText("\n\n"),
+          hash: sha256Hex("\n\n"),
           content: "",
           lineMap: [],
           messageTimestampsMs: [],
@@ -862,8 +861,14 @@ async function buildSessionEntryFromSource(
       ) {
         continue;
       }
-      const rawText = collectRawSessionText(message.content);
-      if (rawText === null) {
+      if ("display" in message && message.display === false) {
+        continue;
+      }
+      const rawText = prepareAssistantTranscriptText(
+        message,
+        collectRawSessionText(message.content) ?? undefined,
+      );
+      if (rawText === undefined) {
         continue;
       }
 

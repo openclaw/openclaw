@@ -116,12 +116,18 @@ export class SqliteSessionImportStage {
     return !this.rejected;
   }
 
-  addSeen(eventJson: string): void {
-    this.insertSeen.run(hash("sha256", eventJson, "buffer"), eventJson);
+  addSeen(eventJson: string, repairLegacyTranscript = false): unknown {
+    const event: unknown = repairLegacyTranscript ? JSON.parse(eventJson) : undefined;
+    const normalizedJson =
+      isRecord(event) && normalizeLegacyOpenAICodexTranscriptMetadata([event]) > 0
+        ? JSON.stringify(event)
+        : eventJson;
+    this.insertSeen.run(hash("sha256", normalizedJson, "buffer"), normalizedJson);
+    return event;
   }
 
-  /** Plan repair on disk; headers-only verification preserves every other payload. */
-  repairLegacyTranscript(source: number, headersOnly = false) {
+  /** Plan the importer's persisted projection on disk. */
+  repairLegacyTranscript(source: number) {
     this.database.exec(
       "DELETE FROM tree; DELETE FROM tree_sets; DELETE FROM selected; DELETE FROM user_keys;",
     );
@@ -200,9 +206,6 @@ export class SqliteSessionImportStage {
           }
           headerSeq ??= row.seq;
           header ??= entry;
-          continue;
-        }
-        if (headersOnly) {
           continue;
         }
         if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
@@ -389,6 +392,6 @@ export class SqliteSessionImportStage {
     const count = this.database
       .prepare("SELECT COUNT(*) AS count FROM rows WHERE source = ?")
       .get(source);
-    return { repaired: changed, events: Number(count!.count), recognized };
+    return { repaired: changed, branchRepaired: broken, events: Number(count!.count), recognized };
   }
 }

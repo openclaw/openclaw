@@ -1,4 +1,3 @@
-// ClawHub package metadata, security, search, and telemetry operations.
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
@@ -151,7 +150,7 @@ export type ClawHubPackageClawPackSummary = {
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
 };
-type ClawHubClawManifestSummary = {
+export type ClawHubClawManifestSummary = {
   schemaVersion: 1;
   agent: { id: string; name?: string; description?: string };
   workspace: { bootstrapFiles: string[]; fileCount: number };
@@ -161,7 +160,7 @@ type ClawHubClawManifestSummary = {
   mcpServerCount: number;
   cronJobCount: number;
 };
-type ClawHubPackageListItem = {
+export type ClawHubPackageListItem = {
   name: string;
   displayName: string;
   family: ClawHubPackageFamily;
@@ -187,6 +186,10 @@ type ClawHubPackageListItem = {
   environmentFlags?: string[];
   artifact?: ClawHubPackageArtifactSummary | null;
   clawpack?: ClawHubPackageClawPackSummary;
+};
+export type ClawHubPackageListResponse = {
+  items: ClawHubPackageListItem[];
+  nextCursor: string | null;
 };
 export type ClawHubPackageDetail = {
   package:
@@ -367,8 +370,38 @@ export async function fetchClawHubPackageDetail(
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
+}
+
+export async function listClawHubPackages(
+  params: ClawHubFetchOptions & {
+    family?: ClawHubPackageFamily;
+    isOfficial?: boolean;
+    limit?: number;
+    cursor?: string;
+  },
+): Promise<ClawHubPackageListResponse> {
+  const result = await fetchClawHubJson<ClawHubPackageListResponse>({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/packages",
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    search: {
+      family: params.family,
+      isOfficial: params.isOfficial === undefined ? undefined : String(params.isOfficial),
+      limit: params.limit === undefined ? undefined : String(params.limit),
+      cursor: params.cursor,
+    },
+  });
+  if (
+    !isJsonObject(result) ||
+    !Array.isArray(result.items) ||
+    !result.items.every(isJsonObject) ||
+    (result.nextCursor !== null && typeof result.nextCursor !== "string")
+  ) {
+    throw new Error("Malformed ClawHub package list response.");
+  }
+  return result;
 }
 
 export async function fetchClawHubPackageVersion(
@@ -384,7 +417,6 @@ export async function fetchClawHubPackageVersion(
     )}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -401,7 +433,6 @@ export async function fetchClawHubPackageArtifact(
     )}/artifact`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -418,7 +449,6 @@ export async function fetchClawHubPackageSecurity(
     )}/security`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   return parseClawHubPackageSecurityResponse(response);
 }
@@ -436,7 +466,6 @@ export async function searchClawHubPackages(
     path: "/api/v1/packages/search",
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: {
       q: params.query.trim(),
       family: params.family,

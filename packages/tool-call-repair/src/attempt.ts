@@ -246,21 +246,40 @@ function isStructuredCall(
   text: string,
   hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
 ): boolean {
-  const detection = classifyJsonValue(safeParseJson(text), hasToolName);
+  const wrapper = /^<(tool_calls?|function_call)>\s*([\s\S]*?)\s*<\/\1>$/i.exec(text);
+  const body = wrapper?.[2] ?? text;
+  const detection = classifyJsonValue(safeParseJson(body), hasToolName);
   if (detection?.toolName) {
     return true;
   }
-  if (parseStandalonePlainTextToolCallBlocks(text)?.some((block) => hasToolName(block.name))) {
+  if (parseStandalonePlainTextToolCallBlocks(body)?.some((block) => hasToolName(block.name))) {
     return true;
   }
   const invoke =
-    /^<(invoke|tool_call|function_call)\s+name=["']([^"']+)["']\s*>[\s\S]*<\/\1>$/i.exec(text);
+    /^<(invoke|tool_call|function_call)\s+name=["']([^"']+)["']\s*>[\s\S]*<\/\1>$/i.exec(body);
   if (invoke && hasToolName(invoke[2] ?? "")) {
     return true;
   }
-  const wrapper = /^<(tool_call|function_call)>\s*([\s\S]*?)\s*<\/\1>$/i.exec(text);
-  const wrapped = wrapper ? classifyJsonValue(safeParseJson(wrapper[2] ?? ""), hasToolName) : null;
-  return Boolean(wrapped?.toolName);
+  const action =
+    /^Action[ \t]*:[ \t]*([A-Za-z_][A-Za-z0-9_.:-]{0,119})[ \t]*\r?\n[ \t]*Action Input[ \t]*:[ \t]*([\s\S]+)$/i.exec(
+      body,
+    );
+  if (action) {
+    const input = action[2]?.trim() ?? "";
+    // JSON-shaped input must be complete; multiline prose is not a ReAct call.
+    return (
+      hasToolName(action[1] ?? "") &&
+      Boolean(input) &&
+      (!/^[{["]|[\r\n]/.test(input) || safeParseJson(input) !== undefined)
+    );
+  }
+  const legacy =
+    /^\[\s*TOOL_CALL\s*\]\s*\{\s*tool\s*=>\s*(["'])([A-Za-z_][A-Za-z0-9_.:-]{0,119})\1\s*,\s*args\s*=>\s*(\{[\s\S]*\})\s*\}\s*\[\s*\/TOOL_CALL\s*\]$/i.exec(
+      body,
+    );
+  return Boolean(
+    legacy && hasToolName(legacy[2] ?? "") && asOptionalRecord(safeParseJson(legacy[3] ?? "")),
+  );
 }
 
 /** Detects a non-executable near miss; this must never be used to dispatch a tool. */
@@ -279,7 +298,7 @@ export function isPlainTextToolCallAttempt(
     /^([\s\S]*?)(?:^|\n)[ \t]*(```|~~~)(?:json|xml)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\2$/i.exec(
       trimmed,
     );
-  const trailing = /^([^\n]+)\n\s*((?:<|\{|\[)[\s\S]*)$/i.exec(trimmed);
+  const trailing = /^([^\n]+)\n\s*((?:<|\{|\[|Action\s*:)[\s\S]*)$/i.exec(trimmed);
   const prefix = (fence?.[1] ?? trailing?.[1] ?? "").trim();
   const body = fence?.[3] ?? trailing?.[2];
   const announcement = /^(?:I(?:'ll| will| am going to)|Let me) (.+?)(?: now)?[.!:]?$/i.exec(

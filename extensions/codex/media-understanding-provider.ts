@@ -1,7 +1,3 @@
-/**
- * Codex-backed media understanding provider for bounded image description and
- * structured extraction turns.
- */
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type {
   ImagesDescriptionRequest,

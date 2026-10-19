@@ -99,3 +99,20 @@ export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; pa
 export function removeAgentIntegrityMetadataForTest(pathname: string): void {
   fs.rmSync(`${pathname}.seal`, { force: true });
 }
+
+export function fixtureVolumeHasFileAlias(
+  directory: string,
+  filename: string,
+  alias: string,
+): boolean {
+  const probeDir = fs.realpathSync(directory);
+  const probePath = path.join(probeDir, filename);
+  fs.writeFileSync(probePath, "probe");
+  try {
+    const probe = fs.lstatSync(probePath, { bigint: true });
+    const alternate = fs.lstatSync(path.join(probeDir, alias), { bigint: true });
+    return probe.dev === alternate.dev && probe.ino === alternate.ino;
+  } catch {
+    return false;
+  }
+}

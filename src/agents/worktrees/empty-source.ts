@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex as sourceName } from "@openclaw/normalization-core/node-crypto";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -18,10 +19,6 @@ const INITIAL_COMMIT_ID = createHash("sha1")
 
 function sourceParent(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "worktree-sources", "empty");
-}
-
-function sourceName(ownerId: string): string {
-  return createHash("sha256").update(ownerId).digest("hex");
 }
 
 async function hasEmptySourceLayout(sourceRoot: string): Promise<boolean> {

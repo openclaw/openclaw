@@ -4,6 +4,10 @@ import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
@@ -11,12 +15,12 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as diffSyntax from "./chat-diff-highlight.runtime.ts";
-import { SessionDiffPanel } from "./session-diff-panel.ts";
+import { SessionDiffPanel } from "./session-diff-panel.tsx";
 import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
   SessionDiffOwner,
-} from "./session-diff-panel.ts";
+} from "./session-diff-panel.tsx";
 
 type SessionDiffElement = HTMLElement & {
   owner: SessionDiffOwner | null;
@@ -206,6 +210,43 @@ describe("SessionDiffPanel", () => {
     expect(panel.textContent).not.toContain("feature/replacement");
   });
 
+  it("shows loading instead of the old files while a changed scope is pending", async () => {
+    const pending = deferred<SessionsDiffResult>();
+    const loader = vi
+      .fn<SessionDiffLoader>()
+      .mockResolvedValueOnce(fileResult(SNAPSHOT_PATCH))
+      .mockReturnValueOnce(pending.promise);
+    const panel = mountPanel();
+    panel.loader = loader;
+    await waitForSolid(() => expect(panel.querySelector(".session-diff__file")).not.toBeNull());
+
+    panel.querySelector<HTMLButtonElement>(".session-diff__section-title")!.click();
+    await waitForSolid(() =>
+      expect(panel.querySelector('button[value="scope:uncommitted"]')).not.toBeNull(),
+    );
+    panel.querySelector<HTMLButtonElement>('button[value="scope:uncommitted"]')!.click();
+    try {
+      await waitForSolid(() => {
+        expect(panel.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+        expect(panel.querySelector(".session-diff__file")).toBeNull();
+      });
+      expect(loader).toHaveBeenLastCalledWith({ scope: "uncommitted" });
+    } finally {
+      pending.resolve(fileResult(FRESH_PATCH));
+    }
+    await waitForSolid(() => expect(panel.textContent).toContain("fresh snapshot line"));
+  });
+
+  it("shows a terminal error when the diff RPC returns an invalid result", async () => {
+    const client = createTestGatewayClient(createGatewayRequestMock().mockResolvedValue({}));
+    const panel = mountPanel();
+    panel.loader = (scope) => client.request<SessionsDiffResult>("sessions.diff", scope);
+
+    await waitForSolid(() => expect(panel.querySelector(".callout.danger")).not.toBeNull());
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
+  });
+
   it.each([true])("highlights source in split=%s without changing its text", async (split) => {
     setNativeGatewayTestState(null);
     localStorage.setItem("openclaw.control.sessionDiff.v1", JSON.stringify({ split }));
@@ -316,9 +357,18 @@ describe("SessionDiffPanel", () => {
 
       const menu = panel.querySelector("openclaw-session-diff-menu");
       expect(menu).not.toBeNull();
+      const nativeMenu = menu?.querySelector<HTMLElement>(".session-diff-menu__surface");
+      await waitForSolid(() => expect(nativeMenu?.matches(":popover-open")).toBe(true));
       const label = surface === "file" ? "Copy Path" : "Checkout path";
       const button = menu?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
       expect(button).toBeInstanceOf(HTMLButtonElement);
+      if (surface === "sync") {
+        const command = menu?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Copy sync command"]',
+        );
+        expect(command).toBeInstanceOf(HTMLButtonElement);
+        await waitForSolid(() => expect(document.activeElement).toBe(command));
+      }
 
       button?.click();
       await waitForSolid(() => expect(button?.getAttribute("aria-label")).toBe(feedback));
@@ -328,6 +378,7 @@ describe("SessionDiffPanel", () => {
       expect(status?.textContent).toBe(feedback);
       expect(status?.hidden).toBe(false);
       expect(panel.querySelector("openclaw-session-diff-menu")).toBe(menu);
+      expect(nativeMenu?.matches(":popover-open")).toBe(true);
     },
   );
 
@@ -356,6 +407,48 @@ describe("SessionDiffPanel", () => {
     const menu = panel.querySelector("openclaw-session-diff-menu");
     expect(menu?.textContent?.includes("Open in Editor")).toBe(testCase.offered);
     expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
+  });
+
+  it("keeps a replacement menu open and applies its action after retiring the file menu", async () => {
+    setNativeGatewayTestState(null);
+    const panel = mountPanel();
+    panel.loader = async () => fileResult(SNAPSHOT_PATCH);
+    await settlePanel(panel);
+
+    const fileTrigger = panel.querySelector<HTMLButtonElement>(".session-diff__file-menu");
+    expect(fileTrigger).toBeInstanceOf(HTMLButtonElement);
+    fileTrigger!.click();
+    await waitForSolid(() =>
+      expect(
+        panel
+          .querySelector(".session-diff-menu--file .session-diff-menu__surface")
+          ?.matches(":popover-open"),
+      ).toBe(true),
+    );
+    const originalMenu = panel.querySelector(
+      ".session-diff-menu--file .session-diff-menu__surface",
+    );
+    const viewTrigger = panel.querySelector<HTMLButtonElement>(".session-diff__toolbar-icon");
+    expect(viewTrigger).toBeInstanceOf(HTMLButtonElement);
+    viewTrigger!.click();
+
+    await waitForSolid(() =>
+      expect(
+        panel
+          .querySelector(".session-diff-menu--view .session-diff-menu__surface")
+          ?.matches(":popover-open"),
+      ).toBe(true),
+    );
+    expect(originalMenu?.isConnected).toBe(false);
+    expect(panel.querySelector(".session-diff__file-body")).not.toBeNull();
+    const collapse = panel.querySelector<HTMLButtonElement>(
+      '.session-diff-menu--view button[data-value="collapse-all"]',
+    );
+    expect(collapse).toBeInstanceOf(HTMLButtonElement);
+    collapse!.click();
+    await waitForSolid(() => expect(panel.querySelector(".session-diff__file-body")).toBeNull());
+    expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
+    expect(document.activeElement).toBe(viewTrigger);
   });
 
   it("closes an open editor menu when the native gateway switches to remote", async () => {
@@ -478,6 +571,7 @@ describe("manual code folding", () => {
   });
 
   it("refreshes metadata when a truncated file still has no patch", async () => {
+    const refreshed = deferred<SessionsDiffResult>();
     let current: SessionsDiffResult = {
       ...result("feature/test"),
       additions: 100001,
@@ -493,7 +587,10 @@ describe("manual code folding", () => {
       ],
     };
     const panel = mountPanel();
-    panel.loader = async () => current;
+    panel.loader = vi
+      .fn<SessionDiffLoader>()
+      .mockResolvedValueOnce(current)
+      .mockImplementationOnce(() => refreshed.promise);
     await settlePanel(panel);
     expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
       "+100001",
@@ -509,6 +606,15 @@ describe("manual code folding", () => {
       ],
     };
     panel.querySelector<HTMLButtonElement>(".session-diff__refresh")!.click();
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("true"),
+    );
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(panel.querySelector(".session-diff__file-toggle")).toBe(originalToggle);
+    expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
+      "+100001",
+    );
+    refreshed.resolve(current);
     await settlePanel(panel);
     expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
       "+100008",
@@ -543,11 +649,9 @@ describe("manual code folding", () => {
     const click = (selector: string) => panel.querySelector<HTMLButtonElement>(selector)!.click();
     async function menu(trigger: string, action: string) {
       click(trigger);
-      await waitForSolid(() => expect(panel.querySelector("wa-dropdown")).not.toBeNull());
-      panel
-        .querySelector("wa-dropdown")!
-        .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: action } } }));
-      flush();
+      const selector = `.session-diff-menu__surface button[data-value="${action}"]`;
+      await waitForSolid(() => expect(panel.querySelector(selector)).not.toBeNull());
+      click(selector);
     }
     await waitForSolid(() =>
       expect(panel.querySelectorAll(".session-diff__code-toggle")).toHaveLength(2),

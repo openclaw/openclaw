@@ -20,7 +20,7 @@ export const TTS_PREFERENCES_COMPAT_RECORD = {
     "Bounded DEP_PLUGIN_SDK warning for legacy path resolution and unprepared synchronous hint calls; prepared hints remain silent",
   ],
   tests: [
-    "src/plugin-sdk/tts-preferences-compat.test.ts",
+    "test/type-contracts/tts-preferences-compat.ts",
     "src/tts/tts-preferences.worker.test.ts",
     "src/plugins/compat/registry.test.ts",
   ],

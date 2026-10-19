@@ -894,7 +894,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         self.receipt = nil
         self.close()
         if self.migrationOnlyLaunchCheck {
-            CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+            CLIInstallPrompter.shared.checkAndPromptIfNeeded()
         }
     }
 

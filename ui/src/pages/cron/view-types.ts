@@ -29,6 +29,7 @@ export type CronProps = {
   listError: string | null;
   /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
+  connected: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   jobs: CronJob[];
@@ -83,7 +84,7 @@ export type CronProps = {
   onClone: (job: CronJob) => void;
   onToggle: (job: CronJob, enabled: boolean) => void;
   onRun: (job: CronJob, mode?: "force" | "due") => void;
-  onRemove: (job: CronJob) => void;
+  onRemove: (job: CronJob) => void | Promise<void>;
   onLoadMoreJobs: () => void;
   onJobsFiltersChange: (patch: Parameters<typeof updateCronJobsFilter>[1]) => void | Promise<void>;
   onJobsFiltersReset: () => void | Promise<void>;
@@ -95,6 +96,8 @@ export type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
+  /** The owner reads current entries after publication; cleanup retires the mounted row. */
+  onRunMount?: (element: HTMLElement, entry: () => CronRunLogEntry) => (() => void) | undefined;
   onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };
 

@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import {
+  emptyAssistantAcknowledgment,
+  emptyAssistantHistory,
+} from "../../test-helpers/empty-assistant-history.ts";
 import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
 import { pendingSessionsYield } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -238,4 +242,81 @@ describe("sessions_yield transcript projection", () => {
       expect(status([asked, earlier, ...separateHistory])).not.toHaveProperty("request");
     });
   });
+});
+
+it.each([undefined, "Waiting for the parent to reply."])(
+  "projects a thinking-only message wait with its public acknowledgment (%s)",
+  (acknowledgment) => {
+    const messages = [
+      { role: "user", content: "talk to parent session", timestamp: 1_000 },
+      {
+        ...separateHistory[0],
+        content: [
+          { type: "thinking", thinking: "Wait for the parent." },
+          { ...call, arguments: { waitFor: "message", message: "PRIVATE_CONTINUATION" } },
+        ],
+      },
+      {
+        ...separateHistory[1],
+        content: [{ type: "text", text: JSON.stringify({ status: "yielded", acknowledgment }) }],
+      },
+    ];
+    const status = acknowledgment ?? "Waiting for a message";
+    const items = buildChatItems(createProps({ messages }));
+    expect(items.filter((item) => item.kind === "group").map((item) => item.role)).toEqual([
+      "user",
+    ]);
+    expect(items).toContainEqual(expect.objectContaining({ kind: "notice", text: status }));
+    expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
+    const resumed = buildChatItems(
+      createProps({
+        messages: [...messages, { role: "assistant", content: "Back again.", timestamp: 4_000 }],
+      }),
+    );
+    expect(resumed).not.toContainEqual(expect.objectContaining({ kind: "notice", text: status }));
+  },
+);
+
+it("does not revive a completed message wait when search hides the resumed reply", () => {
+  const messages = [
+    {
+      ...separateHistory[0],
+      content: [
+        { type: "text", text: "Waiting for the parent." },
+        { ...call, arguments: { waitFor: "message" } },
+        result,
+      ],
+    },
+  ];
+  const search = { searchOpen: true, searchQuery: "Waiting for the parent" };
+  const notice = expect.objectContaining({ kind: "notice", text: "Waiting for a message" });
+  expect(buildChatItems(createProps({ messages, ...search }))).toContainEqual(notice);
+  expect(
+    buildChatItems(
+      createProps({
+        messages: [...messages, { role: "assistant", content: "Back again.", timestamp: 4_000 }],
+        ...search,
+      }),
+    ),
+  ).not.toContainEqual(notice);
+});
+
+it("keeps Code Mode activity and its public yield acknowledgment without an empty assistant row", () => {
+  const items = buildChatItems(createProps({ messages: emptyAssistantHistory() }));
+  expect(items.filter((item) => item.kind === "group").map((item) => item.role)).not.toContain(
+    "assistant",
+  );
+  expect(items).toContainEqual(
+    expect.objectContaining({ kind: "notice", text: emptyAssistantAcknowledgment }),
+  );
+  expect(
+    items.flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.flatMap(({ message }) =>
+            extractToolCardsCached(message).map((card) => card.name),
+          )
+        : [],
+    ),
+  ).toEqual(["exec", "exec", "sessions_list", "sessions_list"]);
+  expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
 });

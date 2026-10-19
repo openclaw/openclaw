@@ -12,9 +12,7 @@ export function PaletteSessionControls(props: DraftProps) {
     void props.revision;
     return props.draft.settingsView();
   });
-  return (
-    <Show when={view()}>{(settings) => <PaletteSessionSettingsView view={settings()} />}</Show>
-  );
+  return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
 }
 
 export function PaletteSessionAttachments(props: DraftProps) {

@@ -1,6 +1,9 @@
 import { toUSVString } from "node:util";
 import { sql } from "kysely";
+import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
+import { jsonPickObject, jsonValid } from "../../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
@@ -31,39 +34,49 @@ const maintenanceFields = [
 ];
 
 function maintenanceCandidates(database: Pick<OpenClawAgentDatabase, "db">) {
+  const entryJson =
+    /* kysely-allow-raw: Fixed column shared by the JSON projections. */ sql.ref("entry_json");
   // json_each preserves absent/null fields and JSON subtypes. Uncertified rows
   // keep the full parser contract, including malformed and overdepth payloads.
-  const projection =
-    /* kysely-allow-raw: maintenance reads only phase facts from certified rows. */ sql<string>`CASE WHEN entry_valid = 1 AND json_valid(entry_json)
+  const projection = (
+    isPostgresSqlConnection(database.db)
+      ? /* kysely-allow-raw: Certified JSON projection uses the selected engine's operators. */ sql<string>`CASE WHEN entry_valid = 1 AND ${jsonValid(database.db, entryJson)}
+    THEN ${jsonPickObject(database.db, entryJson, maintenanceFields)} ELSE entry_json END`
+      : /* kysely-allow-raw: maintenance reads only phase facts from certified rows. */ sql<string>`CASE WHEN entry_valid = 1 AND json_valid(entry_json)
     THEN (SELECT json_group_object(key, CASE type
       WHEN 'object' THEN json(value) WHEN 'array' THEN json(value)
       WHEN 'true' THEN json('true') WHEN 'false' THEN json('false')
       ELSE value END) FROM json_each(entry_json) WHERE key IN (${sql.join(maintenanceFields)}))
-    ELSE entry_json END`.as("entry_json");
+    ELSE entry_json END`
+  ).as("entry_json");
   return getSessionKysely(database.db)
     .selectFrom("session_nodes")
     .select([projection, "current_session_id", "session_key", "updated_at", "archived_at"])
-    .modifyEnd(
-      /* kysely-allow-raw: stream age bounds without sorting the entire active store. */
-      sql`INDEXED BY idx_agent_session_nodes_updated_at`,
-    );
+    .modifyEnd(engineIndexHint(database.db, "idx_agent_session_nodes_updated_at"));
 }
 
 export function collectSqliteSessionMaintenanceBaseKeys(
-  store: Record<string, SessionEntry>,
+  readProjection: (sessionKeys: readonly string[]) => Record<string, SessionEntry>,
   activeSessionKeys: Iterable<string>,
+  baseKeys: readonly string[] = [],
 ): string[] {
-  const keys: string[] = [];
-  const seen = new Set<string>();
-  for (const activeSessionKey of activeSessionKeys) {
-    let currentKey = normalizeStoreSessionKey(activeSessionKey);
-    while (currentKey && !seen.has(currentKey)) {
-      seen.add(currentKey);
-      keys.push(currentKey);
-      currentKey = normalizeStoreSessionKey(store[currentKey]?.parentSessionKey ?? "");
+  const keys = new Set(baseKeys);
+  let pending = [...activeSessionKeys];
+  while (pending.length > 0) {
+    pending = [...new Set(pending.map(normalizeStoreSessionKey))].filter(
+      (key) => key && !keys.has(key),
+    );
+    if (pending.length === 0) {
+      break;
     }
+    pending.forEach((key) => keys.add(key));
+    const projection = readProjection(pending);
+    pending = pending.flatMap((key) => {
+      const parent = projection[key]?.parentSessionKey;
+      return parent ? [parent] : [];
+    });
   }
-  return keys;
+  return [...keys];
 }
 
 export function readSessionMaintenanceKeyProjection(
@@ -96,26 +109,41 @@ export function readSessionMaintenanceAgeCandidates(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
   minimumAgeMs: number | null;
   pruneAfterMs: number;
+  archiveDashboardAfterMs: number | null;
+  modelRunPruneAfterMs: number | null;
 }): Record<string, SessionEntry> {
   if (params.minimumAgeMs == null || params.minimumAgeMs <= 0) {
     return {};
   }
   const db = getSessionKysely(params.database.db);
   const store: Record<string, SessionEntry> = {};
+  const now = Date.now();
   for (const row of iterateSqliteQuerySync(
     params.database.db,
     db
       .selectFrom(maintenanceCandidates(params.database).as("candidates"))
       .selectAll()
-      .where("updated_at", "<", Date.now() - params.minimumAgeMs)
+      .where("updated_at", "<", now - params.minimumAgeMs)
       .where("archived_at", "is", null)
       .where((eb) =>
         eb.or([
-          ...(params.pruneAfterMs > 0
-            ? [eb("updated_at", "<", Date.now() - params.pruneAfterMs)]
+          ...(params.pruneAfterMs > 0 ? [eb("updated_at", "<", now - params.pruneAfterMs)] : []),
+          ...(params.archiveDashboardAfterMs != null && params.archiveDashboardAfterMs > 0
+            ? [
+                eb.and([
+                  eb("session_key", "like", "%dashboard:%"),
+                  eb("updated_at", "<", now - params.archiveDashboardAfterMs),
+                ]),
+              ]
             : []),
-          eb("session_key", "like", "%dashboard:%"),
-          eb("session_key", "like", "%model-run-%"),
+          ...(params.modelRunPruneAfterMs != null && params.modelRunPruneAfterMs > 0
+            ? [
+                eb.and([
+                  eb("session_key", "like", "%model-run-%"),
+                  eb("updated_at", "<", now - params.modelRunPruneAfterMs),
+                ]),
+              ]
+            : []),
         ]),
       )
       .orderBy("updated_at", "asc"),
@@ -160,8 +188,10 @@ export function readSessionMaintenanceCapCandidates(params: {
       .selectFrom(maintenanceCandidates(params.database).as("candidates"))
       .selectAll()
       .select(
-        /* kysely-allow-raw: BINARY ties use the database encoding, including retained UTF-16 stores. */
-        sql<Uint8Array>`CAST(session_key AS BLOB)`.as("key_bytes"),
+        (isPostgresSqlConnection(params.database.db)
+          ? /* kysely-allow-raw: PostgreSQL text keys use UTF-8 byte order. */ sql<Uint8Array>`convert_to(session_key, 'UTF8')`
+          : /* kysely-allow-raw: Preserve native encoding, including retained UTF-16 stores. */ sql<Uint8Array>`CAST(session_key AS BLOB)`
+        ).as("key_bytes"),
       )
       .where("archived_at", "is", null)
       .$if(excludedKeys.length > 0, (query) =>

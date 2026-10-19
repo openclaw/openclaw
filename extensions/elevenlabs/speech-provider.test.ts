@@ -105,7 +105,6 @@ describe("elevenlabs speech provider", () => {
             : {
                 handled: true,
                 overrides: {
-                  ...currentOverrides,
                   voiceSettings: { ...currentOverrides.voiceSettings, ...expected },
                 },
               },

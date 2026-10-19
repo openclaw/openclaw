@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { createMemo, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -27,6 +30,45 @@ function digest(health: SessionObserverDigest["health"] = "on-track"): SessionOb
 }
 
 describe("ChatSessionCompanionThreads", () => {
+  it("publishes in-place answer settlement through its owner projection", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    let readStatuses!: () => string[];
+    const dispose = createRoot((disposeRoot) => {
+      const projected = projectOwner(threads, (owner) => owner);
+      readStatuses = createMemo(() =>
+        projected
+          .read()
+          .view("one")
+          .turns.map((turn) => turn.status),
+      );
+      return disposeRoot;
+    });
+    let answer!: (value: { answer: string; ts: number }) => void;
+    try {
+      expect(readStatuses()).toEqual([]);
+      const pending = threads.submit(
+        "one",
+        "Question",
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const turn = threads.view("one").turns[0];
+      expect(turn?.status).toBe("pending");
+      flush();
+      expect(readStatuses()).toEqual(["pending"]);
+      answer({ answer: "Answer", ts: 1 });
+      await pending;
+      flush();
+      expect(readStatuses()).toEqual(["answered"]);
+      expect(threads.view("one").turns[0]).toBe(turn);
+    } finally {
+      dispose();
+      threads.retire();
+    }
+  });
+
   it("sends companion questions with the bounded RPC timeout", async () => {
     const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
     const client = { request: request as GatewayBrowserClient["request"] };
@@ -214,6 +256,7 @@ describe("ChatSessionRailElement", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   async function mount(overrides: Partial<ChatSessionRailElement> = {}) {
@@ -228,6 +271,58 @@ describe("ChatSessionRailElement", () => {
     await element.updateComplete;
     return element;
   }
+
+  it("consumes only the latest visible focus intent and retires it on disconnect", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const initial = vi.fn(() => true);
+    const current = vi.fn(() => true);
+    const element = await mount({ presented: true, focusRequest: initial });
+    element.focusRequest = current;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(initial).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(element.querySelector("textarea"));
+
+    const hidden = vi.fn(() => true);
+    element.presented = false;
+    element.focusRequest = hidden;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(hidden).not.toHaveBeenCalled();
+
+    const retired = vi.fn(() => true);
+    element.presented = true;
+    element.focusRequest = retired;
+    await element.updateComplete;
+    element.remove();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(retired).not.toHaveBeenCalled();
+  });
+
+  it("follows changed turns while preserving a manually scrolled draft edit", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const element = await mount({ presented: true });
+    const thread = element.querySelector<HTMLElement>(".chat-session-rail__thread")!;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 200 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(200);
+
+    thread.scrollTop = 60;
+    element.companion = { ...element.companion, draft: "A local draft" };
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(60);
+
+    element.companion = {
+      ...element.companion,
+      turns: [{ question: "What changed?", status: "answered", answer: "A completed turn", ts: 1 }],
+    };
+    await element.updateComplete;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 500 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(500);
+  });
 
   it.each([
     { phrases: [], expected: "" },
@@ -274,6 +369,40 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+  });
+
+  it("returns focus to the rail composer after deleting its last comment", async () => {
+    const onAttachmentsChange = vi.fn();
+    const element = await mount({
+      presented: true,
+      onAttachmentsChange,
+      companion: {
+        turns: [],
+        loading: false,
+        draft: "Keep this draft",
+        attachments: [
+          {
+            id: "rail-comment",
+            mimeType: "text/plain",
+            selectionAnnotation: {
+              text: "Selected text",
+              comment: "Explain this",
+              sessionKey: "agent:main:run",
+              start: 0,
+              end: 13,
+            },
+          },
+        ],
+      },
+    });
+    const textarea = element.querySelector("textarea")!;
+    await waitForSolid(() =>
+      expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe("Keep this draft");
   });
 
   it("retains selected answer text while draft and presentation props update", async () => {
@@ -347,7 +476,8 @@ describe("ChatSessionRailElement", () => {
   );
 
   it("explains unsupported image input and retries the retained image only on user action", async () => {
-    const threads = new ChatSessionCompanionThreads(() => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.subscribe(() => {
       element.companion = { ...threads.view("one") };
     });
     const image = registerChatAttachmentPayload({
@@ -403,7 +533,8 @@ describe("ChatSessionRailElement", () => {
   it.each(["answered"] as const)(
     "keeps a follow-up editable while answering and retains it when %s",
     async (outcome) => {
-      const threads = new ChatSessionCompanionThreads(() => {
+      const threads = new ChatSessionCompanionThreads();
+      threads.subscribe(() => {
         element.companion = { ...threads.view("one") };
       });
       const ask = vi.fn<() => Promise<{ answer: string; ts: number }>>();

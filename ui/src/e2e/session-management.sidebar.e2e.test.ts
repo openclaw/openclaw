@@ -134,11 +134,10 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
       const parent = page.locator(`[data-session-key="${parentKey}"]`);
       await parent.waitFor({ state: "visible", timeout: 10_000 });
+      // Children that already exist at load stay collapsed; only new children reveal.
       const initialToggle = parent.locator("[data-child-session-toggle]");
       await initialToggle.waitFor();
-      if ((await initialToggle.getAttribute("aria-expanded")) === "true") {
-        await initialToggle.click();
-      }
+      expect(await initialToggle.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       // Delegated work keeps the idle parent's ring visible even with children collapsed.
       await expect
@@ -517,7 +516,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps sidebar sessions visible through transport and client replacement reconnects", async () => {
+  it("retains sidebar sessions through transport loss and reloads them after client replacement", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:disconnect-proof";
@@ -585,11 +584,12 @@ suite.define(() => {
         })
         .toBeGreaterThan(reconnectPreviewCount);
       await sidebarRow.waitFor({ state: "visible" });
-      expect(await sidebarRows.count()).toBe(3);
+      // A replacement client retires membership; only the fresh route descriptor is ready.
+      expect(await sidebarRows.count()).toBe(1);
       for (const otherKey of otherSessionKeys) {
-        await page
-          .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
-          .waitFor({ state: "visible" });
+        expect(
+          await page.locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`).count(),
+        ).toBe(0);
       }
 
       const firstReconnectListCount = (await gateway.getRequests("sessions.list", rosterMatch))
@@ -832,7 +832,7 @@ suite.define(() => {
         suite,
         page,
         "sidebar-session-dropped-into-pinned.png",
-        page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+        page.locator("openclaw-session-menu .session-menu__panel"),
         [page.getByRole("menuitem", { name: "Unpin session" })],
       );
     } finally {

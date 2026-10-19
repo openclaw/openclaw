@@ -7,11 +7,11 @@ import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
+  type InternalRealtimeVoiceProviderCapabilities,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   toOpenAICompatibleRealtimeAudioFormat,
@@ -45,6 +45,7 @@ import {
 } from "./realtime-quicksilver-redaction.js";
 import {
   OPENAI_GPT_LIVE_MODELS,
+  OPENAI_GPT_LIVE_MODEL_PREFIX,
   isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
@@ -74,9 +75,20 @@ export const OPENAI_REALTIME_MODELS = [
   ...OPENAI_GPT_LIVE_MODELS,
 ] as const;
 export const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
+export const OPENAI_REALTIME_CAPABILITIES: InternalRealtimeVoiceProviderCapabilities & {
   voicesByModel: Record<string, readonly string[]>;
 } = {
+  modelFamilySettings: {
+    family: OPENAI_GPT_LIVE_MODEL_PREFIX,
+    unlistedModelVoices: "active",
+    unsupportedTransports: ["provider-websocket"],
+    gatewayRelayHandlesAgentConsult: true,
+    hint: {
+      titleKey: "talkPage.gptLive.title",
+      descriptionKey: "talkPage.gptLive.hint",
+      readyKey: "talkPage.gptLive.ready",
+    },
+  },
   voicesByModel: Object.fromEntries(
     OPENAI_GPT_LIVE_MODELS.map((model) => [
       model,
@@ -177,34 +189,34 @@ function normalizeRealtimeBaseUrl(value: unknown): string | undefined {
 
 export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
-  const baseUrl = normalizeRealtimeBaseUrl(raw?.baseUrl);
-  const azureEndpoint = normalizeOptionalString(raw?.azureEndpoint);
-  const azureDeployment = normalizeOptionalString(raw?.azureDeployment);
+  const baseUrl = normalizeRealtimeBaseUrl(raw.baseUrl);
+  const azureEndpoint = normalizeOptionalString(raw.azureEndpoint);
+  const azureDeployment = normalizeOptionalString(raw.azureDeployment);
   if (baseUrl && (azureEndpoint || azureDeployment)) {
     throw new Error("OpenAI realtime baseUrl cannot be combined with Azure endpoint or deployment");
   }
   return {
     baseUrl,
     apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
+      value: raw.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
-    model: normalizeOptionalString(raw?.model),
+    model: normalizeOptionalString(raw.model),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
-    voice: normalizeOptionalLowercaseString(raw?.speakerVoice ?? raw?.voice),
-    temperature: asFiniteNumber(raw?.temperature),
-    vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
-    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
-    prefixPaddingMs: asSafeIntegerInRange(raw?.prefixPaddingMs, { min: 0 }),
+    voice: normalizeOptionalLowercaseString(raw.speakerVoice ?? raw.voice),
+    temperature: asFiniteNumber(raw.temperature),
+    vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
+    silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),
+    prefixPaddingMs: asSafeIntegerInRange(raw.prefixPaddingMs, { min: 0 }),
     interruptResponseOnInputAudio:
-      typeof raw?.interruptResponseOnInputAudio === "boolean"
+      typeof raw.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
         : undefined,
-    minBargeInAudioEndMs: asSafeIntegerInRange(raw?.minBargeInAudioEndMs, { min: 0 }),
-    reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
+    minBargeInAudioEndMs: asSafeIntegerInRange(raw.minBargeInAudioEndMs, { min: 0 }),
+    reasoningEffort: normalizeOptionalString(raw.reasoningEffort),
     azureEndpoint,
     azureDeployment,
-    azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
+    azureApiVersion: normalizeOptionalString(raw.azureApiVersion),
   };
 }
 

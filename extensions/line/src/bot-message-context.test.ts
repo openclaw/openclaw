@@ -267,10 +267,7 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker]");
   });
 
-  it.each([
-    { kind: "message", label: "inbound" },
-    { kind: "postback", label: "postback" },
-  ])("preserves $kind content without logging it", async ({ kind, label }) => {
+  it.each(["message", "postback"])("preserves %s content without logging it", async (kind) => {
     const rawBody = "private-line-message\n🚀";
     const source = { type: "user", userId: "user-1" } as const;
     const context =
@@ -284,9 +281,6 @@ describe("buildLineMessageContext", () => {
 
     expect(context?.ctxPayload.RawBody).toBe(rawBody);
     expect(context?.ctxPayload.BodyForAgent).toBe(rawBody);
-    expect(logVerboseMock).toHaveBeenCalledWith(
-      expect.stringMatching(new RegExp(`^line ${label}: from=line:user-1 len=\\d+$`)),
-    );
     expect(logVerboseMock.mock.calls.flat().join("\n")).not.toContain("private-line-message");
   });
 

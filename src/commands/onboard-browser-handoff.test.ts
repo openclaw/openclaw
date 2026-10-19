@@ -12,7 +12,7 @@ const sharedMocks = vi.hoisted(() => ({
   issueControlUiBrowserHandoff: vi.fn(),
   hasVerifiedControlUiLoopbackAlias: vi.fn(),
   detectBrowserOpenSupport: vi.fn(),
-  openUrl: vi.fn(),
+  openUrlPrivately: vi.fn(),
   resolveAdvertisedLanHostCore: vi.fn(),
   resolveAdvertisedControlUiLinks: vi.fn(),
 }));
@@ -31,10 +31,13 @@ vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
   issueControlUiBrowserHandoff: sharedMocks.issueControlUiBrowserHandoff,
   hasVerifiedControlUiLoopbackAlias: sharedMocks.hasVerifiedControlUiLoopbackAlias,
 }));
+vi.mock("../infra/browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/browser-handoff.js")>()),
+  openUrlPrivately: sharedMocks.openUrlPrivately,
+}));
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   detectBrowserOpenSupport: sharedMocks.detectBrowserOpenSupport,
-  openUrl: sharedMocks.openUrl,
   resolveAdvertisedControlUiLinks: sharedMocks.resolveAdvertisedControlUiLinks,
 }));
 
@@ -80,7 +83,7 @@ beforeEach(async () => {
       expiresAtMs: 123_456,
     }));
   sharedMocks.detectBrowserOpenSupport.mockReset().mockResolvedValue({ ok: false });
-  sharedMocks.openUrl.mockReset().mockResolvedValue(true);
+  sharedMocks.openUrlPrivately.mockReset().mockResolvedValue(true);
   sharedMocks.resolveAdvertisedLanHostCore.mockReset().mockResolvedValue(null);
   sharedMocks.resolveAdvertisedControlUiLinks.mockReset();
 });
@@ -110,7 +113,7 @@ describe("runBrowserHatchHandoff", () => {
     async (opened) => {
       const prompter = createWizardPrompter();
       sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
-      sharedMocks.openUrl.mockResolvedValue(opened);
+      sharedMocks.openUrlPrivately.mockResolvedValue(opened);
       const result = await runHandoff({
         config: {
           meta: { migrations: { utilityModelSeparation: true } },
@@ -118,8 +121,8 @@ describe("runBrowserHatchHandoff", () => {
         },
         prompter,
       });
-      expect(result).toEqual({ handedOff: true });
-      const url = new URL(sharedMocks.openUrl.mock.calls[0]![0]);
+      expect(result).toBe(true);
+      const url = new URL(sharedMocks.openUrlPrivately.mock.calls[0]![0]);
       expect(url.pathname).toBe("/custodian");
       expect(url.searchParams.get("onboarding")).toBe("1");
       expect(url.searchParams.has("session")).toBe(false);
@@ -147,9 +150,7 @@ describe("runBrowserHatchHandoff", () => {
         ]);
       const prompter = createWizardPrompter();
       const result = await runHandoff({ config: {}, prompter }, change === "new-tab" ? 0 : 60_000);
-      expect(result).toEqual(
-        change === "new-tab" ? { handedOff: true } : { handedOff: false, reason: "timeout" },
-      );
+      expect(result).toBe(change === "new-tab");
       expect(Date.now()).toBe(change === "new-tab" ? 0 : 60_000);
       if (change !== "new-tab") {
         expect(prompter.note).not.toHaveBeenCalledWith(
@@ -165,11 +166,9 @@ describe("runBrowserHatchHandoff", () => {
     async (gui) => {
       sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: gui });
       const prompter = createWizardPrompter();
-      expect(await runHandoff({ config: {}, prompter, agentId: "coordinator" })).toEqual({
-        handedOff: true,
-      });
+      expect(await runHandoff({ config: {}, prompter, agentId: "coordinator" })).toBe(true);
       if (gui) {
-        expect(sharedMocks.openUrl).toHaveBeenCalledWith(
+        expect(sharedMocks.openUrlPrivately).toHaveBeenCalledWith(
           expect.stringContaining("?session=agent%3Acoordinator%3Amain#bootstrapToken="),
         );
       } else {
@@ -202,19 +201,16 @@ describe("runBrowserHatchHandoff", () => {
     async (outcome) => {
       sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
       if (outcome === "rejects") {
-        sharedMocks.openUrl.mockRejectedValue(new Error("browser command failed"));
+        sharedMocks.openUrlPrivately.mockRejectedValue(new Error("browser command failed"));
       } else {
-        sharedMocks.openUrl.mockResolvedValue(false);
+        sharedMocks.openUrlPrivately.mockResolvedValue(false);
       }
       sharedMocks.callGateway.mockReset().mockResolvedValue([]);
       vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
       const prompter = createWizardPrompter();
-      expect(await runHandoff({ config: {}, prompter }, 300_000)).toEqual({
-        handedOff: false,
-        reason: "timeout",
-      });
+      expect(await runHandoff({ config: {}, prompter }, 300_000)).toBe(false);
       expect(Date.now()).toBe(300_000);
-      expect(sharedMocks.openUrl).toHaveBeenCalledWith(browserUrl);
+      expect(sharedMocks.openUrlPrivately).toHaveBeenCalledWith(browserUrl);
       expect(displayedNotes(prompter)).toContain("ssh -N -L 18789:127.0.0.1:18789");
       expect(displayedNotes(prompter)).toContain("#bootstrapToken=one-time-bootstrap");
     },
@@ -326,11 +322,11 @@ describe("runBrowserHatchHandoff", () => {
         prompter: createWizardPrompter(),
         suppressTokenOutput: reason === "suppressed",
       });
-      expect(result).toEqual({ handedOff: false, reason: "target-unavailable" });
+      expect(result).toBe(false);
       expect(sharedMocks.detectBrowserOpenSupport).not.toHaveBeenCalled();
       expect(sharedMocks.waitForControlUiDocument).not.toHaveBeenCalled();
       expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
-      expect(sharedMocks.openUrl).not.toHaveBeenCalled();
+      expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
     },
   );
 
@@ -340,13 +336,17 @@ describe("runBrowserHatchHandoff", () => {
       reason: "Control UI build failed.",
       status: 503,
     });
-    expect(await runHandoff({ config: {}, prompter: createWizardPrompter() })).toEqual({
-      handedOff: false,
-      reason: "target-unavailable",
-    });
+    expect(await runHandoff({ config: {}, prompter: createWizardPrompter() })).toBe(false);
     expect(sharedMocks.callGateway).not.toHaveBeenCalled();
     expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
-    expect(sharedMocks.openUrl).not.toHaveBeenCalled();
+    expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
+  });
+
+  it("does not issue browser credentials when the presence request fails", async () => {
+    sharedMocks.callGateway.mockReset().mockRejectedValue(new Error("gateway unavailable"));
+    expect(await runHandoff({ config: {}, prompter: createWizardPrompter() })).toBe(false);
+    expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
+    expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
   });
 
   it("starts and stops preparation progress only when the document reports pending", async () => {
@@ -365,11 +365,8 @@ describe("runBrowserHatchHandoff", () => {
     sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
     sharedMocks.issueControlUiBrowserHandoff.mockRejectedValue(new Error("state unavailable"));
     const prompter = createWizardPrompter();
-    expect(await runHandoff({ config: {}, prompter })).toEqual({
-      handedOff: false,
-      reason: "target-unavailable",
-    });
-    expect(sharedMocks.openUrl).not.toHaveBeenCalled();
+    expect(await runHandoff({ config: {}, prompter })).toBe(false);
+    expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
     expect(prompter.note).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { normalizeOptionalTrimmedStringRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
@@ -11,6 +12,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  asOptionalRecord,
   isRecord,
   normalizeOptionalString,
   normalizeTrimmedStringList,
@@ -52,20 +54,6 @@ function normalizeFrameImageRoles(value: unknown): Array<"first_frame" | "last_f
   return normalizeUniqueTrimmedStringList(value).filter(
     (entry) => entry === "first_frame" || entry === "last_frame",
   );
-}
-
-function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    const normalized = normalizeOptionalString(raw);
-    if (normalized) {
-      record[key] = normalized;
-    }
-  }
-  return Object.keys(record).length > 0 ? record : undefined;
 }
 
 function buildOpenRouterVideoModeCapabilities(params: {
@@ -146,7 +134,10 @@ function buildOpenRouterVideoModelCapabilities(
   if (typeof model.created === "number" && Number.isFinite(model.created)) {
     capabilities.created = model.created;
   }
-  const pricingSkus = normalizeStringRecord(model.pricing_skus);
+  const pricingRecord = asOptionalRecord(model.pricing_skus);
+  const pricingSkus = pricingRecord
+    ? normalizeOptionalTrimmedStringRecord(pricingRecord)
+    : undefined;
   if (pricingSkus) {
     capabilities.pricingSkus = pricingSkus;
   }
@@ -263,9 +254,9 @@ export async function resolveOpenRouterVideoModelCapabilities(
     request: ctx.cfg?.models?.providers?.openrouter?.request,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
   });
-  const model = payload.find((row) => {
-    const id = isRecord(row) ? normalizeOptionalString(row.id) : undefined;
-    return id !== undefined && id === ctx.model;
-  });
-  return isRecord(model) ? buildOpenRouterVideoModelCapabilities(model) : undefined;
+  const model = payload.find(
+    (row): row is Record<string, unknown> =>
+      isRecord(row) && normalizeOptionalString(row.id) === ctx.model,
+  );
+  return model ? buildOpenRouterVideoModelCapabilities(model) : undefined;
 }

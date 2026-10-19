@@ -5,6 +5,79 @@ import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../solid/menu.tsx";
 import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
 
+export function boardWidgetMenuEntries(params: {
+  widget: BoardWidget;
+  tabs: readonly BoardTab[];
+  disabled: boolean;
+}): MenuEntry[] {
+  const tabs = params.tabs.filter((tab) => tab.tabId !== params.widget.tabId);
+  return [
+    {
+      kind: "content",
+      id: "move-heading",
+      content: <div class="board-widget__menu-heading">{t("board.widget.moveToTab")}</div>,
+    },
+    ...tabs.map((tab) => ({
+      id: `move:${tab.tabId}`,
+      label: tab.title,
+      disabled: params.disabled,
+    })),
+    ...(tabs.length
+      ? []
+      : [
+          {
+            kind: "content" as const,
+            id: "no-tabs",
+            content: <span class="board-widget__menu-empty">{t("board.widget.noOtherTabs")}</span>,
+          },
+        ]),
+    {
+      kind: "content",
+      id: "resize-heading",
+      content: <div class="board-widget__menu-heading">{t("board.widget.resize")}</div>,
+    },
+    ...Object.entries(BOARD_SIZE_PRESETS).map(([label, size]) => ({
+      id: `resize:${label}`,
+      label: label.toUpperCase(),
+      class: "board-widget__preset",
+      disabled: params.disabled,
+      details: (
+        <span>
+          {size.w}×{size.h}
+        </span>
+      ),
+    })),
+    ...(params.widget.contentKind === "html"
+      ? [
+          {
+            id: "height:auto",
+            label: t("board.widget.autoHeight"),
+            class: "board-widget__preset",
+            type: "checkbox" as const,
+            checked: params.widget.heightMode !== "fixed",
+            disabled: params.disabled,
+          },
+        ]
+      : []),
+    {
+      kind: "content",
+      id: "separator",
+      content: <div class="board-widget__menu-separator" role="separator" />,
+    },
+    {
+      id: "remove",
+      label: t("board.widget.remove"),
+      class: "board-widget__menu-danger",
+      disabled: params.disabled,
+      icon: (
+        <span class="board-widget__menu-icon" aria-hidden="true">
+          <Icon name="trash" />
+        </span>
+      ),
+    },
+  ];
+}
+
 export function BoardWidgetMenu(props: {
   widget: BoardWidget;
   tabs: readonly BoardTab[];
@@ -13,76 +86,7 @@ export function BoardWidgetMenu(props: {
   ref: (handle: MenuHandle) => void;
 }) {
   const id = createUniqueId();
-  const items = createMemo((): MenuEntry[] => {
-    const tabs = props.tabs.filter((tab) => tab.tabId !== props.widget.tabId);
-    return [
-      {
-        kind: "content",
-        id: "move-heading",
-        content: <div class="board-widget__menu-heading">{t("board.widget.moveToTab")}</div>,
-      },
-      ...tabs.map((tab) => ({
-        id: `move:${tab.tabId}`,
-        label: tab.title,
-        disabled: props.disabled,
-      })),
-      ...(tabs.length
-        ? []
-        : [
-            {
-              kind: "content" as const,
-              id: "no-tabs",
-              content: (
-                <span class="board-widget__menu-empty">{t("board.widget.noOtherTabs")}</span>
-              ),
-            },
-          ]),
-      {
-        kind: "content",
-        id: "resize-heading",
-        content: <div class="board-widget__menu-heading">{t("board.widget.resize")}</div>,
-      },
-      ...Object.entries(BOARD_SIZE_PRESETS).map(([label, size]) => ({
-        id: `resize:${label}`,
-        label: label.toUpperCase(),
-        class: "board-widget__preset",
-        disabled: props.disabled,
-        details: (
-          <span>
-            {size.w}×{size.h}
-          </span>
-        ),
-      })),
-      ...(props.widget.contentKind === "html"
-        ? [
-            {
-              id: "height:auto",
-              label: t("board.widget.autoHeight"),
-              class: "board-widget__preset",
-              type: "checkbox" as const,
-              checked: props.widget.heightMode !== "fixed",
-              disabled: props.disabled,
-            },
-          ]
-        : []),
-      {
-        kind: "content",
-        id: "separator",
-        content: <div class="board-widget__menu-separator" role="separator" />,
-      },
-      {
-        id: "remove",
-        label: t("board.widget.remove"),
-        class: "board-widget__menu-danger",
-        disabled: props.disabled,
-        icon: (
-          <span class="board-widget__menu-icon" aria-hidden="true">
-            <Icon name="trash" />
-          </span>
-        ),
-      },
-    ];
-  });
+  const items = createMemo(() => boardWidgetMenuEntries(props));
   return (
     <Menu
       id={id}

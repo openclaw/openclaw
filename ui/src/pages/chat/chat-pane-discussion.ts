@@ -14,7 +14,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (
       !state?.connected ||
       !state.client ||
-      this.sessionDiscussionStates.has(sessionKey) ||
+      this.sessionDiscussion.snapshot.states.has(sessionKey) ||
       // One in-flight probe per key: a rapid A→B→A switch must not start a
       // second probe whose slower twin could later overwrite the fresh result.
       this.sessionDiscussionProbes.has(sessionKey) ||
@@ -38,8 +38,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (generation !== this.connectionGeneration) {
         return;
       }
-      this.sessionDiscussionStates.set(sessionKey, info.state);
-      this.requestUpdate();
+      this.sessionDiscussion.record(sessionKey, info.state);
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
     } finally {
@@ -49,7 +48,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (
         generation !== this.connectionGeneration &&
         this.state?.sessionKey === sessionKey &&
-        !this.sessionDiscussionStates.has(sessionKey)
+        !this.sessionDiscussion.snapshot.states.has(sessionKey)
       ) {
         void this.probeSessionDiscussion(sessionKey);
       }
@@ -79,7 +78,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     const contentGeneration = this.connectionGeneration;
     const cached = this.sessionDiscussionPanels.get(sessionKey);
     if (cached?.generation === contentGeneration && cached.canOpen === canOpen) {
-      cached.config.openUrl = this.sessionDiscussionOpenUrls.get(sessionKey) ?? null;
+      cached.config.openUrl = this.sessionDiscussion.snapshot.openUrls.get(sessionKey) ?? null;
       return cached.config;
     }
     const request = async (
@@ -107,7 +106,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     const config: SessionDiscussionPanelConfig = {
       sessionKey,
       canOpen,
-      openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
+      openUrl: this.sessionDiscussion.snapshot.openUrls.get(sessionKey) ?? null,
       loadInfo: (key) => request("session.discussion.info", key),
       openDiscussion: (key) => request("session.discussion.open", key),
       onStateChange: (key, discussionState, openUrl) => {
@@ -116,19 +115,11 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
         if (contentGeneration !== this.connectionGeneration) {
           return;
         }
-        this.sessionDiscussionStates.set(key, discussionState);
         const isCurrentSession = state.sessionKey.trim() === key;
-        if (isCurrentSession) {
-          this.sessionDiscussionOpenUrls.set(key, openUrl);
-        }
-        if (discussionState === "none") {
-          this.sessionDiscussionOpenUrls.delete(key);
-        }
+        this.sessionDiscussion.record(key, discussionState, isCurrentSession ? openUrl : undefined);
         if (discussionState === "none" && isCurrentSession) {
           state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"));
-          return;
         }
-        state.requestUpdate();
       },
     };
     this.sessionDiscussionPanels.set(sessionKey, {
@@ -161,7 +152,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
   } | null {
     const state = this.state;
     const sessionKey = state?.sessionKey.trim() ?? "";
-    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    const known = sessionKey ? this.sessionDiscussion.snapshot.states.get(sessionKey) : undefined;
     if (
       !state ||
       !sessionKey ||

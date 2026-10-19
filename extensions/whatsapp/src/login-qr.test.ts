@@ -305,7 +305,7 @@ describe("login-qr", () => {
       authDir: expect.stringContaining(accountId),
       isLegacyAuthDir: false,
       runtime: expect.anything(),
-      beforeCredentialPersistence,
+      beforeCredentialPersistence: expect.any(Function),
     });
     expect(createWaSocketMock).toHaveBeenCalledWith(
       false,
@@ -316,6 +316,12 @@ describe("login-qr", () => {
 
   it("transfers credential writes to the exact active login instance", async () => {
     let hostActive = true;
+    let accountCurrent = true;
+    const assertCredentialPersistenceCurrent = () => {
+      if (!accountCurrent) {
+        throw new Error("account changed");
+      }
+    };
     const beforeCredentialPersistence = vi.fn(async () => {
       if (!hostActive) {
         throw new Error("plugin tool host authority is no longer active");
@@ -327,6 +333,7 @@ describe("login-qr", () => {
       timeoutMs: 5000,
       accountId: "active-operation-authority",
       beforeCredentialPersistence,
+      assertCredentialPersistenceCurrent,
     });
     expectScanQrResult(start);
     const operationGuard = createWaSocketMock.mock.calls[0]?.[2]?.beforeCredentialPersistence;
@@ -335,6 +342,10 @@ describe("login-qr", () => {
 
     hostActive = false;
     await expect(operationGuard?.()).resolves.toBeUndefined();
+
+    accountCurrent = false;
+    await expect(operationGuard?.()).rejects.toThrow("account changed");
+    accountCurrent = true;
 
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 3 * 60_000 + 1);
@@ -346,6 +357,32 @@ describe("login-qr", () => {
     });
     await expect(operationGuard?.()).rejects.toThrow("WhatsApp login is no longer active");
   });
+
+  it.each(["unguarded", "stale", "current"])(
+    "handles a %s cached QR account binding",
+    async (binding) => {
+      const accountId = `cached-binding-${binding}`;
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("account changed");
+        }
+      };
+      waitForWaConnectionMock.mockImplementation(waitForever);
+      const first = await startWebLoginWithQr({
+        accountId,
+        ...(binding === "unguarded" ? {} : { assertCredentialPersistenceCurrent: assertCurrent }),
+      });
+      expectScanQrResult(first);
+      current = binding === "current";
+      const next = await startWebLoginWithQr({
+        accountId,
+        assertCredentialPersistenceCurrent: () => {},
+      });
+      expect(next.qrDataUrl).toBe(first.qrDataUrl);
+      expect(createWaSocketMock).toHaveBeenCalledTimes(binding === "current" ? 1 : 2);
+    },
+  );
 
   it("revalidates authority after auth inspection and before forced credential cleanup", async () => {
     const accountId = "revoked-force-fresh-qr";

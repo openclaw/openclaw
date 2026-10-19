@@ -1,9 +1,10 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionWebSocketTransport,
-} from "openclaw/plugin-sdk/realtime-transcription-session";
+import {
+  measureTranscriptDeltaBytes,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-transcription-provider";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
@@ -132,19 +133,6 @@ function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
   return "Mistral realtime transcription error";
 }
 
-function measureTranscriptDeltaBytes(partialText: string, delta: string): number {
-  const previousCodeUnit = partialText.charCodeAt(partialText.length - 1);
-  const nextCodeUnit = delta.charCodeAt(0);
-  const completesSplitSurrogatePair =
-    previousCodeUnit >= 0xd800 &&
-    previousCodeUnit <= 0xdbff &&
-    nextCodeUnit >= 0xdc00 &&
-    nextCodeUnit <= 0xdfff;
-  // Separate UTF-8 measurements encode split surrogates as two replacement
-  // characters (six bytes); the combined transcript encodes one four-byte code point.
-  return Buffer.byteLength(delta, "utf8") - (completesSplitSurrogatePair ? 2 : 0);
-}
-
 export function buildMistralRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
 }: Pick<
@@ -175,7 +163,6 @@ export function buildMistralRealtimeTranscriptionProvider({
         throw new Error("Mistral API key missing");
       }
       const baseUrl = normalizeMistralRealtimeBaseUrl(config.baseUrl);
-      const callbacks = { ...req };
       let partialText = "";
       let partialBytes = 0;
       let hasFinalSegment = false;
@@ -191,7 +178,7 @@ export function buildMistralRealtimeTranscriptionProvider({
           return;
         }
         hasFinalSegment ||= source === "segment";
-        callbacks.onTranscript?.(text);
+        req.onTranscript?.(text);
       };
 
       const failTerminal = (error: Error, transport: RealtimeTranscriptionWebSocketTransport) => {
@@ -201,14 +188,14 @@ export function buildMistralRealtimeTranscriptionProvider({
         terminal = true;
         clearPartial();
         transport.closeNow();
-        callbacks.onError?.(error);
+        req.onError?.(error);
       };
 
       return createRealtimeTranscriptionWebSocketSession<MistralRealtimeTranscriptionEvent>({
         providerId: "mistral",
-        callbacks,
+        callbacks: req,
         url: () => {
-          const base = new URL(`${normalizeMistralRealtimeBaseUrl(baseUrl)}/`);
+          const base = new URL(`${baseUrl}/`);
           const url = new URL("v1/audio/transcriptions/realtime", base);
           url.searchParams.set("model", config.model ?? MISTRAL_REALTIME_DEFAULT_MODEL);
           url.searchParams.set(
@@ -271,7 +258,7 @@ export function buildMistralRealtimeTranscriptionProvider({
                 }
                 partialText += event.text;
                 partialBytes += deltaBytes;
-                callbacks.onPartial?.(partialText);
+                req.onPartial?.(partialText);
               }
               return;
             case "transcription.segment":

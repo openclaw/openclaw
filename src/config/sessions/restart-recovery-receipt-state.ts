@@ -43,9 +43,16 @@ export function resolveRestartRecoveryTerminalDeliveryDisposition(
   scope: Pick<RestartRecoveryTerminalDeliveryClaim, "sessionId" | "sourceTurnId">,
 ): RestartRecoveryTerminalDeliveryDisposition {
   if (entry) {
+    // A stranded retry keeps source correlation but owns a separate admitted delivery.
+    const retryRunId = `stranded-reply-retry:${scope.sourceTurnId}`;
+    const terminalRunId =
+      entry.restartRecoveryDeliveryRunId === retryRunId &&
+      hasActiveRestartRecoveryDeliveryClaim(entry, scope)
+        ? retryRunId
+        : scope.sourceTurnId;
     if (
       entry.sessionId === scope.sessionId &&
-      hasRestartRecoveryTerminalRun(entry, scope.sourceTurnId)
+      hasRestartRecoveryTerminalRun(entry, terminalRunId)
     ) {
       return "already-delivered";
     }

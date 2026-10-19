@@ -156,6 +156,9 @@ async function compress(data: VideoCompressionRequest) {
   }
 }
 
-globalThis.addEventListener("message", ({ data }: MessageEvent<VideoCompressionRequest>) => {
+function onMessage({ data }: MessageEvent<VideoCompressionRequest>) {
+  globalThis.removeEventListener("message", onMessage);
   void compress(data).catch(() => reply({ type: "error", reason: "failed" }));
-});
+}
+
+globalThis.addEventListener("message", onMessage);

@@ -270,6 +270,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   private subscribe(client: BoardGatewayClient): void {
+    // Gateway event subscriptions return teardown; this is not a native DOM listener.
     this.unsubscribe = client.addEventListener((event) => {
       if (this.disposed || client !== this.client) {
         return;

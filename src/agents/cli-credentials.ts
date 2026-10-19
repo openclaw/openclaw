@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -85,8 +86,12 @@ export function hasCodexCliAuthFile(codexHome?: string): boolean {
       path.join(resolveCodexCliHomePath(codexHome), CODEX_CLI_AUTH_FILENAME),
     );
     return file.isFile() && file.size > 0;
-  } catch {
-    return false;
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw error;
   }
 }
 

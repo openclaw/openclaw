@@ -78,26 +78,46 @@ suite.define(() => {
         const trigger = pane.getByRole("button", { name: "Versions", exact: true });
         await trigger.press("Enter");
         const menu = pane.locator(".chat-pane__branches-menu");
-        const menuSurface = menu.locator('[part="menu"]');
+        const menuSurface = menu.locator(".oc-menu");
         const info = menu.getByRole("button", { name: "About versions" });
         const help = page.getByRole("dialog", { name: "About versions" });
-        const helpSurface = menu.locator('wa-popover [part="body"]');
+        const helpSurface = menu.locator(".chat-pane__versions-help");
         await expect
           .poll(() => info.evaluate((element) => element === document.activeElement))
           .toBe(true);
         expect(await help.isVisible()).toBe(false);
-        await waitForControlUiProofSurface(menuSurface, [info]);
-        const infoIconBox = await info.locator("svg").boundingBox();
-        expect(infoIconBox).not.toBeNull();
         const current = menu.locator('.chat-pane__branch-item[data-active="true"]');
-        expect(await current.locator(".chat-pane__branch-headline").textContent()).toBe(
-          "A simpler way to stay organized",
-        );
-        const textBox = await current.locator(".chat-pane__branch-copy").boundingBox();
-        const checkBox = await current.locator(".chat-pane__branch-active").boundingBox();
+        await waitForControlUiProofSurface(menuSurface, [
+          info,
+          current.locator(".chat-pane__branch-copy"),
+          current.locator(".chat-pane__branch-active svg"),
+        ]);
+        // Measure one DOM generation so a rerender cannot detach an icon between reads.
+        const { infoIconBox, headline, textBox, checkBox, checkIconBox } =
+          await menuSurface.evaluate((surface) => {
+            const active = surface.querySelector('.chat-pane__branch-item[data-active="true"]');
+            const measure = (element: Element | null) => {
+              if (
+                !element?.isConnected ||
+                !element.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+              ) {
+                return null;
+              }
+              const { x, y, width, height } = element.getBoundingClientRect();
+              return width > 0 && height > 0 ? { x, y, width, height } : null;
+            };
+            return {
+              infoIconBox: measure(surface.querySelector(".chat-pane__versions-info svg")),
+              headline: active?.querySelector(".chat-pane__branch-headline")?.textContent,
+              textBox: measure(active?.querySelector(".chat-pane__branch-copy") ?? null),
+              checkBox: measure(active?.querySelector(".chat-pane__branch-active") ?? null),
+              checkIconBox: measure(active?.querySelector(".chat-pane__branch-active svg") ?? null),
+            };
+          });
+        expect(infoIconBox).not.toBeNull();
+        expect(headline).toBe("A simpler way to stay organized");
         expect(textBox).not.toBeNull();
         expect(checkBox).not.toBeNull();
-        const checkIconBox = await current.locator(".chat-pane__branch-active svg").boundingBox();
         expect(checkIconBox).not.toBeNull();
         expect(
           Math.abs(
@@ -118,7 +138,9 @@ suite.define(() => {
 
         await info.press("Enter");
         await help.waitFor();
-        expect((await menu.locator("wa-popover").textContent())?.trim()).toBe(helpText);
+        expect((await menu.locator(".chat-pane__versions-help").textContent())?.trim()).toBe(
+          helpText,
+        );
         const helpFrame = await takeControlUiScreenshotFrame(page, help, [help], {
           animations: "disabled",
         });

@@ -41,9 +41,9 @@ export function isSubagentRunQueued(entry: SubagentRunIdentity | null | undefine
   const current = entry ? subagentRuns.get(entry.runId) : undefined;
   return Boolean(
     current &&
-    isSameSubagentRunOwner(current, entry) &&
     current.collect &&
     current.execution.status === "queued" &&
+    isSameSubagentRunOwner(current, entry) &&
     ownsSwarmRunReservation(
       current.schedulerSlotId ?? current.runId,
       getSubagentRunRuntimeKey(current),

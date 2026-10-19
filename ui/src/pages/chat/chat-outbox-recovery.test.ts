@@ -28,8 +28,8 @@ it("shows a failed recovery module only for the owner still awaiting it", async 
   await import("./chat-outbox-recovery.tsx");
   const host = createPageState(
     createInitializationContext(),
-    { invalidate: () => {}, afterCommit: () => () => {} },
-    { dispatchEvent: () => true, querySelector: () => null },
+    { afterCommit: () => () => {} },
+    { dispatchEvent: () => true },
   );
   host.connected = true;
   host.client = createTestGatewayClient(async () => ({}));

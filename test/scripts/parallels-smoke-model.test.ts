@@ -1274,10 +1274,16 @@ ensure_vm_running`,
     }
   });
 
-  it("waits for host artifact server exit after SIGKILL before stop resolves", async () => {
+  it.each(["running", "signaled"] as const)("stops a %s host artifact server", async (state) => {
     vi.useFakeTimers();
     try {
       const child = new FakeHostServerChild();
+      if (state === "signaled") {
+        child.exitWithSignal("SIGTERM");
+        await expect(hostServerTesting.stopHostServerChild(child as never)).resolves.toBe(true);
+        expect(child.signals).toEqual([]);
+        return;
+      }
       const stop = hostServerTesting.stopHostServerChild(child as never);
       expect(child.signals).toEqual(["SIGTERM"]);
 
@@ -1297,14 +1303,6 @@ ensure_vm_running`,
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("treats signaled host artifact server children as already exited", async () => {
-    const child = new FakeHostServerChild();
-    child.exitWithSignal("SIGTERM");
-
-    await expect(hostServerTesting.stopHostServerChild(child as never)).resolves.toBe(true);
-    expect(child.signals).toEqual([]);
   });
 
   it("uses a temporary npmrc file and cleans it after resolving the latest package version", () => {
@@ -1382,17 +1380,21 @@ kill -TERM "$$"`,
             date: "2026-07-26 11:52:02",
           },
           "{other}": { name: "unrelated", state: "poweroff" },
+          "{old-macos}": { name: "macOS 26.3.1 LATEST", state: "poweron" },
+          "{current-macos}": { name: "macOS 26.5", state: "poweron" },
         },
       },
       () => {
         const snapshot = resolveSnapshot("vm", "fresh");
         const latestE2e = resolveSnapshot("vm", "pre-openclaw-native-e2e-");
         const missingDate = resolveSnapshot("vm", "undated-family-");
+        const latestMacos = resolveSnapshot("vm", "macOS 26.5 latest");
         return [
           shellQuote("it's ok"),
           [snapshot.id, snapshot.state, snapshot.name].join("\t"),
           [latestE2e.id, latestE2e.state, latestE2e.name].join("\t"),
           [missingDate.id, missingDate.state, missingDate.name].join("\t"),
+          [latestMacos.id, latestMacos.state, latestMacos.name].join("\t"),
         ].join("\n");
       },
     );
@@ -1401,23 +1403,7 @@ kill -TERM "$$"`,
     expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
     expect(output).toContain("{new-e2e}\tpoweroff\tpre-openclaw-native-e2e-2026-07-26");
     expect(output).toContain("{undated-first}\tpoweroff\tundated-family-1");
-  });
-
-  it("resolves a latest snapshot hint to the matching version before older LATEST labels", () => {
-    const output = withJsonFakePrlctl(
-      {
-        "snapshot-list": {
-          "{old}": { name: "macOS 26.3.1 LATEST", state: "poweron" },
-          "{wanted}": { name: "macOS 26.5", state: "poweron" },
-        },
-      },
-      () => {
-        const snapshot = resolveSnapshot("vm", "macOS 26.5 latest");
-        return [snapshot.id, snapshot.state, snapshot.name].join("\t");
-      },
-    );
-
-    expect(output).toBe("{wanted}\tpoweron\tmacOS 26.5");
+    expect(output.split("\n").at(-1)).toBe("{current-macos}\tpoweron\tmacOS 26.5");
   });
 
   it.each(["poweron", "poweroff"] as const)(
@@ -1952,8 +1938,8 @@ if (commandArgs[0] === "list") {
     expect(combined).toContain("MinGit-");
     expect(combined).toContain("portable-git");
     expect(combined).toContain("where.exe git.exe");
-    expect(windowsGit.indexOf('"MinGit-2.55.0.5-64-bit.zip"')).toBeLessThan(
-      windowsGit.indexOf('"MinGit-2.55.0.5-arm64.zip"'),
+    expect(windowsGit.indexOf('"MinGit-2.56.0.2-64-bit.zip"')).toBeLessThan(
+      windowsGit.indexOf('"MinGit-2.56.0.2-arm64.zip"'),
     );
     expect(
       combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
@@ -2008,15 +1994,6 @@ if (commandArgs[0] === "list") {
     expect(output.join("")).toContain("update complete");
   });
 
-  it("propagates a detached POSIX background exit failure", async () => {
-    const { result } = runFakePosixBackground(
-      { exit: [fakeResult(0, "7\n")], tail: () => fakeResult(0, "update failed\n") },
-      { script: "exit 7" },
-    );
-
-    await expect(result).rejects.toThrow("macos update failed");
-  });
-
   it("reads the POSIX background exit after log drain consumes the deadline", async () => {
     const { result, state } = runFakePosixBackground(
       {
@@ -2036,29 +2013,36 @@ if (commandArgs[0] === "list") {
     expect(state.exitRead).toBe(true);
   });
 
-  it("cleans up an ambiguous POSIX launch when PID materialization is missed", async () => {
-    const { result, state } = runFakePosixBackground(
-      { launch: fakeResult(124), pid: fakeResult(1) },
-      { script: "sleep 60", timeoutMs: 25 },
-    );
-
-    await expect(result).rejects.toThrow("macos update background launch failed");
-
-    expect(state.cleanupRun).toBe(true);
-  });
-
-  it("force-stops the verified POSIX background process tree on timeout", async () => {
-    const { result, state } = runFakePosixBackground(
-      { done: fakeResult(1) },
-      { script: "sleep 60", timeoutMs: 25 },
-    );
-
-    await expect(result).rejects.toThrow("macos update timed out");
-
-    expect(state.cleanupPayload).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
-    expect(state.cleanupPayload).toContain('for child in $(/usr/bin/pgrep -P "$1"');
-    expect(state.cleanupPayload).toContain('/bin/kill -TERM "$1"');
-    expect(state.cleanupPayload).toContain('/bin/kill -KILL "$1"');
+  it.each([
+    {
+      name: "detached exit failure",
+      fake: { exit: [fakeResult(0, "7\n")], tail: () => fakeResult(0, "update failed\n") },
+      options: { script: "exit 7" },
+      error: "macos update failed",
+    },
+    {
+      name: "missing PID after ambiguous launch",
+      fake: { launch: fakeResult(124), pid: fakeResult(1) },
+      options: { script: "sleep 60", timeoutMs: 25 },
+      error: "macos update background launch failed",
+    },
+    {
+      name: "timeout",
+      fake: { done: fakeResult(1) },
+      options: { script: "sleep 60", timeoutMs: 25 },
+      error: "macos update timed out",
+    },
+  ])("handles POSIX background $name", async ({ name, fake, options, error }) => {
+    const { result, state } = runFakePosixBackground(fake, options);
+    await expect(result).rejects.toThrow(error);
+    if (name === "missing PID after ambiguous launch") {
+      expect(state.cleanupRun).toBe(true);
+    } else if (name === "timeout") {
+      expect(state.cleanupPayload).toContain('command=$(/bin/ps -p "$background_pid" -o command=');
+      expect(state.cleanupPayload).toContain('for child in $(/usr/bin/pgrep -P "$1"');
+      expect(state.cleanupPayload).toContain('/bin/kill -TERM "$1"');
+      expect(state.cleanupPayload).toContain('/bin/kill -KILL "$1"');
+    }
   });
 
   it("carries refreshed Windows guest environment into every PowerShell script", () => {

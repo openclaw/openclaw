@@ -1,12 +1,9 @@
 import { expect, it } from "vitest";
-import {
-  prepareSessionAncestor,
-  SessionAncestorReferences,
-} from "./session-ancestor-references.js";
+import { prepareSessionAncestor, ConnectionSessionRows } from "./session-ancestor-references.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 it("preserves presentation clocks and the delivered baseline when serialization fails", () => {
-  const references = new SessionAncestorReferences();
+  const references = new ConnectionSessionRows();
   const row: GatewaySessionRow = {
     key: "agent:main:parent",
     sessionId: "parent",
@@ -58,7 +55,7 @@ it.each([
 ])(
   "resends an ancestor in full after reaching the $bound bound",
   ({ count, label, snapshotAt }) => {
-    const references = new SessionAncestorReferences();
+    const references = new ConnectionSessionRows();
     const rows = Array.from({ length: count }, (_, index): GatewaySessionRow => ({
       key: `agent:main:ancestor-${index}`,
       ...(count > 1 ? { sessionId: `ancestor-${index}` } : {}),
