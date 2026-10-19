@@ -27,7 +27,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import { executeSlashCommand } from "./chat-command-executor.ts";
+import type { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
@@ -372,6 +372,10 @@ export async function dispatchChatSlashCommand(
   const targetIsCurrent = () => isChatCommandTargetCurrent(host, target);
   let result: Awaited<ReturnType<typeof executeSlashCommand>>;
   try {
+    const { executeSlashCommand } = await import("./chat-command-executor.ts");
+    if (!targetIsCurrent()) {
+      return "failed";
+    }
     result = await executeSlashCommand(target.client, target.sessionKey, name, args, {
       sessions: host.sessions,
       attachments,

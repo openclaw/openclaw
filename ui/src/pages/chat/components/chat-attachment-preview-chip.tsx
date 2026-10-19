@@ -17,7 +17,7 @@ export function AttachmentPreviewChip(props: {
   onReveal?: () => void;
   removal?: AttachmentChipRemoval;
   elementRef?: (element: Element | undefined) => void;
-  triggerRef?: (element: HTMLButtonElement) => void;
+  triggerRef?: JSX.Ref<HTMLButtonElement>;
 }) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
   const label = () => (

@@ -1043,7 +1043,9 @@ describe("chat pane history pagination intent", () => {
     pane.loadOlderMessages = vi.fn(async () => true);
     vi.stubGlobal("TouchEvent", undefined);
     const thread = document.createElement("div");
-    thread.innerHTML = '<div class="chat-history-sentinel"></div>';
+    const sentinel = thread.appendChild(document.createElement("div"));
+    sentinel.className = "chat-history-sentinel";
+    pane.historySentinel = sentinel;
     pane.append(thread);
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const event = new WheelEvent("wheel", { deltaY: -1 });
@@ -1074,7 +1076,9 @@ describe("chat pane history pagination intent", () => {
     }
     vi.stubGlobal("TouchEvent", TestTouchEvent);
     const thread = document.createElement("div");
-    thread.innerHTML = '<div class="chat-history-sentinel"></div>';
+    const sentinel = thread.appendChild(document.createElement("div"));
+    sentinel.className = "chat-history-sentinel";
+    pane.historySentinel = sentinel;
     pane.append(thread);
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const touchEvent = (type: string, clientY: number) => {

@@ -12,7 +12,7 @@ export function createSecretEgressProxyEnvironment(proxyUrl: string, trustBundle
     GIT_SSL_CAINFO: trustBundlePath,
   };
 }
-export const SECRET_EGRESS_PROXY_ENV_KEYS: ReadonlySet<string> = new Set(
+const SECRET_EGRESS_PROXY_ENV_KEYS: ReadonlySet<string> = new Set(
   Object.keys(createSecretEgressProxyEnvironment("", "")),
 );
 

@@ -52,7 +52,15 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
 
 export type AgentMemoryState = ReturnType<typeof createAgentMemory>;
 
-export function createAgentMemory(context: ApplicationContext) {
+export type AgentMemoryTarget = {
+  read(): string | null;
+  subscribe(notify: () => void): () => void;
+};
+
+export function createAgentMemory(
+  context: ApplicationContext,
+  getInitialAgentTarget: () => AgentMemoryTarget,
+) {
   const config = projectOwner(context.runtimeConfig, (source) => source.state);
   let active = false;
   let publish = () => {};
@@ -518,9 +526,14 @@ export function createAgentMemory(context: ApplicationContext) {
     equality: "revision",
   });
   onSettled(() => {
+    const agentTarget = getInitialAgentTarget();
+    const syncAgent = () => setAgentId(agentTarget.read() ?? "");
+    const stopAgent = agentTarget.subscribe(syncAgent);
+    syncAgent();
     active = true;
     gateway.connect();
     return () => {
+      stopAgent();
       active = false;
       publish = () => {};
       resetTransientState();
@@ -529,7 +542,6 @@ export function createAgentMemory(context: ApplicationContext) {
     };
   });
   return {
-    setAgentId,
     loadResources,
     setEnabled,
     view() {

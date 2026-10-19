@@ -58,6 +58,9 @@ function fixture(
   // DOM behavior is real; only browser layout is deterministic in this Node test.
   let rowHeight = initialRowHeight;
   dom.window.Element.prototype.getBoundingClientRect = function () {
+    if (this.matches(".reader-controls")) {
+      return new dom.window.DOMRect(0, 528, 400, 56);
+    }
     const rows = Array.from(document.querySelectorAll(".transcript > *"));
     const index = rows.indexOf(this);
     const top = this.matches(".transcript") ? 300 : 300 + Math.max(0, index) * rowHeight;

@@ -7,6 +7,7 @@ import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
+import { createPublicSessionLocalesPlugin } from "./public-session-locales.mts";
 import {
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
@@ -123,6 +124,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
       createPublicSessionCardAssetsPlugin(root, recordInput),
+      createPublicSessionLocalesPlugin(root, recordInput),
       createSqliteSchemaAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,

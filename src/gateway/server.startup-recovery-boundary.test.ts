@@ -1,14 +1,16 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -93,7 +95,7 @@ async function seedInterruptedSession(
     sessionId: string;
     message: string;
     provenance?: InputProvenance;
-    patch?: Partial<SessionEntry>;
+    patch?: Partial<InternalSessionEntry>;
   },
 ) {
   const target = { storePath: fixture.storePath, sessionKey: params.sessionKey };
@@ -609,6 +611,67 @@ async function steerQueuesBehindRestartSafeResend(fixture: Fixture) {
   expect(resendTurns(owed)[0]).not.toContain(steer);
 }
 
+async function resetRestoresMainAfterRecoveryArchival(fixture: Fixture) {
+  const sessionKey = "agent:main:main";
+  const sessionId = "boundary-archived-main";
+  const owed = "Archived Main case: interrupted task retained in history.";
+  const fresh = "Archived Main case: fresh task after explicit reset.";
+  const target = { agentId: "main", storePath: fixture.storePath, sessionKey, sessionId };
+  await seedInterruptedSession(fixture, {
+    sessionKey,
+    sessionId,
+    message: owed,
+    patch: {
+      mainRestartRecovery: { cycleId: sessionId, revision: 1, chargedAttempts: 3 },
+    },
+  });
+  // Run the real startup owner from persisted restart state, then use the public recovery API.
+  await expect(runStartupRecovery(fixture)).resolves.toMatchObject({ started: 0, failed: 0 });
+  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery?.tombstone).toBeDefined();
+  const recovered = await fixture.client.request<SessionsRecoverResult>("sessions.recover", {
+    key: sessionKey,
+    mode: "new-session",
+  });
+  expect(recovered.key).not.toBe(sessionKey);
+  expect(recovered.continuation.status).toBe("started");
+  if (recovered.continuation.status === "started") {
+    await expect(
+      fixture.client.request("agent.wait", {
+        runId: recovered.continuation.runId,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toMatchObject({ status: "ok" });
+  }
+  expect(readEntry(fixture, sessionKey)).toMatchObject({
+    sessionId,
+    archivedAt: expect.any(Number),
+    archiveReason: "restart-recovery",
+  });
+  const retained = await loadTranscriptEvents(target);
+  await expect(
+    fixture.client.request("sessions.reset", { key: sessionKey, expectedSessionId: sessionId }),
+  ).resolves.toMatchObject({ ok: true });
+  const reset = readEntry(fixture, sessionKey);
+  expect(reset?.sessionId).toBe(sessionId);
+  expect(reset?.archivedAt).toBeUndefined();
+  expect(reset?.mainRestartRecovery).toBeUndefined();
+  const afterReset = await loadTranscriptEvents(target);
+  expect(afterReset.slice(0, retained.length)).toEqual(retained);
+  expect(afterReset.slice(retained.length)).toContainEqual(
+    expect.objectContaining({ type: "reset", reason: "reset" }),
+  );
+  const runId = "boundary-archived-main-fresh";
+  await fixture.client.request("chat.send", {
+    sessionKey,
+    sessionId,
+    message: fresh,
+    deliver: false,
+    idempotencyKey: runId,
+  });
+  await waitForChatTurn(runId, fresh);
+  expect(promptTurns(fresh)[0]).not.toContain(owed);
+}
+
 // The test runtime resets plugin state after each test, so one test owns the Gateway.
 it("orders, joins, and cancels restart resends through the session mailbox", async () => {
   const token = "startup-recovery-boundary-token";
@@ -724,6 +787,7 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
     await interruptEndsRunningResend(fixture);
     await interruptSurvivesInterruptedTurnCleanup(fixture);
     await steerQueuesBehindRestartSafeResend(fixture);
+    await resetRestoresMainAfterRecoveryArchival(fixture);
   } finally {
     for (const gate of holds.values()) {
       gate.resolve();

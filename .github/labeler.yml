@@ -57,6 +57,12 @@
           - "extensions/onnx/**"
           - "docs/plugins/onnx.md"
           - "docs/plugins/reference/onnx.md"
+"plugin: levanto":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/levanto/**"
+          - "docs/providers/levanto.md"
+          - "docs/plugins/reference/levanto.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:

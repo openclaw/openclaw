@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { clampNumber, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   BEAM_MAX_BODY_BYTES,
   BEAM_MAX_ITEM_CHARS,
@@ -229,22 +230,8 @@ export function createBeamMirrorRunner(params: {
 
   // Catalog work cannot be cancelled, so detach its late result after stop.
   // Guarded transport cleanup remains joined to the active scan in upload().
-  const raceCatalog = async <T>(operation: Promise<T>): Promise<T> => {
-    let rejectAbort: (error: Error) => void;
-    const aborted = new Promise<never>((_, reject) => {
-      rejectAbort = reject;
-    });
-    const abort = () => rejectAbort(stopError);
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      if (signal.aborted) {
-        abort();
-      }
-      return await Promise.race([operation, aborted]);
-    } finally {
-      signal.removeEventListener("abort", abort);
-    }
-  };
+  const raceCatalog = <T>(operation: Promise<T>): Promise<T> =>
+    racePromiseWithAbortSignal(operation, signal, () => stopError);
 
   // Retry state keeps a bounded sender-owned superset until the receiver's TTL.
   // The extra capacity prevents independent clocks from dropping a live row.

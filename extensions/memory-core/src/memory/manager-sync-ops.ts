@@ -635,6 +635,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             cacheEnabled: this.cache.enabled,
             ftsEnabled: shadow.fts.enabled,
             ftsTokenizer: this.settings.store.fts.tokenizer,
+            fresh: postgresStage ? undefined : true,
           });
 
           await this.executeSourceSync({
@@ -683,7 +684,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return {
             nextMeta,
             vectorIndexComplete,
-            hasVectors: shadow.facts.hasVectorTable,
           };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
@@ -717,7 +717,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               sourceIdentity: readMemoryShadowIdentity(tempDbPath),
               metaKey: MEMORY_INDEX_META_KEY,
               expectedRevision: originalRevision,
-              sourceHasVectors: rebuilt.hasVectors,
+              sourceSchema: shadow.searchSchema,
               vectorIndexComplete: rebuilt.vectorIndexComplete,
               extensionPath: shadow.vector.extensionPath,
             },

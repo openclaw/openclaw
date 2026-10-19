@@ -113,6 +113,13 @@ export class ShellOwner
     this.renderedShellElements.renderedElement(tagName) ??
     this.routeOutlet?.renderedElement?.(tagName) ??
     null;
+  queryRenderedElements<K extends keyof HTMLElementTagNameMap>(tag: K): HTMLElementTagNameMap[K][];
+  queryRenderedElements(tag: string): HTMLElement[];
+  queryRenderedElements(tag: string): HTMLElement[] {
+    return this.renderedShellElements
+      .renderedElements(tag)
+      .concat(this.routeOutlet?.renderedElements?.(tag) ?? []);
+  }
   readonly elements: ShellOwnedElements = {};
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
   navDrawerTrigger: HTMLElement | null = null;
@@ -125,7 +132,7 @@ export class ShellOwner
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar: HTMLElement &
+  readonly navigationSidebar: ShellChromeHost["navigationSidebar"] &
     Partial<
       Pick<
         AppSidebarElement,
@@ -334,10 +341,7 @@ export class ShellOwner
             disconnectFavicon = connectControlUiFavicon(
               this.element,
               context,
-              () => [
-                ...this.renderedShellElements.renderedElements("openclaw-chat-pane"),
-                ...(this.routeOutlet?.renderedElements?.("openclaw-chat-pane") ?? []),
-              ],
+              () => this.queryRenderedElements("openclaw-chat-pane"),
               startedAt,
             );
           }

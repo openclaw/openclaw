@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import type { ToolsEffectiveResult } from "../../../api/types.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import type { IconName } from "../../../components/solid/icon.tsx";
@@ -53,7 +52,6 @@ export type ChatComposerCapabilityMenuProps = {
   skillsLoading: boolean;
   skillsError: boolean;
   library?: ComposerLibraryProps;
-  libraryDialog?: JSX.Element;
   mcpServers: readonly McpServerSummary[];
   toolsEffectiveResult: ToolsEffectiveResult | null;
   toolsEffectiveLoading: boolean;
@@ -63,7 +61,6 @@ export type ChatComposerCapabilityMenuProps = {
   mutationBlockedReason: string | null;
   canAdmin: boolean;
   adminBlockedReason: string | null;
-  addServerDialog?: JSX.Element;
   onLoadSkills: () => void;
   onLoadView?: (view: ChatComposerPlusMenuView) => void;
   onPatchToolOverrides: (next: SessionToolOverrides | null) => void;

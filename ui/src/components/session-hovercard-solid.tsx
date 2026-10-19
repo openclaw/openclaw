@@ -1,5 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, useContext } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
@@ -17,6 +17,7 @@ import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts"
 import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
+import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
 import {
@@ -28,7 +29,7 @@ import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
+import { ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
 import "./session-hovercard.css";
 import "./tooltip.ts";
 
@@ -85,6 +86,7 @@ function ParticipantLink(props: {
   return (
     <div role="listitem">
       <PersonName
+        ref={createHovercardControlRef()}
         label={label()}
         link={activity()}
         class="session-menu__item learn-more-link session-hovercard__participant-link"
@@ -127,6 +129,8 @@ function AttributionContent(props: {
   auth?: SessionHovercardAvatarAuth;
   routing?: PersonActivityRouting;
 }) {
+  const controls = useContext(HovercardControlsContext);
+  const registerLink = (element: HTMLAnchorElement) => controls?.registerSource(() => [element]);
   const creatorInitials = createMemo(() => {
     const creator = props.attribution?.creator;
     return creator ? sessionOwnerInitials(creator) : "";
@@ -189,6 +193,7 @@ function AttributionContent(props: {
     <div class="session-hovercard__attribution" aria-label={attributionLabel()}>
       <span class="session-hovercard__attribution-copy">
         <PersonName
+          ref={createHovercardControlRef()}
           label={props.attribution?.primaryLabel ?? ""}
           link={primaryActivity()}
           class="session-hovercard__attribution-name"
@@ -204,6 +209,7 @@ function AttributionContent(props: {
               open-on-click
             >
               <button
+                ref={createHovercardControlRef()}
                 type="button"
                 class="session-hovercard__attribution-others"
                 style={{
@@ -261,11 +267,12 @@ function AttributionContent(props: {
           </Show>
         </PersonAvatarLink>
         <Show when={remaining().length > 0}>
-          <openclaw-viewer-facepile
-            prop:staticParticipants={remaining()}
-            prop:totalCount={otherCount()}
-            prop:maxVisible={Math.min(remaining().length, MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS)}
-            prop:personActivity={props.routing}
+          <ViewerFacepile
+            registerLink={registerLink}
+            staticParticipants={remaining()}
+            totalCount={otherCount()}
+            maxVisible={Math.min(remaining().length, MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS)}
+            personActivity={props.routing}
           />
         </Show>
       </span>
@@ -371,6 +378,7 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
   const stateLabel = () => (checks() ? `${state()} · ${checks()}` : state());
   return (
     <a
+      ref={createHovercardControlRef()}
       class="session-hovercard__pr-row"
       data-state={props.request.state}
       href={props.request.url}
@@ -442,6 +450,7 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
             }
           >
             <a
+              ref={createHovercardControlRef()}
               class="session-hovercard__branch-action"
               href={branch()?.createUrl}
               target="_blank"
@@ -496,6 +505,7 @@ function SessionColorDot(props: { color: string | null | undefined }) {
 }
 
 export function SessionHovercard(props: SessionHovercardInput) {
+  const controls = useContext(HovercardControlsContext);
   const headsUp = createMemo(() =>
     progressCardHeadsUp(
       props.progressCard,
@@ -579,7 +589,11 @@ export function SessionHovercard(props: SessionHovercardInput) {
             aria-label={t("sessionHovercard.agentNotepad")}
           >
             <div class="session-hovercard__notepad-title">{t("sessionHovercard.agentNotepad")}</div>
-            <ProgressCardMarkdown markdown={props.progressCard?.markdown} promoteProgress />
+            <ProgressCardMarkdown
+              markdown={props.progressCard?.markdown}
+              promoteProgress
+              registerControls={controls?.registerSource}
+            />
           </section>
         </Show>
         <Show

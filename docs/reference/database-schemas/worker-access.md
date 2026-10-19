@@ -6922,6 +6922,12 @@ committed write invalidates its namespace, unknown settlement invalidates the
 database's lists, and each read filters expired entries without another worker
 request. Returned lists and values are detached from the retained snapshot.
 
+Runtime-health cleanup retains acknowledged empty selections in that same bounded
+namespace cache, scoped by store identity, process, and engine or tool selection.
+Repeated clears skip the worker request until a namespace write receipt or unknown
+settlement invalidates them. Initial observations and positive clears retain the
+existing ordered worker operation and deletion authority.
+
 Agent dispatch reads ACP metadata only after finding a completed subagent run
 eligible for reactivation. Ordinary turns without such a run skip that worker
 request; actual reactivation retains the ACP exclusion and live dispatch checks.

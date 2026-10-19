@@ -16,7 +16,6 @@ import {
 import { resolveMSTeamsRuntimeAccount, withAccountScopedMSTeamsConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
@@ -31,11 +30,7 @@ import {
   type MSTeamsStatusSink,
 } from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
-import {
-  createMSTeamsPollStoreState,
-  extractMSTeamsPollVote,
-  type MSTeamsPollStore,
-} from "./polls.js";
+import { createMSTeamsPollStoreState, extractMSTeamsPollVote } from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
@@ -69,19 +64,10 @@ type MonitorMSTeamsOpts = {
   msteamsCfg?: MSTeamsConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  conversationStore?: MSTeamsConversationStore;
-  pollStore?: MSTeamsPollStore;
   statusSink?: MSTeamsStatusSink;
 };
 
-type MonitorMSTeamsResult = {
-  app: unknown;
-  shutdown: () => Promise<void>;
-};
-
-export async function monitorMSTeamsProvider(
-  opts: MonitorMSTeamsOpts,
-): Promise<MonitorMSTeamsResult> {
+export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<void> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
   const account = resolveMSTeamsRuntimeAccount(opts);
@@ -92,13 +78,13 @@ export async function monitorMSTeamsProvider(
   if (opts.cfg.channels?.msteams?.enabled !== true || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
-    return { app: null, shutdown: async () => {} };
+    return;
   }
 
   if (!creds) {
     log.error("msteams credentials not configured");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
-    return { app: null, shutdown: async () => {} };
+    return;
   }
   const collisionIssue = resolveMSTeamsWebhookCollisionIssue(accountPolicyCfg);
   if (collisionIssue) {
@@ -222,9 +208,8 @@ export async function monitorMSTeamsProvider(
       cfg,
       resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
     }) ?? 8 * 1024 * 1024;
-  const conversationStore =
-    opts.conversationStore ?? createMSTeamsConversationStoreState({ accountId });
-  const pollStore = opts.pollStore ?? createMSTeamsPollStoreState({ accountId });
+  const conversationStore = createMSTeamsConversationStoreState({ accountId });
+  const pollStore = createMSTeamsPollStoreState({ accountId });
 
   log.info("starting provider on Gateway HTTP routes");
 
@@ -616,8 +601,6 @@ export async function monitorMSTeamsProvider(
   } finally {
     await shutdown();
   }
-
-  return { app: expressApp, shutdown };
 }
 
 function cardActionMessage(value: string): MSTeamsCardActionResponse {

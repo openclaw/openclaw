@@ -98,7 +98,6 @@ export function GroupedMessage(props: GroupedMessageProps) {
   const messageElements = useContext(TranscriptMessageElementsContext);
   // The keyed message owns this DOM registration through acknowledgement and option refreshes.
   const initialMessageKey = untrack(() => props.messageKey);
-  const entryRef = messageElements?.forKey(initialMessageKey);
   // Expiring pairing QR attachments schedule a timer at their resource owner.
   createEffect(
     () => [props.messageKey, state().nextPairingQrExpiresAt] as const,
@@ -111,6 +110,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
       fallback={
         <Show when={!state().empty}>
           {(_visible) => {
+            const entryRef = messageElements?.forKey(initialMessageKey);
             onCleanup(() => entryRef?.(undefined));
             return (
               <>
@@ -192,11 +192,18 @@ export function GroupedMessage(props: GroupedMessageProps) {
         </Show>
       }
     >
-      <WorkspaceConflictTranscriptMessage
-        conflict={state().workspaceConflict!}
-        messageKey={props.messageKey}
-        entryId={props.options.entryId}
-      />
+      {(conflict) => {
+        const entryRef = messageElements?.forKey(initialMessageKey);
+        onCleanup(() => entryRef?.(undefined));
+        return (
+          <WorkspaceConflictTranscriptMessage
+            conflict={conflict()}
+            messageKey={props.messageKey}
+            entryId={props.options.entryId}
+            ref={entryRef}
+          />
+        );
+      }}
     </Show>
   );
 }

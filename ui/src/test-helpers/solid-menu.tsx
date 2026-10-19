@@ -25,22 +25,25 @@ export const navigationItems: readonly MenuItem[] = [
   { id: "archive", label: "Archive" },
 ];
 
-export function mountMenu(props: Partial<MenuProps> = {}) {
+export function mountMenu(props: Partial<MenuProps> | (() => Partial<MenuProps>) = {}) {
   let handle!: MenuHandle;
-  const view = render(() => (
-    <>
-      <Menu
-        id="people"
-        label="People"
-        items={navigationItems}
-        {...props}
-        ref={(value) => (handle = value)}
-      />
-      <button type="button" tabindex={0}>
-        After menu
-      </button>
-    </>
-  ));
+  const view = render(() => {
+    const resolved = typeof props === "function" ? props() : props;
+    return (
+      <>
+        <Menu
+          id="people"
+          label="People"
+          items={navigationItems}
+          {...resolved}
+          ref={(value) => (handle = value)}
+        />
+        <button type="button" tabindex={0}>
+          After menu
+        </button>
+      </>
+    );
+  });
   flush();
   return {
     ...view,

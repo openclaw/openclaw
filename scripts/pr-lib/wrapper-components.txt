@@ -997,7 +997,6 @@ src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
-src/infra/git-ref-lock-repair.ts
 src/infra/git-repository-repair.ts
 src/infra/git-root.ts
 src/infra/git-worker-context.ts
@@ -2611,3 +2610,6 @@ src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
 src/config/sessions/session-run-lifecycle-projection.ts
 src/shared/agent-liveness.ts
+src/agents/agent-bundle-mcp-manager-catalog.ts
+src/agents/agent-bundle-mcp-runtime-owner.ts
+src/agents/agent-bundle-mcp-runtime-shared.ts

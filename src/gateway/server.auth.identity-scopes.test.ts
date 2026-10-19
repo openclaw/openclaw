@@ -725,6 +725,38 @@ test("caps a broader reconnect before device scope-upgrade comparison", async ()
   await expectUnchangedPairing(identity.deviceId, ["operator.read"]);
 });
 
+test("keeps equivalent identity grants within both proxy scope ceilings", async () => {
+  await configureGatewayAuth(
+    proxyAuth({
+      "explicit@example.com": READ_WRITE,
+      "implied@example.com": ["operator.write"],
+      "admin@example.com": ["operator.admin"],
+      "read-only@example.com": ["operator.read"],
+      "pairing-only@example.com": ["operator.pairing"],
+    }),
+  );
+  const cases: Array<[string, string, OperatorScope[]]> = [
+    ["explicit@example.com", "operator.read", ["operator.read"]],
+    ["implied@example.com", "operator.read", ["operator.read"]],
+    ["admin@example.com", "operator.read", ["operator.read"]],
+    ["read-only@example.com", "operator.write", ["operator.read"]],
+    ["pairing-only@example.com", "operator.read", []],
+    ["implied@example.com", "", []],
+  ];
+  await withIdentityServer(async ({ connect }) => {
+    for (const [identity, cap, expected] of cases) {
+      const { ws, connected } = await connect(
+        { device: null },
+        { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": identity, "x-openclaw-scopes": cap },
+      );
+      expectScopes(connected, expected);
+      expect((await rpcReq(ws, "sessions.list", {})).ok).toBe(expected.length > 0);
+      await expectWriteDenied(ws, "agent:main:scope-cap");
+      ws.close();
+    }
+  });
+});
+
 test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([
   ["clears device-less scopes", proxyAuth(ADMIN_GRANT), { device: null }, ["operator.admin"]],
   [

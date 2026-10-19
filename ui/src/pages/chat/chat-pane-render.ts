@@ -369,7 +369,11 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     );
     const props: ChatProps = {
       applicationContext: this.context,
+      registerBrowserAnnotationFocus: this.registerBrowserAnnotationFocus,
       transcript: this.transcript,
+      onHistorySentinelRef: this.registerHistorySentinel,
+      onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
+      onComposerShellRef: this.registerComposerShell,
       paneId: this.presentationId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,

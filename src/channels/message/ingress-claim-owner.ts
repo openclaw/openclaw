@@ -4,9 +4,8 @@
  * ownerId = pid:startToken:uuid. Starttime binds the PID to one process instance so
  * Linux TIDs and recycled PIDs cannot impersonate a dead claim owner.
  */
-import childProcess from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { getProcessStartTime } from "../../shared/pid-alive.ts";
+import { getFileLockProcessStartTime, getProcessStartTime } from "../../shared/pid-alive.ts";
 import type {
   ChannelIngressQueueClaim,
   ChannelIngressQueueCorruptClaim,
@@ -30,23 +29,8 @@ function readProcessStartTime(pid: number): number | null {
     return null;
   }
   if (process.platform === "darwin") {
-    try {
-      // Bounded: this runs on shared channel/SDK init paths, so a hung /bin/ps must
-      // not block startup. Timeout -> null -> "unknown liveness" (callers hold claims).
-      const startedAt = childProcess
-        .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
-          encoding: "utf8",
-          env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 2000,
-          killSignal: "SIGKILL",
-        })
-        .trim();
-      const startedAtMs = Date.parse(`${startedAt} UTC`);
-      return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
-    } catch {
-      return null;
-    }
+    // Keep the shipped epoch-second token and bounded unknown-liveness fallback.
+    return getFileLockProcessStartTime(pid, process.env, 2000);
   }
   return getProcessStartTime(pid);
 }

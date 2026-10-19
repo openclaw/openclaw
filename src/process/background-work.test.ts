@@ -4,13 +4,11 @@ import { createBackgroundWorkOwner, getBackgroundWorkSnapshot } from "./backgrou
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
-  markGatewayDraining,
   publishLaneConfiguration,
   resetAllLanes,
 } from "./command-queue.js";
 import { getQueueState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
-import { getGatewayRestartDrainSignal } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 
 const state = getQueueState();
@@ -98,7 +96,7 @@ function park(
   const run =
     typeof lane === "string"
       ? enqueueCommandInLane(lane, task, options)
-      : lane.enqueue(task, options);
+      : enqueueCommandInLane(lane.lane, task, { ...options, priority: "background" });
   return { run, resolve: gate.resolve };
 }
 
@@ -107,7 +105,7 @@ afterEach(resetCommandQueueStateForTest);
 
 it("does not scan sibling lanes while reading registered owner widths", () => {
   const owners = Array.from({ length: 32 }, (_, index) =>
-    createBackgroundWorkOwner({ owner: `core:stable-${index}`, maxConcurrent: (index % 3) + 1 }),
+    createBackgroundWorkOwner({ owner: `core:stable-${index}` }),
   );
   const members = owners.map((owner) => owner.lane);
   expect(state.lanes.size).toBe(members.length);
@@ -132,10 +130,10 @@ it.each([
 ] as const)("registers lazily (group-only=%s, width=%i)", (groupOnly, maxConcurrent) => {
   const lane = "background:core:width";
   if (groupOnly) {
-    configureBackground([lane]);
+    configureBackground([lane], maxConcurrent === 1 ? undefined : { [lane]: maxConcurrent });
   }
-  const owner = createBackgroundWorkOwner({ owner: "  core:width  ", maxConcurrent });
-  expect(state.lanes.size).toBe(0);
+  const owner = createBackgroundWorkOwner({ owner: "  core:width  " });
+  expect(state.lanes.size).toBe(groupOnly && maxConcurrent !== 1 ? 1 : 0);
   if (groupOnly) {
     const group = state.laneGroups.get("background-work");
     if (maxConcurrent === 1) {
@@ -143,7 +141,7 @@ it.each([
     } else {
       expect(() => owner.lane).toThrow("already registered with different concurrency");
     }
-    expect(state.lanes.size).toBe(0);
+    expect(state.lanes.size).toBe(maxConcurrent === 1 ? 0 : 1);
     expect(state.laneGroups.get("background-work")).toBe(group);
     expect([...group!.members]).toEqual([lane]);
     return;
@@ -154,8 +152,8 @@ it.each([
   const group = state.laneGroups.get("background-work");
   expect(registered?.maxConcurrent).toBe(1);
   expect([...group!.members]).toEqual([lane]);
-  expect(createBackgroundWorkOwner({ owner: "core:width", maxConcurrent: 1 }).lane).toBe(lane);
-  for (const width of [0, 2, 1]) {
+  expect(createBackgroundWorkOwner({ owner: "core:width" }).lane).toBe(lane);
+  for (const width of [0, 2, 3, 1]) {
     publishLaneConfiguration({ lanes: { [lane]: width } });
     if (width === 1) {
       expect(owner.lane).toBe(lane);
@@ -264,13 +262,18 @@ it("preserves admission draining and the newest generation across Gateway restar
 });
 
 it("shares three slots, preserves owner widths and FIFO, and leaves foreground capacity free", async () => {
-  const parallel = createBackgroundWorkOwner({ owner: "plugin:parallel", maxConcurrent: 3 });
-  const serial = createBackgroundWorkOwner({ owner: "core:serial", maxConcurrent: 1 });
-  const gates = Array.from({ length: 3 }, () => park(parallel));
+  const parallel = "background:plugin:parallel";
+  const serial = createBackgroundWorkOwner({ owner: "core:serial" });
+  configureBackground([parallel, serial.lane], { [parallel]: 3 });
+  const gates = Array.from({ length: 3 }, () =>
+    park(parallel, undefined, { priority: "background" }),
+  );
   const parallelRuns = gates.map(({ run }) => run);
   const order: number[] = [];
   const first = park(serial, () => void order.push(1));
-  const second = serial.enqueue(async () => void order.push(2));
+  const second = enqueueCommandInLane(serial.lane, async () => void order.push(2), {
+    priority: "background",
+  });
   try {
     expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 2 });
     await expect(enqueueCommandInLane(CommandLane.Main, async () => "foreground")).resolves.toBe(
@@ -294,14 +297,21 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
 });
 
 it("removes cancelled work immediately without invoking it or reordering its successors", async () => {
-  const owner = createBackgroundWorkOwner({ owner: "core:cancel", maxConcurrent: 1 });
+  const owner = createBackgroundWorkOwner({ owner: "core:cancel" });
   const active = park(owner);
   const controller = new AbortController();
   const cancelledTask = vi.fn(async () => undefined);
   const order: number[] = [];
-  const first = owner.enqueue(async () => void order.push(1));
-  const cancelled = owner.enqueue(cancelledTask, { abortSignal: controller.signal });
-  const last = owner.enqueue(async () => void order.push(2));
+  const first = enqueueCommandInLane(owner.lane, async () => void order.push(1), {
+    priority: "background",
+  });
+  const cancelled = enqueueCommandInLane(owner.lane, cancelledTask, {
+    priority: "background",
+    abortSignal: controller.signal,
+  });
+  const last = enqueueCommandInLane(owner.lane, async () => void order.push(2), {
+    priority: "background",
+  });
   const rejection = expect(cancelled).rejects.toThrow("cancel background work");
   controller.abort(new Error("cancel background work"));
   await rejection;
@@ -310,32 +320,4 @@ it("removes cancelled work immediately without invoking it or reordering its suc
   await Promise.all([active.run, first, last]);
   expect(cancelledTask).not.toHaveBeenCalled();
   expect(order).toEqual([1, 2]);
-});
-
-it.each([
-  ["drain", "Gateway is restarting. Please try again shortly."],
-  ["reset", "gateway runtime reset"],
-])("cancels old work on restart %s and admits fresh work", async (restart, message) => {
-  const owner = createBackgroundWorkOwner({ owner: "core:restart", maxConcurrent: 1 });
-  const started = createDeferred();
-  const active = owner.enqueue(async (signal) => {
-    started.resolve();
-    await new Promise<void>((resolve) => {
-      signal.addEventListener("abort", () => resolve(), { once: true });
-    });
-    signal.throwIfAborted();
-  });
-  await started.promise;
-  const staleTask = vi.fn(async () => undefined);
-  const stale = owner.enqueue(staleTask);
-  const oldSignal = getGatewayRestartDrainSignal();
-  const rejected = [active, stale].map((run) => expect(run).rejects.toThrow(message));
-  (restart === "drain" ? markGatewayDraining : resetAllLanes)();
-  await Promise.all(rejected);
-  resetAllLanes();
-  expect(oldSignal.aborted).toBe(true);
-  expect(getGatewayRestartDrainSignal().aborted).toBe(false);
-  await expect(owner.enqueue(async () => "fresh")).resolves.toBe("fresh");
-  expect(staleTask).not.toHaveBeenCalled();
-  expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 0, queuedCount: 0 });
 });

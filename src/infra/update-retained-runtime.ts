@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -19,7 +19,6 @@ import {
   reportRetainedUpdateRuntime,
   resolveRetainedUpdateRuntimeParents,
 } from "./temp-artifact-cleanup.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,

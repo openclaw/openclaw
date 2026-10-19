@@ -251,12 +251,13 @@ export function transportAbortError(signal?: AbortSignal): Error {
     : new Error("Request was aborted");
 }
 
-const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
-const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
-
-type ModelStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 6;
+const MODEL_STREAM_COOPERATIVE_YIELD_BUDGET = 64;
+// Readiness fans out lifecycle state; body events can share a larger batch.
+const MODEL_STREAM_START_WORK = 8;
+let streamWorkThisTurn = 0;
+let streamTurnStartedAt = 0;
+let nextStreamTurn: Promise<void> | undefined;
 
 export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -264,31 +265,32 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   }
 }
 
-export function createModelStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): ModelStreamCooperativeScheduler {
-  let lastYieldedAt = Date.now();
-  let eventsSinceYield = 0;
-  return {
-    async afterEvent() {
-      throwIfModelStreamAborted(signal);
-      eventsSinceYield += 1;
-      const now = Date.now();
-      if (
-        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
-        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
-      ) {
-        return;
-      }
-      eventsSinceYield = 0;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      throwIfModelStreamAborted(signal);
-      // Time waiting for the yield does not consume the next work budget.
-      lastYieldedAt = Date.now();
-    },
-  };
+async function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> {
+  throwIfModelStreamAborted(signal);
+  // All streams share the main loop. Recheck after waking so a swarm cannot
+  // spend a fresh per-stream budget in the same microtask burst.
+  for (;;) {
+    if (
+      !nextStreamTurn ||
+      (streamWorkThisTurn + work <= MODEL_STREAM_COOPERATIVE_YIELD_BUDGET &&
+        Date.now() - streamTurnStartedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
+    ) {
+      break;
+    }
+    await nextStreamTurn;
+    throwIfModelStreamAborted(signal);
+  }
+  if (!nextStreamTurn) {
+    streamTurnStartedAt = Date.now();
+    nextStreamTurn = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        streamWorkThisTurn = 0;
+        nextStreamTurn = undefined;
+        resolve();
+      }, 0);
+    });
+  }
+  streamWorkThisTurn += work;
 }
 
 /** Keep ready provider events from monopolizing the main loop, including ignored events. */
@@ -296,11 +298,10 @@ export async function* iterateModelStream<T>(
   events: AsyncIterable<T> | Iterable<T>,
   signal?: AbortSignal,
 ): AsyncGenerator<T> {
-  const scheduler = createModelStreamCooperativeScheduler(signal);
   for await (const event of events) {
-    throwIfModelStreamAborted(signal);
+    await waitForModelStreamTurn(signal);
     yield event;
-    await scheduler.afterEvent();
+    throwIfModelStreamAborted(signal);
   }
 }
 
@@ -500,6 +501,8 @@ export function withProviderResponseHook<T = never>(params: {
     async *[Symbol.asyncIterator]() {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
+        // Hooks may finish together after waiting through earlier work budgets.
+        await waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;

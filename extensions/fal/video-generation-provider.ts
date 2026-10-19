@@ -339,14 +339,9 @@ async function fetchFalJson(params: {
   const { response, release } = await fetchWithSsrFGuard(request);
   try {
     await assertOkOrThrowHttpError(response, errorContext);
-    try {
-      return await readProviderJsonResponse<unknown>(response, errorContext);
-    } catch (error) {
-      if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
-        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE, { cause: error });
-      }
-      throw error;
-    }
+    return await readProviderJsonResponse<unknown>(response, errorContext, {
+      malformedResponseError: FAL_VIDEO_MALFORMED_RESPONSE,
+    });
   } finally {
     await release();
   }

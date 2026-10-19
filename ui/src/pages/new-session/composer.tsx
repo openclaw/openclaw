@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
+import { createEffect, createMemo, onSettled, Show, useContext } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
@@ -8,7 +8,9 @@ import {
   lobsterPetSeed,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
+  type LobsterComposerElements,
 } from "../../components/lobster-pet-contract.ts";
+import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -56,6 +58,8 @@ import {
   NewSessionPlusMenu,
   NewSessionSelectionStatus,
 } from "./composer-capability-controls.tsx";
+import { createComposerPlaceholder } from "./composer-placeholder.ts";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
@@ -88,7 +92,6 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
-  composerTextarea: NewSessionComposerTextarea;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
@@ -103,49 +106,48 @@ export type NewSessionComposerOptions = {
   onBackgroundSubmit?: () => void;
 };
 
-function submitNewSession(options: NewSessionComposerOptions) {
-  options.composerTextarea.emojiMenu.close();
-  options.composerTextarea.mentionMenu.close();
-  options.composerTextarea.skillMenu.reset();
-  options.composerTextarea.slashMenu.reset();
+function submitNewSession(
+  options: NewSessionComposerOptions,
+  textarea: NewSessionComposerTextarea,
+) {
+  textarea.emojiMenu.close();
+  textarea.mentionMenu.close();
+  textarea.skillMenu.reset();
+  textarea.slashMenu.reset();
   options.onSubmit();
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
-function prepareNewSessionComposer(options: NewSessionComposerOptions) {
-  const { attachmentDraft, context, composerTextarea } = options;
+function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessionComposerTextarea) {
+  const { attachmentDraft, context } = options;
   const readSignal = attachmentDraft.reads.readSignal;
   const gateway = context?.gateway;
   const commandClient = options.nativeTerminal ? null : (gateway?.snapshot.client ?? null);
   const mentionDirectory = resolveNewSessionMentionDirectory(options);
-  const { skillMenu, slashMenu, mentionMenu, emojiMenu } = composerTextarea;
+  const { skillMenu, slashMenu, mentionMenu, emojiMenu } = textarea;
   const skillMenuState = skillMenu.state;
   const slashMenuState = slashMenu.state;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
-    getDraft: () => options.composerTextarea.getTextarea()?.value ?? options.message,
+    getDraft: () => textarea.getTextarea()?.value ?? options.message,
     commitDraft: options.onInput,
-    getTextarea: options.composerTextarea.getTextarea,
+    getTextarea: textarea.getTextarea,
     refreshCommands: commandClient
       ? () =>
           refreshSlashCommands({
             client: commandClient,
             agentId: options.agentId,
             shouldApply: () =>
-              composerTextarea.ownsSkillCommands(
-                commandClient,
-                options.agentId,
-                options.draftOwnerKey,
-              ),
+              textarea.ownsSkillCommands(commandClient, options.agentId, options.draftOwnerKey),
           })
       : undefined,
   };
   const slashMenuHost: SlashMenuHost = {
     ...skillMenuHost,
     resolveArgOptions: (command) => command.argOptions ?? [],
-    runCommand: () => submitNewSession(options),
+    runCommand: () => submitNewSession(options, textarea),
     canRun: (inline) => !inline,
     commandFilter: (command) => command.executeLocal !== true,
   };
@@ -161,14 +163,14 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       options.dictationActive ||
       options.submitting ||
       options.messageLocked ||
-      options.composerTextarea.composing ||
+      textarea.composing ||
       isComposingKeyboardEvent(event)
     ) {
       return;
     }
     if (
-      options.composerTextarea.emojiMenu.handleKeydown(event, "new-session") ||
-      options.composerTextarea.mentionMenu.handleKeydown(event, mentionMenuHost) ||
+      textarea.emojiMenu.handleKeydown(event, "new-session") ||
+      textarea.mentionMenu.handleKeydown(event, mentionMenuHost) ||
       skillMenu.handleKeydown(event, skillMenuHost) ||
       slashMenu.handleKeydown(event, slashMenuHost)
     ) {
@@ -193,12 +195,12 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
       if (background) {
-        options.composerTextarea.skillMenu.reset();
-        options.composerTextarea.slashMenu.reset();
-        options.composerTextarea.mentionMenu.close();
+        textarea.skillMenu.reset();
+        textarea.slashMenu.reset();
+        textarea.mentionMenu.close();
         options.onBackgroundSubmit?.();
       } else {
-        submitNewSession(options);
+        submitNewSession(options, textarea);
       }
     }
   };
@@ -210,13 +212,13 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       target,
       !composerLocked &&
         !options.nativeTerminal &&
-        !options.composerTextarea.composing &&
+        !textarea.composing &&
         !commandsOpen &&
         !mentionMenu.open,
     );
   };
   const updateMenus = (target: HTMLTextAreaElement, event?: InputEvent) => {
-    if (options.nativeTerminal || options.composerTextarea.composing || event?.isComposing) {
+    if (options.nativeTerminal || textarea.composing || event?.isComposing) {
       emojiMenu.close();
       return;
     }
@@ -276,7 +278,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     canCompose: !composerLocked && !options.nativeTerminal,
   });
   const visibleMessage = options.dictationPreview ?? options.message;
-  options.composerTextarea.syncDraft(visibleMessage);
+  textarea.syncDraft(visibleMessage);
   const messagePlaceholder = t(
     options.nativeTerminal ? "newSession.nativeTerminalPrompt" : "newSession.messagePlaceholder",
   );
@@ -328,6 +330,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
 }
 
 function StartControl(props: { options: NewSessionComposerOptions }) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const label = () =>
     props.options.submitting
       ? t("newSession.starting")
@@ -351,7 +354,7 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
         aria-disabled={props.options.canSubmit ? "false" : "true"}
         aria-busy={busy() ? "true" : "false"}
         aria-label={label()}
-        onClick={() => submitNewSession(props.options)}
+        onClick={() => submitNewSession(props.options, textarea)}
       >
         <Icon
           name={busy() ? "loader" : props.options.nativeTerminal ? "squareTerminal" : "arrowUp"}
@@ -361,67 +364,14 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
   );
 }
 
-/** Animation belongs to the mounted input; menu and draft updates do not restart it. */
-function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
-  const target = createMemo(() =>
-    t(
-      options().nativeTerminal
-        ? "newSession.nativeTerminalPrompt"
-        : "newSession.messagePlaceholder",
-    ),
-  );
-  const hasMessage = createMemo(() => options().message.length > 0);
-  const reducedMotion =
-    !globalThis.requestAnimationFrame ||
-    (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  const [frame, setFrame] = createSignal({ target: "", text: "" });
-  let entered = false;
-  // Restart the browser animation only when its text changes; typing cancels pending frames.
-  createEffect(
-    () => [target(), hasMessage()] as const,
-    ([text, hasText]) => {
-      entered ||= hasText;
-      if (entered || reducedMotion) {
-        return undefined;
-      }
-      let startedAt: number | undefined;
-      let pending: number;
-      let length = 0;
-      const step = (timestamp: number) => {
-        if (!options().composerTextarea.getTextarea()?.isConnected) {
-          return;
-        }
-        startedAt ??= timestamp;
-        const nextLength = Math.min(
-          text.length,
-          Math.floor(Math.max(0, timestamp - startedAt - 180) / 26),
-        );
-        entered = nextLength === text.length;
-        if (length !== nextLength) {
-          length = nextLength;
-          setFrame({ target: text, text: text.slice(0, length) });
-        }
-        if (!entered) {
-          pending = requestAnimationFrame(step);
-        }
-      };
-      pending = requestAnimationFrame(step);
-      return () => cancelAnimationFrame(pending);
-    },
-  );
-  return () =>
-    options().dictationActive
-      ? ""
-      : entered || hasMessage() || reducedMotion
-        ? target()
-        : frame().target === target()
-          ? frame().text
-          : "";
-}
-
-export function NewSessionComposer(props: { options: NewSessionComposerOptions }) {
+export function NewSessionComposer(props: {
+  options: NewSessionComposerOptions;
+  surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
+}) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const footerControl = createFooterControlRef();
   const inputHandle = createChatAttachmentInputHandle();
+  const backgroundLayoutRef = createBackgroundLayoutRef("composer");
   const draft = createMemo(() => {
     const source = props.options.draftSource;
     return source ? projectOwner(source, (owner) => owner.read()) : undefined;
@@ -432,10 +382,8 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
       ? { ...props.options, message: current.draft, mentions: current.mentions }
       : props.options;
   });
-  const frame = createMemo(() => prepareNewSessionComposer(options()));
-  const placeholder = createComposerPlaceholder(options);
-  // The input and its synchronous owner share one mounted lifetime.
-  const textarea = untrack(() => options().composerTextarea);
+  const frame = createMemo(() => prepareComposer(options(), textarea));
+  const placeholder = createComposerPlaceholder(options, textarea);
   // The textarea owner retires stale command requests and closes menus when its scope changes.
   createEffect(
     () =>
@@ -456,7 +404,28 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   );
   const visibleMessage = createMemo(() => frame().visibleMessage);
   const messageValue = createLiveValue(visibleMessage);
-  let input: HTMLTextAreaElement;
+  let input: HTMLTextAreaElement | undefined;
+  let composer: HTMLDivElement | undefined;
+  let footer: HTMLDivElement | undefined;
+  let lead: HTMLDivElement | undefined;
+  let model: HTMLDivElement | undefined;
+  let actions: HTMLDivElement | undefined;
+  const composerElements = (): LobsterComposerElements | null => {
+    if (!composer || !input || !footer) {
+      return null;
+    }
+    const surroundings = props.surroundings?.();
+    return {
+      root: surroundings?.root ?? composer,
+      composer,
+      editor: input,
+      footer,
+      controls: [lead, model, actions].filter(
+        (element): element is HTMLDivElement => element?.isConnected === true,
+      ),
+      obstacles: surroundings?.obstacles ?? [],
+    };
+  };
   // A replacement can render before the old branch retires; claim only the committed input.
   onSettled(() => {
     textarea.ref(input);
@@ -479,6 +448,10 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
       onDragOver={(event) => frame().attachmentDropHandlers.onDragover(event)}
     >
       <div
+        ref={(element) => {
+          composer = element;
+          backgroundLayoutRef(element);
+        }}
         class={[
           "agent-chat__input agent-chat__input--mobile-toolbar",
           {
@@ -492,6 +465,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         }}
       >
         <openclaw-lobster-pet
+          prop:composerElements={composerElements}
           prop:seed={lobsterPetSeed(`${textarea.critterVisit}:${options().draftOwnerKey}`)}
           prop:mode={resolveLobsterPetMode(
             !options().context?.gateway.snapshot.offlineStable,
@@ -658,8 +632,13 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
             </span>
           </div>
         </div>
-        <div class="agent-chat__composer-footer">
-          <div class="agent-chat__composer-lead">
+        <div class="agent-chat__composer-footer" ref={(element) => (footer = element)}>
+          <div
+            class="agent-chat__composer-lead"
+            ref={(element) => {
+              lead = element;
+            }}
+          >
             <Show when={!options().nativeTerminal}>
               <NewSessionPlusMenu
                 options={options()}
@@ -678,7 +657,12 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
               <Show when={!options().isCatalogTarget}>
-                <div class="chat-composer-model-control">
+                <div
+                  class="chat-composer-model-control"
+                  ref={(element) => {
+                    model = element;
+                  }}
+                >
                   <NewSessionModelControlView
                     control={options().modelControl}
                     options={{
@@ -691,7 +675,12 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 </div>
               </Show>
             </div>
-            <div class="agent-chat__composer-actions">
+            <div
+              class="agent-chat__composer-actions"
+              ref={(element) => {
+                actions = element;
+              }}
+            >
               {options().voiceControl}
               <Show when={!options().dictationActive}>
                 <StartControl options={options()} />

@@ -18,6 +18,8 @@ import {
   nonNegativeSecondsToSafeMilliseconds,
   parseDateFirstTimestampMs,
   parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
   positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
   resolveExpiresAtMsFromDurationMs,
@@ -86,6 +88,18 @@ describe("number-coercion", () => {
     expect(parseFiniteNumber("4.5ms")).toBeUndefined();
     expect(parseFiniteNumber("")).toBeUndefined();
     expect(parseFiniteNumber("nope")).toBeUndefined();
+  });
+
+  test.each([
+    ["Unicode-trimmed signed zero", "\u00a0-0\u2003", -0, -0],
+    ["unsafe integer", "9007199254740992", undefined, 9_007_199_254_740_992],
+    ["scientific overflow", "1e309", undefined, undefined],
+    ["scientific underflow", "-1e-400", undefined, -0],
+    ["coercible array", ["4"], undefined, undefined],
+    ["coercible object", { valueOf: (): number => 4 }, undefined, undefined],
+  ])("preserves strict parser boundaries for %s", (_name, value, integer, finite) => {
+    expect(parseStrictInteger(value)).toBe(integer);
+    expect(parseStrictFiniteNumber(value)).toBe(finite);
   });
 
   test("timer timeout helpers centralize Node-safe bounds", () => {

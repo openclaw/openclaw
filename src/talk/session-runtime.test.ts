@@ -1,47 +1,49 @@
-// Talk session runtime tests cover provider lifecycle and session events.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBridgeCallbacks,
   type RealtimeVoiceBridgeCreateRequest,
 } from "./provider-types.js";
-import { createRealtimeVoiceBridgeSession } from "./session-runtime.js";
+import {
+  createRealtimeVoiceBridgeSession,
+  type RealtimeVoiceBridgeSessionParams,
+} from "./session-runtime.js";
 import { makeBridge, makeVoiceProvider } from "./session-runtime.test-support.js";
 
-function expectBridgeRequest(
-  request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined,
-): Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] {
-  if (!request) {
-    throw new Error("Expected realtime voice provider bridge request");
-  }
-  return request;
+const toolCall = { itemId: "item-1", callId: "call-1", name: "lookup", args: {} };
+
+function createSession(
+  options: Partial<RealtimeVoiceBridgeSessionParams> = {},
+  bridge = makeBridge(),
+  onCreate?: (request: RealtimeVoiceBridgeCreateRequest) => void,
+) {
+  let callbacks!: RealtimeVoiceBridgeCreateRequest;
+  const session = createRealtimeVoiceBridgeSession({
+    provider: makeVoiceProvider((request) => {
+      callbacks = request;
+      onCreate?.(request);
+      return bridge;
+    }),
+    providerConfig: {},
+    audioSink: { sendAudio: vi.fn() },
+    ...options,
+  });
+  return { session, callbacks, bridge };
 }
 
 describe("realtime voice bridge session runtime", () => {
   it.each(["abort", "detach", "cancelled-detach"] as const)(
     "settles accepted native delegation after %s while rejecting new work",
     async (ending) => {
-      let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-      let complete!: (result: { text: string }) => void;
-      const consult = vi.fn(
-        () =>
-          new Promise<{ text: string }>((resolve) => {
-            complete = resolve;
-          }),
-      );
+      const completion = createDeferred<{ text: string }>();
+      const consult = vi.fn(() => completion.promise);
       const close = vi.fn();
-      const session = createRealtimeVoiceBridgeSession({
-        provider: makeVoiceProvider((request) => {
-          callbacks = request;
-          return makeBridge({ close });
-        }),
-        providerConfig: {},
-        audioSink: { sendAudio: vi.fn() },
-        runAgentConsult: consult,
-      });
-      const runner = expectBridgeRequest(callbacks).runAgentConsult;
+      const { session, callbacks } = createSession(
+        { runAgentConsult: consult },
+        makeBridge({ close }),
+      );
+      const runner = callbacks.runAgentConsult;
       expect(runner).toBeTypeOf("function");
       const controller = new AbortController();
       const signal = controller.signal;
@@ -60,7 +62,7 @@ describe("realtime voice bridge session runtime", () => {
       if (ending === "cancelled-detach") {
         controller.abort(new Error("Call cancelled"));
       }
-      complete({ text: "Late answer" });
+      completion.resolve({ text: "Late answer" });
       await settled;
       await expect(runner!({ prompt: "Another task" })).rejects.toThrow("session is closed");
       expect(consult).toHaveBeenCalledOnce();
@@ -68,18 +70,9 @@ describe("realtime voice bridge session runtime", () => {
   );
 
   it("does not start a cancelled native delegation", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const consult = vi.fn(async () => ({ text: "Answer" }));
-    const session = createRealtimeVoiceBridgeSession({
-      provider: makeVoiceProvider((request) => {
-        callbacks = request;
-        return makeBridge();
-      }),
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      runAgentConsult: consult,
-    });
-    const runner = expectBridgeRequest(callbacks).runAgentConsult;
+    const { session, callbacks } = createSession({ runAgentConsult: consult });
+    const runner = callbacks.runAgentConsult;
     expect(runner).toBeTypeOf("function");
     await expect(runner!({ prompt: "Old task", signal: AbortSignal.abort() })).rejects.toThrow();
     expect(consult).not.toHaveBeenCalled();
@@ -88,20 +81,14 @@ describe("realtime voice bridge session runtime", () => {
   it.each(["sink", "provider", "session"] as const)(
     "fences scoped transport acknowledgments after the %s closes",
     (closing) => {
-      let callbacks: RealtimeVoiceBridgeCallbacks | undefined;
       let open = true;
       const acknowledge = vi.fn();
       const sendMark = vi.fn();
       const acknowledgeMark = vi.fn();
-      const bridge = makeBridge({ acknowledgeMark });
-      const session = createRealtimeVoiceBridgeSession({
-        provider: makeVoiceProvider((request) => {
-          callbacks = request;
-          return bridge;
-        }),
-        providerConfig: {},
-        audioSink: { isOpen: () => open, sendAudio: vi.fn(), sendMark },
-      });
+      const { session, callbacks } = createSession(
+        { audioSink: { isOpen: () => open, sendAudio: vi.fn(), sendMark } },
+        makeBridge({ acknowledgeMark }),
+      );
       callbacks?.onMark?.("scoped", acknowledge);
       const acknowledgePlayback = sendMark.mock.calls[0]?.[1];
       expect(acknowledgePlayback).toBeTypeOf("function");
@@ -121,12 +108,6 @@ describe("realtime voice bridge session runtime", () => {
     },
   );
   it("routes provider output through an open audio sink", () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return bridge;
-    });
     const sendAudio = vi.fn();
     const clearAudio = vi.fn();
     const sendMark = vi.fn();
@@ -134,10 +115,8 @@ describe("realtime voice bridge session runtime", () => {
     const playback = [{ itemId: "audio-1", audioEndMs: 120 }];
     const getPlaybackState = vi.fn(() => playback);
 
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
+    const { session, callbacks } = createSession({
       cfg: { talk: { realtime: { provider: "test" } } } as never,
-      providerConfig: {},
       audioSink: {
         isOpen: () => open,
         sendAudio,
@@ -170,55 +149,35 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("passes the requested agent scope and audio format to the provider bridge", () => {
-    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((nextRequest) => {
-      request = nextRequest;
-      return makeBridge();
-    });
-
     expectTypeOf<() => Promise<void>>().toExtend<
       NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>
     >();
     const handleDelegationInput = vi.fn(() => "control" as const);
     const onTranscript = vi.fn();
-    createRealtimeVoiceBridgeSession({
-      provider,
+    const { callbacks: request } = createSession({
       handleDelegationInput,
       onTranscript,
       agentId: "voice-agent",
-      providerConfig: {},
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      audioSink: { sendAudio: vi.fn() },
     });
 
-    expect(expectBridgeRequest(request).handleDelegationInput?.("status", vi.fn())).toBe("control");
+    expect(request.handleDelegationInput?.("status", vi.fn())).toBe("control");
     expect(handleDelegationInput).toHaveBeenCalledExactlyOnceWith("status", expect.any(Function));
-    expectBridgeRequest(request).onTranscript?.("user", "status", true);
+    request.onTranscript?.("user", "status", true);
     expect(onTranscript).toHaveBeenCalledExactlyOnceWith("user", "status", true);
-    expectBridgeRequest(request).onTranscript?.("user", "corrected", false, {
+    request.onTranscript?.("user", "corrected", false, {
       textMode: "snapshot",
     });
     expect(onTranscript).toHaveBeenLastCalledWith("user", "corrected", false, {
       textMode: "snapshot",
     });
-    expect(expectBridgeRequest(request).agentId).toBe("voice-agent");
-    expect(expectBridgeRequest(request).audioFormat).toEqual(
-      REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    );
+    expect(request.agentId).toBe("voice-agent");
+    expect(request.audioFormat).toEqual(REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ);
   });
 
   it("can acknowledge provider marks without transport mark support", () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return bridge;
-    });
     const sendMark = vi.fn();
-
-    createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
+    const { callbacks, bridge } = createSession({
       audioSink: { sendAudio: vi.fn(), sendMark },
       markStrategy: "ack-immediately",
     });
@@ -230,17 +189,8 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("can ignore provider marks", () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return bridge;
-    });
     const sendMark = vi.fn();
-
-    createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
+    const { callbacks, bridge } = createSession({
       audioSink: { sendAudio: vi.fn(), sendMark },
       markStrategy: "ignore",
     });
@@ -252,28 +202,13 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("passes tool calls the active session and triggers initial greeting on ready", () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return bridge;
-    });
     const onToolCall = vi.fn();
-
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
+    const { session, callbacks, bridge } = createSession({
       initialGreetingInstructions: "Say hello",
       triggerGreetingOnReady: true,
       onToolCall,
     });
-    const event = {
-      itemId: "item-1",
-      callId: "call-1",
-      name: "lookup",
-      args: { q: "test" },
-    };
+    const event = { ...toolCall, args: { q: "test" } };
 
     callbacks?.onReady?.();
     callbacks?.onToolCall?.(event);
@@ -283,35 +218,18 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("routes synchronous and asynchronous tool-call callback failures to onError", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const onError = vi.fn();
     const syncFailure = new Error("sync callback failed");
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return makeBridge();
-    });
     const onToolCall = vi
       .fn()
       .mockImplementationOnce(() => {
         throw syncFailure;
       })
       .mockImplementationOnce(() => Promise.reject(new Error("async callback failed")));
-    createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      onToolCall,
-      onError,
-    });
-    const event = {
-      itemId: "item-1",
-      callId: "call-1",
-      name: "lookup",
-      args: {},
-    };
+    const { callbacks } = createSession({ onToolCall, onError });
 
-    callbacks?.onToolCall?.(event);
-    callbacks?.onToolCall?.(event);
+    callbacks.onToolCall?.(toolCall);
+    callbacks.onToolCall?.(toolCall);
     await Promise.resolve();
 
     expect(onError).toHaveBeenNthCalledWith(1, syncFailure);
@@ -319,28 +237,15 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("contains an onError exception after an asynchronous tool-call failure", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const onError = vi.fn(() => {
       throw new Error("error callback failed");
     });
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return makeBridge();
-    });
-    createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
+    const { callbacks } = createSession({
       onToolCall: () => Promise.reject(new Error("tool callback failed")),
       onError,
     });
 
-    callbacks?.onToolCall?.({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "lookup",
-      args: {},
-    });
+    callbacks.onToolCall?.(toolCall);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -349,34 +254,20 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("does not report an asynchronous tool-call failure after the session closes", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    let rejectToolCall: ((error: Error) => void) | undefined;
+    const completion = createDeferred();
     const close = vi.fn();
-    const bridge = makeBridge({ close });
     const onError = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return bridge;
-    });
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      onToolCall: () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectToolCall = reject;
-        }),
-      onError,
-    });
+    const { session, callbacks } = createSession(
+      {
+        onToolCall: () => completion.promise,
+        onError,
+      },
+      makeBridge({ close }),
+    );
 
-    callbacks?.onToolCall?.({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "lookup",
-      args: {},
-    });
+    callbacks.onToolCall?.(toolCall);
     const closing = session.close();
-    rejectToolCall?.(new Error("late tool callback failure"));
+    completion.reject(new Error("late tool callback failure"));
     await closing;
 
     expect(close).toHaveBeenCalledTimes(1);
@@ -384,24 +275,20 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("reopens audio and close reporting for an explicit connection generation", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const connect = vi.fn(async () => {});
     const sendProviderAudio = vi.fn();
     const sendSinkAudio = vi.fn();
     const onClose = vi.fn();
     const onReady = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      request.onClose?.("error");
-      return makeBridge({ connect, sendAudio: sendProviderAudio });
-    });
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: sendSinkAudio },
-      onClose,
-      onReady,
-    });
+    const { session, callbacks } = createSession(
+      {
+        audioSink: { sendAudio: sendSinkAudio },
+        onClose,
+        onReady,
+      },
+      makeBridge({ connect, sendAudio: sendProviderAudio }),
+      (request) => request.onClose?.("error"),
+    );
 
     session.sendAudio(Buffer.from("closed-input"));
     callbacks?.onAudio(Buffer.from("closed-output"));
@@ -427,34 +314,21 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("rejects reconnect and ignores tool failures after an established provider close", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    let rejectToolCall: ((error: Error) => void) | undefined;
+    const completion = createDeferred();
     const connect = vi.fn(async () => {});
     const onError = vi.fn();
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      return makeBridge({ connect });
-    });
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      onToolCall: () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectToolCall = reject;
-        }),
-      onError,
-    });
+    const { session, callbacks } = createSession(
+      {
+        onToolCall: () => completion.promise,
+        onError,
+      },
+      makeBridge({ connect }),
+    );
 
-    callbacks?.onToolCall?.({
-      itemId: "item-1",
-      callId: "call-1",
-      name: "lookup",
-      args: {},
-    });
+    callbacks.onToolCall?.(toolCall);
     callbacks?.onClose?.("error");
     await expect(session.connect()).rejects.toThrow("Realtime voice connection is closed");
-    rejectToolCall?.(new Error("late tool callback failure"));
+    completion.reject(new Error("late tool callback failure"));
     await Promise.resolve();
 
     expect(connect).not.toHaveBeenCalled();
@@ -464,13 +338,7 @@ describe("realtime voice bridge session runtime", () => {
   it("forwards tool result continuation options and async acceptance to the provider bridge", () => {
     const acceptance = Promise.resolve();
     const submitToolResult = vi.fn(() => acceptance);
-    const bridge = makeBridge({ submitToolResult });
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider(() => bridge);
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-    });
+    const { session } = createSession({}, makeBridge({ submitToolResult }));
 
     const submitted = session.submitToolResult(
       "call-1",
@@ -492,12 +360,7 @@ describe("realtime voice bridge session runtime", () => {
       submitToolResult,
       supportsToolResultSuppression: false,
     });
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider(() => bridge);
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-    });
+    const { session } = createSession({}, bridge);
 
     expect(() =>
       session.submitToolResult("call-1", { ok: true }, { suppressResponse: true }),
@@ -506,46 +369,31 @@ describe("realtime voice bridge session runtime", () => {
   });
 
   it("does not expose session callbacks until the provider returns its bridge", () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    const bridge = makeBridge();
     const onReady = vi.fn();
     const onToolCall = vi.fn();
-    const event = {
-      itemId: "item-1",
-      callId: "call-1",
-      name: "lookup",
-      args: {},
-    };
-    const provider: RealtimeVoiceProviderPlugin = makeVoiceProvider((request) => {
-      callbacks = request;
-      request.onReady?.();
-      request.onToolCall?.(event);
-      return bridge;
-    });
-
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      onReady,
-      onToolCall,
-    });
+    const { session, callbacks } = createSession(
+      { onReady, onToolCall },
+      makeBridge(),
+      (request) => {
+        request.onReady?.();
+        request.onToolCall?.(toolCall);
+      },
+    );
 
     expect(onReady).not.toHaveBeenCalled();
     expect(onToolCall).not.toHaveBeenCalled();
 
     callbacks?.onReady?.();
-    callbacks?.onToolCall?.(event);
+    callbacks.onToolCall?.(toolCall);
 
     expect(onReady).toHaveBeenCalledWith(session);
-    expect(onToolCall).toHaveBeenCalledWith(event, session);
+    expect(onToolCall).toHaveBeenCalledWith(toolCall, session);
   });
 });
 
 describe("realtime voice bridge finalization", () => {
   it("drains final transcripts while async close settles with a failure", async () => {
     const completion = createDeferred();
-    let callbacks: RealtimeVoiceBridgeCallbacks | undefined;
     const close = vi.fn(() => {
       void session.close();
       return completion.promise;
@@ -554,16 +402,14 @@ describe("realtime voice bridge finalization", () => {
     const onTranscript = vi.fn();
     const onToolCall = vi.fn();
     const sendAudio = vi.fn();
-    const session = createRealtimeVoiceBridgeSession({
-      provider: makeVoiceProvider((request) => {
-        callbacks = request;
-        return providerBridge;
-      }),
-      providerConfig: {},
-      audioSink: { sendAudio },
-      onTranscript,
-      onToolCall,
-    });
+    const { session, callbacks } = createSession(
+      {
+        audioSink: { sendAudio },
+        onTranscript,
+        onToolCall,
+      },
+      providerBridge,
+    );
 
     callbacks?.onTranscript?.("user", "active fragment", false);
     callbacks?.onTranscript?.("assistant", "active final", true);
@@ -619,23 +465,14 @@ describe("native delegation session facade", () => {
   it("blocks pre-adoption input before enabling the native hook", async () => {
     const handleDelegationInput = vi.fn(() => "control" as const);
     const respond = vi.fn();
-    let request!: RealtimeVoiceBridgeCreateRequest;
-    const session = createRealtimeVoiceBridgeSession({
-      provider: {
-        id: "native-test",
-        label: "Native Test",
-        isConfigured: () => true,
-        createBridge: (next) => {
-          request = next;
-          expect(next.handleDelegationInput?.("status", respond)).toBe("control");
-          expect(handleDelegationInput).not.toHaveBeenCalled();
-          return makeBridge();
-        },
+    const { session, callbacks: request } = createSession(
+      { handleDelegationInput },
+      makeBridge(),
+      (next) => {
+        expect(next.handleDelegationInput?.("status", respond)).toBe("control");
+        expect(handleDelegationInput).not.toHaveBeenCalled();
       },
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      handleDelegationInput,
-    });
+    );
     try {
       expect(Object.hasOwn(request, "handleDelegationInput")).toBe(true);
       // Buffered native input can arrive after adoption but before any ready event.
@@ -648,7 +485,6 @@ describe("native delegation session facade", () => {
   });
 
   it("fences retained actions and responses after provider close but preserves final transcript flush", () => {
-    let request!: RealtimeVoiceBridgeCreateRequest;
     let reply: ((text: string) => void) | undefined;
     const handleDelegationInput = vi.fn<
       NonNullable<RealtimeVoiceBridgeCallbacks["handleDelegationInput"]>
@@ -657,23 +493,10 @@ describe("native delegation session facade", () => {
       return "control";
     });
     const onTranscript = vi.fn();
-    const session = createRealtimeVoiceBridgeSession({
-      provider: {
-        id: "native-test",
-        label: "Native Test",
-        isConfigured: () => true,
-        createBridge: (next) => {
-          request = next;
-          return makeBridge({
-            close: () => next.onTranscript?.("assistant", "final flush", true),
-          });
-        },
-      },
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      handleDelegationInput,
-      onTranscript,
-    });
+    const { session, callbacks: request } = createSession(
+      { handleDelegationInput, onTranscript },
+      makeBridge({ close: () => request.onTranscript?.("assistant", "final flush", true) }),
+    );
     const respond = vi.fn();
     expect(request.handleDelegationInput?.("status", respond)).toBe("control");
     request.onClose?.("completed");
@@ -687,20 +510,8 @@ describe("native delegation session facade", () => {
   });
 
   it("contains callback failure without task fallthrough or a second reply", async () => {
-    let request!: RealtimeVoiceBridgeCreateRequest;
     const onError = vi.fn();
-    const session = createRealtimeVoiceBridgeSession({
-      provider: {
-        id: "native-test",
-        label: "Native Test",
-        isConfigured: () => true,
-        createBridge: (next) => {
-          request = next;
-          return makeBridge();
-        },
-      },
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
+    const { session, callbacks: request } = createSession({
       onError,
       handleDelegationInput: (_text, respond) => {
         respond("accepted");

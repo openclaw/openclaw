@@ -139,7 +139,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   const compact = context
     ? await prepareSubagentRunsCache(compactCache, readCompactSubagentRuns)
     : new Map<string, SubagentRunReadRecord>();
-  const selected = select(withLiveFacts(compact));
+  const initialSnapshot = withLiveFacts(compact);
+  const selected = select(initialSnapshot);
   const scope = selectionScope(selected);
   const resident = context ? acceptedFullSnapshot(fullCache, context) : undefined;
   const preparedPayloads = mergeSelectedFullRuns(
@@ -149,7 +150,7 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
     scope.matches,
     {
       context,
-      runIds: scope.sessionKeys.size ? undefined : scope.runIds,
+      runIds: scope.sessionKeys.size ? new Set(initialSnapshot.keys()) : scope.runIds,
     },
   );
   const residentPayloads = new Map(preparedPayloads);

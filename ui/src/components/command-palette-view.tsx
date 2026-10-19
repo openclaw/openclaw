@@ -448,6 +448,7 @@ function PaletteSearch(props: {
 }
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
+  let initialInput!: HTMLTextAreaElement;
   const current = () => props.readProps();
   const results = createMemo(() => resolvePaletteResults(current()));
   const hideSearch = () => results().hideSearch;
@@ -468,6 +469,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   return (
     <>
       <openclaw-modal-dialog
+        prop:initialFocus={() => initialInput}
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
@@ -492,6 +494,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           onKeyDown={(event) => handleKeydown(event, current, activeElement)}
         >
           <CommandPaletteInput
+            onAutofocusRef={(element) => {
+              initialInput = element;
+            }}
             value={current().query}
             placeholder={t("palette.placeholder")}
             onInputRef={current().onInputRef}

@@ -1,7 +1,9 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runDaemonRestart } from "../cli/daemon-cli/lifecycle.js";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -85,6 +87,7 @@ function configSnapshot(config: OpenClawConfig) {
 }
 
 let sharedFixture: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>;
+let configFixture: Awaited<ReturnType<typeof createInferenceConfigFixture>>;
 
 beforeAll(async () => {
   sharedFixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
@@ -111,8 +114,13 @@ function runner(runtime: RuntimeEnv, verified = createVerifiedRunOptions()) {
 }
 
 describe("runSystemAgent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.mocked(runDaemonRestart).mockReset().mockResolvedValue(true);
+    configFixture = await createInferenceConfigFixture(verifiedConfig);
+    const reader = vi
+      .spyOn(configModule, "readConfigFileSnapshot")
+      .mockImplementation(configFixture.read);
+    onTestFinished(() => reader.mockRestore());
   });
   it("rejects a missing inference binding before any runner side effect", async () => {
     const { runtime } = createSystemAgentTestRuntime();
@@ -194,18 +202,23 @@ describe("runSystemAgent", () => {
 
   it("rechecks one-shot authority at the persistent apply boundary", async () => {
     const { runtime } = createSystemAgentTestRuntime();
-    const readConfigFileSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(configSnapshot(verifiedConfig))
-      .mockResolvedValueOnce(configSnapshot(verifiedConfig))
-      .mockResolvedValueOnce(configSnapshot(verifiedConfig))
-      .mockResolvedValue(configSnapshot(changedConfig));
-    const verified = createVerifiedRunOptions(
-      {
-        readConfigFileSnapshot: readConfigFileSnapshot as never,
-      },
-      true,
+    const snapshot = configFixture.snapshot;
+    const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
     );
+    let reads = 0;
+    const readConfigFileSnapshot = vi
+      .mocked(configModule.readConfigFileSnapshot)
+      .mockClear()
+      .mockImplementation(async () => {
+        reads += 1;
+        if (reads === 4) {
+          await configFixture.write(changedConfig);
+        }
+        return configFixture.read();
+      });
+    const verified = { verifiedInference: fixture.binding, deps: { readConfigFileSnapshot } };
     const run = runner(runtime, verified);
 
     await expect(

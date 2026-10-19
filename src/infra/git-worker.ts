@@ -200,9 +200,9 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
       ? createHash("sha256")
           .update(
             JSON.stringify(
-              Object.entries(baseEnv).filter(([key]) =>
-                /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key),
-              ),
+              Object.entries(baseEnv)
+                .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+                .toSorted(([left], [right]) => left.localeCompare(right)),
             ),
           )
           .digest("hex")

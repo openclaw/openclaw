@@ -19,124 +19,74 @@ const PRICING = {
   defaultMaxOutputTokens: 64_000,
 };
 
+function catalogProvider(
+  id: string,
+  displayName: string,
+  upstream: string,
+  capabilities: string[],
+  routes: Array<[string, string]> = [],
+  model: { id?: string; supportedReasoningEfforts?: string[]; pricing?: typeof PRICING } = {},
+) {
+  return {
+    id,
+    displayName,
+    openaiCompatible: id === "openai" || id === "deepseek",
+    nativeBaseUrl: `/v1/native/${id}`,
+    routes: routes.map(([path, requestFormat]) => ({ path, requestFormat, methods: ["POST"] })),
+    models: [{ id: `${id}/${upstream}`, upstream, capabilities, ...model }],
+  };
+}
+
 const CATALOG = {
   version: "clawrouter.client-catalog.v1",
   providers: [
-    {
-      id: "openai",
-      displayName: "OpenAI",
-      openaiCompatible: true,
-      nativeBaseUrl: "/v1/native/openai",
-      routes: [
-        {
-          path: "/v1/responses",
-          methods: ["POST"],
-          requestFormat: "openai.responses",
-        },
+    catalogProvider(
+      "openai",
+      "OpenAI",
+      "gpt-5.6",
+      ["llm.responses", "llm.chat"],
+      [["/v1/responses", "openai.responses"]],
+      {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        pricing: PRICING,
+      },
+    ),
+    catalogProvider("deepseek", "DeepSeek", "deepseek-v4-flash", ["llm.chat"]),
+    catalogProvider(
+      "anthropic",
+      "Anthropic",
+      "claude-sonnet-4-6",
+      ["llm.messages"],
+      [["/v1/messages", "anthropic.messages"]],
+      { pricing: PRICING },
+    ),
+    catalogProvider(
+      "google-gemini",
+      "Google Gemini",
+      "gemini-3.5-flash",
+      ["llm.generate", "llm.stream"],
+      [
+        ["/v1beta/models/${model}:generateContent", "google.generate_content"],
+        ["/v1beta/models/${model}:streamGenerateContent", "google.generate_content"],
       ],
-      models: [
-        {
-          id: "openai/gpt-5.6",
-          upstream: "gpt-5.6",
-          capabilities: ["llm.responses", "llm.chat"],
-          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
-          pricing: PRICING,
-        },
-      ],
-    },
-    {
-      id: "deepseek",
-      displayName: "DeepSeek",
-      openaiCompatible: true,
-      nativeBaseUrl: "/v1/native/deepseek",
-      routes: [],
-      models: [
-        {
-          id: "deepseek/deepseek-v4-flash",
-          upstream: "deepseek-v4-flash",
-          capabilities: ["llm.chat"],
-        },
-      ],
-    },
-    {
-      id: "anthropic",
-      displayName: "Anthropic",
-      openaiCompatible: false,
-      nativeBaseUrl: "/v1/native/anthropic",
-      routes: [
-        {
-          path: "/v1/messages",
-          methods: ["POST"],
-          requestFormat: "anthropic.messages",
-        },
-      ],
-      models: [
-        {
-          id: "anthropic/claude-sonnet-4-6",
-          upstream: "claude-sonnet-4-6",
-          capabilities: ["llm.messages"],
-          pricing: PRICING,
-        },
-      ],
-    },
-    {
-      id: "google-gemini",
-      displayName: "Google Gemini",
-      openaiCompatible: false,
-      nativeBaseUrl: "/v1/native/google-gemini",
-      routes: [
-        {
-          path: "/v1beta/models/${model}:generateContent",
-          methods: ["POST"],
-          requestFormat: "google.generate_content",
-        },
-        {
-          path: "/v1beta/models/${model}:streamGenerateContent",
-          methods: ["POST"],
-          requestFormat: "google.generate_content",
-        },
-      ],
-      models: [
-        {
-          id: "google/gemini-3.5-flash",
-          upstream: "gemini-3.5-flash",
-          capabilities: ["llm.generate", "llm.stream"],
-        },
-      ],
-    },
-    {
-      id: "cohere",
-      displayName: "Cohere",
-      openaiCompatible: false,
-      nativeBaseUrl: "/v1/native/cohere",
-      routes: [
-        {
-          path: "/v2/chat",
-          methods: ["POST"],
-          requestFormat: "cohere.chat",
-        },
-      ],
-      models: [
-        {
-          id: "cohere/command-a-plus-05-2026",
-          upstream: "command-a-plus-05-2026",
-          capabilities: ["llm.chat"],
-        },
-      ],
-    },
+      { id: "google/gemini-3.5-flash" },
+    ),
+    catalogProvider(
+      "cohere",
+      "Cohere",
+      "command-a-plus-05-2026",
+      ["llm.chat"],
+      [["/v2/chat", "cohere.chat"]],
+    ),
   ],
 };
 
-function buildFetchGuard(catalog: unknown = CATALOG): {
-  fetchGuard: LiveModelCatalogFetchGuard;
-  fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard>;
-} {
-  const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-    response: new Response(JSON.stringify(catalog)),
+function buildFetchGuard(): MockedFunction<LiveModelCatalogFetchGuard> {
+  return vi.fn(async () => ({
+    response: Response.json(CATALOG),
     finalUrl: "https://clawrouter.example/v1/catalog",
     release: async () => undefined,
   }));
-  return { fetchGuard: fetchGuardMock, fetchGuardMock };
 }
 
 describe("ClawRouter provider catalog", () => {
@@ -145,14 +95,14 @@ describe("ClawRouter provider catalog", () => {
   });
 
   it("maps every supported catalog protocol to its OpenClaw transport", async () => {
-    const { fetchGuard, fetchGuardMock } = buildFetchGuard();
+    const fetchGuard = buildFetchGuard();
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",
       baseUrl: "https://clawrouter.example/v1",
       fetchGuard,
     });
 
-    expect(fetchGuardMock).toHaveBeenCalledOnce();
+    expect(fetchGuard).toHaveBeenCalledOnce();
     expect(provider.models.map((model) => model.id)).toEqual([
       "anthropic/claude-sonnet-4-6",
       "deepseek/deepseek-v4-flash",
@@ -209,14 +159,15 @@ describe("ClawRouter provider catalog", () => {
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",
       baseUrl: "https://clawrouter.example",
-      fetchGuard: buildFetchGuard().fetchGuard,
+      fetchGuard: buildFetchGuard(),
     });
-    const anthropic = provider.models.find((model) => model.id === "anthropic/claude-sonnet-4-6");
-    const normalized = normalizeClawRouterResolvedModel({
-      ...anthropic,
-      baseUrl: provider.baseUrl,
-      provider: "clawrouter",
-    } as ProviderRuntimeModel);
+    const normalize = (id: string) =>
+      normalizeClawRouterResolvedModel({
+        ...provider.models.find((model) => model.id === id),
+        baseUrl: provider.baseUrl,
+        provider: "clawrouter",
+      } as ProviderRuntimeModel);
+    const normalized = normalize("anthropic/claude-sonnet-4-6");
 
     expect(normalized).toMatchObject({
       id: "anthropic/claude-sonnet-4-6",
@@ -227,47 +178,39 @@ describe("ClawRouter provider catalog", () => {
       params: undefined,
     });
 
-    const openaiModel = provider.models.find((model) => model.id === "openai/gpt-5.6");
-    const normalizedOpenAi = normalizeClawRouterResolvedModel({
-      ...openaiModel,
-      baseUrl: provider.baseUrl,
-      provider: "clawrouter",
-    } as ProviderRuntimeModel);
+    const normalizedOpenAi = normalize("openai/gpt-5.6");
     expect(prepareClawRouterRequestModel(normalizedOpenAi as ProviderRuntimeModel).id).toBe(
       "openai/gpt-5.6",
     );
   });
 
-  it.each([["granted models", CATALOG]])(
-    "reuses %s for an hour without mixing credentials or endpoints",
-    async (_label, catalog) => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-      const { fetchGuard, fetchGuardMock } = buildFetchGuard(catalog);
-      const params = {
-        apiKey: "catalog-key-a",
-        baseUrl: "https://clawrouter.example",
-        fetchGuard,
-      };
-      try {
-        const first = await buildClawRouterProviderConfig(params);
-        now.mockReturnValue(1_800_000_000_000 + 59 * 60_000);
-        expect(await buildClawRouterProviderConfig(params)).toEqual(first);
-        expect(fetchGuardMock).toHaveBeenCalledOnce();
+  it("reuses granted models for an hour without mixing credentials or endpoints", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const fetchGuard = buildFetchGuard();
+    const params = {
+      apiKey: "catalog-key-a",
+      baseUrl: "https://clawrouter.example",
+      fetchGuard,
+    };
+    try {
+      const first = await buildClawRouterProviderConfig(params);
+      now.mockReturnValue(1_800_000_000_000 + 59 * 60_000);
+      expect(await buildClawRouterProviderConfig(params)).toEqual(first);
+      expect(fetchGuard).toHaveBeenCalledOnce();
 
-        await buildClawRouterProviderConfig({ ...params, discoveryApiKey: "catalog-key-b" });
-        await buildClawRouterProviderConfig({ ...params, baseUrl: "https://other.example" });
-        expect(fetchGuardMock).toHaveBeenCalledTimes(3);
-        const headers = fetchGuardMock.mock.calls[1]?.[0].init?.headers;
-        expect(headers).toBeInstanceOf(Headers);
-        expect((headers as Headers).get("authorization")).toBe("Bearer catalog-key-b");
+      await buildClawRouterProviderConfig({ ...params, discoveryApiKey: "catalog-key-b" });
+      await buildClawRouterProviderConfig({ ...params, baseUrl: "https://other.example" });
+      expect(fetchGuard).toHaveBeenCalledTimes(3);
+      const headers = fetchGuard.mock.calls[1]?.[0].init?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      expect((headers as Headers).get("authorization")).toBe("Bearer catalog-key-b");
 
-        // A cache hit does not renew the original deadline indefinitely.
-        now.mockReturnValue(1_800_000_000_000 + 60 * 60_000);
-        await buildClawRouterProviderConfig(params);
-        expect(fetchGuardMock).toHaveBeenCalledTimes(4);
-      } finally {
-        now.mockRestore();
-      }
-    },
-  );
+      // A cache hit does not renew the original deadline indefinitely.
+      now.mockReturnValue(1_800_000_000_000 + 60 * 60_000);
+      await buildClawRouterProviderConfig(params);
+      expect(fetchGuard).toHaveBeenCalledTimes(4);
+    } finally {
+      now.mockRestore();
+    }
+  });
 });

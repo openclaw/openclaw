@@ -3,41 +3,48 @@ import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-
 import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
-  renderBillingReplyCopy,
+  renderBillingReplyCopy as billingCopy,
   renderCliTimeoutReplyCopy,
-  renderFailoverCodeUserCopy,
+  renderFailoverCodeUserCopy as codeCopy,
   renderHeartbeatRunFailureCopy,
-  renderMissingApiKeyReplyCopy,
+  renderMissingApiKeyReplyCopy as missingKeyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
-  renderSanitizedUserFacingText,
+  renderSanitizedUserFacingText as sanitizedCopy,
 } from "./user-copy.js";
 
 describe("failover user copy", () => {
+  const retryCopy = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
+  const promptCopy =
+    "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+  const promptMessage =
+    "This prompt is longer than the free tier allows for a single request. Shorten it, or add credits to use this model without the free-tier cap.";
+  const rate = (raw: string) => renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw });
+  const reply = (fields: Partial<Parameters<typeof renderRateLimitReplyCopy>[0]>) =>
+    renderRateLimitReplyCopy({ message: "limited", reason: "rate_limit", ...fields });
+  const http400 = (size: number, message = promptMessage) =>
+    `400 ${JSON.stringify({ error: { type: "invalid_request_error", message }, request_id: "req_prompt_size_canary", details: "x".repeat(size) })}`;
   it.each([
     ["Weekly usage limit exhausted; resets 2026-10-20 00:00:00 UTC.", false],
     ["Weekly usage limit exhausted; resets 2026-10-20 00:00:00 UTC.", true],
     ["您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", false],
     ["您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", true],
-  ])(
-    "extracts only quota reset guidance after fallback: %s (structured=%s)",
-    (message, structured) => {
-      const raw = structured
-        ? `429 ${JSON.stringify({ error: { message }, request: { input: "PRIVATE_REQUEST_CANARY" } })}`
-        : `429 ${message}`;
-      expect(
-        renderRateLimitReplyCopy({
-          message: "All models failed (2)",
-          reason: "overloaded",
-          attempts: [
-            { provider: "zai", model: "fixture", reason: "rate_limit", error: raw },
-            { provider: "fallback", model: "fixture", reason: "overloaded", error: "overloaded" },
-          ],
-          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
-        }),
-      ).toBe(`⚠️ ${message}`);
-    },
-  );
+  ])("extracts quota reset guidance: %s (structured=%s)", (message, structured) => {
+    const raw = structured
+      ? `429 ${JSON.stringify({ error: { message }, request: { input: "PRIVATE_REQUEST_CANARY" } })}`
+      : `429 ${message}`;
+    expect(
+      reply({
+        message: "All models failed (2)",
+        reason: "overloaded",
+        attempts: [
+          { provider: "zai", model: "fixture", reason: "rate_limit", error: raw },
+          { provider: "fallback", model: "fixture", reason: "overloaded", error: "overloaded" },
+        ],
+        sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
+      }),
+    ).toBe(`⚠️ ${message}`);
+  });
 
   it.each([
     [undefined, "Troubleshooting: run `openclaw logs --follow` in a terminal."],
@@ -55,79 +62,67 @@ describe("failover user copy", () => {
     );
   });
 
-  const tokenLimitCopy =
-    "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
-
   it("renders only the allowlisted selected-profile code", () => {
-    expect(renderFailoverCodeUserCopy("selected_auth_profile_unavailable")).toBe(
+    expect(codeCopy("selected_auth_profile_unavailable")).toBe(
       "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
     );
-    expect(renderFailoverCodeUserCopy("plugin_selected_profile_unavailable")).toBeUndefined();
-    expect(
-      renderFailoverCodeUserCopy({ code: "selected_auth_profile_unavailable" }),
-    ).toBeUndefined();
+    expect(codeCopy("plugin_selected_profile_unavailable")).toBeUndefined();
+    expect(codeCopy({ code: "selected_auth_profile_unavailable" })).toBeUndefined();
+  });
+
+  it("uses neutral billing copy for subscription credentials", () => {
+    expect(billingCopy({ provider: "Anthropic", model: "claude", authMode: "oauth" })).toBe(
+      "⚠️ Anthropic (claude) returned a billing error — check your account for subscription or usage limits, then try again.",
+    );
+    expect(billingCopy({})).toBe(
+      "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
+    );
+  });
+
+  it("renders provider-safe missing-key guidance", () => {
+    expect(missingKeyCopy({ provider: "openai", providerGuidance: true })).toContain(
+      "openclaw configure",
+    );
+    expect(missingKeyCopy({ provider: "provider-with-secret-name" })).toBe(
+      "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
+    );
   });
 
   it("renders transient copy from the classified reason", () => {
     const raw = "429 Too Many Requests: model overloaded";
-    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    );
+    expect(rate(raw)).toBe(retryCopy);
     expect(renderRateLimitOrOverloadedCopy({ reason: "overloaded", raw })).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
 
-  it("gives sanitized prompt-size guidance for a non-retryable HTTP 400", () => {
-    const raw =
-      "400 This prompt is longer than the free tier allows for a single request. Shorten it, or add credits to use this model without the free-tier cap.";
-    const copy = renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw });
-
-    expect(copy).toBe(
-      "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.",
-    );
-    expect(copy).not.toContain("free-tier cap");
-    expect(copy).not.toContain("add credits");
+  it.each([
+    [`400 ${promptMessage}`, promptCopy],
+    [
+      http400(16_384, "This prompt is longer than the free tier allows for a single request."),
+      retryCopy,
+    ],
+  ])("renders prompt-size policy for %s", (raw, expected) => {
+    expect(rate(raw)).toBe(expected);
   });
 
   it("parses a complete bounded HTTP 400 JSON body in both failover and reply copy", () => {
-    const providerMessage =
-      "This prompt is longer than the free tier allows for a single request. Shorten it, or add credits to use this model without the free-tier cap.";
-    const raw = `400 ${JSON.stringify({
-      error: { type: "invalid_request_error", message: providerMessage },
-      request_id: "req_prompt_size_canary",
-      details: "x".repeat(700),
-    })}`;
-    const expected =
-      "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
-
-    expect(raw.length).toBeGreaterThan(512);
-    expect(raw.length).toBeLessThanOrEqual(16_384);
-    const failoverCopy = renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw });
-    const replyCopy = renderRateLimitReplyCopy({ message: raw, reason: "rate_limit" });
-    expect(failoverCopy).toBe(expected);
-    expect(replyCopy).toBe(expected);
-    expect(failoverCopy).not.toContain("req_prompt_size_canary");
-    expect(replyCopy).not.toContain("free-tier cap");
-  });
-
-  it("keeps over-limit structured provider errors on generic rate-limit copy", () => {
-    const providerMessage = "This prompt is longer than the free tier allows for a single request.";
-    const raw = `400 ${JSON.stringify({
-      error: { type: "invalid_request_error", message: providerMessage },
-      details: "x".repeat(16_384),
-    })}`;
-
-    expect(raw.length).toBeGreaterThan(16_384);
-    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    );
+    const raw = http400(700);
+    // 700 bytes of padding keeps this above the old 512-byte truncation boundary.
+    expect([rate(raw), reply({ message: raw })]).toEqual([promptCopy, promptCopy]);
   });
 
   it.each([
-    "OpenAI API error (400): 400 max_new_tokens (384000) exceeds model's maximum output tokens (65536)",
-  ])("surfaces token limits from %s", (raw) => {
-    expect(renderFormatErrorCopy(raw)).toBe(tokenLimitCopy);
+    [
+      "OpenAI API error (400): 400 max_new_tokens (384000) exceeds model's maximum output tokens (65536)",
+      "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
+    ],
+    ...["{ malformed response", "<html>Private gateway response</html>"].map((raw) => [
+      raw,
+      "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+    ]),
+  ])("renders bounded format-error copy: %s", (raw, expected) => {
+    expect(renderFormatErrorCopy(raw)).toBe(expected);
   });
 
   it("bounds provider diagnostics without dropping the cause", () => {
@@ -148,42 +143,20 @@ describe("failover user copy", () => {
       }),
     );
     expect(copy).toContain("Invalid argument");
-    expect(copy).not.toContain("synthetic_secret_value");
-    expect(copy).not.toContain("PRIVATE_PROMPT");
-    expect(copy).not.toContain("![image](");
+    expect(copy).not.toMatch(/synthetic_secret_value|PRIVATE_PROMPT|!\[image\]\(/);
   });
 
-  it.each(["{ malformed response", "<html>Private gateway response</html>"])(
-    "does not dump an unparsed response body: %s",
-    (raw) => {
-      expect(renderFormatErrorCopy(raw)).toBe(
-        "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
-      );
-    },
-  );
-
-  it("renders structured cooldown durations and exhausted model sets", () => {
-    const now = 1_000_000;
-    expect(
-      renderRateLimitReplyCopy({
-        message: "limited",
-        reason: "rate_limit",
-        attempts: [{ provider: "openai", model: "gpt-a", reason: "rate_limit" }],
-        cooldownExpiry: now + 45_000,
-        nowMs: now,
-      }),
-    ).toBe("⚠️ The AI service needs a short break. Please try again in ~45s.");
-    expect(
-      renderRateLimitReplyCopy({
-        message: "limited",
-        reason: "rate_limit",
-        attempts: [
-          { provider: "openai", model: "gpt-a", reason: "rate_limit" },
-          { provider: "anthropic", model: "claude-b", reason: "overloaded" },
-        ],
-        nowMs: now,
-      }),
-    ).toBe("⚠️ The AI services are busy. Please try again in a few minutes.");
+  const firstAttempt = { provider: "openai", model: "gpt-a", reason: "rate_limit" } as const;
+  const secondAttempt = { provider: "anthropic", model: "claude-b", reason: "overloaded" } as const;
+  it.each([
+    [[firstAttempt], 1_045_000, "⚠️ The AI service needs a short break. Please try again in ~45s."],
+    [
+      [firstAttempt, secondAttempt],
+      undefined,
+      "⚠️ The AI services are busy. Please try again in a few minutes.",
+    ],
+  ] as const)("renders cooldown/exhaustion: %j", (attempts, cooldownExpiry, expected) => {
+    expect(reply({ attempts, cooldownExpiry, nowMs: 1_000_000 })).toBe(expected);
   });
 
   it("preserves the first bounded provider hint from structured exhausted attempts", () => {
@@ -194,11 +167,10 @@ describe("failover user copy", () => {
       error: `Rate limit reached. Please try again in ${17 + index} minutes.`,
     }));
     expect(
-      renderRateLimitReplyCopy({
+      reply({
         message: `All models failed (3): ${attempts
           .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error} (rate_limit)`)
           .join(" | ")}`,
-        reason: "rate_limit",
         attempts,
       }),
     ).toBe("⚠️ Rate limit reached. Please try again in 17 minutes.");
@@ -209,100 +181,57 @@ describe("failover user copy", () => {
     "<html>Rate limit reached. Try again in 17 minutes.</html>",
   ])("keeps unsafe or nonspecific structured provider text generic: %s", (error) => {
     expect(
-      renderRateLimitReplyCopy({
+      reply({
         message: "All models failed (1)",
-        reason: "rate_limit",
         attempts: [{ provider: "mock", model: "model", reason: "rate_limit", error }],
       }),
-    ).toBe("⚠️ The AI service needs a short break. Please try again in a few minutes.");
-  });
-
-  it("uses neutral billing copy for subscription credentials", () => {
-    expect(
-      renderBillingReplyCopy({
-        provider: "Anthropic",
-        model: "claude",
-        authMode: "oauth",
-      }),
-    ).toBe(
-      "⚠️ Anthropic (claude) returned a billing error — check your account for subscription or usage limits, then try again.",
-    );
-    expect(renderBillingReplyCopy({})).toBe(
-      "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
-    );
-  });
-
-  it("renders provider-safe missing-key guidance", () => {
-    expect(renderMissingApiKeyReplyCopy({ provider: "openai", providerGuidance: true })).toContain(
-      "openclaw configure",
-    );
-    expect(renderMissingApiKeyReplyCopy({ provider: "provider-with-secret-name" })).toBe(
-      "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
-    );
+    ).toBe(retryCopy);
   });
 
   it("renders typed CLI timeout context without losing partial-work warnings", () => {
     expect(
       renderCliTimeoutReplyCopy({
         message: "openai/gpt-5.6-sol: CLI exceeded timeout (90s) and was terminated",
-        provider: "codex-cli",
         cliTimeout: {
           mode: "overall",
           timeoutSeconds: 90,
           observedActivity: true,
-          activeToolCount: 1,
-          backgroundTaskCount: 2,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
         },
-        replayPrevented: true,
       }),
     ).toBe(
       "⚠️ The task took too long. Some work may have completed. Check its results before trying again. Try a smaller task, or increase the task time limit in the Control UI settings.",
     );
   });
 
-  // Session transcripts, run status, and the TUI render failed turns through this
-  // renderer; the channel reply path renders the same reason-level copy from failover
-  // facts, so every error grammar the harnesses emit must agree across surfaces.
+  const forbidden = "unexpected status 403 Forbidden: insufficient permissions for this key";
+  const unauthorized = "status code 401: Incorrect API key provided";
   it.each([
-    "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a38749741971a37b-SEA, request id: req_21723077dbef46fc8a554a7f511bcb2f",
-    "401 Unauthorized: invalid api key",
-  ])("renders the provider authentication copy for %j", (raw) => {
-    expect(renderSanitizedUserFacingText(raw, { errorContext: true })).toBe(
+    [
+      "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a38749741971a37b-SEA, request id: req_21723077dbef46fc8a554a7f511bcb2f",
+      true,
       `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`,
-    );
+    ],
+    ["401 Unauthorized: invalid api key", true, `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`],
+    [
+      "unexpected status 404 Not Found: The model `gpt-x` does not exist",
+      true,
+      expect.stringMatching(/^⚠️ This model was not found/),
+    ],
+    [forbidden, true, forbidden],
+    [unauthorized, false, unauthorized],
+  ] as const)("renders provider copy in context: %s", (raw, errorContext, expected) => {
+    expect(sanitizedCopy(raw, errorContext ? { errorContext } : undefined)).toEqual(expected);
   });
-
-  it("renders the unavailable-model copy for provider model-not-found errors", () => {
-    expect(
-      renderSanitizedUserFacingText(
-        "unexpected status 404 Not Found: The model `gpt-x` does not exist",
-        { errorContext: true },
-      ),
-    ).toMatch(/^⚠️ This model was not found/);
-  });
-
-  it("keeps non-401 auth text and non-error context out of the provider copy", () => {
-    const forbidden = "unexpected status 403 Forbidden: insufficient permissions for this key";
-    expect(renderSanitizedUserFacingText(forbidden, { errorContext: true })).toBe(forbidden);
-    const unauthorized = "status code 401: Incorrect API key provided";
-    expect(renderSanitizedUserFacingText(unauthorized)).toBe(unauthorized);
-  });
-});
-
-describe("rate limit copy from a failover chain summary", () => {
   const aggregate =
     "All models failed (3): anthropic/claude-opus-5: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | " +
     "claude-cli/claude-sonnet-5: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | " +
     "openai/gpt-5.6-sol: Codex error: The usage limit has been reached (rate_limit)";
 
-  it("keeps the provider reset hint when the summary exceeds the length guard", () => {
-    // The summary is over the 300 char bound, so reading it whole discards a hint the
-    // provider did give. The first leg is the route the user picked.
+  it("keeps reset hints beyond the summary length guard", () => {
     expect(aggregate.length).toBeGreaterThan(300);
     const copy = renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: aggregate });
     expect(copy).toContain("resets 6:20pm (Europe/London)");
-    expect(copy).not.toBe(
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    );
   });
 });

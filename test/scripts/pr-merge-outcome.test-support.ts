@@ -450,7 +450,7 @@ const suiteChecks=(suite)=>{
 };
 const currentSuite=(suite)=>suite.id<30?suite:s.restUnseenSuite==="changed-suite"?{...suite,updated_at:"2026-09-20T00:02:00Z"}:
   ["changed-count","queued-empty-drift"].includes(s.restUnseenSuite)?{...suite,latest_check_runs_count:4}:suite;
-const paginated=(values,key,total=values.length)=>Array.from({length:Math.max(1,Math.ceil(values.length/100))},(_,index)=>({total_count:total,[key]:values.slice(index*100,index*100+100)}));
+const paginated=(values,key,total=values.length,size=100)=>Array.from({length:Math.max(1,Math.ceil(values.length/size))},(_,index)=>({total_count:total,[key]:values.slice(index*size,index*size+size)}));
 const advanceClock=(seconds)=>{
   const clock=process.env.FIXTURE_CLOCK;
   fs.writeFileSync(clock,String(Number(fs.readFileSync(clock,"utf8"))+seconds)+"\\n");
@@ -513,7 +513,16 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501"))) {
   const jobs=s.priorCi.jobs??[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}];
-  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:jobs.length,jobs}]);
+  const jobsEndpoint=args.find(arg=>arg.includes("/jobs?"));
+  if(jobsEndpoint) {
+    const size=Number(new URL("https://api.github.com/"+jobsEndpoint).searchParams.get("per_page")??30);
+    if(jobs.length>20&&size>20) fail("gh: Bad Gateway (HTTP 502)");
+    const pages=paginated(jobs,"jobs",jobs.length,size);
+    if(s.priorCi.jobPageFault==="truncated") pages.pop();
+    if(s.priorCi.jobPageFault==="duplicate") pages.at(-1).jobs[0]=pages[0].jobs[0];
+    if(s.priorCi.jobPageFault==="inconsistent-total") pages.at(-1).total_count++;
+    out(args.includes("--paginate")&&args.includes("--slurp")?pages:pages[0]);
+  }
   else out({id:501,run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
   if(s.restObservation?.afterHistoricalRead&&s.restMainReads>0) applyRestObservation();
 }

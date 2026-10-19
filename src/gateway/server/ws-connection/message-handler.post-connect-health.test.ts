@@ -63,6 +63,8 @@ import {
   createSetCloseCauseMock,
   createTestAgentRuntimeIdentityLease,
   DEVICE_TOKEN_MUTATION_PARAMS,
+  expectIdentityScopeAudit,
+  IDENTITY_SCOPE_AUDIT_CASES,
   localUserIngressFor,
   useGatewayTestConfig,
   waitForFast,
@@ -1918,22 +1920,17 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("keeps each identity scope grant in the info audit trail across reconnects and grant changes", async () => {
     await withGatewayTestState({ scenario: "minimal" }, async () => {
-      for (const [connId, scopes] of [
-        ["scope-grant-first", ["operator.admin"]],
-        ["scope-grant-reconnect", ["operator.admin"]],
-        ["scope-grant-changed", ["operator.read"]],
-        ["scope-grant-removed", []],
-      ] as const) {
-        const harness = connectTrustedProxyUser(loadConfigMock, connId, {}, [...scopes]);
+      for (const [connId, identityScopes, scopes, scopeCap] of IDENTITY_SCOPE_AUDIT_CASES) {
+        const harness = connectTrustedProxyUser(
+          loadConfigMock,
+          connId,
+          {},
+          identityScopes,
+          undefined,
+          scopeCap,
+        );
         await harness.whenAttached;
-        expect(harness.client).toMatchObject({ connect: { scopes: [...scopes] } });
-        const message = `security audit: identity scope grant elevated connection identity=alice@example.com addedScopes=${scopes.join(",")} auth=trusted-proxy conn=${connId}`;
-        expect(harness.logGateway.warn).not.toHaveBeenCalled();
-        if (scopes.length > 0) {
-          expect(harness.logGateway.info).toHaveBeenCalledExactlyOnceWith(message);
-        } else {
-          expect(harness.logGateway.info).not.toHaveBeenCalled();
-        }
+        expectIdentityScopeAudit(harness, connId, scopes);
       }
     });
   });

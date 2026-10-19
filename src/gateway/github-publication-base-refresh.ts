@@ -305,12 +305,20 @@ export async function refreshManagedWorkspaceBase(params: {
                 });
                 snapshots.push(await captureWorkspaceSnapshot({ root: destination, baseCommit }));
               }
+              const buildCacheInputs = await state.buildCacheInputs();
               const accepted = parseWorkerWorkspaceManifest(
                 state.current().baseline_json!,
                 state.current().baseline_ref!,
+                buildCacheInputs,
               );
               const before = snapshots[0]!.manifest;
               const current = applyWorkspaceSourceOverlay(before, accepted, snapshots[1]!.manifest);
+              current.buildCacheInputs = [
+                ...new Set([
+                  ...buildCacheInputs,
+                  ...snapshots[1]!.manifest.entries.map((entry) => entry.path),
+                ]),
+              ];
               const priorNodes = manifestNodes(before);
               const currentNodes = manifestNodes(current);
               for (const [file, entry] of manifestNodes(accepted)) {
@@ -330,6 +338,7 @@ export async function refreshManagedWorkspaceBase(params: {
                 currentManifestRef:
                   "sha256:" + createHash("sha256").update(currentRaw).digest("hex"),
                 currentManifestRaw: currentRaw,
+                buildCacheInputs: current.buildCacheInputs,
                 assertCurrent: check,
               });
             } finally {

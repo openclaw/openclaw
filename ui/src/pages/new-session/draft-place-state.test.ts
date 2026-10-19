@@ -8,7 +8,7 @@ import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { renderControl } from "./model-control.test-support.ts";
+import { waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 const REMOTE_PROJECT = {
@@ -267,16 +267,24 @@ describe("DraftPlaceState repository selection", () => {
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
     await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
-    const view = renderControl(state.modelControl, context, "main", state.selectedAgent());
+    const view = await waitForModelControl(
+      state.modelControl,
+      context,
+      "main",
+      state.selectedAgent(),
+    );
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
     expect(persistPreference).not.toHaveBeenCalled();
 
-    const choice = view.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="example/second"]',
-    );
-    expect(choice).not.toBeNull();
-    choice!.click();
+    const choice = await vi.waitFor(() => {
+      const option = view.querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="example/second"]',
+      );
+      expect(option).not.toBeNull();
+      return option!;
+    });
+    choice.click();
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.modelControl.load(context, "main", true, { agent: state.selectedAgent() });
     state.adoptAgentDefaults();

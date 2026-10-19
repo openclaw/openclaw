@@ -58,6 +58,7 @@ export type Job = {
   dispatchState?: DispatchState;
   request: SqliteWorkerRequest;
   bytes: number;
+  result: Promise<unknown>;
   resolve(value: unknown): void;
   reject(error: unknown): void;
   detach(): void;

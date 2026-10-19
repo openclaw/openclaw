@@ -59,6 +59,8 @@ type DiagnosticGatewayRpcFields = {
 } & (
   | {
       phase: "received";
+      /** Coarse handshake identity; never a device id, platform, or display name. */
+      clientKind?: "control-ui" | "macos" | "ios" | "android" | "cli" | "node" | "plugin" | "other";
       cronList?: {
         clientKind: GatewayClientId;
         source: "wire" | "internal";

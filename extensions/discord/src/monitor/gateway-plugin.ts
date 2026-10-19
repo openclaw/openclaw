@@ -11,10 +11,10 @@ import {
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { assertDiscordEndpointGatewayUrl, getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import * as discordGateway from "../internal/gateway.js";
-import { WebSocket } from "../internal/ws-runtime.js";
 import { createDiscordDnsLookup, createDiscordEndpointDnsLookup } from "../network-config.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
@@ -72,10 +72,11 @@ function formatDiscordGatewayCloseReason(reason: Buffer): string {
   if (!text) {
     return `<${reason.length} bytes>`;
   }
-  if (text.length <= DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS)}...`;
+  return truncateWithMarker(text, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS, {
+    marker: "...",
+    reserve: 0,
+    trimEnd: false,
+  });
 }
 
 function formatDiscordGatewayTransportErrorLog(params: {

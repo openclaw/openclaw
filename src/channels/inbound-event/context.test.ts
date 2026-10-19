@@ -1,23 +1,21 @@
-// Inbound event context tests cover channel event context construction before routing.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
   resolveInboundSupplementalSenderAllowed,
   type BuildChannelInboundEventContextParams,
+  type FinalizeChannelInboundContextAsyncParams,
 } from "./context.js";
 
-function createBaseContextParams(
+function buildTestInboundEventContext(
   overrides: Partial<BuildChannelInboundEventContextParams> = {},
-): BuildChannelInboundEventContextParams {
-  return {
+) {
+  return buildChannelInboundEventContext({
     channel: "test",
     accountId: "acct",
     messageId: "msg-1",
     from: "test:user:u1",
-    sender: {
-      id: "u1",
-    },
+    sender: { id: "u1" },
     conversation: {
       kind: "group",
       id: "room-1",
@@ -27,61 +25,57 @@ function createBaseContextParams(
       agentId: "main",
       routeSessionKey: "agent:main:test:group:room-1",
     },
-    reply: {
-      to: "test:room:room-1",
-    },
-    message: {
-      rawBody: "hello",
-    },
+    reply: { to: "test:room:room-1" },
+    message: { rawBody: "hello" },
     ...overrides,
+  });
+}
+
+function supplemental(senderAllowed?: boolean) {
+  return {
+    quote: { id: "quote-1", body: "quoted", sender: "Quoted User", isQuote: true, senderAllowed },
+    forwarded: { from: "Forwarded User", fromId: "f1", senderAllowed },
+    thread: { starterBody: "thread starter", historyBody: "thread history", senderAllowed },
   };
 }
 
-function buildTestInboundEventContext(
-  overrides: Partial<BuildChannelInboundEventContextParams> = {},
+const selfQuote = { id: "reply-1", body: "previous bot reply", sender: "Bot", isSelf: true };
+const hiddenSupplemental = {
+  ReplyToBody: undefined,
+  ReplyToSender: undefined,
+  ForwardedFrom: undefined,
+  ThreadStarterBody: undefined,
+  ThreadHistoryBody: undefined,
+};
+
+function finalizeQuote(
+  params: Omit<
+    FinalizeChannelInboundContextAsyncParams<Record<string, unknown>>,
+    "context" | "resolveSupplementalMedia"
+  >,
 ) {
-  return buildChannelInboundEventContext(createBaseContextParams(overrides));
+  return finalizeChannelInboundContext({
+    context: {
+      Body: "hello",
+      RawBody: "hello",
+      From: "test:u1",
+      To: "test:room",
+      SessionKey: "session",
+      ChatType: "group",
+    },
+    resolveSupplementalMedia: true,
+    ...params,
+  });
 }
 
 describe("resolveInboundSupplementalSenderAllowed", () => {
   it.each([
-    {
-      name: "allows direct context without consulting the channel matcher",
-      isGroup: false,
-      groupPolicy: "allowlist",
-      allowFrom: ["alice"],
-      matcherResult: false,
-      expected: true,
-      matcherCalls: 0,
-    },
-    {
-      name: "allows open group context without consulting the channel matcher",
-      isGroup: true,
-      groupPolicy: "open",
-      allowFrom: ["alice"],
-      matcherResult: false,
-      expected: true,
-      matcherCalls: 0,
-    },
-    {
-      name: "allows an allowlisted supplemental sender",
-      isGroup: true,
-      groupPolicy: "allowlist",
-      allowFrom: ["alice"],
-      matcherResult: true,
-      expected: true,
-      matcherCalls: 1,
-    },
-    {
-      name: "blocks a non-allowlisted supplemental sender",
-      isGroup: true,
-      groupPolicy: "allowlist",
-      allowFrom: ["alice"],
-      matcherResult: false,
-      expected: false,
-      matcherCalls: 1,
-    },
-  ])("$name", ({ isGroup, groupPolicy, allowFrom, matcherResult, expected, matcherCalls }) => {
+    ["allows direct context", false, "allowlist", false, true, 0],
+    ["allows open group context", true, "open", false, true, 0],
+    ["allows an allowlisted sender", true, "allowlist", true, true, 1],
+    ["blocks a non-allowlisted sender", true, "allowlist", false, false, 1],
+  ] as const)("%s", (_name, isGroup, groupPolicy, matcherResult, expected, matcherCalls) => {
+    const allowFrom = ["alice"];
     const isSenderAllowed = vi.fn(() => matcherResult);
 
     expect(
@@ -109,14 +103,10 @@ describe("buildChannelInboundEventContext", () => {
   });
 
   it("maps normalized inbound facts into a finalized message context", async () => {
-    const ctx = buildChannelInboundEventContext({
-      channel: "test",
-      accountId: "acct",
+    const ctx = buildTestInboundEventContext({
       provider: "test-provider",
       surface: "test-surface",
-      messageId: "msg-1",
       timestamp: 123,
-      from: "test:user:u1",
       sender: {
         id: "u1",
         name: "User One",
@@ -156,9 +146,7 @@ describe("buildChannelInboundEventContext", () => {
         inboundHistory: [{ sender: "Other", body: "previous", timestamp: 100 }],
       },
       access: {
-        commands: {
-          authorized: true,
-        },
+        commands: { authorized: true },
         mentions: {
           canDetectMention: true,
           wasMentioned: true,
@@ -176,11 +164,7 @@ describe("buildChannelInboundEventContext", () => {
         body: "/status",
       },
       media: [
-        {
-          path: "/tmp/image.png",
-          contentType: "image/png",
-          kind: "image",
-        },
+        { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
         {
           url: "https://example.test/audio.mp3",
           contentType: "audio/mpeg",
@@ -189,111 +173,95 @@ describe("buildChannelInboundEventContext", () => {
         },
       ],
       supplemental: {
-        quote: {
-          id: "quote-1",
-          body: "quoted",
-          sender: "Quoted User",
-          isQuote: true,
-        },
-        thread: {
-          starterBody: "thread starter",
-          historyBody: "thread history",
-          label: "thread label",
-        },
+        quote: supplemental().quote,
+        thread: { ...supplemental().thread, label: "thread label" },
         groupSystemPrompt: "group prompt",
       },
     });
 
-    expect(ctx.InboundAccessAuthorized).toBe(true);
-    expect(ctx.ConversationRouteContextObserved).toBe(true);
-    expect(ctx.ConversationRoutePeerId).toBe("route-room-1");
-
-    const expectedFields = {
-      Body: "[User One] hello",
-      InboundEventKind: "user_request",
-      BodyForAgent: "hello",
-      RawBody: "hello",
-      CommandBody: "/status",
-      BodyForCommands: "/status",
-      From: "test:user:u1",
-      To: "test:room:room-1",
-      SessionKey: "agent:main:test:group:room-1",
-      AgentId: "main",
-      DmScope: "main",
-      AccountId: "acct",
-      ParentSessionKey: "agent:main:test:group",
-      ModelParentSessionKey: "agent:main:test:model",
-      MessageSid: "msg-1",
-      ReplyToId: "root-1",
-      ReplyToBody: "quoted",
-      ReplyToSender: "Quoted User",
-      media: [
-        expect.objectContaining({
-          path: "/tmp/image.png",
-          contentType: "image/png",
-          kind: "image",
-          transcribed: false,
-        }),
-        expect.objectContaining({
-          url: "https://example.test/audio.mp3",
-          contentType: "audio/mpeg",
-          kind: "audio",
-          transcribed: true,
-        }),
-      ],
-      ChatType: "group",
-      ChatId: "room-1",
-      ConversationLabel: "Room One",
-      GroupSubject: "Room One",
-      GroupSpace: "workspace",
-      GroupSystemPrompt: "group prompt",
-      SenderName: "User One",
-      SenderId: "u1",
-      SenderUsername: "userone",
-      SenderTag: "User#0001",
-      SenderIsBot: true,
-      SenderIsSelf: undefined,
-      MemberRoleIds: ["admin"],
-      Timestamp: 123,
-      Provider: "test-provider",
-      Surface: "test-surface",
-      WasMentioned: true,
-      GroupRequireMention: false,
-      ExplicitlyMentionedBot: true,
-      MentionedUserIds: ["bot-1"],
-      ImplicitMentionKinds: ["reply_to_bot"],
-      MentionSource: "explicit_bot",
-      CommandAuthorized: true,
-      CommandSource: "text",
-      CommandTurn: {
-        kind: "text-slash",
-        source: "text",
-        authorized: true,
-        commandName: "status",
-        body: "/status",
-      },
-      MessageThreadId: "thread-1",
-      NativeChannelId: "native-room-1",
-      ConversationAvatar: "/media/inbound/conversation-avatar.png",
-      OriginatingChannel: "test",
-      OriginatingTo: "test:room:room-1",
-      ThreadStarterBody: "thread starter",
-      ThreadHistoryBody: "thread history",
-      ThreadLabel: "thread label",
-    } as const;
-
-    for (const [key, value] of Object.entries(expectedFields)) {
-      expect(ctx[key as keyof typeof ctx]).toEqual(value);
-    }
+    expect(ctx).toEqual(
+      expect.objectContaining({
+        InboundAccessAuthorized: true,
+        ConversationRouteContextObserved: true,
+        ConversationRoutePeerId: "route-room-1",
+        Body: "[User One] hello",
+        InboundEventKind: "user_request",
+        BodyForAgent: "hello",
+        RawBody: "hello",
+        CommandBody: "/status",
+        BodyForCommands: "/status",
+        From: "test:user:u1",
+        To: "test:room:room-1",
+        SessionKey: "agent:main:test:group:room-1",
+        AgentId: "main",
+        DmScope: "main",
+        AccountId: "acct",
+        ParentSessionKey: "agent:main:test:group",
+        ModelParentSessionKey: "agent:main:test:model",
+        MessageSid: "msg-1",
+        ReplyToId: "root-1",
+        ReplyToBody: "quoted",
+        ReplyToSender: "Quoted User",
+        media: [
+          expect.objectContaining({
+            path: "/tmp/image.png",
+            contentType: "image/png",
+            kind: "image",
+            transcribed: false,
+          }),
+          expect.objectContaining({
+            url: "https://example.test/audio.mp3",
+            contentType: "audio/mpeg",
+            kind: "audio",
+            transcribed: true,
+          }),
+        ],
+        ChatType: "group",
+        ChatId: "room-1",
+        ConversationLabel: "Room One",
+        GroupSubject: "Room One",
+        GroupSpace: "workspace",
+        GroupSystemPrompt: "group prompt",
+        SenderName: "User One",
+        SenderId: "u1",
+        SenderUsername: "userone",
+        SenderTag: "User#0001",
+        SenderIsBot: true,
+        SenderIsSelf: undefined,
+        MemberRoleIds: ["admin"],
+        Timestamp: 123,
+        Provider: "test-provider",
+        Surface: "test-surface",
+        WasMentioned: true,
+        GroupRequireMention: false,
+        ExplicitlyMentionedBot: true,
+        MentionedUserIds: ["bot-1"],
+        ImplicitMentionKinds: ["reply_to_bot"],
+        MentionSource: "explicit_bot",
+        CommandAuthorized: true,
+        CommandSource: "text",
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "status",
+          body: "/status",
+        },
+        MessageThreadId: "thread-1",
+        NativeChannelId: "native-room-1",
+        ConversationAvatar: "/media/inbound/conversation-avatar.png",
+        OriginatingChannel: "test",
+        OriginatingTo: "test:room:room-1",
+        ThreadStarterBody: "thread starter",
+        ThreadHistoryBody: "thread history",
+        ThreadLabel: "thread label",
+      }),
+    );
   });
 
   it("projects the ingress from-me sender fact as SenderIsSelf", () => {
     const ctx = buildTestInboundEventContext({
-      sender: {
-        id: "u1",
-        name: "User One",
-        isSelf: true,
-      },
+      sender: { id: "u1", name: "User One", isSelf: true },
     });
 
     expect(ctx.SenderIsSelf).toBe(true);
@@ -315,53 +283,25 @@ describe("buildChannelInboundEventContext", () => {
   });
 
   it("preserves deprecated-only structured context sources", () => {
+    const extra = { label: "Deprecated extra metadata", payload: { source: "extra" } };
+    const legacy = {
+      label: "Deprecated supplemental metadata",
+      payload: { source: "supplemental" },
+    };
     const ctx = buildTestInboundEventContext({
-      supplemental: {
-        untrustedContext: [
-          {
-            label: "Deprecated supplemental metadata",
-            payload: { source: "supplemental" },
-          },
-        ],
-      },
-      extra: {
-        UntrustedStructuredContext: [
-          {
-            label: "Deprecated extra metadata",
-            payload: { source: "extra" },
-          },
-        ],
-      },
+      supplemental: { untrustedContext: [structuredClone(legacy)] },
+      extra: { UntrustedStructuredContext: [structuredClone(extra)] },
     });
 
-    expect(ctx.ChannelStructuredContext).toEqual([
-      {
-        label: "Deprecated extra metadata",
-        payload: { source: "extra" },
-      },
-      {
-        label: "Deprecated supplemental metadata",
-        payload: { source: "supplemental" },
-      },
-    ]);
+    expect(ctx.ChannelStructuredContext).toEqual([extra, legacy]);
     expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
   });
 
   it("derives command turns from normalized command facts", async () => {
     const ctx = buildTestInboundEventContext({
-      message: {
-        rawBody: "/status",
-        commandBody: "/status",
-      },
-      command: {
-        kind: "text-slash",
-        name: "status",
-      },
-      access: {
-        commands: {
-          authorized: true,
-        },
-      },
+      message: { rawBody: "/status", commandBody: "/status" },
+      command: { kind: "text-slash", name: "status" },
+      access: { commands: { authorized: true } },
     });
 
     expect(ctx.CommandTurn).toEqual({
@@ -377,14 +317,8 @@ describe("buildChannelInboundEventContext", () => {
 
   it("keeps explicit command turns ahead of normalized command facts", async () => {
     const ctx = buildTestInboundEventContext({
-      message: {
-        rawBody: "/status",
-        commandBody: "/status",
-      },
-      command: {
-        kind: "native",
-        authorized: true,
-      },
+      message: { rawBody: "/status", commandBody: "/status" },
+      command: { kind: "native", authorized: true },
       commandTurn: {
         kind: "normal",
         source: "message",
@@ -404,112 +338,40 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.CommandAuthorized).toBe(false);
   });
 
-  it("filters supplemental context with channel visibility policy", async () => {
-    const ctx = buildTestInboundEventContext({
-      supplemental: {
-        quote: {
-          id: "quote-1",
-          body: "quoted",
-          sender: "Quoted User",
-          senderAllowed: false,
-          isQuote: true,
-        },
-        forwarded: {
-          from: "Forwarded User",
-          fromId: "f1",
-          senderAllowed: false,
-        },
-        thread: {
-          starterBody: "thread starter",
-          historyBody: "thread history",
-          senderAllowed: false,
-        },
-      },
-      contextVisibility: "allowlist",
-    });
-
-    expect(ctx.ReplyToBody).toBeUndefined();
-    expect(ctx.ReplyToSender).toBeUndefined();
-    expect(ctx.ForwardedFrom).toBeUndefined();
-    expect(ctx.ThreadStarterBody).toBeUndefined();
-    expect(ctx.ThreadHistoryBody).toBeUndefined();
-  });
-
-  it("keeps quoted context in allowlist_quote mode", async () => {
-    const ctx = buildTestInboundEventContext({
-      supplemental: {
-        quote: {
-          id: "quote-1",
-          body: "quoted",
-          sender: "Quoted User",
-          senderAllowed: false,
-          isQuote: true,
-        },
-        thread: {
-          starterBody: "thread starter",
-          senderAllowed: false,
-        },
-      },
-      contextVisibility: "allowlist_quote",
-    });
-
-    expect(ctx.ReplyToBody).toBe("quoted");
-    expect(ctx.ReplyToSender).toBe("Quoted User");
-    expect(ctx.ThreadStarterBody).toBeUndefined();
-  });
-
-  it("drops supplemental context with unknown sender allow state in restrictive modes", async () => {
-    const ctx = buildTestInboundEventContext({
-      supplemental: {
-        quote: {
-          id: "quote-1",
-          body: "quoted",
-          sender: "Quoted User",
-          isQuote: true,
-        },
-        forwarded: {
-          from: "Forwarded User",
-          fromId: "f1",
-        },
-        thread: {
-          starterBody: "thread starter",
-          historyBody: "thread history",
-        },
-      },
-      contextVisibility: "allowlist_quote",
-    });
-
-    expect(ctx.ReplyToBody).toBeUndefined();
-    expect(ctx.ReplyToSender).toBeUndefined();
-    expect(ctx.ForwardedFrom).toBeUndefined();
-    expect(ctx.ThreadStarterBody).toBeUndefined();
-    expect(ctx.ThreadHistoryBody).toBeUndefined();
-  });
+  it.each([
+    ["allowlist", false, hiddenSupplemental],
+    [
+      "allowlist_quote",
+      false,
+      { ...hiddenSupplemental, ReplyToBody: "quoted", ReplyToSender: "Quoted User" },
+    ],
+    ["allowlist_quote", undefined, hiddenSupplemental],
+  ] as const)(
+    "filters supplemental context in %s with senderAllowed=%s",
+    (contextVisibility, senderAllowed, expected) => {
+      const ctx = buildTestInboundEventContext({
+        supplemental: supplemental(senderAllowed),
+        contextVisibility,
+      });
+      expect({
+        ReplyToBody: ctx.ReplyToBody,
+        ReplyToSender: ctx.ReplyToSender,
+        ForwardedFrom: ctx.ForwardedFrom,
+        ThreadStarterBody: ctx.ThreadStarterBody,
+        ThreadHistoryBody: ctx.ThreadHistoryBody,
+      }).toMatchObject(expected);
+    },
+  );
 });
 
 describe("finalizeChannelInboundContext supplemental media resolution", () => {
   it("preserves self-authored quote text without loading its media by default", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/reply.png", contentType: "image/png" }]);
-    const result = await finalizeChannelInboundContext({
-      context: {
-        Body: "hello",
-        RawBody: "hello",
-        From: "test:u1",
-        To: "test:room",
-        SessionKey: "session",
-        ChatType: "group",
-      },
-      resolveSupplementalMedia: true,
+    const result = await finalizeQuote({
       media: [{ path: "/tmp/current.png", contentType: "image/png" }],
       contextVisibility: "all",
       supplemental: {
-        quote: {
-          id: "reply-1",
-          body: "previous bot reply",
-          sender: "Bot",
-          isSelf: true,
-          media,
-        },
+        quote: { ...selfQuote, media },
       },
     });
 
@@ -525,25 +387,13 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
   });
 
   it("preserves self-authored quote media when only the body is suppressed", async () => {
-    const result = await finalizeChannelInboundContext({
-      context: {
-        Body: "hello",
-        RawBody: "hello",
-        From: "test:u1",
-        To: "test:room",
-        SessionKey: "session",
-        ChatType: "group",
-      },
-      resolveSupplementalMedia: true,
+    const result = await finalizeQuote({
       contextVisibility: "all",
       suppressSelfQuoteBody: true,
       suppressSelfQuoteMedia: false,
       supplemental: {
         quote: {
-          id: "reply-1",
-          body: "previous bot reply",
-          sender: "Bot",
-          isSelf: true,
+          ...selfQuote,
           media: async () => [{ path: "/tmp/self.png", contentType: "image/png" }],
         },
       },
@@ -557,16 +407,7 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
 
   it("does not resolve media for hidden quotes", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/hidden.png", contentType: "image/png" }]);
-    const result = await finalizeChannelInboundContext({
-      context: {
-        Body: "hello",
-        RawBody: "hello",
-        From: "test:u1",
-        To: "test:room",
-        SessionKey: "session",
-        ChatType: "group",
-      },
-      resolveSupplementalMedia: true,
+    const result = await finalizeQuote({
       contextVisibility: "allowlist",
       supplemental: {
         quote: {

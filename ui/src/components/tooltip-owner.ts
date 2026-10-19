@@ -11,8 +11,6 @@ interface TooltipProviderPolicy extends HTMLElement {
   closeTooltip(): void;
 }
 
-const DESCRIBABLE_SELECTOR =
-  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
 const HOVER_DELAY = 150;
 const RICH_CONTENT_CLOSE_DELAY = 100;
 let nextTooltipId = 0;
@@ -25,6 +23,8 @@ export interface TooltipPolicyProps {
   hoverDismissDelay?: number;
   delay?: number;
   describe?: boolean;
+  /** The described control can differ from the wrapper that owns hover geometry. */
+  descriptionTarget?: () => Element | null;
   /** Read-only cards must not block nearby actions when their surface overlaps them. */
   pointerThrough?: boolean;
   autoSize?: boolean;
@@ -477,9 +477,7 @@ export class TooltipOwner {
     if (!trigger) {
       return null;
     }
-    return trigger.matches(DESCRIBABLE_SELECTOR)
-      ? trigger
-      : (trigger.querySelector(DESCRIBABLE_SELECTOR) ?? trigger);
+    return this.options.props().descriptionTarget?.() ?? trigger;
   }
 
   #syncDescription() {

@@ -7,7 +7,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
-export type SessionEventSource =
+type SessionEventSource =
   | "exec"
   | "node"
   | "task"

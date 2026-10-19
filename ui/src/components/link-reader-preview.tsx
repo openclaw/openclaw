@@ -16,6 +16,7 @@ import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-
 import { createPreviewRenderer } from "./link-reader-preview-root.ts";
 import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import { linkReaderTargetKey, type LinkReaderTarget } from "./link-reader-target.ts";
+import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { BrandIcon, Icon } from "./solid/icon.tsx";
 export type LinkPreview = LinkReaderTarget & ControlUiLinkReaderPreview;
 
@@ -272,6 +273,7 @@ function CardLink(props: {
 }) {
   return (
     <a
+      ref={createHovercardControlRef()}
       class={props.class}
       href={props.href}
       target={EXTERNAL_LINK_TARGET}

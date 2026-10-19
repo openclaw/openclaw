@@ -1,5 +1,3 @@
-// Retry config and policy helpers for official plugin runtimes.
-
 /** Transient failures that prove the request did not reach the remote server. */
 const PRE_CONNECT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
   "EAI_AGAIN",

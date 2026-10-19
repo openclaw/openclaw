@@ -17,6 +17,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
@@ -45,6 +46,8 @@ import "./agent-select-registration.ts";
 import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
 import "./sidebar-build-chip.tsx";
+
+registerSettingsEnglish();
 
 type AgentRosterRow = AgentsListResult["agents"][number];
 

@@ -34,7 +34,12 @@ export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
 
 export type GatewayBenchCommand =
   | GatewayProfileCommand
-  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "diagnostics"; action: "start" | "stop" }
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "diagnostics";
+      action: "start" | "stop";
+      captureId?: string;
+    }
   | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
   | {
       channel: typeof GATEWAY_PROFILE_CHANNEL;
@@ -53,6 +58,7 @@ type GatewayProfileReply = {
   cpuUsage?: GatewayCpuUsageSnapshot;
   resources?: GatewayResourceSnapshot;
   diagnostics?: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>>;
+  captureId?: string;
 };
 
 export type GatewayCpuUsage = Omit<ReturnType<typeof measureGatewayCpuUsage>, "cpuEnvironment"> &
@@ -96,17 +102,19 @@ export async function controlGatewayProfile(
 }
 
 /** Lightweight main-isolate diagnostics, without CPU or allocation sampling. */
-export async function startGatewayDiagnostics(child: ChildProcess) {
+export async function startGatewayDiagnostics(child: ChildProcess, captureId?: string) {
   await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
     kind: "diagnostics",
     action: "start",
+    captureId,
   });
   return async () => {
     const reply = await sendGatewayBenchCommand(child, {
       channel: GATEWAY_PROFILE_CHANNEL,
       kind: "diagnostics",
       action: "stop",
+      captureId,
     });
     if (!reply.diagnostics) {
       throw new Error("Gateway did not report diagnostics");
@@ -198,7 +206,8 @@ async function sendGatewayBenchCommand(
       if (
         message?.channel !== GATEWAY_PROFILE_CHANNEL ||
         message.kind !== kind ||
-        message.action !== action
+        message.action !== action ||
+        (command.kind === "diagnostics" && message.captureId !== command.captureId)
       ) {
         return;
       }
