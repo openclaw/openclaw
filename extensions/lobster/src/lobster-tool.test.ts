@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginToolContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -22,29 +19,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
-  return createTestPluginApi({
-    id: "lobster",
-    name: "lobster",
-    source: "test",
-    runtime: { version: "test" } as OpenClawPluginApi["runtime"],
-    resolvePath: (p) => p,
-    ...overrides,
-  });
-}
-
-function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPluginToolContext {
-  return {
-    config: {},
-    workspaceDir: "/tmp",
-    agentDir: "/tmp",
-    agentId: "main",
-    sessionKey: "main",
-    sandboxed: false,
-    ...overrides,
-  };
-}
-
 const requireRecord = createRequireRecord("record", "expected-label-record");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -60,7 +34,7 @@ function resumeToken(details: unknown, field = "requiresInput") {
 describe("lobster plugin tool", () => {
   let tool: ReturnType<typeof createLobsterTool>;
   beforeEach(() => {
-    tool = createLobsterTool(fakeApi());
+    tool = createLobsterTool(createTestPluginApi());
   });
   const run = async (pipeline: string) =>
     (await tool.execute("run", { action: "run", pipeline })).details;
@@ -73,8 +47,6 @@ describe("lobster plugin tool", () => {
     vi.stubEnv("LOBSTER_STATE_DIR", dir);
     return dir;
   };
-  const rejects = (params: Record<string, unknown>, error: RegExp) =>
-    expect(tool.execute("invalid", params)).rejects.toThrow(error);
 
   it("resumes real pipeline input, preserves invalid answers, and still handles approvals", async () => {
     stateDir("openclaw-lobster-input-");
@@ -146,7 +118,7 @@ describe("lobster plugin tool", () => {
       requiresInput: { prompt: "Which label?" },
     });
     // A new tool instance proves continuation comes from saved state, not the runner's memory.
-    const finished = await createLobsterTool(fakeApi()).execute("finish", {
+    const finished = await createLobsterTool(createTestPluginApi()).execute("finish", {
       action: "resume",
       token: resumeToken(second),
       responseJson: '"reviewed"',
@@ -168,27 +140,21 @@ describe("lobster plugin tool", () => {
 
   it("registers ordinary execution without a task runtime and keeps sandbox gating", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    plugin.register(fakeApi({ registerTool }));
+    plugin.register(createTestPluginApi({ registerTool }));
     const factory = registerTool.mock.calls[0]?.[0];
     if (typeof factory !== "function") {
       throw new Error("expected a registered Lobster tool factory");
     }
-    expect(factory(fakeCtx())).toMatchObject({ name: "lobster" });
-    expect(factory(fakeCtx({ sandboxed: true }))).toBeNull();
+    expect(factory({ sandboxed: false })).toMatchObject({ name: "lobster" });
+    expect(factory({ sandboxed: true })).toBeNull();
   });
 
   it("normalizes numeric string run limits before invoking the runner", async () => {
-    const runner = {
-      run: vi.fn().mockResolvedValue({
-        ok: true,
-        status: "ok",
-        output: [],
-        requiresApproval: null,
-      }),
-    };
+    const result = { ok: true, status: "ok", output: [], requiresApproval: null };
+    const runner = { run: vi.fn().mockResolvedValue(result) };
 
     vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
-    tool = createLobsterTool(fakeApi());
+    tool = createLobsterTool(createTestPluginApi());
     await tool.execute("call-string-limits", {
       action: "run",
       pipeline: "noop",
@@ -207,19 +173,16 @@ describe("lobster plugin tool", () => {
     });
   });
 
-  it("requires action", async () => {
-    await rejects({}, /action required/);
-  });
-
-  it("rejects unknown action", async () => {
-    await rejects({ action: "explode" }, /Unknown action/);
-  });
-
-  it("rejects absolute cwd", async () => {
-    await rejects({ action: "run", pipeline: "noop", cwd: "/tmp" }, /cwd must be a relative path/);
-  });
-
-  it("rejects cwd that escapes the gateway working directory", async () => {
-    await rejects({ action: "run", pipeline: "noop", cwd: "../../etc" }, /must stay within/);
+  it.each<[string, Record<string, unknown>, RegExp]>([
+    ["missing action", {}, /action required/],
+    ["unknown action", { action: "explode" }, /Unknown action/],
+    [
+      "absolute cwd",
+      { action: "run", pipeline: "noop", cwd: "/tmp" },
+      /cwd must be a relative path/,
+    ],
+    ["escaping cwd", { action: "run", pipeline: "noop", cwd: "../../etc" }, /must stay within/],
+  ])("rejects %s", async (_name, params, error) => {
+    await expect(tool.execute("invalid", params)).rejects.toThrow(error);
   });
 });
