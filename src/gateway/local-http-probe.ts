@@ -82,7 +82,6 @@ async function requestGatewayLocalHttpProbe(params: {
         port: params.port,
         path: params.pathname,
         method: "GET",
-        timeout: params.timeoutMs,
         // agent:false reconstructs the global agent without its required proxy
         // options. Select an explicit agent without overriding loopback policy.
         agent: proxyAgent ?? (pins ? directHttpsAgent : directHttpAgent),
@@ -130,10 +129,6 @@ async function requestGatewayLocalHttpProbe(params: {
       req.destroy();
       finish(null);
     }, params.timeoutMs);
-    req.once("timeout", () => {
-      req.destroy();
-      finish(null);
-    });
     req.once("error", () => {
       finish(null);
     });

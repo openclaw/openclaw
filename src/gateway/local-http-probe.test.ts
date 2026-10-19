@@ -4,7 +4,8 @@ import { unlink, writeFile } from "node:fs/promises";
 import * as http from "node:http";
 import { createServer } from "node:https";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
 import { startProxy } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -183,6 +184,52 @@ describe("local TLS probes", () => {
       });
     },
   );
+});
+
+test.each(["silent", "dripping"])("bounds a %s native HTTP peer by one deadline", async (mode) => {
+  const responseReady = createDeferredCore<http.ServerResponse>();
+  const server = http.createServer((_request, response) => {
+    responseReady.resolve(response);
+  });
+  const port = await listen(server);
+  const controller = new AbortController();
+  // Socket I/O stays native; only the absolute request deadline uses the fake clock.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const pending = requestHttp(createConfiguredGatewayLocalProbe({}), port, {
+    timeoutMs: 10,
+    signal: controller.signal,
+  });
+  const outcome = vi.fn();
+  const operation = pending.then(outcome, outcome);
+  try {
+    const response = await Promise.race([
+      responseReady.promise,
+      pending.then(() => {
+        throw new Error("Probe settled before its native HTTP request arrived");
+      }),
+    ]);
+    if (mode === "dripping") {
+      const write = async (chunk: string) => {
+        await new Promise<void>((resolve, reject) => {
+          response.write(chunk, (error) => (error ? reject(error) : resolve()));
+        });
+        await setImmediate();
+      };
+      response.writeHead(200, { "content-type": "application/json" });
+      await write('{"ok":');
+      await vi.advanceTimersByTimeAsync(5);
+      expect(outcome).not.toHaveBeenCalled();
+      await write("true");
+      await vi.advanceTimersByTimeAsync(5);
+    } else {
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(outcome).toHaveBeenCalledWith(null);
+  } finally {
+    controller.abort();
+    vi.useRealTimers();
+    await Promise.all([close(server), operation]);
+  }
 });
 
 test("cancels pending readiness requests when the repair budget expires", async () => {
