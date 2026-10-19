@@ -15,31 +15,40 @@ function register(overrides: Partial<Parameters<typeof registerPendingConversati
   });
 }
 
+function ready(outbound: string, overrides: Parameters<typeof register>[0] = {}) {
+  const turn = register(overrides);
+  turn.setOutboundMessageId(outbound);
+  turn.markReady();
+  return turn;
+}
+
+function claimReply(overrides: Partial<Parameters<typeof claimPendingConversationTurnReply>[0]>) {
+  return claimPendingConversationTurnReply({
+    agentId: "main",
+    conversationRef: "conv_a",
+    sessionId: "session-main",
+    messageId: "inbound-1",
+    text: "hello from peer",
+    ...overrides,
+  });
+}
+
 describe("conversation turn correlation", () => {
   it.each(["complete", "release"] as const)(
     "does not let a released claim %s a successor claim",
     async (operation) => {
-      const pending = register();
-      pending.setOutboundMessageId("outbound-claim");
-      pending.markReady();
-      const claimReply = (messageId: string) =>
-        claimPendingConversationTurnReply({
-          agentId: "main",
-          conversationRef: "conv_a",
-          sessionId: "session-main",
-          messageId,
-          replyToId: "outbound-claim",
-          text: messageId,
-        });
+      const pending = ready("outbound-claim");
+      const reply = (messageId: string) =>
+        claimReply({ messageId, replyToId: "outbound-claim", text: messageId });
       try {
-        const released = await claimReply("released-reply");
+        const released = await reply("released-reply");
         expect(released).toBeDefined();
         released!.release();
-        const successor = await claimReply("successor-reply");
+        const successor = await reply("successor-reply");
         expect(successor).toBeDefined();
         released![operation]();
         if (operation === "release") {
-          expect(await claimReply("third-reply")).toBeUndefined();
+          expect(await reply("third-reply")).toBeUndefined();
         }
         successor!.complete();
         await expect(pending.wait()).resolves.toMatchObject({ messageId: "successor-reply" });
@@ -50,18 +59,8 @@ describe("conversation turn correlation", () => {
   );
 
   it("matches a reply to the exact outbound transport message", async () => {
-    const pending = register();
-    pending.setOutboundMessageId("outbound-1");
-    pending.markReady();
-
-    const claim = await claimPendingConversationTurnReply({
-      agentId: "main",
-      conversationRef: "conv_a",
-      sessionId: "session-main",
-      messageId: "inbound-1",
-      replyToId: "outbound-1",
-      text: "hello from peer",
-    });
+    const pending = ready("outbound-1");
+    const claim = await claimReply({ replyToId: "outbound-1" });
     expect(claim).toBeDefined();
     claim?.complete({ transcriptMessageId: "transcript-1" });
 
@@ -74,15 +73,11 @@ describe("conversation turn correlation", () => {
   });
 
   it("matches a reply that promotes the outbound message into its own thread", async () => {
-    const pending = register({ conversationRef: "conv_parent" });
-    pending.setOutboundMessageId("outbound-thread-root");
-    pending.markReady();
+    const pending = ready("outbound-thread-root", { conversationRef: "conv_parent" });
 
-    const claim = await claimPendingConversationTurnReply({
-      agentId: "main",
+    const claim = await claimReply({
       conversationRef: "conv_child",
       parentConversationRef: "conv_parent",
-      sessionId: "session-main",
       messageId: "inbound-thread-reply",
       replyToId: "outbound-thread-root",
       threadId: "outbound-thread-root",
@@ -99,16 +94,12 @@ describe("conversation turn correlation", () => {
   });
 
   it("does not promote a reply thread from a different conversation in a shared session", async () => {
-    const pending = register({ conversationRef: "conv_peer_a" });
-    pending.setOutboundMessageId("outbound-peer-a");
-    pending.markReady();
+    const pending = ready("outbound-peer-a", { conversationRef: "conv_peer_a" });
 
     await expect(
-      claimPendingConversationTurnReply({
-        agentId: "main",
+      claimReply({
         conversationRef: "conv_peer_b_thread",
         parentConversationRef: "conv_peer_b",
-        sessionId: "session-main",
         messageId: "inbound-peer-b",
         replyToId: "outbound-peer-a",
         threadId: "outbound-peer-a",
@@ -121,27 +112,17 @@ describe("conversation turn correlation", () => {
   });
 
   it("does not guess between concurrent uncorrelated turns", async () => {
-    const first = register();
-    const second = register();
-    first.setOutboundMessageId("outbound-1");
-    second.setOutboundMessageId("outbound-2");
-    first.markReady();
-    second.markReady();
+    const first = ready("outbound-1");
+    const second = ready("outbound-2");
 
     await expect(
-      claimPendingConversationTurnReply({
-        agentId: "main",
-        conversationRef: "conv_a",
-        sessionId: "session-main",
+      claimReply({
         messageId: "inbound-unknown",
         text: "ambiguous",
       }),
     ).resolves.toBeUndefined();
 
-    const exact = await claimPendingConversationTurnReply({
-      agentId: "main",
-      conversationRef: "conv_a",
-      sessionId: "session-main",
+    const exact = await claimReply({
       messageId: "inbound-2",
       replyToId: "outbound-2",
       text: "second",
@@ -154,18 +135,13 @@ describe("conversation turn correlation", () => {
 
   it("claims an exact reply without visiting unrelated pending turns", async () => {
     const turns = Array.from({ length: 64 }, (_, index) =>
-      register({
+      ready(`outbound-${index}`, {
         agentId: `agent-${index % 4}`,
         id: `turn-${index}`,
         conversationRef: `conv-${(index * 7) % 13}`,
         sessionId: `session-${(index * 11) % 17}`,
       }),
     );
-    for (const [index, turn] of turns.entries()) {
-      turn.setOutboundMessageId(`outbound-${index}`);
-      turn.markReady();
-    }
-
     const registry: Map<unknown, unknown> | undefined = Object.getOwnPropertyDescriptor(
       globalThis,
       Symbol.for("openclaw.pendingConversationTurns"),
@@ -179,7 +155,7 @@ describe("conversation turn correlation", () => {
     };
     try {
       const target = 37;
-      const claim = await claimPendingConversationTurnReply({
+      const claim = await claimReply({
         agentId: `agent-${target % 4}`,
         conversationRef: `conv-${(target * 7) % 13}`,
         sessionId: `session-${(target * 11) % 17}`,
@@ -202,32 +178,24 @@ describe("conversation turn correlation", () => {
   });
 
   it("isolates outbound id collisions and claims the oldest eligible turn", async () => {
-    const wrongSession = register({
-      agentId: "collision-agent",
+    const collision = { agentId: "collision-agent", conversationRef: "collision-conv" };
+    const wrongSession = ready("provider-collision", {
+      ...collision,
       id: "wrong-session",
-      conversationRef: "collision-conv",
       sessionId: "other-session",
     });
-    const oldestEligible = register({
-      agentId: "collision-agent",
+    ready("provider-collision", {
+      ...collision,
       id: "oldest-eligible",
-      conversationRef: "collision-conv",
       sessionId: "collision-session",
     });
-    const newerEligible = register({
-      agentId: "collision-agent",
+    const newerEligible = ready("provider-collision", {
+      ...collision,
       id: "newer-eligible",
-      conversationRef: "collision-conv",
       sessionId: "collision-session",
     });
-    for (const turn of [wrongSession, oldestEligible, newerEligible]) {
-      turn.setOutboundMessageId("provider-collision");
-      turn.markReady();
-    }
-
-    const claim = await claimPendingConversationTurnReply({
-      agentId: "collision-agent",
-      conversationRef: "collision-conv",
+    const claim = await claimReply({
+      ...collision,
       sessionId: "collision-session",
       messageId: "collision-reply",
       replyToId: "provider-collision",
@@ -240,42 +208,25 @@ describe("conversation turn correlation", () => {
   });
 
   it("retires replaced and timed-out outbound index entries before turn id reuse", async () => {
-    const replaced = register({
-      id: "replaced-turn",
-      conversationRef: "conv_replaced",
-    });
+    const replaced = register({ id: "replaced-turn", conversationRef: "conv_replaced" });
     replaced.setOutboundMessageId("outbound-old");
     replaced.setOutboundMessageId("outbound-new");
     replaced.markReady();
     await expect(
-      claimPendingConversationTurnReply({
-        agentId: "main",
+      claimReply({
         conversationRef: "conv_replaced",
-        sessionId: "session-main",
         messageId: "reply-old",
         replyToId: "outbound-old",
         text: "stale replacement",
       }),
     ).resolves.toBeUndefined();
 
-    const expired = register({
-      id: "retired-turn",
-      conversationRef: "conv_retired",
-      timeoutMs: 0,
-    });
-    expired.setOutboundMessageId("outbound-retired");
-    expired.markReady();
+    const retired = { id: "retired-turn", conversationRef: "conv_retired" };
+    const expired = ready("outbound-retired", { ...retired, timeoutMs: 0 });
     await expect(expired.wait()).resolves.toBeUndefined();
-    const reused = register({
-      id: "retired-turn",
+    ready("outbound-retired", retired);
+    const claim = await claimReply({
       conversationRef: "conv_retired",
-    });
-    reused.setOutboundMessageId("outbound-retired");
-    reused.markReady();
-    const claim = await claimPendingConversationTurnReply({
-      agentId: "main",
-      conversationRef: "conv_retired",
-      sessionId: "session-main",
       messageId: "reply-current",
       replyToId: "outbound-retired",
       text: "current reuse",
@@ -294,20 +245,16 @@ describe("conversation turn correlation", () => {
   });
 
   it("stops consuming replies after Gateway cancellation", async () => {
-    const pending = register({
+    const pending = ready("outbound-cancelled", {
       id: "cancelled-turn",
       conversationRef: "conv_cancelled",
     });
-    pending.setOutboundMessageId("outbound-cancelled");
-    pending.markReady();
 
     expect(cancelPendingConversationTurn({ agentId: "main", id: "cancelled-turn" })).toBe(true);
     await expect(pending.wait()).resolves.toBeUndefined();
     await expect(
-      claimPendingConversationTurnReply({
-        agentId: "main",
+      claimReply({
         conversationRef: "conv_cancelled",
-        sessionId: "session-main",
         messageId: "inbound-after-cancel",
         replyToId: "outbound-cancelled",
         text: "dispatch me normally",
@@ -317,26 +264,19 @@ describe("conversation turn correlation", () => {
   });
 
   it("ignores delayed handle writes after a turn id is reused", async () => {
-    const first = register({
-      id: "reused-turn",
-      conversationRef: "conv_reused",
-    });
+    const identity = { id: "reused-turn", conversationRef: "conv_reused" };
+    const first = register(identity);
     first.cancel();
     await expect(first.wait()).resolves.toBeUndefined();
 
-    const replacement = register({
-      id: "reused-turn",
-      conversationRef: "conv_reused",
-    });
+    const replacement = register(identity);
     first.setOutboundMessageId("outbound-stale");
     first.markReady();
     replacement.setOutboundMessageId("outbound-current");
     replacement.markReady();
 
-    const claim = await claimPendingConversationTurnReply({
-      agentId: "main",
+    const claim = await claimReply({
       conversationRef: "conv_reused",
-      sessionId: "session-main",
       messageId: "inbound-current",
       replyToId: "outbound-current",
       text: "current reply",
@@ -347,18 +287,13 @@ describe("conversation turn correlation", () => {
   });
 
   it("isolates equal turn IDs between agents", async () => {
-    const first = register({
-      agentId: "first-agent",
+    const identity = {
       id: "shared-turn",
       conversationRef: "conv_shared",
       sessionId: "session-shared",
-    });
-    const second = register({
-      agentId: "second-agent",
-      id: "shared-turn",
-      conversationRef: "conv_shared",
-      sessionId: "session-shared",
-    });
+    };
+    const first = register({ ...identity, agentId: "first-agent" });
+    const second = register({ ...identity, agentId: "second-agent" });
     first.setOutboundMessageId("outbound-first");
     second.setOutboundMessageId("outbound-second");
     first.markReady();
@@ -366,7 +301,7 @@ describe("conversation turn correlation", () => {
 
     expect(cancelPendingConversationTurn({ agentId: "first-agent", id: "shared-turn" })).toBe(true);
     await expect(first.wait()).resolves.toBeUndefined();
-    const claim = await claimPendingConversationTurnReply({
+    const claim = await claimReply({
       agentId: "second-agent",
       conversationRef: "conv_shared",
       sessionId: "session-shared",
@@ -381,10 +316,7 @@ describe("conversation turn correlation", () => {
   it("gates an exact reply until outbound context is durable", async () => {
     const pending = register();
     pending.setOutboundMessageId("outbound-fast");
-    const claimPromise = claimPendingConversationTurnReply({
-      agentId: "main",
-      conversationRef: "conv_a",
-      sessionId: "session-main",
+    const claimPromise = claimReply({
       messageId: "inbound-fast",
       replyToId: "outbound-fast",
       text: "fast reply",
@@ -398,16 +330,9 @@ describe("conversation turn correlation", () => {
   });
 
   it("keeps the configured timeout active until reply persistence completes", async () => {
-    const pending = register({
+    const pending = ready("outbound-slow", { conversationRef: "conv_slow_persist", timeoutMs: 1 });
+    const claim = await claimReply({
       conversationRef: "conv_slow_persist",
-      timeoutMs: 1,
-    });
-    pending.setOutboundMessageId("outbound-slow");
-    pending.markReady();
-    const claim = await claimPendingConversationTurnReply({
-      agentId: "main",
-      conversationRef: "conv_slow_persist",
-      sessionId: "session-main",
       messageId: "inbound-slow",
       replyToId: "outbound-slow",
       text: "arrived before timeout",

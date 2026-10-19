@@ -44,6 +44,19 @@ const entry = {
   authProfileOverride: "fixture-provider:work",
 } satisfies SessionEntry;
 
+function preserves(
+  overrides: Partial<Parameters<typeof shouldPreserveSessionAuthProfileOverride>[0]>,
+) {
+  return shouldPreserveSessionAuthProfileOverride({
+    cfg: {},
+    agentDir: "/fixture/agent",
+    entry,
+    currentProvider: "openai",
+    provider: "openai",
+    ...overrides,
+  });
+}
+
 describe("shouldPreserveSessionAuthProfileOverride", () => {
   it.each([
     { provider: "openai", configured: "anthropic", expected: true },
@@ -63,31 +76,21 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
           throw new Error("unprepared snapshot read");
         });
       try {
-        const cfg: OpenClawConfig = configured
-          ? {
-              auth: {
-                profiles: { "openai:missing": { provider: configured, mode: "api_key" } },
-              },
-            }
-          : {};
-        expect(
-          shouldPreserveSessionAuthProfileOverride({
-            cfg,
-            agentDir: "/fixture/agent",
-            entry: { ...entry, authProfileOverride: "openai:missing" },
-            currentProvider: "openai",
-            provider: "openai",
-            recordedProvider: { provider },
-          }),
-        ).toBe(expected);
         const selectedEntry = { ...entry, authProfileOverride: "openai:missing" };
-        applyModelOverrideWithAuthProfileCompatibility({
+        const cfg: OpenClawConfig = {
+          auth: { profiles: { "openai:missing": { provider: configured, mode: "api_key" } } },
+        };
+        const params = {
           cfg,
           agentDir: "/fixture/agent",
           entry: selectedEntry,
           currentProvider: "openai",
-          selection: { provider: "openai", model: "selected-model" },
           recordedProvider: { provider },
+        };
+        expect(preserves(params)).toBe(expected);
+        applyModelOverrideWithAuthProfileCompatibility({
+          ...params,
+          selection: { provider: "openai", model: "selected-model" },
         });
         expect(selectedEntry.authProfileOverride).toBe(expected ? "openai:missing" : undefined);
         expect(persisted).not.toHaveBeenCalled();
@@ -114,7 +117,7 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
         },
       };
       expect(
-        shouldPreserveSessionAuthProfileOverride({
+        preserves({
           cfg: {
             models: {
               providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
@@ -132,29 +135,20 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
   );
 
   it("uses config trust when resolving workspace provider aliases", () => {
-    const allowedConfig = {
-      plugins: { entries: { "fixture-provider": { enabled: true } } },
-    } satisfies OpenClawConfig;
-
+    const params = {
+      currentProvider: "fixture-provider",
+      provider: "fixture-provider-plan",
+      metadataSnapshot,
+    };
     expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: allowedConfig,
+      preserves({
+        ...params,
+        cfg: { plugins: { entries: { "fixture-provider": { enabled: true } } } },
         agentDir: "/tmp/openclaw-auth-profile-preservation-allowed",
-        entry,
-        currentProvider: "fixture-provider",
-        provider: "fixture-provider-plan",
-        metadataSnapshot,
       }),
     ).toBe(true);
     expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: {},
-        agentDir: "/tmp/openclaw-auth-profile-preservation-denied",
-        entry,
-        currentProvider: "fixture-provider",
-        provider: "fixture-provider-plan",
-        metadataSnapshot,
-      }),
+      preserves({ ...params, agentDir: "/tmp/openclaw-auth-profile-preservation-denied" }),
     ).toBe(false);
   });
 
@@ -163,31 +157,14 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
     saveAuthProfileStore(
       {
         version: 1,
-        profiles: {
-          "team:prod": { type: "api_key", provider: "openai", key: "test" },
-        },
+        profiles: { "team:prod": { type: "api_key", provider: "openai", key: "test" } },
       },
       agentDir,
     );
 
-    expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: {},
-        agentDir,
-        entry: { ...entry, authProfileOverride: "team:prod" },
-        currentProvider: "openai",
-        provider: "openai",
-      }),
-    ).toBe(true);
-    expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: {},
-        agentDir,
-        entry: { ...entry, authProfileOverride: "team:prod" },
-        currentProvider: "openai",
-        provider: "anthropic",
-      }),
-    ).toBe(false);
+    const params = { agentDir, entry: { ...entry, authProfileOverride: "team:prod" } };
+    expect(preserves(params)).toBe(true);
+    expect(preserves({ ...params, provider: "anthropic" })).toBe(false);
   });
 
   it.each(["openai", "anthropic"])(
@@ -220,16 +197,7 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
     },
   );
 
-  it.each([
-    {
-      name: "clears an incompatible auth profile when resetting to a cross-provider default",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      expectedProfile: undefined,
-      expectedSource: undefined,
-      expectedCompactionCount: undefined,
-    },
-  ])("$name", ({ provider, model, expectedProfile, expectedSource, expectedCompactionCount }) => {
+  it("clears an incompatible auth profile when resetting to a cross-provider default", () => {
     const sessionEntry = {
       ...entry,
       providerOverride: "openai",
@@ -247,15 +215,15 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
       agentDir: tempDirs.make("openclaw-auth-profile-default-"),
       entry: sessionEntry,
       currentProvider: "openai",
-      selection: { provider, model, isDefault: true },
+      selection: { provider: "anthropic", model: "claude-opus-4-6", isDefault: true },
     });
 
     expect(result.updated).toBe(true);
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
     expect(sessionEntry.modelOverrideSource).toBeUndefined();
-    expect(sessionEntry.authProfileOverride).toBe(expectedProfile);
-    expect(sessionEntry.authProfileOverrideSource).toBe(expectedSource);
-    expect(sessionEntry.authProfileOverrideCompactionCount).toBe(expectedCompactionCount);
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
   });
 });
