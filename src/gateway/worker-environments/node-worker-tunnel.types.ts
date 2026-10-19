@@ -33,7 +33,6 @@ export type NodeEnvironmentOwner = Omit<
 > & {
   stopPromise?: Promise<void>;
   stopReason?: WorkerTunnelStopReason;
-  shutdownDeadline?: number;
   drainLocalWork?: () => Promise<void>;
   deviceFolder?: string;
 };

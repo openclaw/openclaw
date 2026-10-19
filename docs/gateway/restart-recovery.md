@@ -417,16 +417,11 @@ Worker-environment shutdown also names its computer, inference, transfer, tunnel
 and accepted-operation joins. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop and drain acknowledgments
-share at most ten seconds of the remaining process cleanup budget. An unreachable
+share at most five seconds after shutdown begins, capped by the remaining process
+cleanup budget, including stops already started by reconciliation. An unreachable
 worker keeps its durable attachment for cleanup on reconnect; it is not reported
 as physically stopped. Local writes and transfer cleanup still settle before
 database retirement.
-
-When worker-environment shutdown begins, pending node stop and drain acknowledgments
-get at most five more seconds, including stops already started by reconciliation.
-This deadline also respects the remaining process cleanup budget. A missing remote
-acknowledgment leaves the attachment available for recovery on the next boot;
-shutdown still joins accepted local writes and transfer cleanup.
 
 The core `shutdown completed` message precedes final process cleanup. Slow-step
 diagnostics continue through managed local services, snapshot cleanup, log

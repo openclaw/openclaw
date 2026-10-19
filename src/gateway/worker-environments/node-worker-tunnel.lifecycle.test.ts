@@ -185,7 +185,7 @@ describe("node worker tunnel lifetime", () => {
     }
   });
 
-  it.each([8_000, 30_000])(
+  it.each([3_000, 30_000])(
     "shares the %i ms shutdown budget across remote stop and drain without renewing it",
     async (budgetMs) => {
       const closeAll = vi.fn(async () => {});
@@ -200,7 +200,7 @@ describe("node worker tunnel lifetime", () => {
         if (request.command === STOP_ENVIRONMENT) {
           stopEntered.resolve();
           await new Promise<void>((resolve) => {
-            setTimeout(resolve, 6_000);
+            setTimeout(resolve, 1_000);
           });
           return nullReply;
         }
@@ -212,28 +212,31 @@ describe("node worker tunnel lifetime", () => {
       nodeTransport.invoke = invoke;
       const manager = createManager();
       const stopWithin = (ms: number) =>
-        runWithProcessCleanupBudget({ deadline: performance.now() + ms, warn: vi.fn() }, () =>
-          manager.stopAll(),
-        );
-      const stopping = stopWithin(budgetMs).catch((error: unknown) => error);
+        runWithProcessCleanupBudget({ deadline: performance.now() + ms, warn: vi.fn() }, () => {
+          manager.beginClose();
+          return manager.stopAll();
+        });
+      let stopped = false;
+      const stopping = stopWithin(budgetMs).catch((error: unknown) => {
+        stopped = true;
+        return error;
+      });
       try {
         await stopEntered.promise;
-        await vi.advanceTimersByTimeAsync(6_000);
-        const boundedMs = Math.min(10_000, budgetMs);
-        expect(invoke.mock.calls.map(([request]) => request.timeoutMs)).toEqual([
-          boundedMs,
-          boundedMs - 6_000,
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
+          STOP_ENVIRONMENT,
+          "worker.workspace.exec.v1",
         ]);
-        await vi.advanceTimersByTimeAsync(boundedMs - 6_000);
+        const boundedMs = Math.min(5_000, budgetMs);
+        await vi.advanceTimersByTimeAsync(boundedMs - 1_001);
+        expect(stopped).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(stopped).toBe(true);
         expect(await stopping).toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
         expect(closeAll).toHaveBeenCalledOnce();
         await expect(stopWithin(30_000)).rejects.toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
         expect(invoke).toHaveBeenCalledTimes(2);
-        invoke.mockImplementation(withWorkspaceDrain(async () => nullReply));
-        await expect(manager.stopAll()).resolves.toBeUndefined();
-        expect(invoke.mock.calls.slice(2).map(([request]) => request.timeoutMs)).toEqual([
-          60_000, 60_000,
-        ]);
       } finally {
         await vi.advanceTimersByTimeAsync(60_000);
         await stopping;

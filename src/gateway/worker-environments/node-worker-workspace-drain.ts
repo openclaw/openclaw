@@ -8,7 +8,6 @@ import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
 } from "../../infra/node-runner-inventory.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
-import { getProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecResult,
@@ -62,46 +61,15 @@ type NodeWorkerWorkspaceDrainRequest = {
 export async function stopNodeWorkerWorkspaceOwner(
   owner: {
     executionMode: WorkerExecutionMode;
-    shutdownDeadline?: number;
     drainLocalWork?: () => Promise<void>;
   },
   params: NodeWorkerWorkspaceDrainRequest,
   reason?: WorkerTunnelStopReason,
 ) {
-  const budget = getProcessCleanupBudget();
-  const shutdownDeadline = budget
-    ? Math.min(owner.shutdownDeadline ?? Infinity, budget.deadline, performance.now() + 10_000)
-    : undefined;
-  owner.shutdownDeadline = shutdownDeadline;
   const run = (
     name: string,
     operation: (request: NodeWorkerWorkspaceDrainRequest) => Promise<void>,
-  ) =>
-    measureGatewayCloseStep(`shutdown.worker-environment.node-${name}`, async () => {
-      const timeoutMs =
-        shutdownDeadline === undefined
-          ? params.timeoutMs
-          : Math.ceil(shutdownDeadline - performance.now());
-      const expired = () =>
-        new WorkerTunnelOwnerDisconnectedError(
-          "Node workspace cleanup exceeded the Gateway shutdown deadline; retry on reconnect",
-        );
-      if (timeoutMs <= 0) {
-        throw expired();
-      }
-      try {
-        await operation({ ...params, timeoutMs });
-      } catch (error) {
-        if (
-          shutdownDeadline !== undefined &&
-          error instanceof Error &&
-          error.name === "TimeoutError"
-        ) {
-          throw expired();
-        }
-        throw error;
-      }
-    });
+  ) => measureGatewayCloseStep(`shutdown.worker-environment.node-${name}`, () => operation(params));
   // Stop native processes before joining queues they may hold. Remote-exec
   // attachments retain their independently owned app processes across shutdown.
   const remoteStop =
