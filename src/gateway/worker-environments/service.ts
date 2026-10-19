@@ -440,7 +440,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     options.nodeTunnelManager?.beginClose();
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
-    providerLifecycle.clearMachineShapeListeners();
+    providerLifecycle.machineShapeNotifications.onChanged = () => {};
     scope.beginClose();
     options.stopNodeEnrollmentWaits?.();
     unsubscribeSessionIdentityMutation?.();
@@ -617,7 +617,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     setHumanPresence: preparedPool.setHumanPresence,
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
-    subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,
+    machineShapeNotifications: providerLifecycle.machineShapeNotifications,
     readMachineShape: (environmentId: string, prepared?: WorkerEnvironmentPlacementFacts) =>
       providerLifecycle.readMachineShape(prepared ?? store.get(environmentId)),
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>

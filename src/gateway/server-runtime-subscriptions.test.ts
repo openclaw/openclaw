@@ -18,6 +18,7 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -215,7 +216,7 @@ describe("startGatewayEventSubscriptions", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await unsubs?.agentUnsub();
-    unsubs?.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
     resetAgentEventsForTest();
@@ -353,7 +354,7 @@ describe("startGatewayEventSubscriptions", () => {
         );
       } finally {
         await unsubs.agentUnsub();
-        unsubs.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         unsubs.transcriptUnsub();
         unsubs.lifecycleUnsub();
         unsubs = undefined;
