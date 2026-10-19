@@ -8,7 +8,8 @@ import {
 import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 
 const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
   createSubsystemLogger: () => schedulerLog,
 }));
 
