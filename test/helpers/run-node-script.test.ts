@@ -9,8 +9,6 @@ import { withinTest } from "./promise.js";
 import { runNodeScript } from "./run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
-const PID_CLEANUP_HANG_GUARD_MS = 2_000;
-const PROCESS_CLEANUP_HANG_GUARD_MS = 15_000;
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -21,29 +19,37 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("captures inherited output written after the script exits", async () => {
-  const script = join(tempDirs.make("openclaw-node-script-output-"), "parent.mjs");
+function makeParent(leaf: string, directory: string, detached = false, status = 0) {
+  const script = join(directory, "parent.mjs");
   writeFileSync(
     script,
     `import { spawn } from "node:child_process";
-const child = spawn(process.execPath, ["-e", \`
-process.on("disconnect", () => {
-  process.stdout.write("drained stdout\\\\n");
-  process.stderr.write("drained stderr\\\\n");
-});
-process.send("ready");
-\`], { stdio: ["ignore", "inherit", "inherit", "ipc"] });
-child.once("message", () => process.exit(17));
+const child = spawn(process.execPath, ["-e", ${JSON.stringify(leaf)}], { detached: ${detached}, stdio: ["ignore", "inherit", "inherit", "ipc"] });
+child.once("message", () => process.exit(${status}));
 `,
   );
+  return script;
+}
 
+function expectOutput(result: unknown, stdout: string, stderr: string, status = 0) {
+  expect(result).toEqual({ error: undefined, status, stdout, stderr });
+}
+
+it("captures inherited output written after the script exits", async () => {
+  const script = makeParent(
+    `
+process.on("disconnect", () => {
+  process.stdout.write("drained stdout\\n");
+  process.stderr.write("drained stderr\\n");
+});
+process.send("ready");
+`,
+    tempDirs.make("openclaw-node-script-output-"),
+    false,
+    17,
+  );
   const result = await runNodeScript(script, process.env, 5_000);
-  expect(result).toEqual({
-    error: undefined,
-    status: 17,
-    stdout: "drained stdout\n",
-    stderr: "drained stderr\n",
-  });
+  expectOutput(result, "drained stdout\n", "drained stderr\n", 17);
 });
 
 it.for(["node", "current"] as const)(
@@ -96,9 +102,7 @@ if(mode==='at limit') {
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
     if (mode === "at limit") {
-      expect(result).toMatchObject({ error: undefined, status: 0 });
-      expect(result.stdout).toBe("a".repeat(maxBuffer));
-      expect(result.stderr).toBe("b".repeat(maxBuffer));
+      expectOutput(result, "a".repeat(maxBuffer), "b".repeat(maxBuffer));
     } else {
       expect(result).toMatchObject({
         error: { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" },
@@ -118,7 +122,6 @@ it.skipIf(process.platform === "win32")(
     const env = { ...process.env, TMPDIR: ownerRoot, TMP: ownerRoot, TEMP: ownerRoot };
     const fixture = createFixtureLifetime(ownerRoot);
     const directory = fixture.createTempDir("openclaw-node-script-uncertain-");
-    const script = join(directory, "parent.mjs");
     const pidFile = join(directory, "leaf.pid");
     const release = join(directory, "release");
     const input = join(directory, "input");
@@ -135,13 +138,7 @@ const poll=setInterval(()=>{
 fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
 process.send('ready');process.disconnect();
 `;
-    writeFileSync(
-      script,
-      `import {spawn} from 'node:child_process';
-const child=spawn(process.execPath,['--eval',${JSON.stringify(leaf)}],{detached:true,stdio:['ignore','inherit','inherit','ipc']});
-child.once('message',()=>process.exit(0));
-`,
-    );
+    const script = makeParent(leaf, directory, true);
     const command = fixture.track(
       runNodeScript(script, env, undefined, { signal, requireProcessTreeExit: true }),
     );
@@ -149,13 +146,11 @@ child.once('message',()=>process.exit(0));
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         await command;
-        // Rescue only this bounded escaped leaf, and certify its exit before
-        // manually disposing roots the lifetime owner deliberately retained.
+        // Join the escaped leaf before disposing deliberately retained inputs.
         if (existsSync(pidFile)) {
           writeFileSync(release, "release");
-          // Cleanup hang guards after the owner released the leaf, not readiness races.
-          const pid = await waitForPidFile(pidFile, AbortSignal.timeout(PID_CLEANUP_HANG_GUARD_MS));
-          await waitForDead(pid, AbortSignal.timeout(PROCESS_CLEANUP_HANG_GUARD_MS));
+          const pid = await waitForPidFile(pidFile, AbortSignal.timeout(2_000));
+          await waitForDead(pid, AbortSignal.timeout(15_000));
         }
         await fixture.cleanup();
         rmSync(directory, { recursive: true, force: true });

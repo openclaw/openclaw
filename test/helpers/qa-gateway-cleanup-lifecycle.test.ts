@@ -8,13 +8,14 @@ import { awaitGateBeforeSettlement, createDeferred } from "./promise.js";
 
 type Evidence = typeof import("../e2e/qa-lab/runtime/script-evidence.js");
 type Wire = typeof import("../e2e/qa-lab/runtime/paired-node-worker-wire-fixture.js");
+type MockFactory = Extract<Parameters<typeof vi.doMock>[1], (...args: never[]) => unknown>;
 const generationModule = "../e2e/qa-lab/runtime/worker-inference-generation-reload.js";
 
 it.for(["cancelled import", "failed import", "failed evidence", "cancelled close"] as const)(
   "joins generation work before reset and the next case (%s)",
   (fault, context) => {
     const work = Promise.resolve().then(async () => {
-      const after: Array<() => unknown> = [];
+      let after!: () => unknown;
       const cases: Array<(context: TestContext) => Promise<unknown>> = [];
       const gate = createDeferred();
       const importing = createDeferred();
@@ -41,7 +42,6 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         vi.unstubAllEnvs();
         vi.resetModules();
       };
-      const realDoMock = vi.doMock.bind(vi);
       vi.doMock("vitest", () => ({
         expect,
         describe: (_name: string, body: () => void) => body(),
@@ -54,15 +54,13 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
               cases.push(...values.map((value) => (ctx: TestContext) => body(value, ctx)));
             },
         }),
-        afterEach: (hook: () => unknown) => after.push(hook),
+        afterEach: (hook: () => unknown) => (after = hook),
         vi: {
           ...vi,
-          doMock: (id: string, factory: Parameters<typeof vi.doMock>[1]) => {
+          doMock: (id: string, factory: MockFactory) => {
             mocks.add(id);
-            if (typeof factory !== "function") {
-              realDoMock(id, factory);
-            } else if (id.endsWith("/script-evidence.js")) {
-              realDoMock(id, async (importOriginal) => {
+            if (id.endsWith("/script-evidence.js")) {
+              vi.doMock(id, async (importOriginal) => {
                 const original = (await factory(importOriginal)) as Evidence;
                 return {
                   createQaScriptEvidenceWriter: (
@@ -83,7 +81,7 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
                 };
               });
             } else if (id.endsWith("/paired-node-worker-wire-fixture.js")) {
-              realDoMock(id, async (importOriginal) => {
+              vi.doMock(id, async (importOriginal) => {
                 const original = (await factory(importOriginal)) as Wire;
                 return {
                   ...original,
@@ -97,23 +95,19 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
                 };
               });
             } else {
-              realDoMock(id, factory);
+              vi.doMock(id, factory);
             }
           },
           doUnmock: (id: string) => {
             resets.push(released);
             // Record premature reset without letting pre-fix code start real services.
-            if (released) {
-              vi.doUnmock(id);
-            }
+            return released && vi.doUnmock(id);
           },
           restoreAllMocks: () => released && vi.restoreAllMocks(),
           unstubAllEnvs: () => released && vi.unstubAllEnvs(),
           resetModules: () => released && vi.resetModules(),
           stubEnv: (key: string, value: string) => {
-            if (key === "TMPDIR") {
-              roots.add(value);
-            }
+            roots.add(value);
             return vi.stubEnv(key, value);
           },
         },
@@ -137,12 +131,9 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         if (fault === "cancelled import") {
           controller.abort(reason);
         }
-        // Vitest enters afterEach when its cancellation wrapper rejects, while the
-        // original body is still pending. The last hook owns reset in both versions.
+        // Vitest can start teardown while the cancelled body is still pending.
         let teardownDone = false;
-        teardown = Promise.resolve(after.at(-1)!()).then(() => {
-          teardownDone = true;
-        });
+        teardown = Promise.resolve(after()).then(() => (teardownDone = true));
         await setImmediate();
         const resetBeforeJoin = resets.includes(false);
         const completedBeforeJoin = teardownDone;
@@ -155,9 +146,7 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         reset(mocks);
         firstCase = false;
         await cases[1]!(context);
-        for (const hook of after.toReversed()) {
-          await hook();
-        }
+        await after();
         expect([resetBeforeJoin, completedBeforeJoin]).toEqual([false, false]);
         expect(collectErrorGraphCandidates(outcome, (error) => [error.cause])).toContain(reason);
         const firstWriteCount = fault === "failed evidence" || fault === "cancelled close" ? 1 : 0;
