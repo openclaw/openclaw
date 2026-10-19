@@ -17,12 +17,12 @@ import type {
 import {
   ChatMobilePeopleBody,
   ChatMobilePeopleGrid,
-  type ChatMobilePeopleLabels,
+  type ChatMobilePeopleBodyProps,
 } from "./components/chat-mobile-people.tsx";
 
 afterEach(resetMentionComposerFixture);
 
-const labels: ChatMobilePeopleLabels = {
+const labels: ChatMobilePeopleBodyProps["labels"] = {
   people: "People",
   viewingNow: "Viewing now",
   creator: "Creator",
