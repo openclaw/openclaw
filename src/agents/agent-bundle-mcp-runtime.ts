@@ -303,17 +303,14 @@ function createServerMcpRuntime(
     request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     options?: McpRequestOptions,
   ) => runGuardedServerRequest(session, () => requests.run(session, request), options);
-  const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") => {
-    const callerSignal = getSessionMcpRequestSignal();
-    return listMcpServerItems(kind, {
+  const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") =>
+    listMcpServerItems(kind, {
       client: session.client,
       timeoutMs: session.requestTimeoutMs,
-      signal: callerSignal
-        ? AbortSignal.any([lifecycleAbortController.signal, callerSignal])
-        : lifecycleAbortController.signal,
+      signal: lifecycleAbortController.signal,
+      callerSignal: getSessionMcpRequestSignal(),
       runRequest: (request, signal) => requests.run(session, request, signal),
     });
-  };
 
   const loadCatalog = async (
     discoveryContext?: NativeMcpClientContext,

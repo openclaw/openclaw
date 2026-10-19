@@ -50,11 +50,13 @@ export function listMcpServerItems(
     client,
     timeoutMs,
     signal,
+    callerSignal,
     runRequest,
   }: {
     client: Client;
     timeoutMs: number;
     signal: AbortSignal;
+    callerSignal?: AbortSignal;
     runRequest: <T>(
       request: (signal: AbortSignal) => Promise<T>,
       signal: AbortSignal,
@@ -66,7 +68,7 @@ export function listMcpServerItems(
     itemLabel: kind,
     timeoutMs,
     ...MCP_CATALOG_LIST_LIMITS,
-    signal,
+    signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
     loadPage: ({ cursor, requestTimeoutMs: timeout, signal: pageSignal }) =>
       runRequest(async (requestSignal) => {
         const requestParams = cursor === undefined ? undefined : { cursor };
