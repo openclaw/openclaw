@@ -1,37 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import type { Mock } from "vitest";
-import { assert, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
 
 let probeModule: typeof import("./list.probe.js");
-
-function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
-  return {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir: path.join(stateDir, "gateway-locks"),
-    readProcessStartTime: () => 123_456,
-    timeoutMs: 100,
-  };
-}
-
-async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-probe-lock-"));
-  try {
-    return await run(stateDir);
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type RunnerParams = Parameters<
   typeof import("../../agents/isolated-completion.js").runIsolatedCompletion
@@ -42,8 +19,8 @@ const providerConfig = (overrides: Partial<ModelProviderConfig> = {}) => ({
   models: [],
   ...overrides,
 });
-const config = (provider: ReturnType<typeof providerConfig>): OpenClawConfig => ({
-  models: { providers: { openai: provider } },
+const config = (overrides: Partial<ModelProviderConfig>): OpenClawConfig => ({
+  models: { providers: { openai: providerConfig(overrides) } },
 });
 function probeInput(
   overrides: Omit<Partial<ProbeParams>, "options"> & { options?: Partial<ProbeParams["options"]> },
@@ -68,17 +45,12 @@ function probeInput(
 
 async function withProbeRuntime(
   credential: "profile" | "literal" | "marker",
-  run: (fixture: {
-    probe: typeof probeModule;
-    runner: ReturnType<typeof createRunner>;
-    upsert: ReturnType<typeof createUpsert>;
-    readCatalog: Mock<() => Promise<Array<{ provider: string; id: string }>>>;
-  }) => Promise<void>,
+  run: (fixture: ReturnType<typeof createMocks> & { probe: typeof probeModule }) => Promise<void>,
 ) {
-  const runner = createRunner();
-  const upsert = createUpsert();
-  const readCatalog = vi.fn(async () => [{ provider: "openai", id: "gpt-5.5" }]);
+  const mocks = createMocks();
+  const { runner, upsert, readCatalog } = mocks;
   const profileIds = credential === "marker" ? [] : ["openai:profile"];
+  const envKey = { apiKey: "envkey", source: "OPENAI_API_KEY" };
   // mock-isolation: The probe fixture controls request completion without starting inference.
   vi.doMock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
   vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => ({
@@ -87,12 +59,12 @@ async function withProbeRuntime(
     ensureAuthProfileStoreAsync: async () => ({
       version: 1,
       order: {},
-      profiles:
-        credential === "marker"
-          ? {}
-          : {
-              "openai:profile": { type: "api_key", provider: "openai", key: "test-profile-key" },
-            },
+      profiles: Object.fromEntries(
+        profileIds.map((id) => [
+          id,
+          { type: "api_key", provider: "openai", key: "test-profile-key" },
+        ]),
+      ),
     }),
     listProfilesForProvider: () => profileIds,
     resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
@@ -102,8 +74,7 @@ async function withProbeRuntime(
   }));
   vi.doMock("../../agents/model-auth.js", () => ({
     hasUsableCustomProviderApiKey: () => credential !== "profile",
-    resolveEnvApiKey: () =>
-      credential === "marker" ? { apiKey: "envkey", source: "OPENAI_API_KEY" } : null,
+    resolveEnvApiKey: () => (credential === "marker" ? envKey : null),
     resolveProviderEntryApiKeyBinding: vi.fn(),
     resolveProviderEntryApiKeyProfileReference: () =>
       credential === "literal"
@@ -111,7 +82,7 @@ async function withProbeRuntime(
         : { kind: credential === "marker" ? "marker" : "none" },
     ...(credential === "marker"
       ? {
-          resolveUsableCustomProviderApiKey: () => ({ apiKey: "envkey", source: "OPENAI_API_KEY" }),
+          resolveUsableCustomProviderApiKey: () => envKey,
         }
       : {}),
   }));
@@ -124,7 +95,7 @@ async function withProbeRuntime(
       import.meta.url,
       `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
     );
-    await run({ probe, runner, upsert, readCatalog });
+    await run({ probe, ...mocks });
   } finally {
     vi.doUnmock("../../agents/isolated-completion.js");
     vi.doUnmock("../../agents/auth-profiles.js");
@@ -133,171 +104,168 @@ async function withProbeRuntime(
   }
 }
 
-function createRunner() {
-  return vi.fn(async (params: RunnerParams) => {
-    params.onRequestComplete?.(13);
-    return { text: "OK" };
-  });
-}
-function createUpsert() {
-  return vi.fn(async (params: { profileId: string; credential: unknown }) => ({
-    version: 1,
-    profiles: { [params.profileId]: params.credential },
-  }));
+function createMocks() {
+  return {
+    runner: vi.fn(async (params: RunnerParams) => {
+      params.onRequestComplete?.(13);
+      return { text: "OK" };
+    }),
+    upsert: vi.fn(async (params: { profileId: string; credential: unknown }) => ({
+      version: 1,
+      profiles: { [params.profileId]: params.credential },
+    })),
+    readCatalog: vi.fn(async () => [{ provider: "openai", id: "gpt-5.5" }]),
+  };
 }
 
-describe("mapFailoverReasonToProbeStatus", () => {
-  beforeAll(async () => {
-    // mock-isolation: Assert the listing path never loads the inference runtime.
-    vi.doMock("../../agents/isolated-completion.js", () => {
-      throw new Error("isolated-completion should stay lazy for probe imports");
-    });
-    try {
-      probeModule = await importFreshModule<typeof import("./list.probe.js")>(
-        import.meta.url,
-        `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
-      );
-    } finally {
-      vi.doUnmock("../../agents/isolated-completion.js");
-    }
+beforeAll(async () => {
+  // mock-isolation: Assert the listing path never loads the inference runtime.
+  vi.doMock("../../agents/isolated-completion.js", () => {
+    throw new Error("isolated-completion should stay lazy for probe imports");
   });
+  try {
+    probeModule = await importFreshModule<typeof import("./list.probe.js")>(
+      import.meta.url,
+      `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
+    );
+  } finally {
+    vi.doUnmock("../../agents/isolated-completion.js");
+  }
+});
 
-  it("maps failover reasons to probe statuses", () => {
-    for (const [reason, expected] of [
-      ["auth_permanent", "auth"],
-      ["auth", "auth"],
-      ["rate_limit", "rate_limit"],
-      ["overloaded", "rate_limit"],
-      ["billing", "billing"],
-      ["timeout", "timeout"],
-      ["model_not_found", "format"],
-      ["format", "format"],
-      [undefined, "unknown"],
-      [null, "unknown"],
-      ["something_else", "unknown"],
-    ]) {
-      expect(probeModule.mapFailoverReasonToProbeStatus(reason)).toBe(expected);
-    }
-  });
+it("maps failover reasons to probe statuses", () => {
+  for (const [reason, expected] of [
+    ["auth_permanent", "auth"],
+    ["auth", "auth"],
+    ["rate_limit", "rate_limit"],
+    ["overloaded", "rate_limit"],
+    ["billing", "billing"],
+    ["timeout", "timeout"],
+    ["model_not_found", "format"],
+    ["format", "format"],
+    [undefined, "unknown"],
+    [null, "unknown"],
+    ["something_else", "unknown"],
+  ]) {
+    expect(probeModule.mapFailoverReasonToProbeStatus(reason)).toBe(expected);
+  }
 });
 
 describe("runAuthProbes", () => {
-  beforeAll(async () => {
-    probeModule ??= await import("./list.probe.js");
-  });
-
   it("refuses direct CLI probes while a live Gateway owns canonical state", async () => {
-    await withTempState(async (stateDir) => {
-      const lockOptions = createGatewayLockOptions(stateDir);
-      const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-      assert(gatewayLock, "Expected live Gateway fixture lock");
-      try {
-        await expect(
-          probeModule.withAuthProbeStateOwnership(
-            { mode: "exclusive", gatewayLockOptions: lockOptions },
-            async () => undefined,
-          ),
-        ).rejects.toThrow(
-          `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Stop the Gateway first (openclaw gateway stop), then rerun models status --probe.`,
+    const stateDir = tempDirs.make("openclaw-model-probe-lock-");
+    const lockOptions: GatewayLockOptions = {
+      allowInTests: true,
+      env: {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      lockDir: path.join(stateDir, "gateway-locks"),
+      readProcessStartTime: () => 123_456,
+      timeoutMs: 100,
+    };
+    const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
+    assert(gatewayLock, "Expected live Gateway fixture lock");
+    try {
+      await expect(
+        probeModule.withAuthProbeStateOwnership(
+          { mode: "exclusive", gatewayLockOptions: lockOptions },
+          async () => undefined,
+        ),
+      ).rejects.toThrow(
+        `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Stop the Gateway first (openclaw gateway stop), then rerun models status --probe.`,
+      );
+    } finally {
+      await gatewayLock.release();
+    }
+  });
+
+  it.each([false, true])(
+    "reports request-only probe timing (provider config: %s)",
+    async (configured) => {
+      await withProbeRuntime("profile", async ({ probe, runner, readCatalog }) => {
+        readCatalog.mockRejectedValue(new Error("Catalog unavailable"));
+        const input = probeInput({
+          cfg: configured ? config({ agentRuntime: { id: "codex" } }) : {},
+          options: { profileIds: ["openai:profile"] },
+        });
+        expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({
+          status: "ok",
+          latencyMs: 13,
+        });
+        expect(runner).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authProfileId: "openai:profile",
+            outputTextPolicy: "strict-visible",
+            agentHarnessRuntimeOverride: "openclaw",
+            thinkLevel: "off",
+          }),
         );
-      } finally {
-        await gatewayLock.release();
-      }
-    });
-  });
+        expect(runner.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
+        runner.mockRejectedValueOnce(
+          new Error(configured ? "LLM request timed out." : "Credential preparation failed"),
+        );
+        const failed = (await probe.runAuthProbes(input)).results[0];
+        if (configured) {
+          expect(failed).toMatchObject({ status: "timeout" });
+        } else {
+          expect(failed?.status).not.toBe("ok");
+        }
+        expect(failed?.latencyMs).toBeUndefined();
+      });
+    },
+  );
 
-  it("uses the configured model without catalog preparation and reports only request time", async () => {
-    await withProbeRuntime("profile", async ({ probe, runner, readCatalog }) => {
-      readCatalog.mockRejectedValue(new Error("Catalog unavailable"));
-      const input = probeInput({ options: { profileIds: ["openai:profile"] } });
-      expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({
-        status: "ok",
-        latencyMs: 13,
+  it.each(["literal", "marker"] as const)(
+    "isolates %s credentials from stored profiles",
+    async (credential) => {
+      await withProbeRuntime(credential, async ({ probe, runner, upsert }) => {
+        const literal = credential === "literal";
+        const marker = ["OPENAI", "API", "KEY"].join("_");
+        const provider = providerConfig({
+          api: "openai-responses",
+          apiKey: literal ? "test" : marker,
+          ...(literal ? ({ auth: "oauth", agentRuntime: { id: "codex" } } as const) : {}),
+        });
+        await probe.runAuthProbes(
+          probeInput({
+            cfg: config(provider),
+            options: { includeDirectKeys: true },
+          }),
+        );
+        const call = literal
+          ? runner.mock.calls.find(([params]) =>
+              params.authProfileId?.startsWith("openai:probe-"),
+            )?.[0]
+          : runner.mock.calls[0]?.[0];
+        assert(call?.agentDir);
+        expect(call.agentDir).not.toBe("/tmp/openclaw-probe-agent");
+        expect(call).toMatchObject({
+          preparedModelRuntimeMode: "isolated-read-only",
+          config: { models: { providers: { openai: provider } }, auth: { order: { openai: [] } } },
+        });
+        if (literal) {
+          expect(call).toMatchObject({
+            agentHarnessRuntimeOverride: "openclaw",
+            onRequestComplete: expect.any(Function),
+          });
+          expect(upsert).toHaveBeenCalledWith({
+            profileId: call.authProfileId,
+            agentDir: call.agentDir,
+            credential: expect.objectContaining({
+              type: "oauth",
+              provider: "openai",
+              access: "test",
+            }),
+          });
+          await expect(fs.stat(call.agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+        } else {
+          expect(call.agentDir).toContain("openclaw-auth-probe-");
+          expect(call.authProfileId).toBeUndefined();
+          expect(upsert).not.toHaveBeenCalled();
+        }
       });
-      runner.mockRejectedValueOnce(new Error("Credential preparation failed"));
-      const failed = (await probe.runAuthProbes(input)).results[0];
-      expect(failed?.status).not.toBe("ok");
-      expect(failed?.latencyMs).toBeUndefined();
-    });
-  });
-
-  it("keeps the existing raw OpenClaw transport for stored credentials", async () => {
-    await withProbeRuntime("profile", async ({ probe, runner }) => {
-      const input = probeInput({
-        cfg: config(providerConfig({ agentRuntime: { id: "codex" } })),
-        options: { profileIds: ["openai:profile"] },
-      });
-      expect((await probe.runAuthProbes(input)).results[0]?.status).toBe("ok");
-      expect(runner).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authProfileId: "openai:profile",
-          outputTextPolicy: "strict-visible",
-        }),
-      );
-      expect(runner.mock.calls[0]?.[0]).toMatchObject({
-        agentHarnessRuntimeOverride: "openclaw",
-        thinkLevel: "off",
-      });
-      expect(runner.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
-      runner.mockRejectedValueOnce(new Error("LLM request timed out."));
-      expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({ status: "timeout" });
-    });
-  });
-
-  it("uses raw OpenClaw for Codex-pinned config keys even with auth: oauth", async () => {
-    await withProbeRuntime("literal", async ({ probe, runner, upsert }) => {
-      const provider = providerConfig({
-        api: "openai-responses",
-        apiKey: "test",
-        auth: "oauth",
-        agentRuntime: { id: "codex" },
-      });
-      await probe.runAuthProbes(
-        probeInput({
-          cfg: config(provider),
-          options: { includeDirectKeys: true },
-        }),
-      );
-      const call = runner.mock.calls.find(([params]) =>
-        params.authProfileId?.startsWith("openai:probe-"),
-      )?.[0];
-      assert(call?.agentDir);
-      expect(call.agentDir).not.toBe("/tmp/openclaw-probe-agent");
-      expect(call).toMatchObject({
-        agentHarnessRuntimeOverride: "openclaw",
-        onRequestComplete: expect.any(Function),
-        preparedModelRuntimeMode: "isolated-read-only",
-      });
-      expect(call.config).toMatchObject({
-        models: { providers: { openai: provider } },
-        auth: { order: { openai: [] } },
-      });
-      expect(upsert).toHaveBeenCalledWith({
-        profileId: call.authProfileId,
-        agentDir: call.agentDir,
-        credential: expect.objectContaining({ type: "oauth", provider: "openai", access: "test" }),
-      });
-      await expect(fs.stat(call.agentDir)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("isolates marker credentials from stored profiles without pinning a synthetic one", async () => {
-    await withProbeRuntime("marker", async ({ probe, runner, upsert }) => {
-      const marker = ["OPENAI", "API", "KEY"].join("_");
-      const cfg = config(providerConfig({ api: "openai-responses", apiKey: marker }));
-      await probe.runAuthProbes(probeInput({ cfg, options: { includeDirectKeys: true } }));
-      const call = runner.mock.calls[0]?.[0];
-      expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
-      expect(call?.agentDir).toContain("openclaw-auth-probe-");
-      expect(call).toMatchObject({
-        preparedModelRuntimeMode: "isolated-read-only",
-        config: {
-          auth: { order: { openai: [] } },
-          models: { providers: { openai: { apiKey: marker } } },
-        },
-      });
-      expect(call?.authProfileId).toBeUndefined();
-      expect(upsert).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 });

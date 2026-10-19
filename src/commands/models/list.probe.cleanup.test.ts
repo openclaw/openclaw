@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { validateConfigObject } from "../../config/validation.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
@@ -27,8 +26,10 @@ let signals: EventEmitter;
 let cfg: OpenClawConfig;
 const lockPath = () => state.path("locks", "gateway.state.lock");
 function expectOwnership(held: boolean) {
-  expect(fs.existsSync(lockPath())).toBe(held);
-  expect(signals.listenerCount("SIGTERM")).toBe(held ? 1 : 0);
+  expect({
+    locked: fs.existsSync(lockPath()),
+    listeners: signals.listenerCount("SIGTERM"),
+  }).toEqual({ locked: held, listeners: held ? 1 : 0 });
 }
 beforeEach(async () => {
   state = await createOpenClawTestState({
@@ -38,8 +39,18 @@ beforeEach(async () => {
   signals = new EventEmitter();
 });
 async function prepareProbe() {
-  cfg = createProbeConfig(state.workspaceDir);
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+  cfg = {
+    models: {
+      providers: {
+        "probe-control": {
+          api: "openai-completions",
+          apiKey: "synthetic-config-credential",
+          baseUrl: "https://fixture.invalid/v1",
+          models: [],
+        },
+      },
+    },
+  };
   await state.writeConfig(cfg);
 }
 afterEach(async () => {
@@ -47,35 +58,6 @@ afterEach(async () => {
   runner.mockReset();
   await state.cleanup();
 });
-
-function createProbeConfig(workspaceDir: string): OpenClawConfig {
-  return {
-    agents: {
-      entries: { main: { workspace: workspaceDir } },
-      defaults: { workspace: workspaceDir },
-    },
-    models: {
-      providers: {
-        "probe-control": {
-          api: "openai-completions",
-          apiKey: "synthetic-config-credential",
-          baseUrl: "https://fixture.invalid/v1",
-          models: [
-            {
-              id: "probe-model",
-              name: "Probe model",
-              contextWindow: 8192,
-              maxTokens: 64,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
-        },
-      },
-    },
-  };
-}
 
 function stateOwnership() {
   return {
@@ -124,15 +106,11 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   });
   const firstStarted = createDeferredCore();
   const finishFirst = createDeferredCore();
-  const firstFinished = createDeferredCore();
   let firstSignal: AbortSignal | undefined;
-  let firstRan = false;
   runner.mockImplementation(async (params) => {
-    firstRan = true;
     firstSignal = params.abortSignal;
     firstStarted.resolve();
     await finishFirst.promise;
-    firstFinished.resolve();
     return { text: "OK" };
   });
   const parent = new AsyncWorkScope();
@@ -158,15 +136,11 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
     expect(firstSignal?.aborted).toBe(true);
     expect(fs.existsSync(lockPath())).toBe(true);
     finishFirst.resolve();
-    await firstFinished.promise;
     await parent.drain();
     expectOwnership(false);
   } finally {
     finishFirst.resolve();
     await operation?.catch(() => {});
-    if (firstRan) {
-      await firstFinished.promise;
-    }
     await parent.drain();
   }
 });

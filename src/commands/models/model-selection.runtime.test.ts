@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readConfigFileSnapshot,
   resetConfigRuntimeState,
@@ -53,24 +53,31 @@ describe("model command provider preparation", () => {
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     });
   }
+  function patchProvider(edit: (source: string) => string) {
+    const file = path.join(root, "alias-fixture/index.cjs");
+    fs.writeFileSync(file, edit(fs.readFileSync(file, "utf8")));
+  }
+  function plugin(id: string, providers: [string, ...string[]], definition: string, prelude = "") {
+    const dir = path.join(root, id);
+    fs.mkdirSync(dir);
+    manifest(dir, id, providers);
+    fs.writeFileSync(
+      path.join(dir, "index.cjs"),
+      `${prelude}
+      module.exports = { id: ${JSON.stringify(id)}, register(api) {
+        api.registerProvider({ id: ${JSON.stringify(providers[0])}, label: "Fixture", auth: [], ${definition} });
+      }};`,
+    );
+    return dir;
+  }
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-command-"));
     configPath = path.join(root, "openclaw.json");
-    const pluginDir = path.join(root, "provider");
-    fs.mkdirSync(pluginDir);
-    manifest(pluginDir, "alias-fixture", ["fixture", "custom"]);
-    fs.writeFileSync(
-      path.join(pluginDir, "index.cjs"),
-      `module.exports = {
-        id: "alias-fixture",
-        register(api) {
-          api.registerProvider({
-            id: "fixture", label: "Fixture", hookAliases: ["custom"], auth: [],
-            normalizeModelId: ({ modelId }) => modelId === "legacy" ? "current" : undefined,
-          });
-        },
-      };`,
+    const pluginDir = plugin(
+      "alias-fixture",
+      ["fixture", "custom"],
+      'hookAliases: ["custom"], normalizeModelId: ({ modelId }) => modelId === "legacy" ? "current" : undefined',
     );
     config = {
       agents: {
@@ -91,7 +98,7 @@ describe("model command provider preparation", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  async function isolated(run: () => Promise<void>) {
+  async function isolated(run: () => Promise<void>, env: NodeJS.ProcessEnv = {}) {
     writeJson(configPath, config);
     await withEnvAsync(
       {
@@ -99,6 +106,7 @@ describe("model command provider preparation", () => {
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        ...env,
       },
       run,
     );
@@ -108,7 +116,7 @@ describe("model command provider preparation", () => {
     return JSON.parse(fs.readFileSync(configPath, "utf8"));
   }
 
-  it("rejects unknown providers for alias without changing config bytes", async () => {
+  it("rejects unknown alias providers without changing config", async () => {
     await isolated(async () => {
       const before = fs.readFileSync(configPath, "utf8");
       await expect(alias("local", "ollmaa/qwen3:4b")).rejects.toThrow(
@@ -118,22 +126,13 @@ describe("model command provider preparation", () => {
     });
   });
 
-  it("keeps the fixture/openai-completions owner's model literal", async () => {
+  it("preserves literal models owned by an explicit API route", async () => {
     config.models = {
       providers: {
         fixture: {
           api: "openai-completions",
           baseUrl: "https://custom.example.invalid/v1",
-          models: [
-            {
-              id: "legacy",
-              name: "Literal model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 1024,
-            },
-          ],
+          models: [],
         },
       },
     };
@@ -154,16 +153,16 @@ describe("model command provider preparation", () => {
     });
   });
 
-  it("preserves alias source settings across canonical moves (existing: true, include: true, alias: same)", async () => {
+  it("preserves alias settings and includes across canonical moves", async () => {
+    const preserved = {
+      maxTokens: 128,
+      cacheRetention: "${ALIAS_CACHE_RETENTION}",
+      credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
+    };
     config.agents!.defaults!.models = {
       "fixture/legacy": {
         alias: "${MODEL_ALIAS}",
-        params: {
-          temperature: 0.2,
-          maxTokens: 128,
-          cacheRetention: "${ALIAS_CACHE_RETENTION}",
-          credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
-        },
+        params: { temperature: 0.2, ...preserved },
         streaming: false,
       },
       "fixture/current": { params: { temperature: 0.7 }, codeMode: false },
@@ -172,8 +171,8 @@ describe("model command provider preparation", () => {
         params: { temperature: 0.9, cacheRetention: "long" },
       },
     };
-    await withEnvAsync({ MODEL_ALIAS: "friendly", ALIAS_CACHE_RETENTION: "long" }, () =>
-      isolated(async () => {
+    await isolated(
+      async () => {
         const agentsPath = path.join(root, "agents.json");
         writeJson(agentsPath, config.agents);
         writeJson(configPath, { ...config, agents: { $include: "agents.json" } });
@@ -183,12 +182,7 @@ describe("model command provider preparation", () => {
         const expectedModels = {
           "fixture/current": {
             alias: "friendly",
-            params: {
-              temperature: 0.7,
-              maxTokens: 128,
-              cacheRetention: "${ALIAS_CACHE_RETENTION}",
-              credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
-            },
+            params: { temperature: 0.7, ...preserved },
             streaming: false,
             codeMode: false,
           },
@@ -210,12 +204,13 @@ describe("model command provider preparation", () => {
           fallbacks: [],
         });
         expect(readConfig().agents).toMatchObject({ $include: "agents.json" });
-      }),
+      },
+      { MODEL_ALIAS: "friendly", ALIAS_CACHE_RETENTION: "long" },
     );
   });
 
   it.each([false, true])(
-    "preserves nested include ownership with sibling overrides=%s",
+    "preserves nested includes (sibling overrides: %s)",
     async (siblingOverrides) => {
       const models = {
         "fixture/legacy": {
@@ -224,8 +219,8 @@ describe("model command provider preparation", () => {
         },
       };
       config.agents!.defaults!.models = models;
-      await withEnvAsync({ ALIAS_CACHE_RETENTION: "long" }, () =>
-        isolated(async () => {
+      await isolated(
+        async () => {
           const modelsPath = path.join(root, "models.json");
           const modelsRaw = JSON.stringify(models);
           const rootRaw = JSON.stringify({
@@ -253,21 +248,17 @@ describe("model command provider preparation", () => {
             });
           }
           expect(fs.readFileSync(configPath, "utf8")).toBe(rootRaw);
-        }),
+        },
+        { ALIAS_CACHE_RETENTION: "long" },
       );
     },
   );
 
-  it("excludes unrelated hooks when reusing an already-loaded registry", async () => {
-    const foreignDir = path.join(root, "aaa-foreign");
-    fs.mkdirSync(foreignDir);
-    manifest(foreignDir, "aaa-foreign", ["foreign"]);
-    fs.writeFileSync(
-      path.join(foreignDir, "index.cjs"),
-      `module.exports = { id: "aaa-foreign", register(api) {
-        api.registerProvider({ id: "foreign", label: "Foreign", auth: [],
-          hookAliases: ["fixture"], normalizeModelId: () => "wrong-owner" });
-      }};`,
+  it("ignores foreign hooks in an existing registry", async () => {
+    const foreignDir = plugin(
+      "aaa-foreign",
+      ["foreign"],
+      'hookAliases: ["fixture"], normalizeModelId: () => "wrong-owner"',
     );
     config.plugins!.allow!.unshift("aaa-foreign");
     config.plugins!.load!.paths!.unshift(foreignDir);
@@ -284,14 +275,11 @@ describe("model command provider preparation", () => {
   });
 
   it.each(["exact", "retained", "empty"] as const)(
-    "prepares runtime-only aliases with %s ownership while preserving source refs",
+    "preserves source refs in %s runtime scope",
     async (scope) => {
       const marker = path.join(root, "registrations");
-      const pluginFile = path.join(root, "provider", "index.cjs");
-      fs.writeFileSync(
-        pluginFile,
-        fs
-          .readFileSync(pluginFile, "utf8")
+      patchProvider((source) =>
+        source
           .replace(
             "register(api) {",
             `register(api) {
@@ -305,18 +293,14 @@ describe("model command provider preparation", () => {
       const entry = { params: { cacheRetention: "${ALIAS_CACHE_RETENTION}" }, streaming: false };
       config.agents!.defaults!.models = { "compat/legacy": entry };
       config.agents!.entries!.probe = { workspace: root };
-      await withEnvAsync({ ALIAS_CACHE_RETENTION: "long" }, () =>
-        isolated(async () => {
-          const metadataSnapshot = loadManifestMetadataSnapshot({
-            config,
-            env: process.env,
-            workspaceDir: root,
-          });
-          const registry = loadOpenClawPlugins({ config, env: process.env, workspaceDir: root });
+      await isolated(
+        async () => {
+          const context = { config, env: process.env, workspaceDir: root };
+          const metadataSnapshot = loadManifestMetadataSnapshot(context);
+          const registry = loadOpenClawPlugins(context);
           expect(
             resolvePluginProviderRegistryCore({
-              config,
-              workspaceDir: root,
+              ...context,
               providerRefs: ["compat"],
             })?.registry,
           ).toBe(registry);
@@ -349,47 +333,33 @@ describe("model command provider preparation", () => {
             });
           }
           if (scope === "empty") {
+            const errors = vi.mocked(runtime.error).mock.calls;
             expect(
-              vi
-                .mocked(runtime.error)
-                .mock.calls.filter(([message]) =>
-                  String(message).includes("could not be verified"),
-                ),
+              errors.filter(([msg]) => String(msg).includes("could not be verified")),
             ).toHaveLength(5);
           }
           expect(fs.readFileSync(marker, "utf8")).toBe(
             "registered\n".repeat(scope === "exact" ? 2 : 1),
           );
-        }),
+        },
+        { ALIAS_CACHE_RETENTION: "long" },
       );
     },
   );
 
-  it("does not activate an unused provider for a runtime-only alias", async () => {
+  it("does not activate unused providers for aliases", async () => {
     const canonical = DEFAULT_MODEL_ALIASES.sonnet;
-    if (!canonical) {
-      throw new Error("Expected the built-in sonnet alias");
-    }
+    assert(canonical, "Expected the built-in sonnet alias");
     config.agents!.defaults!.models = { [canonical]: {} };
-    const providerDir = path.join(root, "provider");
+    const providerDir = path.join(root, "alias-fixture");
     manifest(providerDir, "alias-fixture", ["anthropic"]);
-    const providerFile = path.join(providerDir, "index.cjs");
-    fs.writeFileSync(
-      providerFile,
-      fs
-        .readFileSync(providerFile, "utf8")
-        .replace('id: "fixture", label:', 'id: "anthropic", label:'),
-    );
-    const unusedDir = path.join(root, "unused");
+    patchProvider((source) => source.replace('id: "fixture", label:', 'id: "anthropic", label:'));
     const marker = path.join(root, "unused-imported");
-    fs.mkdirSync(unusedDir);
-    manifest(unusedDir, "unused-provider", ["openai"]);
-    fs.writeFileSync(
-      path.join(unusedDir, "index.cjs"),
-      `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");
-      module.exports = { id: "unused-provider", register(api) {
-        api.registerProvider({ id: "openai", label: "Unused", auth: [] });
-      }};`,
+    const unusedDir = plugin(
+      "unused-provider",
+      ["openai"],
+      "",
+      `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");`,
     );
     config.plugins!.allow!.push("unused-provider");
     config.plugins!.load!.paths!.push(unusedDir);
@@ -411,26 +381,25 @@ describe("model command provider preparation", () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it("repairs model entry settings while preserving an existing fallback placeholder", async () => {
+  it("repairs entries without rewriting fallback placeholders", async () => {
     config.agents!.defaults!.model = { fallbacks: ["${FALLBACK_REF}"] };
     const entry = { params: { temperature: 0.2 }, streaming: false };
     config.agents!.defaults!.models = { "fixture/legacy": entry };
-    await withEnvAsync({ FALLBACK_REF: "fixture/legacy" }, () =>
-      isolated(async () => {
+    await isolated(
+      async () => {
         await fallback("add", "fixture/current");
         expect(readConfig().agents?.defaults?.model).toEqual({ fallbacks: ["${FALLBACK_REF}"] });
         expect(readConfig().agents?.defaults?.models).toEqual({ "fixture/current": entry });
         await fallback("remove", "fixture/current");
         expect(readConfig().agents?.defaults?.model).toEqual({ fallbacks: [] });
-      }),
+      },
+      { FALLBACK_REF: "fixture/legacy" },
     );
   });
 
   it("rejects config replacement during provider preparation", async () => {
-    const pluginFile = path.join(root, "provider", "index.cjs");
-    fs.writeFileSync(
-      pluginFile,
-      fs.readFileSync(pluginFile, "utf8").replace(
+    patchProvider((source) =>
+      source.replace(
         "register(api) {",
         `register(api) {
           const fs = require("node:fs");
@@ -450,11 +419,9 @@ describe("model command provider preparation", () => {
   it("rejects an invalid fallback target before activating existing providers", async () => {
     config.agents!.defaults!.model = { fallbacks: ["fixture/legacy"] };
     const marker = path.join(root, "provider-imported");
-    const pluginFile = path.join(root, "provider", "index.cjs");
-    fs.writeFileSync(
-      pluginFile,
-      `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");\n` +
-        fs.readFileSync(pluginFile, "utf8"),
+    patchProvider(
+      (source) =>
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");\n${source}`,
     );
     await isolated(async () => {
       await expect(fallback("remove", "/invalid")).rejects.toThrow(

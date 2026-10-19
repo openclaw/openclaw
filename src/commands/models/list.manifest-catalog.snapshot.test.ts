@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearBundledDiscoveryModeMemo } from "../../plugins/bundled-discovery-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -20,6 +20,13 @@ import { withEnv } from "../../test-utils/env.js";
 import { loadStaticManifestCatalogRowsForList } from "./list.manifest-catalog.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("manifest-catalog");
+const url = (host: string) => `https://${host}.example.invalid/v1`;
+const refs = (...providers: string[]) => providers.map((provider) => `${provider}/tiny-model`);
+const expectedRow = (provider: string, alias = false) => ({
+  ref: refs(provider)[0],
+  api: alias ? "openai-responses" : "openai-completions",
+  baseUrl: url(alias ? "alias" : "canonical"),
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -33,17 +40,12 @@ function prepareFixture() {
   const bundled = path.join(root, "bundled");
   const workspaceDir = path.join(root, "workspace");
   const declarations = [
-    ["catalog-owner", "fixture-provider", bundled, "static"],
-    ["fixture-direct", "fixture-direct", bundled, "static"],
-    ["disabled-owner", "fixture-disabled", bundled, "static"],
-    ["refreshable-owner", "fixture-refreshable", bundled, "refreshable"],
-    ["runtime-owner", "fixture-runtime", bundled, "runtime"],
-    [
-      "workspace-owner",
-      "fixture-workspace",
-      path.join(workspaceDir, ".openclaw/extensions"),
-      "static",
-    ],
+    ["catalog-owner", "provider", bundled, "static"],
+    ["direct", "direct", bundled, "static"],
+    ["disabled-owner", "disabled", bundled, "static"],
+    ["refreshable-owner", "refreshable", bundled, "refreshable"],
+    ["runtime-owner", "runtime", bundled, "runtime"],
+    ["workspace-owner", "workspace", path.join(workspaceDir, ".openclaw/extensions"), "static"],
   ] as const;
   const fixtures = declarations.map(([pluginId, providerId, parent, discovery]) => {
     const rootDir = path.join(parent, pluginId);
@@ -61,27 +63,19 @@ function prepareFixture() {
           providers: {
             [providerId]: {
               api: "openai-completions",
-              baseUrl: "https://canonical.example.invalid/v1",
+              baseUrl: url("canonical"),
               models: [{ id: "tiny-model", name: "Tiny model", contextWindow: 8192 }],
             },
           },
           discovery: { [providerId]: discovery },
-          ...(pluginId === "catalog-owner"
-            ? {
-                aliases: {
-                  // A competing declaration must not displace same-name convention rows.
-                  "fixture-direct": {
-                    provider: providerId,
-                    baseUrl: "https://competing.example.invalid/v1",
-                  },
-                  "fixture-alias": {
-                    provider: providerId,
-                    api: "openai-responses",
-                    baseUrl: "https://alias.example.invalid/v1",
-                  },
-                },
-              }
-            : {}),
+          aliases:
+            pluginId === "catalog-owner"
+              ? {
+                  // The same-name convention must beat this competing alias.
+                  direct: { provider: providerId, baseUrl: url("competing") },
+                  alias: { provider: providerId, api: "openai-responses", baseUrl: url("alias") },
+                }
+              : undefined,
         },
       },
     });
@@ -117,13 +111,17 @@ function prepareFixture() {
   return { cfg, env, workspaceDir, metadataSnapshot, fixtures, manifestPaths };
 }
 
-function withoutManifestIo<T>(fixture: ReturnType<typeof prepareFixture>, run: () => T) {
+function readRows(
+  fixture: ReturnType<typeof prepareFixture>,
+  providerFilter?: string,
+  cfg = fixture.cfg,
+) {
   const opens = vi.spyOn(fs, "openSync");
   const reads = vi.spyOn(fs, "readFileSync");
   const isManifest = (file: unknown) =>
     fixture.manifestPaths.includes(file instanceof URL ? fileURLToPath(file) : String(file));
   try {
-    const output = run();
+    const output = loadStaticManifestCatalogRowsForList({ ...fixture, cfg, providerFilter });
     expect(fixture.fixtures.some(isColdPluginRuntimeLoaded)).toBe(false);
     // Forbidding manifest opens also catches reads through newly pinned descriptors.
     expect.soft(opens.mock.calls.filter(([file]) => isManifest(file))).toEqual([]);
@@ -135,80 +133,46 @@ function withoutManifestIo<T>(fixture: ReturnType<typeof prepareFixture>, run: (
   }
 }
 
-describe("setup prepared manifest snapshot", () => {
-  it("uses the explicit profile's allowlist instead of process compatibility policy", () => {
-    const fixture = prepareFixture();
-    const processEnv = { OPENCLAW_STATE_DIR: path.join(fixture.workspaceDir, "other-profile") };
-    writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: fixture.env });
-    writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: processEnv });
-    clearBundledDiscoveryModeMemo();
-    const cfg: OpenClawConfig = {
-      ...fixture.cfg,
-      plugins: { ...fixture.cfg.plugins, allow: ["unrelated-owner"] },
-    };
-    withEnv(processEnv, () =>
-      withoutManifestIo(fixture, () => {
-        for (const providerFilter of ["fixture-direct", "fixture-alias"]) {
-          expect
-            .soft(loadStaticManifestCatalogRowsForList({ ...fixture, cfg, providerFilter }))
-            .toEqual([]);
-        }
-      }),
-    );
-  });
+it("uses the explicit profile's allowlist instead of process compatibility policy", () => {
+  const fixture = prepareFixture();
+  const processEnv = { OPENCLAW_STATE_DIR: path.join(fixture.workspaceDir, "other-profile") };
+  writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: fixture.env });
+  writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: processEnv });
+  clearBundledDiscoveryModeMemo();
+  const cfg: OpenClawConfig = {
+    ...fixture.cfg,
+    plugins: { ...fixture.cfg.plugins, allow: ["unrelated-owner"] },
+  };
+  withEnv(processEnv, () =>
+    ["direct", "alias"].forEach((provider) =>
+      expect.soft(readRows(fixture, provider, cfg)).toEqual([]),
+    ),
+  );
+});
 
-  it("keeps captured static provider and alias rows after manifest removal without I/O", () => {
-    const fixture = prepareFixture();
-    const coldRows = withEnv(fixture.env, () =>
-      loadStaticManifestCatalogRowsForList({ cfg: fixture.cfg }),
-    );
-    expect(coldRows.map((row) => row.ref)).toEqual([
-      "fixture-direct/tiny-model",
-      "fixture-disabled/tiny-model",
-      "fixture-provider/tiny-model",
-    ]);
+it("keeps captured static provider and alias rows after manifest removal without I/O", () => {
+  const fixture = prepareFixture();
+  const coldRows = withEnv(fixture.env, () =>
+    loadStaticManifestCatalogRowsForList({ cfg: fixture.cfg }),
+  );
+  expect(coldRows.map((row) => row.ref)).toEqual(refs("direct", "disabled", "provider"));
 
-    for (const providerFilter of [
-      " FIXTURE-PROVIDER ",
-      " FIXTURE-ALIAS ",
-      "fixture-direct",
-      "fixture-disabled",
-    ]) {
-      const rows = withoutManifestIo(fixture, () =>
-        loadStaticManifestCatalogRowsForList({ ...fixture, providerFilter }).map(
-          ({ ref, api, baseUrl }) => ({ ref, api, baseUrl }),
-        ),
-      );
-      const provider = providerFilter.trim().toLowerCase();
-      expect(rows).toEqual(
-        provider === "fixture-disabled"
-          ? []
-          : [
-              {
-                ref: `${provider}/tiny-model`,
-                api: provider === "fixture-alias" ? "openai-responses" : "openai-completions",
-                baseUrl: `https://${provider === "fixture-alias" ? "alias" : "canonical"}.example.invalid/v1`,
-              },
-            ],
-      );
-    }
-    const owner = fixture.metadataSnapshot.byPluginId.get("catalog-owner");
-    if (!owner) {
-      throw new Error("missing fixture catalog owner");
-    }
-    fs.unlinkSync(owner.manifestPath);
-    withoutManifestIo(fixture, () => {
-      expect(
-        loadStaticManifestCatalogRowsForList({ ...fixture, providerFilter: "fixture-alias" }).map(
-          (row) => row.ref,
-        ),
-      ).toEqual(["fixture-alias/tiny-model"]);
-      expect(loadStaticManifestCatalogRowsForList(fixture).map((row) => row.ref)).toEqual([
-        "fixture-direct/tiny-model",
-        "fixture-disabled/tiny-model",
-        "fixture-provider/tiny-model",
-        "fixture-workspace/tiny-model",
-      ]);
-    });
-  });
+  for (const providerFilter of [" PROVIDER ", " ALIAS ", "direct", "disabled"]) {
+    const rows = readRows(fixture, providerFilter).map(({ ref, api, baseUrl }) => ({
+      ref,
+      api,
+      baseUrl,
+    }));
+    const provider = providerFilter.trim().toLowerCase();
+    expect(rows).toEqual(
+      provider === "disabled" ? [] : [expectedRow(provider, provider === "alias")],
+    );
+  }
+  const owner = fixture.metadataSnapshot.byPluginId.get("catalog-owner");
+  assert(owner, "missing fixture catalog owner");
+  fs.unlinkSync(owner.manifestPath);
+  expect(readRows(fixture, "alias").map((row) => row.ref)).toEqual(refs("alias"));
+  expect(readRows(fixture).map((row) => row.ref)).toEqual(
+    refs("direct", "disabled", "provider", "workspace"),
+  );
 });
