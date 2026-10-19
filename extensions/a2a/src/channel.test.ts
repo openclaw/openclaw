@@ -4,12 +4,14 @@ import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { a2aChannelPlugin } from "./channel.js";
 import { a2aPluginConfigSchema } from "./config-schema.js";
-import type { A2aCoreConfig } from "./types.js";
+import type { A2aCoreConfig, A2aPeerConfig } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function createA2aSendConfig(): A2aCoreConfig {
-  return { channels: { a2a: { peers: { hermes: peer } } } };
+function createA2aSendConfig(
+  peers: Record<string, A2aPeerConfig> = { hermes: peer },
+): A2aCoreConfig {
+  return { channels: { a2a: { peers } } };
 }
 
 const peer = {
@@ -18,15 +20,8 @@ const peer = {
   outboundToken: "test-outbound-token",
 };
 
-function requireSender() {
-  const adapter = a2aChannelPlugin.message;
-  const send = adapter?.send?.text;
-  if (!adapter || !send) {
-    throw new Error("expected A2A channel message adapter with text sender");
-  }
-  expect(adapter.send?.media).toBeUndefined();
-  expect(adapter.durableFinal?.capabilities).toEqual({ text: true });
-  return send;
+function sendParams(assertDirectAdapterHandoff: () => void, to = "hermes", text = "hello") {
+  return { cfg: createA2aSendConfig(), accountId: "default", to, text, assertDirectAdapterHandoff };
 }
 
 // Discovery and runtime validation share this schema (#131292).
@@ -79,31 +74,21 @@ describe("A2A channel configuration", () => {
   });
 
   it("exposes only the configured default account and peer-derived sender allowlist", () => {
-    const cfg: A2aCoreConfig = {
-      channels: {
-        a2a: {
-          peers: {
-            hermes: { token: "test-hermes-token" },
-            crew: { token: "test-crew-token" },
-          },
-        },
-      },
-    };
+    const { config } = a2aChannelPlugin;
+    const cfg = createA2aSendConfig({
+      hermes: { token: "test-hermes-token" },
+      crew: { token: "test-crew-token" },
+    });
 
-    expect(a2aChannelPlugin.config.listAccountIds(cfg)).toEqual(["default"]);
-    expect(a2aChannelPlugin.config.resolveAccount(cfg)).toMatchObject({
+    expect(config.listAccountIds(cfg)).toEqual(["default"]);
+    expect(config.resolveAccount(cfg)).toMatchObject({
       accountId: "default",
       enabled: true,
       configured: true,
     });
-    expect(a2aChannelPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
-      "hermes",
-      "crew",
-    ]);
-    expect(a2aChannelPlugin.config.listAccountIds({})).toEqual([]);
-    expect(a2aChannelPlugin.config.resolveAccount({ channels: { a2a: {} } }).configured).toBe(
-      false,
-    );
+    expect(config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["hermes", "crew"]);
+    expect(config.listAccountIds({})).toEqual([]);
+    expect(config.resolveAccount({ channels: { a2a: {} } }).configured).toBe(false);
   });
 });
 
@@ -126,7 +111,6 @@ describe("A2A channel message adapter", () => {
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(new Response('{"jsonrpc":"2.0","result":{}}'));
-      const sendParams = { cfg: createA2aSendConfig(), to: "hermes", text: "hello" };
       let current = true;
       const assertDirectAdapterHandoff = vi.fn(() => {
         if (!current) {
@@ -141,7 +125,7 @@ describe("A2A channel message adapter", () => {
       if (!sender) {
         throw new Error(`expected ${surface} A2A text sender`);
       }
-      const send = sender({ ...sendParams, accountId: "default", assertDirectAdapterHandoff });
+      const send = sender(sendParams(assertDirectAdapterHandoff));
       await lookupStarted.promise;
       current = false;
       lookupFinished.resolve([{ address: "93.184.216.34", family: 4 }]);
@@ -160,25 +144,21 @@ describe("A2A channel message adapter", () => {
         Response.json({ jsonrpc: "2.0", id: "response-id", result: { task: { id: "task-42" } } }),
       );
 
-    const cfg = createA2aSendConfig();
-    const sendText = requireSender();
+    const adapter = a2aChannelPlugin.message;
+    const sendText = adapter?.send?.text;
+    if (!sendText) {
+      throw new Error("expected A2A channel message adapter with text sender");
+    }
+    expect(adapter?.durableFinal?.capabilities).toEqual({ text: true });
+    expect(adapter?.send?.media).toBeUndefined();
     const assertDirectAdapterHandoff = vi.fn();
 
-    const result = await sendText({
-      cfg,
-      accountId: "default",
-      to: "a2a:hermes",
-      text: "hello",
-      assertDirectAdapterHandoff,
-    });
+    const result = await sendText(sendParams(assertDirectAdapterHandoff, "a2a:hermes"));
     expect(fetchSpy).toHaveBeenCalledOnce();
     const [url, request] = fetchSpy.mock.calls[0] ?? [];
     expect(url).toBe("https://peer.example.test/a2a/v1");
     expect(request).toMatchObject({
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer test-outbound-token",
-      },
+      headers: { "content-type": "application/json", authorization: "Bearer test-outbound-token" },
       method: "POST",
       // The SSRF guard inspects redirects itself instead of delegating to fetch.
       redirect: "manual",
@@ -199,10 +179,9 @@ describe("A2A channel message adapter", () => {
         configuration: { returnImmediately: true },
       },
     });
-    expect(result.messageId).toBe("task-42");
-    expect(result.receipt.parts[0]).toMatchObject({
-      kind: "text",
-      platformMessageId: "task-42",
+    expect(result).toMatchObject({
+      messageId: "task-42",
+      receipt: { parts: [expect.objectContaining({ kind: "text", platformMessageId: "task-42" })] },
     });
     expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
 
@@ -213,12 +192,7 @@ describe("A2A channel message adapter", () => {
     const assertLegacyHandoff = vi.fn();
     fetchSpy.mockClear();
     await expect(
-      legacySendText({
-        cfg,
-        to: "hermes",
-        text: "legacy hello",
-        assertDirectAdapterHandoff: assertLegacyHandoff,
-      }),
+      legacySendText(sendParams(assertLegacyHandoff, "hermes", "legacy hello")),
     ).resolves.toMatchObject({ channel: "a2a", messageId: "task-42" });
     expect(fetchSpy).toHaveBeenCalledOnce();
     expect(assertLegacyHandoff).toHaveBeenCalledOnce();

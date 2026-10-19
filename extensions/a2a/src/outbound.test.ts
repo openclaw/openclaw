@@ -113,27 +113,21 @@ describe("A2A outbound channel delivery", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const methods = fetchMock.mock.calls.map(([, init]) => {
-      const body = parseA2aRequestBody(init?.body) as { method: string };
-      return body.method;
-    });
+    const methods = fetchMock.mock.calls.map(([, init]) => parseA2aRequestBody(init?.body).method);
     expect(methods).toEqual(["SendMessage", "message/send"]);
     expect(assertDirectAdapterHandoff).toHaveBeenCalledTimes(2);
-    const firstHeaders = fetchMock.mock.calls[0]?.[1]?.headers;
-    expect(firstHeaders).not.toHaveProperty("authorization");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty("authorization");
   });
 
-  it("does not retry other JSON-RPC errors or retry the legacy alias repeatedly", async () => {
+  it.each([
+    [-32000, "peer unavailable", 1],
+    [-32601, "Method not found", 2],
+  ] as const)("bounds retries for RPC error %s", async (code, message, attempts) => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(rpcError(-32000, "peer unavailable"));
-
-    await expect(send()).rejects.toThrow("peer unavailable");
-    expect(fetchMock).toHaveBeenCalledOnce();
-
-    fetchMock.mockClear().mockImplementation(async () => rpcError());
-    await expect(send()).rejects.toThrow("Method not found");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+      .mockImplementation(async () => rpcError(code, message));
+    await expect(send()).rejects.toThrow(message);
+    expect(fetchMock).toHaveBeenCalledTimes(attempts);
   });
 
   it("returns its generated message ID when the peer omits a task ID", async () => {
@@ -186,13 +180,10 @@ describe("A2A outbound channel delivery", () => {
 
     const failure = await send(cfg).catch((error: unknown) => error);
 
-    expect(failure).toBeInstanceOf(Error);
     if (!(failure instanceof Error)) {
       throw new Error("expected malformed peer response to reject");
     }
     expect(failure.message).toBe("peer hermes A2A response: malformed JSON response");
-    expect(failure.message).not.toContain(outboundToken);
-    expect(String(failure.cause)).not.toContain(outboundToken);
     expect(failure.cause).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledOnce();
   });
