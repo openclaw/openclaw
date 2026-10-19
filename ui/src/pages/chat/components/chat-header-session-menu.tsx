@@ -515,7 +515,7 @@ function ChatHeaderSessionMenuContent(
       value.startsWith("public:")
     ) {
       if (props.sharing) {
-        selectChatSessionSharingItem(props.sharing, value);
+        void selectChatSessionSharingItem(props.sharing, value);
       }
       return;
     }
