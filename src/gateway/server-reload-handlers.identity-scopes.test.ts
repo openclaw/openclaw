@@ -361,18 +361,14 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
         }
       }
       expect(close).not.toHaveBeenCalled();
-      const reordered = structuredClone(unrelated);
-      reordered.gateway!.auth!.identityScopes![identity] = [
-        "operator.read",
-        "operator.write",
-        "operator.read",
-      ];
-      await write(reordered);
+      const equivalent = structuredClone(unrelated);
+      equivalent.gateway!.auth!.identityScopes![identity] = ["operator.write"];
+      await write(equivalent);
       expectLive(original);
       await capture(); // The original connection must also admit subsequent requests.
       expect(captures).toHaveLength(2);
       const transportEffect = await prepareEffect("transport.txt", original.authority);
-      const oidc = structuredClone(reordered);
+      const oidc = structuredClone(equivalent);
       oidc.gateway!.auth!.trustedProxy!.cloudflareAccessOidc = {
         issuer: "https://fixture.cloudflareaccess.com",
         providerId: "fixture-provider",

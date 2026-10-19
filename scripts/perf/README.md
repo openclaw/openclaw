@@ -877,3 +877,31 @@ with the same sampling settings. No profiling runs when `--allocations` is absen
 For live operator attribution, `diagnostics.heapProfile` accepts
 `{ "durationMs": 10000, "includeCollected": true }` with the existing admin
 scope and 30-second churn cap; it remains a timed sample, not an RPC denominator.
+
+## Presence during chat pane replacement
+
+`presence-churn-measure.ts` starts an isolated loopback Gateway with synthetic
+sessions and 42 WebSocket operators (40 delta readers and two legacy readers).
+It drives the same viewer-declaration owner as chat pages, replacing its owner
+without changing the watched session once per second. A real session change and
+final departure are positive controls after the measured churn.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/presence-churn-measure.ts \
+  --state-dir /path/to/new-synthetic-presence-state --port 41466 \
+  --clients 42 --rounds 20 --interval-ms 1000 --output /path/to/presence.json
+```
+
+The state directory must not exist. Run with an isolated `HOME`, `OPENCLAW_HOME`,
+and `TMPDIR`. `--viewer-owner` accepts the baseline or candidate TypeScript owner
+module; both sides otherwise use the same Gateway. This isolates client-side
+publication changes without counting Gateway startup as a performance result.
+Use `--start-at <epoch-ms>` for concurrent pairs with separate directories and
+ports, swapping CPU halves between pairs under the quiet-measurement lock.
+
+Compare viewer requests, presence frames and UTF-8 payload bytes per minute.
+A successful no-op fix removes unchanged-viewer requests and their fan-out while
+both legacy and delta readers still receive real changes. CPU and RSS cover the
+workload in the shared Gateway/client process; they are context, not full-browser
+or production capacity measurements. This script models a reproducible lifecycle
+pattern, not a claim that all observed viewer traffic is redundant.
