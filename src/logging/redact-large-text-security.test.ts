@@ -2,18 +2,15 @@ import { expect, it } from "vitest";
 import { redactSensitiveText } from "./redact.js";
 
 // GHSA-pm9j-g39c-3x2v: synthetic credentials straddle former slice boundaries.
-function placeAt(secret: string, sentence: string, offset: number, total: number): string {
+function expectMaskedAt(secret: string, sentence: string, offset: number, total: number): void {
   const [leading = "", trailing = ""] = sentence.split("@@SECRET@@");
   const secretStart = Math.max(leading.length + 2, offset - Math.floor(secret.length / 2));
   const prefixFiller = "x".repeat(secretStart - leading.length - 1);
   const consumed = secretStart + secret.length + trailing.length;
   const suffixFiller = "y".repeat(Math.max(0, total - consumed - 1));
-  return `${prefixFiller} ${leading}${secret}${trailing}${suffixFiller ? ` ${suffixFiller}` : ""}`;
-}
-
-function expectMaskedAt(secret: string, sentence: string, offset: number, total: number): void {
-  const text = placeAt(secret, sentence, offset, total);
-  const output = redactSensitiveText(text, { mode: "tools" });
+  const output = redact(
+    `${prefixFiller} ${leading}${secret}${trailing}${suffixFiller ? ` ${suffixFiller}` : ""}`,
+  );
   expect(output, `family "${sentence}" must not leak across offset ${offset}`).not.toContain(
     secret,
   );
@@ -21,12 +18,15 @@ function expectMaskedAt(secret: string, sentence: string, offset: number, total:
 
 const hexRepeat = (count: number, chars = "0123456789abcdef"): string =>
   chars.repeat(Math.ceil(count / 16)).slice(0, count);
+const redact = (text: string) => redactSensitiveText(text, { mode: "tools" });
+function elapsed(text: string) {
+  const started = performance.now();
+  redact(text);
+  return performance.now() - started;
+}
 
-const lowerRepeat = (char: string, count: number): string => char.repeat(count);
-const shortTokenSamples =
-  "gsk_|pplx-|fal_| fc-|sk_live_|pypi-|dop_v1_| am_| sk_|tvly-|exa_|syt_|mem0_|brv_|hsk-|AKID|LTAI|hf_|r8_"
-    .split("|")
-    .map((prefix): readonly [string, string] => [prefix, `${prefix}abcdefghij12345`]);
+const tokenSamples = (prefixes: string, suffix: string) =>
+  prefixes.split("|").map((prefix): readonly [string, string] => [prefix, prefix + suffix]);
 
 // Each row exercises a default rule family, with an optional sentence template.
 const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
@@ -69,25 +69,24 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
   ["config prefixed", "db-password: cfgprefixedsecret"],
   ["config namespaced", "smtp.password: cfgnssecret1234"],
   ["bare pass", "pass: opaquepassvalue123", "TODO\n@@SECRET@@\nrest of line"],
-  ...shortTokenSamples,
+  ...tokenSamples(
+    "gsk_|pplx-|fal_| fc-|sk_live_|pypi-|dop_v1_| am_| sk_|tvly-|exa_|syt_|mem0_|brv_|hsk-|AKID|LTAI|hf_|r8_",
+    "abcdefghij12345",
+  ),
+  ...tokenSamples(
+    "glpat-|gldt-|glft-|glwt-|glsoat-|glffct-|glrt-|_gitlab_session=|api_org_",
+    "abcdefghijklmnopqrst",
+  ),
   ["openai sk", "sk-abcdef0123456789"],
   ["github ghp", "ghp_abcdefghij1234567890"],
   ["github gho", "gho_abcdefghij1234567890"],
   ["github pat", "github_pat_abcdefghij1234"],
-  ["gitlab glpat", "glpat-abcdefghijklmnopqrst"],
   ["gitlab gloas", `gloas-${hexRepeat(66)}`],
-  ["gitlab gldt", "gldt-abcdefghijklmnopqrst"],
   ["gitlab glcbt", "glcbt-abc_abcdefghijklmnopqrst"],
-  ["gitlab glptt", `glptt-${lowerRepeat("g", 40)}`],
-  ["gitlab glft", "glft-abcdefghijklmnopqrst"],
-  ["gitlab glimt", `glimt-${lowerRepeat("h", 25)}`],
-  ["gitlab glagent", `glagent-${lowerRepeat("i", 50)}`],
-  ["gitlab glwt", "glwt-abcdefghijklmnopqrst"],
-  ["gitlab glsoat", "glsoat-abcdefghijklmnopqrst"],
-  ["gitlab glffct", "glffct-abcdefghijklmnopqrst"],
-  ["gitlab glrt", "glrt-abcdefghijklmnopqrst"],
+  ["gitlab glptt", `glptt-${"g".repeat(40)}`],
+  ["gitlab glimt", `glimt-${"h".repeat(25)}`],
+  ["gitlab glagent", `glagent-${"i".repeat(50)}`],
   ["gitlab gr134", "GR1348941abcdefghijklmnopqrst"],
-  ["gitlab session", "_gitlab_session=abcdefghijklmnopqrst"],
   ["slack xoxb", "xoxb-123456789012-abcdefghij"],
   ["slack xapp", "xapp-123456789012-abcdefghij"],
   [
@@ -97,11 +96,8 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
       ["/B", "01234567"].join("") +
       ["/", "abcdefghijklmnopqrst"].join(""),
   ],
-  [
-    "discord webhook",
-    `https://discord.com/api/webhooks/123456789012345678/${lowerRepeat("a", 60)}`,
-  ],
-  ["discord token", `discord ${lowerRepeat("a", 24)}.bbbbbb.${lowerRepeat("c", 27)}`],
+  ["discord webhook", `https://discord.com/api/webhooks/123456789012345678/${"a".repeat(60)}`],
+  ["discord token", `discord ${"a".repeat(24)}.bbbbbb.${"c".repeat(27)}`],
   ["google aiza", ["AIzaSyA123456", "7890abcdefghij"].join("")],
   ["google ya29", ["ya", "29"].join("") + ".a0123456789"],
   ["google refresh", "1//0a0123456789"],
@@ -110,12 +106,12 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
   ["fuzz gAAAA", "gAAAAabcdefghij0123456789"],
   ["sendgrid", "SG.abcdefghij1234567.abcdefghij1234567"],
   ["npm", "npm_abcdefghij12345678"],
-  ["digitalpulse ct", `dp.ct.${lowerRepeat("j", 42)}`],
-  ["digitalpulse st", `dp.st.${lowerRepeat("k", 42)}`],
+  ["digitalpulse ct", `dp.ct.${"j".repeat(42)}`],
+  ["digitalpulse st", `dp.st.${"k".repeat(42)}`],
   ["docker pat", "dckr_pat_abcdefghij0123456789abcdefghij"],
-  ["bkua", `bkua_${lowerRepeat("b", 40)}`],
+  ["bkua", `bkua_${"b".repeat(40)}`],
   ["ccipat", `CCIPAT_${"C".repeat(22)}_${hexRepeat(40)}`],
-  ["sbp", `sbp_${lowerRepeat("d", 40)}`],
+  ["sbp", `sbp_${"d".repeat(40)}`],
   ["datadog", `ddp_${"D".repeat(36)}`],
   ["nfp", `nfp_${"E".repeat(36)}`],
   ["glsa", `glsa_${"F".repeat(41)}`],
@@ -134,19 +130,16 @@ const RULE_FAMILY_SAMPLES: readonly (readonly [string, string, string?])[] = [
   ["fireworks fpk", " fpk_abcdefghij01234567890123456789"],
   ["aws akia", "AKIAABCDEFGHIJKLMNOP"],
   ["aws asia", "ASIAABCDEFGHIJKLMNOP"],
-  ["api org", "api_org_abcdefghijklmnopqrst"],
   ["atlassian atatt", "ATATTabcdefghij1234567890=12345678"],
   ["atlassian atctt", "ATCTT3xFfGabcdefghij123=12345678"],
   ["atlassian atbb", "ATBBabcdefghij012345"],
   ["dataiku dapi", `dapi${hexRepeat(32)}`],
 ];
 
-const BOUNDARY_OFFSETS = [16_384, 32_768, 65_536] as const;
-
 it("masks every rule family across former slice boundaries and at the control offset", () => {
   for (const [_name, secret, sentence] of RULE_FAMILY_SAMPLES) {
     const template = sentence ?? "@@SECRET@@ and trailing context";
-    for (const offset of BOUNDARY_OFFSETS) {
+    for (const offset of [16_384, 32_768, 65_536]) {
       const total = Math.max(40_000, offset + 6_000);
       expectMaskedAt(secret, template, offset, total);
     }
@@ -155,15 +148,11 @@ it("masks every rule family across former slice boundaries and at the control of
 }, 240_000);
 
 it("returns multi-megabyte values without throwing", () => {
-  expect(() =>
-    redactSensitiveText(`Bearer ${"a".repeat(6_000_000)}`, { mode: "tools" }),
-  ).not.toThrow();
-  const quoted = redactSensitiveText(`password="${"a".repeat(10_500_000)}"`, { mode: "tools" });
+  expect(() => redact(`Bearer ${"a".repeat(6_000_000)}`)).not.toThrow();
+  const quoted = redact(`password="${"a".repeat(10_500_000)}"`);
   expect(quoted).not.toContain("a".repeat(200));
-  expect(() => redactSensitiveText(`sk-${"a".repeat(6_000_000)}`, { mode: "tools" })).not.toThrow();
-  expect(() =>
-    redactSensitiveText(`gloas-${hexRepeat(3_000_000, "0123456789ABCDEF")}`, { mode: "tools" }),
-  ).not.toThrow();
+  expect(() => redact(`sk-${"a".repeat(6_000_000)}`)).not.toThrow();
+  expect(() => redact(`gloas-${hexRepeat(3_000_000, "0123456789ABCDEF")}`)).not.toThrow();
 }, 120_000);
 
 it("redacts adversarial run shapes within one second", () => {
@@ -175,23 +164,14 @@ it("redacts adversarial run shapes within one second", () => {
     ["url userinfo runs", "https://user:".repeat(16_000)],
   ];
   for (const [name, text] of shapes) {
-    const started = performance.now();
-    redactSensitiveText(text, { mode: "tools" });
-    const elapsed = performance.now() - started;
-    expect(elapsed, `${name} must not stall`).toBeLessThan(1_000);
+    expect(elapsed(text), `${name} must not stall`).toBeLessThan(1_000);
   }
 }, 60_000);
 
 it("scales without explosion when the input doubles", () => {
-  const timed = (units: number): number => {
-    const started = performance.now();
-    redactSensitiveText("+AKIAA".repeat(units), { mode: "tools" });
-    return performance.now() - started;
-  };
-  const smaller = timed(20_000);
-  const larger = timed(40_000);
+  const smaller = elapsed("+AKIAA".repeat(20_000));
+  const larger = elapsed("+AKIAA".repeat(40_000));
   expect(larger).toBeLessThan(1_000);
-  // Doubling may at most quadruple the cost (plus scheduling slack); explosive growth fails.
   expect(larger).toBeGreaterThan(0);
   expect(larger).toBeLessThan(smaller * 6 + 50);
 }, 60_000);
