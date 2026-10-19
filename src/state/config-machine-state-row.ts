@@ -10,6 +10,7 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
+import { publishRemoteModelCatalogChanged } from "../model-catalog/remote-store-receipt.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
@@ -48,6 +49,12 @@ export function publishConfigMachineStateRow(
     publishSqliteDatabaseAdmission(database, ttsPathAdmission, { row });
   } else if (key === "authProfiles.store" || key === "authProfiles.state") {
     publishAuthProfileRowsChanged(database);
+  } else if (
+    key === "modelCatalog.remote.v3" ||
+    key === "modelCatalog.remote.v2" ||
+    key === "modelCatalog.remote"
+  ) {
+    publishRemoteModelCatalogChanged(database);
   }
 }
 
