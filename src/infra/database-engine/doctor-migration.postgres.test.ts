@@ -917,10 +917,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           expect(capture.receipt?.unchanged).toBe(!foreignWrite);
           recordUpdateDatabaseWrites(saved, capture.receipt, {
             name: "candidate agent Doctor",
-            command: "doctor --fix",
-            cwd: env.OPENCLAW_STATE_DIR!,
-            durationMs: 0,
-            exitCode: 0,
           });
           expect(saved.restoreRefusal !== undefined).toBe(foreignWrite);
         } finally {
