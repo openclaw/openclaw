@@ -96,7 +96,7 @@ const SCOPED_AUTH = {
 function catalogContext(
   apiKey: string,
   discoveryApiKey?: string,
-  source = "profile",
+  source: "profile" | "env" = "profile",
 ): ProviderCatalogContext {
   const auth = { apiKey, discoveryApiKey };
   return {
