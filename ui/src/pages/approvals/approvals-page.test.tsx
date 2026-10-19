@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalHistoryResult } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
 import type {
   ExecApprovalGrantsListResult,
@@ -27,16 +27,26 @@ const waitForHistory = (page: HTMLElement, text: string) =>
   waitForSolid(() => expect(historyText(page)).toContain(text));
 const waitForGrants = (page: HTMLElement, text: string) =>
   waitForSolid(() => expect(grantsText(page)).toContain(text));
+const oldAutomation = "Old Gateway automation";
+const currentAutomation = "Current Gateway automation";
+function operatorAuth(scopes?: string[], recoveryScope?: string) {
+  return { role: "operator", scopes, recoveryScope };
+}
+const grantReply = (name: string) => ({ grants: [standingGrant(name)] });
+
+function replyOnce(...values: unknown[]) {
+  const request = vi.fn();
+  for (const value of values) {
+    request.mockResolvedValueOnce(value);
+  }
+  return request;
+}
 
 function terminal(id: string, resolvedAtMs: number): ApprovalHistoryResult["items"][number] {
   return {
     id,
     status: "denied",
-    presentation: {
-      kind: "exec",
-      commandText: `echo ${id}`,
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    },
+    presentation: { kind: "exec", commandText: `echo ${id}`, allowedDecisions: ["deny"] },
     urlPath: `/approve/${id}`,
     createdAtMs: resolvedAtMs - 1_000,
     expiresAtMs: resolvedAtMs + 60_000,
@@ -49,9 +59,13 @@ function terminal(id: string, resolvedAtMs: number): ApprovalHistoryResult["item
 }
 
 function createPage(
-  request: (method: string, params?: unknown) => unknown,
+  history: (method: string, params?: unknown) => unknown,
   auth?: { role: string; scopes?: string[]; recoveryScope?: string },
+  grants: () => unknown = () => Promise.resolve({ grants: [] }),
 ) {
+  const request = vi.fn((method: string, params?: unknown) =>
+    method === "exec.approval.grants.list" ? grants() : history(method, params),
+  );
   const client = { request } as GatewayBrowserClient;
   const initialGateway = createApplicationGateway({
     phase: "connected",
@@ -65,50 +79,42 @@ function createPage(
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   const { container: page } = mountSolid(() => <ApprovalsPage />, { wrapper: provider.wrapper });
+  const updateGateway = (next: Partial<ApplicationGatewaySnapshot>) => {
+    currentGateway.publish({ ...currentGateway.gateway.snapshot, ...next });
+  };
   flush();
   return {
     page,
-    replaceGatewaySource() {
-      currentGateway = createApplicationGateway(currentGateway.gateway.snapshot);
-      provider.setContext({ ...context, gateway: currentGateway.gateway });
+    request,
+    updateGateway,
+    replaceGateway(kind: "source" | "client" | "account" | "recovery scope") {
+      if (kind === "source") {
+        currentGateway = createApplicationGateway(currentGateway.gateway.snapshot);
+        provider.setContext({ ...context, gateway: currentGateway.gateway });
+      } else if (kind === "client") {
+        updateGateway({ client: { request } as GatewayBrowserClient });
+      } else if (kind === "account") {
+        updateGateway({ selfUser: { id: "second" } });
+      } else {
+        updateGateway({ hello: operatorHello(undefined, "scope-second") });
+      }
       flush();
     },
     emitGatewayEvent(event: string, payload: unknown) {
       initialGateway.publishEvent({ event, payload, type: "event" } as GatewayEventFrame);
     },
-    updateGateway(next: Partial<ApplicationGatewaySnapshot>) {
-      currentGateway.publish({ ...currentGateway.gateway.snapshot, ...next });
-    },
   };
 }
 
-beforeEach(async () => {
-  await i18n.setLocale("en");
-});
+beforeEach(() => i18n.setLocale("en"));
 
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.restoreAllMocks();
-});
-
-function stubGrants(
-  history: (method: string, params?: unknown) => unknown,
-): GatewayBrowserClient["request"] {
-  // Keep grant reads out of the history mock's ordered queue and call counts.
-  return ((method: string, params?: unknown) =>
-    method === "exec.approval.grants.list"
-      ? Promise.resolve({ grants: [] })
-      : (history(method, params) as Promise<unknown>)) as GatewayBrowserClient["request"];
-}
-
-function mockLedger(grants: () => unknown, other: (method: string, params?: unknown) => unknown) {
-  return vi.fn((method: string, params?: unknown) =>
-    method === "exec.approval.grants.list" ? grants() : other(method, params),
-  );
-}
-
-function operatorHello(scopes: string[]): ApplicationGatewaySnapshot["hello"] {
-  return { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"];
+function operatorHello(
+  scopes?: string[],
+  recoveryScope?: string,
+): ApplicationGatewaySnapshot["hello"] {
+  return {
+    auth: operatorAuth(scopes, recoveryScope),
+  } as ApplicationGatewaySnapshot["hello"];
 }
 
 function standingGrant(name: string): ExecApprovalStandingGrant {
@@ -132,18 +138,13 @@ function standingGrant(name: string): ExecApprovalStandingGrant {
 describe("ApprovalsPage", () => {
   it("keeps history and grants through a blip without allowing offline actions", async () => {
     const refreshedHistory = createDeferred<ApprovalHistoryResult>();
-    let historyReads = 0;
-    const request = mockLedger(
-      () => Promise.resolve({ grants: [standingGrant("Retained automation")] }),
-      () =>
-        ++historyReads === 1
-          ? Promise.resolve({ items: [terminal("retained", 2_000)], nextCursor: "next" })
-          : refreshedHistory.promise,
+    const { page, updateGateway, request } = createPage(
+      replyOnce({ items: [terminal("retained", 2_000)], nextCursor: "next" }).mockReturnValue(
+        refreshedHistory.promise,
+      ),
+      operatorAuth(["operator.approvals"]),
+      () => Promise.resolve(grantReply("Retained automation")),
     );
-    const { page, updateGateway } = createPage(request, {
-      role: "operator",
-      scopes: ["operator.approvals"],
-    });
     await waitForGrants(page, "Retained automation");
 
     updateGateway({ phase: "reconnecting", hello: null });
@@ -151,14 +152,9 @@ describe("ApprovalsPage", () => {
     expect(historyText(page)).toContain("echo retained");
     expect(grantsText(page)).toContain("Retained automation");
     expect(grantButton(page)?.disabled).toBe(true);
-    expect(page.querySelector<HTMLButtonElement>(".data-table-pagination button")?.disabled).toBe(
-      true,
-    );
+    expect(page.querySelector(".data-table-pagination button")).toMatchObject({ disabled: true });
 
-    updateGateway({
-      phase: "connected",
-      hello: operatorHello(["operator.approvals"]),
-    });
+    updateGateway({ phase: "connected", hello: operatorHello(["operator.approvals"]) });
     flush();
     expect(historyText(page)).toContain("echo retained");
     refreshedHistory.resolve({ items: [terminal("fresh", 3_000)] });
@@ -175,7 +171,7 @@ describe("ApprovalsPage", () => {
 
   it("does not claim an empty history when the load failed", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
-    const { page } = createPage(stubGrants(request));
+    const { page } = createPage(request);
 
     await waitForSolid(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom"),
@@ -187,12 +183,12 @@ describe("ApprovalsPage", () => {
 
   it("refreshes the newest history after an approval resolves during pagination", async () => {
     const olderPage = createDeferred<ApprovalHistoryResult>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ items: [terminal("first", 2_000)], nextCursor: "next" })
-      .mockReturnValueOnce(olderPage.promise)
-      .mockResolvedValueOnce({ items: [terminal("newest", 3_000), terminal("first", 2_000)] });
-    const { page, emitGatewayEvent } = createPage(stubGrants(request));
+    const request = replyOnce(
+      { items: [terminal("first", 2_000)], nextCursor: "next" },
+      olderPage.promise,
+      { items: [terminal("newest", 3_000), terminal("first", 2_000)] },
+    );
+    const { page, emitGatewayEvent } = createPage(request);
 
     await waitForHistory(page, "echo first");
     const loadMore = [...page.querySelectorAll("button")].find((button) =>
@@ -212,56 +208,38 @@ describe("ApprovalsPage", () => {
     expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
   });
 
-  it("does not request or render approval history for a read-only operator", async () => {
+  it.each([
+    { name: "read-only", scopes: ["operator.read"], allowed: false },
+    { name: "legacy", scopes: undefined, allowed: true },
+  ])("gates history for a $name operator", async ({ scopes, allowed }) => {
     const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(stubGrants(request), {
-      role: "operator",
-      scopes: ["operator.read"],
-    });
-
-    flush();
-
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelector(".approval-history-table")).toBeNull();
-    expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
-  });
-
-  it("loads approval history for a legacy operator", async () => {
-    const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(stubGrants(request), { role: "operator" });
-
-    await waitForSolid(() => expect(page.querySelector(".approval-history-table")).not.toBeNull());
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("approval.history", { limit: 50 });
+    const { page } = createPage(request, operatorAuth(scopes));
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table") !== null).toBe(allowed),
+    );
+    expect(request.mock.calls).toEqual(allowed ? [["approval.history", { limit: 50 }]] : []);
+    if (!allowed) {
+      expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
+    }
   });
 
   it("discards stale history when approval access changes on the same gateway", async () => {
     const staleHistory = createDeferred<ApprovalHistoryResult>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(staleHistory.promise)
-      .mockResolvedValueOnce({ items: [terminal("current", 2_000)] });
-    const { page, emitGatewayEvent, updateGateway } = createPage(stubGrants(request), {
-      role: "operator",
-      scopes: ["operator.approvals"],
-    });
-
-    flush();
+    const request = replyOnce(staleHistory.promise, { items: [terminal("current", 2_000)] });
+    const { page, emitGatewayEvent, updateGateway } = createPage(
+      request,
+      operatorAuth(["operator.approvals"]),
+    );
     expect(request).toHaveBeenCalledOnce();
 
-    updateGateway({
-      hello: operatorHello(["operator.read"]),
-    });
+    updateGateway({ hello: operatorHello(["operator.read"]) });
     flush();
     emitGatewayEvent("exec.approval.resolved", { id: "inaccessible", decision: "deny" });
     flush();
     expect(request).toHaveBeenCalledOnce();
     expect(page.querySelector(".approval-history-table")).toBeNull();
 
-    updateGateway({
-      hello: operatorHello(["operator.admin"]),
-    });
+    updateGateway({ hello: operatorHello(["operator.admin"]) });
     await waitForHistory(page, "echo current");
     expect(request).toHaveBeenCalledTimes(2);
 
@@ -276,41 +254,19 @@ describe("ApprovalsPage", () => {
     "clears standing grants while a replacement %s loads its ledger",
     async (replacement) => {
       const nextGrants = createDeferred<ExecApprovalGrantsListResult>();
-      let replaced = false;
-      const request = mockLedger(
-        () =>
-          replaced
-            ? nextGrants.promise
-            : Promise.resolve({ grants: [standingGrant("Old Gateway automation")] }),
+      const { page, updateGateway, replaceGateway } = createPage(
         () => Promise.resolve({ items: [] }),
+        operatorAuth(undefined, "scope-first"),
+        replyOnce(grantReply(oldAutomation)).mockReturnValue(nextGrants.promise),
       );
-      const { page, updateGateway, replaceGatewaySource } = createPage(request, {
-        role: "operator",
-        recoveryScope: "scope-first",
-      });
       updateGateway({ selfUser: { id: "first" } });
-      await waitForGrants(page, "Old Gateway automation");
-
-      replaced = true;
-      if (replacement === "source") {
-        replaceGatewaySource();
-      } else if (replacement === "account") {
-        updateGateway({ selfUser: { id: "second" } });
-      } else if (replacement === "recovery scope") {
-        updateGateway({
-          hello: {
-            auth: { role: "operator", recoveryScope: "scope-second" },
-          } as ApplicationGatewaySnapshot["hello"],
-        });
-      } else {
-        updateGateway({ client: { request } as unknown as GatewayBrowserClient });
-      }
-      flush();
-      expect(grantsText(page)).not.toContain("Old Gateway automation");
+      await waitForGrants(page, oldAutomation);
+      replaceGateway(replacement);
+      expect(grantsText(page)).not.toContain(oldAutomation);
       expect(grantButton(page)).toBeNull();
 
-      nextGrants.resolve({ grants: [standingGrant("Current Gateway automation")] });
-      await waitForGrants(page, "Current Gateway automation");
+      nextGrants.resolve(grantReply(currentAutomation));
+      await waitForGrants(page, currentAutomation);
     },
   );
 
@@ -322,33 +278,19 @@ describe("ApprovalsPage", () => {
     async ({ replacement, outcome }) => {
       const oldRevoke = createDeferred<{ outcome: string }>();
       const currentRevoke = createDeferred<{ outcome: string }>();
-      let replaced = false;
-      const request = mockLedger(
-        () =>
-          Promise.resolve({
-            grants: [
-              standingGrant(replaced ? "Current Gateway automation" : "Old Gateway automation"),
-            ],
-          }),
-        (method) => {
-          if (method === "exec.approval.grants.revoke") {
-            return replaced ? currentRevoke.promise : oldRevoke.promise;
-          }
-          return Promise.resolve({ items: [] });
-        },
+      const revoke = replyOnce(oldRevoke.promise).mockReturnValue(currentRevoke.promise);
+      const { page, replaceGateway } = createPage(
+        (method) =>
+          method === "exec.approval.grants.revoke" ? revoke() : Promise.resolve({ items: [] }),
+        undefined,
+        replyOnce(grantReply(oldAutomation)).mockResolvedValue(grantReply(currentAutomation)),
       );
-      const { page, updateGateway, replaceGatewaySource } = createPage(request);
       await waitForSolid(() => expect(grantButton(page)).not.toBeNull());
       grantButton(page)!.click();
       flush();
 
-      replaced = true;
-      if (replacement === "source") {
-        replaceGatewaySource();
-      } else {
-        updateGateway({ client: { request } as unknown as GatewayBrowserClient });
-      }
-      await waitForGrants(page, "Current Gateway automation");
+      replaceGateway(replacement);
+      await waitForGrants(page, currentAutomation);
       const currentButton = grantButton(page)!;
       expect(currentButton.disabled).toBe(false);
       currentButton.click();
@@ -375,20 +317,17 @@ describe("ApprovalsPage", () => {
   );
 
   it("renders the standing-grant ledger and revokes through the gateway", async () => {
-    const history = vi.fn().mockResolvedValue({ items: [] });
     const pendingRefresh = createDeferred<ExecApprovalGrantsListResult>();
-    let grantReads = 0;
     const grant = standingGrant("Nightly backup");
-    const request = mockLedger(
-      () => (++grantReads === 1 ? Promise.resolve({ grants: [grant] }) : pendingRefresh.promise),
-      (method, params) => {
-        if (method === "exec.approval.grants.revoke") {
-          return Promise.resolve({ outcome: "revoked", params });
-        }
-        return history(method, params) as Promise<unknown>;
-      },
+    const grants = replyOnce({ grants: [grant] }).mockReturnValue(pendingRefresh.promise);
+    const { page, emitGatewayEvent, request } = createPage(
+      (method, params) =>
+        method === "exec.approval.grants.revoke"
+          ? Promise.resolve({ outcome: "revoked", params })
+          : Promise.resolve({ items: [] }),
+      undefined,
+      grants,
     );
-    const { page, emitGatewayEvent } = createPage(request);
 
     await waitForGrants(page, "Nightly backup");
 
@@ -397,7 +336,7 @@ describe("ApprovalsPage", () => {
     expect(ledger?.textContent).toContain("Until revoked");
 
     emitGatewayEvent("exec.approval.resolved", { id: "another-approval", decision: "deny" });
-    await waitForSolid(() => expect(grantReads).toBe(2));
+    await waitForSolid(() => expect(grants).toHaveBeenCalledTimes(2));
 
     const revoke = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Revoke"),
