@@ -35,10 +35,7 @@ import type { DoctorHealthCheckContext } from "./doctor-health-contribution-type
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import {
-  collectRuntimeToolSchemaFindingsWithRuntime,
-  createRuntimeToolSchemaCheck,
-} from "./doctor-tool-schema-check.js";
+import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
@@ -776,9 +773,7 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
         return collectLocalAudioAccelerationFindings();
       },
     },
-    createRuntimeToolSchemaCheck({
-      collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
-    }),
+    runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
     skillWorkshopToolPolicyCheck,
     commandOwnerCheck,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import * as retention from "../infra/doctor-capture-retention.js";
 import * as ancestry from "../infra/restart-stale-pids.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
@@ -100,7 +101,7 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
         };
       });
     const retire = vi
-      .spyOn(baselineCapture, "retireExpiredStandaloneDoctorCaptures")
+      .spyOn(retention, "retireExpiredStandaloneDoctorCaptures")
       .mockResolvedValue({ retired: [], warnings: [] });
     await preserve(process.cwd());
     expect(capture).toHaveBeenCalledOnce();

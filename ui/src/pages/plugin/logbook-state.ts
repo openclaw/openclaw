@@ -187,22 +187,23 @@ export function createLogbook() {
       return projection.read();
     },
     load,
-    connect(next: GatewayBrowserClient | null) {
-      if (client === next) {
-        return;
+    // Returns whether the connected source needs its initial load.
+    connect(next: GatewayBrowserClient | null): boolean {
+      if (client !== next) {
+        clearInterval(pollTimer);
+        client = next;
+        state.loading = false;
+        backgroundRefresh = null;
+        backgroundRefreshQueued = false;
+        state.actionPending = false;
+        state.standupLoading = false;
+        state.askLoading = false;
+        frameLoads = new Set();
+        // Polls and analysis completion share one background request owner.
+        pollTimer = next ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS) : undefined;
+        notify();
       }
-      clearInterval(pollTimer);
-      client = next;
-      state.loading = false;
-      backgroundRefresh = null;
-      backgroundRefreshQueued = false;
-      state.actionPending = false;
-      state.standupLoading = false;
-      state.askLoading = false;
-      frameLoads = new Set();
-      // Polls and analysis completion share one background request owner.
-      pollTimer = next ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS) : undefined;
-      notify();
+      return next !== null && !state.timeline && !state.loading && !state.error;
     },
     async loadFrame(frameId: number) {
       const current = client;

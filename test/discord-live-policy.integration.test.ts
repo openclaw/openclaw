@@ -14,28 +14,40 @@ import {
 import { createLazyGatewayCronState } from "../src/gateway/server-cron-lazy.js";
 import type { GatewayReloadHandlerParams } from "../src/gateway/server-reload-contracts.js";
 import { createGatewayReloadHandlers } from "../src/gateway/server-reload-hot.js";
-import type { fanInChannelIngressLifecycles } from "../src/plugin-sdk/channel-ingress-runtime.js";
+import { dispatchChannelInboundTurn } from "../src/plugin-sdk/channel-inbound.js";
+import { createRuntimeTestRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import {
   captureActivePluginRegistrySnapshot,
+  disposePluginRegistryInstances,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../src/plugins/runtime.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
+import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
-import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
+import { createDeferred } from "./helpers/promise.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
+
+// mock-isolation: Keep durable ingress and policy admission real; stop before model execution.
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
+  dispatchChannelInboundTurn: vi.fn<typeof dispatchChannelInboundTurn>(),
+}));
 
 const tempDirs = createTempDirTracker();
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 let stateDir: string;
+let fixtureRegistry: ReturnType<typeof createRuntimeTestRegistry>["registry"] | undefined;
+let stopHandler: (() => Promise<void>) | undefined;
 
 beforeEach(() => {
+  vi.mocked(dispatchChannelInboundTurn).mockClear();
   registrySnapshot = captureActivePluginRegistrySnapshot();
   stateDir = tempDirs.make("discord-live-policy-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -44,7 +56,16 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", undefined);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await stopHandler?.();
+  stopHandler = undefined;
+  if (fixtureRegistry) {
+    await disposePluginRegistryInstances(
+      fixtureRegistry,
+      registrySnapshot.activeRegistry ?? undefined,
+    );
+    fixtureRegistry = undefined;
+  }
   clearRuntimeConfigSnapshot();
   restoreActivePluginRegistrySnapshot(registrySnapshot);
   closeOpenClawStateDatabaseForTest();
@@ -76,12 +97,25 @@ describe("Discord admission through Gateway policy publication", () => {
       channels: { discord: { token: "synthetic-token", groupPolicy: "allowlist", guilds: {} } },
       messages: { inbound: { debounceMs: 0 } },
     };
-    const registry = createTestRegistry([
-      { pluginId: "discord", plugin: discordPlugin, source: "synthetic" },
-    ]);
+    const builder = createRuntimeTestRegistry(createPluginRuntime());
+    const api = builder.createApi(createPluginRecord({ id: "discord", origin: "bundled" }), {
+      config: cfg,
+      registrationMode: "full",
+    });
+    api.registerChannel({ plugin: discordPlugin });
+    const registry = builder.registry;
+    fixtureRegistry = registry;
     setActivePluginRegistry(registry);
     setRuntimeConfigSnapshot(cfg, cfg);
-    discord.setDiscordRuntime(createPluginRuntime());
+    discord.setDiscordRuntime(api.runtime);
+    const queue = api.runtime.state.openChannelIngressQueue({ accountId: "default" });
+    const waitForIngress = async () => {
+      // Admission ends at enqueue; observe settlement before asserting a policy denied delivery.
+      await waitForFast(async () =>
+        expect(await queue.listUnsettled?.()).toEqual({ pending: [], claims: [] }),
+      );
+      expect(await queue.listFailed?.()).toEqual([]);
+    };
     let channelId = "456";
     let pendingChannelLookup: Promise<void> | undefined;
     let channelLookupStarted = false;
@@ -96,21 +130,16 @@ describe("Discord admission through Gateway policy publication", () => {
       },
       fetchGuild: async () => null,
     };
-    const admitted: string[] = [];
-    const abort = new AbortController();
-    const createTransportEvent = (raw: ReturnType<typeof createRawMessage>) => ({
-      author: raw.author,
-      guild_id: guildId,
-      guild: { id: guildId, name: "synthetic" },
-      channel_id: channelId,
-      message: {
-        ...raw,
-        channelId,
-        mentionedUsers: [],
-        mentionedRoles: [],
-        mentionedEveryone: false,
-      },
+    const dispatchStarted = createDeferred();
+    vi.mocked(dispatchChannelInboundTurn).mockImplementation(async () => {
+      dispatchStarted.resolve();
+      return { admission: { kind: "handled", reason: "test-fixture" }, dispatched: false };
     });
+    const admitted = () =>
+      vi
+        .mocked(dispatchChannelInboundTurn)
+        .mock.calls.map(([params]) => params.ctxPayload.MessageSid);
+    const abort = new AbortController();
     const createHandlerOptions = (threadBindings: object) => ({
       client,
       cfg,
@@ -136,35 +165,11 @@ describe("Discord admission through Gateway policy publication", () => {
       guildEntries: {},
       threadBindings,
       abortSignal: abort.signal,
-      testing: {
-        processDiscordMessage: async ({ message }: { message: { id: string } }) => {
-          admitted.push(message.id);
-        },
-        createIngressMonitor: ({
-          dispatch,
-        }: {
-          dispatch: (
-            event: ReturnType<typeof createTransportEvent>,
-            lifecycle: NonNullable<Parameters<typeof fanInChannelIngressLifecycles>[0][number]>,
-          ) => Promise<unknown>;
-        }) => ({
-          start() {},
-          async stop() {},
-          async accept(raw: ReturnType<typeof createRawMessage>) {
-            await dispatch(createTransportEvent(raw), {
-              abortSignal: abort.signal,
-              onAdopted() {},
-              onDeferred() {},
-              onAdoptionFinalizing() {},
-              onAbandoned() {},
-            });
-          },
-        }),
-      },
     });
     const createRawMessage = (id: string) => ({
       id,
       channel_id: channelId,
+      guild_id: guildId,
       content: "hello",
       author: {
         id: userId,
@@ -188,6 +193,10 @@ describe("Discord admission through Gateway policy publication", () => {
     const handler = discord.createDiscordMessageHandler(
       createHandlerOptions(discord.createNoopThreadBindingManager("default")),
     );
+    stopHandler = async () => {
+      abort.abort();
+      await handler.deactivate();
+    };
     const send = (id: string) => handler(createRawMessage(id), client);
     const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
@@ -252,7 +261,8 @@ describe("Discord admission through Gateway policy publication", () => {
     expect(activeTurn).not.toBeNull();
     try {
       await send("before-policy");
-      expect(admitted).toEqual([]);
+      await waitForIngress();
+      expect(admitted()).toEqual([]);
       await apply({
         ...cfg,
         channels: {
@@ -265,7 +275,8 @@ describe("Discord admission through Gateway policy publication", () => {
         },
       });
       await send("newly-allowed");
-      await waitForFast(() => expect(admitted).toEqual(["newly-allowed"]));
+      await dispatchStarted.promise;
+      expect(admitted()).toEqual(["newly-allowed"]);
       channelId = "457";
       channelLookupStarted = false;
       let releaseChannelLookup!: () => void;
@@ -280,18 +291,17 @@ describe("Discord admission through Gateway policy publication", () => {
         releaseChannelLookup();
         await pendingMessage;
       }
+      await waitForIngress();
       pendingChannelLookup = undefined;
       await send("after-revocation");
-      expect(admitted).toEqual(["newly-allowed"]);
+      await waitForIngress();
+      expect(admitted()).toEqual(["newly-allowed"]);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       expect(startChannel).not.toHaveBeenCalled();
       expect(stopChannel).not.toHaveBeenCalled();
     } finally {
       activeTurn?.release();
       await pendingReload?.catch(() => {});
-      abort.abort();
-      await handler.deactivate();
-      clearRuntimeConfigSnapshot();
     }
   });
 });

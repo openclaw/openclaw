@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAutoNodeExtraCaCerts } from "./node-extra-ca-certs.js";
+import { resolveNodeStartupTlsEnvironment } from "./node-startup-env.js";
 
 const DEBIAN_CA_BUNDLE_PATH = "/etc/ssl/certs/ca-certificates.crt";
 const GENERIC_CA_BUNDLE_PATH = "/etc/ssl/ca-bundle.pem";
@@ -25,29 +25,29 @@ function allowOnly(path: string) {
   };
 }
 
-describe("resolveAutoNodeExtraCaCerts", () => {
+describe("Node startup Linux CA defaults", () => {
   it.each(VERSION_MANAGER_EXEC_PATHS)("detects %s via execPath", (_manager, execPath) => {
     expect(
-      resolveAutoNodeExtraCaCerts({
+      resolveNodeStartupTlsEnvironment({
         env: {},
         platform: "linux",
         execPath,
         accessSync: allowOnly(GENERIC_CA_BUNDLE_PATH),
-      }),
+      }).NODE_EXTRA_CA_CERTS,
     ).toBe(GENERIC_CA_BUNDLE_PATH);
   });
 
-  it("returns undefined when NODE_EXTRA_CA_CERTS is already set", () => {
+  it("keeps NODE_EXTRA_CA_CERTS when it is already set", () => {
     expect(
-      resolveAutoNodeExtraCaCerts({
+      resolveNodeStartupTlsEnvironment({
         env: {
           NVM_DIR: "/home/test/.nvm",
           NODE_EXTRA_CA_CERTS: "/custom/ca.pem",
         },
         platform: "linux",
         accessSync: allowOnly(DEBIAN_CA_BUNDLE_PATH),
-      }),
-    ).toBeUndefined();
+      }).NODE_EXTRA_CA_CERTS,
+    ).toBe("/custom/ca.pem");
   });
 
   it.each([
@@ -58,12 +58,12 @@ describe("resolveAutoNodeExtraCaCerts", () => {
     ["/home/test/.nvm\\versions\\node\\v22\\bin\\node", undefined],
   ] as const)("does not infer Linux CA settings for %s with NVM_DIR=%j", (execPath, NVM_DIR) => {
     expect(
-      resolveAutoNodeExtraCaCerts({
+      resolveNodeStartupTlsEnvironment({
         env: { NVM_DIR },
         platform: "linux",
         execPath,
         accessSync: allowOnly(DEBIAN_CA_BUNDLE_PATH),
-      }),
+      }).NODE_EXTRA_CA_CERTS,
     ).toBeUndefined();
   });
 });

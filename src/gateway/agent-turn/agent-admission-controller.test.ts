@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -24,7 +23,7 @@ describe("agent admission session ownership", () => {
       const scope = `agent-admission-replay-${replay}.sqlite`;
       const replayEntered = createDeferred();
       const releaseReplay = createDeferred();
-      const replayAdmission = beginSessionWorkAdmission({
+      const replayAdmission = beginSessionEffect({
         scope,
         identities: [replayKey],
         storeWriterIdentities: [replayKey],
@@ -38,14 +37,12 @@ describe("agent admission session ownership", () => {
       readEntry.mockReset().mockResolvedValue({ entry });
       const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
       const io = createAgentTurnIo(vi.fn());
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const runId = `marker-${replay}`;
       const agentDedupeKeys = [runId];
       const dedupeLifecycle = createAgentDedupeLifecycle({
         cfg: {},
         request: { message: "marker", idempotencyKey: runId },
         runId,
-        lifecycleGeneration,
         agentDedupeKeys,
         suppressVisibleSessionEffects: false,
         context,
@@ -53,7 +50,6 @@ describe("agent admission session ownership", () => {
       });
       const controller = createAgentAdmissionController({
         runId,
-        lifecycleGeneration,
         agentDedupeKeys,
         context,
         io,
@@ -112,14 +108,12 @@ describe("agent admission session ownership", () => {
       });
       const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
       const io = createAgentTurnIo(vi.fn());
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const runId = `admission-owner-${expected}`;
       const agentDedupeKeys = [runId];
       const dedupeLifecycle = createAgentDedupeLifecycle({
         cfg: {},
         request: { message: "continue", idempotencyKey: runId },
         runId,
-        lifecycleGeneration,
         agentDedupeKeys,
         suppressVisibleSessionEffects: false,
         context,
@@ -127,7 +121,6 @@ describe("agent admission session ownership", () => {
       });
       const controller = createAgentAdmissionController({
         runId,
-        lifecycleGeneration,
         agentDedupeKeys,
         expectedSession: expected ? { sessionId: "prepared" } : undefined,
         context,

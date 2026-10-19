@@ -1,4 +1,3 @@
-// Implements channel-scoped tailing of the OpenClaw log file.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -83,7 +82,7 @@ export async function channelsLogsCommand(
 ) {
   const filter = parseChannelFilter(opts.channel);
   const { channel } = filter;
-  const limit = parseLogsPositiveInt(opts.lines ?? undefined, DEFAULT_LIMIT, "--lines");
+  const limit = parseLogsPositiveInt(opts.lines, DEFAULT_LIMIT, "--lines");
 
   const tail = await readConfiguredParsedLogTail({
     limit,

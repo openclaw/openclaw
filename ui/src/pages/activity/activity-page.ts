@@ -8,6 +8,7 @@ import { ActivityPageView } from "./activity-page-view.tsx";
 export function ActivityPage(props: { routeLocation?: RouteLocation }) {
   const host = document.createElement("openclaw-activity-page");
   const page = createActivityPageState(useApplication());
+  // Route changes drive the Activity request owner without remounting the page.
   createEffect(
     () => props.routeLocation,
     (location) => page.setRouteLocation(location),

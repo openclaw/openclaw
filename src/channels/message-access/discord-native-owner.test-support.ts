@@ -108,8 +108,12 @@ async function createFixture(state: OpenClawTestState) {
     queuedFinal: dispatcher.sendFinalReply({ text: "accepted" }),
     counts: dispatcher.getQueuedCounts(),
   }));
-  const createCommandOptions = (threadBindings: object) => ({
-    command: { name: "ping", description: "Ping", acceptsArgs: false },
+  const createCommandOptions = (
+    threadBindings: object,
+    name: string,
+    pluginCommand?: PluginCommandNativeCandidate,
+  ) => ({
+    command: pluginCommand ?? { name, description: "Test command", acceptsArgs: true },
     cfg,
     discordConfig: cfg.channels?.discord ?? {},
     accountId: "default",
@@ -138,13 +142,13 @@ async function createFixture(state: OpenClawTestState) {
     }>({ pluginId: "discord", artifactBasename: "runtime-api.js" });
   setDiscordRuntime(
     createPluginRuntimeMock({
-      channel: {
-        inbound: {
-          ingress: createHostChannelIngressRuntime(host),
-        },
-      },
+      channel: { inbound: { ingress: createHostChannelIngressRuntime(host) } },
     }),
   );
+  const createCommand = (name: string, candidate?: PluginCommandNativeCandidate) =>
+    createDiscordNativeCommand(
+      createCommandOptions(createNoopThreadBindingManager("default"), name, candidate),
+    );
   const run = async (
     options: {
       senderId?: string;
@@ -154,16 +158,8 @@ async function createFixture(state: OpenClawTestState) {
     } = {},
   ) => {
     dispatch.mockClear();
-    const command = createDiscordNativeCommand({
-      ...createCommandOptions(createNoopThreadBindingManager("default")),
-      command: options.pluginCommand ?? {
-        name: options.commandName ?? "ping",
-        description: "Test command",
-        acceptsArgs: true,
-      },
-    });
     const interaction = createInteraction(options);
-    await command.run(interaction);
+    await createCommand(options.commandName ?? "ping", options.pluginCommand).run(interaction);
     return interaction;
   };
   return {
@@ -174,10 +170,7 @@ async function createFixture(state: OpenClawTestState) {
     run,
     dispatch,
     autocomplete: async () => {
-      const command = createDiscordNativeCommand({
-        ...createCommandOptions(createNoopThreadBindingManager("default")),
-        command: { name: "think", description: "Thinking level", acceptsArgs: true },
-      });
+      const command = createCommand("think");
       const complete = command.options?.find((option) => option.name === "level")?.autocomplete;
       if (!complete) {
         throw new Error("Expected the registered /think level autocomplete handler");
@@ -206,14 +199,12 @@ export async function withDiscordNativeAdminFixture(
       null,
       "default",
     );
+    let fixture: Awaited<ReturnType<typeof createFixture>> | undefined;
     try {
-      const fixture = await createFixture(state);
-      try {
-        await test(fixture);
-      } finally {
-        fixture.close();
-      }
+      fixture = await createFixture(state);
+      await test(fixture);
     } finally {
+      fixture?.close();
       rollbackStagedPluginRegistry(previousRegistry);
     }
   });

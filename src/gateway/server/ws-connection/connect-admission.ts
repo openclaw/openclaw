@@ -1,5 +1,6 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
+import { isDeepStrictEqual } from "node:util";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_CAPS,
@@ -185,7 +186,11 @@ export function resolveGatewayConnectPolicyFailure(
       return { kind: "origin", reason: originCheck.reason };
     }
   }
-  if (!isGatewayAuthPolicyCurrent(state.authPolicy)) {
+  // Pending handshakes must not issue credentials under a superseded role policy.
+  if (
+    !isDeepStrictEqual(context.configSnapshot.gateway?.roles, getRuntimeConfig().gateway?.roles) ||
+    !isGatewayAuthPolicyCurrent(state.authPolicy)
+  ) {
     return { kind: "auth" };
   }
   if (
@@ -232,7 +237,6 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     return undefined;
   }
 
-  // protocol negotiation
   const { minProtocol, maxProtocol } = connectParams;
   const supportsCurrentProtocol =
     maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;

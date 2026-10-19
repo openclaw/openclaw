@@ -1,4 +1,4 @@
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import type { TerminalOpenOutcome, TerminalOpenRequest } from "./session-manager.types.js";
 
 /** Gateway lifecycle custody includes pending spawns until their backend settles. */
@@ -10,9 +10,9 @@ export async function withAgentTerminalOpenAdmission(
   const signal = request.signal
     ? AbortSignal.any([request.signal, interrupted.signal])
     : interrupted.signal;
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>>;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>>;
   try {
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
       agentId: request.agentId,
       scope: `agent:${request.agentId}`,
       identities:

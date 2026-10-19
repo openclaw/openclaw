@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,7 +86,10 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
               openclaw: {
                 type: "http",
                 url: "http://127.0.0.1:9999/mcp",
-                headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+                headers: {
+                  Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+                  "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+                },
               },
             },
           },
@@ -327,6 +330,18 @@ describe("openclaw attach (action)", () => {
         throw new Error("missing spawned MCP config path");
       }
       expect(existsSync(configPath)).toBe(true);
+      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:9999/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+            },
+          },
+        },
+      });
       const onSigint = process.listeners("SIGINT").find((fn) => !beforeInt.includes(fn));
       const onSigterm = process.listeners("SIGTERM").find((fn) => !beforeTerm.includes(fn));
       expect(onSigint).toBeTypeOf("function");
@@ -474,15 +489,34 @@ describe("openclaw attach (action)", () => {
     expect(logs.join("\n")).toContain("failed to revoke attach grant");
   });
 
-  it("errors on a grant with a non-numeric expiresAtMs instead of crashing on toISOString", async () => {
-    vi.mocked(callGateway).mockResolvedValueOnce({
-      sessionKey: "agent:main:x",
-      token: "tok-123",
-      expiresAtMs: "soon",
-      mcpConfig: { mcpServers: { openclaw: {} } },
-      env: {},
-    } as never);
+  it.each(["soon", 8_640_000_000_000_001, -8_640_000_000_000_001])(
+    "rejects invalid expiresAtMs %s while revoking the minted grant",
+    async (expiresAtMs) => {
+      vi.mocked(callGateway).mockResolvedValueOnce({
+        sessionKey: "agent:main:x",
+        token: "tok-123",
+        expiresAtMs,
+        mcpConfig: { mcpServers: { openclaw: {} } },
+        env: {},
+      });
+      vi.mocked(defaultRuntime.exit).mockImplementation((code) => {
+        throw new ExitError(code);
+      });
+      const configCount = vi.mocked(mkdtempSync).mock.calls.length;
+      await expect(runAttach("--print-config")).rejects.toEqual(new ExitError(1));
+      expect(logs).toEqual(["ERR:attach.grant returned an unexpected response from the gateway."]);
+      expect(vi.mocked(mkdtempSync).mock.calls).toHaveLength(configCount);
+      const revocations = gatewayCalls.filter((call) => call.method === "attach.revoke");
+      expect(revocations).toHaveLength(1);
+      expect(revocations[0]?.params).toEqual({ token: "tok-123" });
+    },
+  );
+
+  it("rejects a missing grant without attempting revocation", async () => {
+    vi.mocked(callGateway).mockResolvedValueOnce(null);
     await runAttach("--print-config");
     expect(exitCode).toBe(1);
+    expect(logs).toEqual(["ERR:attach.grant returned an unexpected response from the gateway."]);
+    expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
   });
 });

@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { normalizePluginConfig } from "./config.js";
 import { buildPromptPrefix } from "./prompt.js";
-import { buildSearchQuery, extractRecentTurns } from "./query.js";
+import { buildQuery, buildSearchQuery, extractRecentTurns } from "./query.js";
+
+// mock-isolation: Keep unrelated model discovery and its runtime graph out of query assembly tests.
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  DEFAULT_PROVIDER: "anthropic",
+  parseModelRef: vi.fn(),
+  resolveAgentEffectiveModelPrimary: vi.fn(),
+  resolveDefaultModelForAgent: vi.fn(),
+}));
 
 describe("active-memory search queries", () => {
   it.each([
@@ -87,5 +96,85 @@ describe("active-memory recent turn block boundaries", () => {
     ] as const) {
       expect(extractRecentTurns([{ role, content }])).toEqual(text ? [{ role, text }] : []);
     }
+  });
+});
+
+describe("active-memory recall query limits", () => {
+  it.each([
+    ["message", "current question"],
+    [
+      "recent",
+      "Recent conversation tail:\nuser: older question\nassistant: previous reply\n\nLatest user message:\ncurrent question",
+    ],
+    [
+      "full",
+      "Full conversation context:\nuser: older question\nassistant: previous reply\n\nLatest user message:\ncurrent question",
+    ],
+  ] as const)("preserves under-limit %s query formatting", (queryMode, expected) => {
+    expect(
+      buildQuery({
+        latestUserMessage: " current question ",
+        recentTurns: [
+          { role: "user", text: " older   question " },
+          { role: "assistant", text: " previous\nreply " },
+        ],
+        config: normalizePluginConfig({ queryMode }),
+      }),
+    ).toBe(expected);
+  });
+
+  it.each(["message", "recent", "full"] as const)(
+    "preserves a current request at the limit in %s mode without overflowing headers",
+    (queryMode) => {
+      const latest = "x".repeat(4_000);
+      expect(
+        buildQuery({
+          latestUserMessage: latest,
+          recentTurns: [{ role: "user", text: "previous question" }],
+          config: normalizePluginConfig({ queryMode }),
+        }),
+      ).toBe(latest);
+    },
+  );
+
+  it.each(["message", "recent", "full"] as const)(
+    "retains quoted context and the final question in an oversized %s request",
+    (queryMode) => {
+      const head = '[Replying to: "QUOTED_REPLY_SENTINEL"]\n';
+      const question = "What is my synthetic access phrase?";
+      const query = buildQuery({
+        latestUserMessage: head + "🦞".repeat(15_000) + question,
+        recentTurns: [{ role: "user", text: "old history" }],
+        config: normalizePluginConfig({ queryMode }),
+      });
+      expect(query.length).toBeLessThanOrEqual(4_000);
+      expect(query.startsWith(head)).toBe(true);
+      expect(query.endsWith(question)).toBe(true);
+      expect(query).toContain("[Middle of current request omitted]");
+      expect(query).not.toContain("old history");
+      expect(query).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+    },
+  );
+
+  it("keeps the newest history without changing the current message", () => {
+    const latest = '[Replying to: "quoted context"]\nWhat was the decision?';
+    const query = buildQuery({
+      latestUserMessage: latest,
+      recentTurns: [
+        { role: "user", text: "OLDEST_HISTORY " + "🦞".repeat(12_000) },
+        { role: "assistant", text: "NEWEST_HISTORY" },
+      ],
+      config: normalizePluginConfig({ queryMode: "full" }),
+    });
+    expect(query.length).toBeLessThanOrEqual(4_000);
+    expect(query).toContain("[Older conversation content omitted]");
+    expect(query).not.toContain("OLDEST_HISTORY");
+    expect(query).toContain("assistant: NEWEST_HISTORY");
+    expect(query.endsWith(`Latest user message:\n${latest}`)).toBe(true);
+    expect(query).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
   });
 });

@@ -14,5 +14,6 @@ export type DoctorMaintenanceParams = {
   runId?: string;
   assertCurrent?: () => void;
   databaseGenerations?: UpdateDatabaseGenerations;
+  databasePluginOwners?: import("../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
   beforeStateMutation?: (context: { env: NodeJS.ProcessEnv; signal: AbortSignal }) => Promise<void>;
 };

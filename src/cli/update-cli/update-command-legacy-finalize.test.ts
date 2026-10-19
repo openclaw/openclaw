@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -28,27 +30,60 @@ import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { legacyFinalizeEntrypoint } from "./update-command-legacy-finalize-entrypoint.test-support.js";
 
-// Vitest cancellation ends its wrapper before the body unwinds. Keep the
-// authority database and scratch inputs until that original body has joined.
+// Cancellation ends Vitest's wrapper before the body joins; retain its inputs.
 const fixture = createFixtureLifetime();
 const testNodeExecPath = resolveTestNodeExecPath();
+type LegacyCommand = ReturnType<typeof commandRunner.runUtf8CommandWithTimeout>;
 afterEach(() => fixture.cleanup());
 
-async function closeLegacyFixture(
-  command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined,
-  release: () => void,
-) {
+function tempEnvironment(directory: string) {
+  return { TMPDIR: directory, TMP: directory, TEMP: directory };
+}
+
+function legacyEnvironment(scratch: string) {
+  const configPath = path.join(scratch, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
+  return {
+    ...process.env,
+    HOME: scratch,
+    USERPROFILE: scratch,
+    OPENCLAW_HOME: scratch,
+    OPENCLAW_STATE_DIR: scratch,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+}
+
+function runLegacyCommand(options: commandRunner.CommandOptions, check = false) {
+  return commandRunner.runUtf8CommandWithTimeout(
+    [
+      testNodeExecPath,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+        testNodeExecPath,
+      ),
+      JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
+      ...(check ? ["--check"] : []),
+    ],
+    {
+      baseEnv: {},
+      cwd: process.cwd(),
+      timeoutMs: 60_000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      ...options,
+    },
+  );
+}
+
+async function closeLegacyFixture(command: LegacyCommand | undefined, release: () => void) {
   await fixture.verifyCleanup(async () => {
-    const result = await command;
-    assertLegacyCommandJoined(result);
+    assertLegacyCommandJoined(await command);
     release();
     stateDatabase.closeOpenClawStateDatabase();
   });
 }
 
-function assertLegacyCommandJoined(
-  result: Awaited<ReturnType<typeof commandRunner.runUtf8CommandWithTimeout>> | undefined,
-) {
+function assertLegacyCommandJoined(result: Awaited<LegacyCommand> | undefined) {
   if (result?.cleanup === "uncertain") {
     throw new Error("Legacy finalizer process cleanup is unverified", {
       cause: {
@@ -94,75 +129,47 @@ it.for(scenarios)(
   (scenario, { signal }) => runLegacyFinalizationScenario(scenario, signal),
 );
 
-it(
-  "reports migrated finalizer capabilities through its real validation entrypoint",
-  { timeout: 90_000 },
-  ({ signal }) =>
-    fixture.run(async () => {
+it("validates migrated finalizer capabilities", { timeout: 90_000 }, ({ signal }) =>
+  fixture.run(async () => {
+    signal.throwIfAborted();
+    const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-check-"));
+    let command: LegacyCommand | undefined;
+    try {
+      command = runLegacyCommand(
+        { env: { ...legacyEnvironment(scratch), ...tempEnvironment(scratch) }, signal },
+        true,
+      );
+      const result = await command;
+      assertLegacyCommandJoined(result);
       signal.throwIfAborted();
-      const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-check-"));
-      const configPath = path.join(scratch, "openclaw.json");
-      fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
-      let command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined;
-      try {
-        command = commandRunner.runUtf8CommandWithTimeout(
-          [
-            testNodeExecPath,
-            ...resolveRuntimeWorkerArgv(
-              resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
-              testNodeExecPath,
-            ),
-            JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
-            "--check",
-          ],
-          {
-            env: {
-              ...process.env,
-              HOME: scratch,
-              USERPROFILE: scratch,
-              OPENCLAW_HOME: scratch,
-              OPENCLAW_STATE_DIR: scratch,
-              OPENCLAW_CONFIG_PATH: configPath,
-              TMPDIR: scratch,
-              TMP: scratch,
-              TEMP: scratch,
-            },
-            baseEnv: {},
-            cwd: process.cwd(),
-            timeoutMs: 60_000,
-            signal,
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
-          },
-        );
-        const result = await command;
-        assertLegacyCommandJoined(result);
-        signal.throwIfAborted();
-        const details = result.stderr + "\n" + result.stdout;
-        expect(result.termination, details).toBe("exit");
-        expect(result.code, details).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          executorDelegation: "pid-start-v1",
-          retainedOwnerBinding: true,
-          doctorConfigWrites: "pid-start-v1",
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-      } finally {
-        await closeLegacyFixture(command, () => {});
-      }
-    }),
+      const details = result.stderr + "\n" + result.stdout;
+      expect(result, details).toMatchObject({ termination: "exit", code: 0 });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        executorDelegation: "pid-start-v1",
+        retainedOwnerBinding: true,
+        doctorConfigWrites: "pid-start-v1",
+        state: OPENCLAW_STATE_SCHEMA_VERSION,
+        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+    } finally {
+      await closeLegacyFixture(command, () => {});
+    }
+  }),
 );
 
 function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], signal: AbortSignal) {
   return fixture.run(async () => {
     signal.throwIfAborted();
     const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-finalize-"));
+    const file = (name: string) => path.join(scratch, name);
+    const exists = (name: string) => fs.existsSync(file(name));
+    const read = (name: string) => fs.readFileSync(file(name), "utf8");
+    const endsWith = (suffix: string) => scenario.endsWith(suffix);
     const root = fs.realpathSync(process.cwd());
-    const switchedRoot = scenario.endsWith("-git-root-switch");
-    const movedRoot = switchedRoot || scenario.endsWith("-pnpm-root-move");
-    const parentRoot = movedRoot ? path.join(scratch, "previous-installation") : root;
-    const candidateRoot = movedRoot ? path.join(scratch, "candidate-installation") : root;
+    const switchedRoot = endsWith("-git-root-switch");
+    const movedRoot = switchedRoot || endsWith("-pnpm-root-move");
+    const parentRoot = movedRoot ? file("previous-installation") : root;
+    const candidateRoot = movedRoot ? file("candidate-installation") : root;
     if (movedRoot) {
       fs.mkdirSync(parentRoot);
       fs.mkdirSync(candidateRoot);
@@ -171,41 +178,30 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         JSON.stringify({ name: "openclaw", version: "2026.9.4", type: "module" }),
       );
     }
-    const configPath = path.join(scratch, "openclaw.json");
-    const scratchEnvironment = scenario.includes("-scratch");
-    const ownedEnvironment = scenario.includes("-owned");
-    const incumbent = scenario.endsWith("-incumbent");
+    const scratchTemp = scenario.includes("-scratch");
+    const ownedTemp = scenario.includes("-owned");
+    const incumbent = endsWith("-incumbent");
     const legacyParent = scenario.includes("-parent-");
-    const completedByGateway = scenario.endsWith("-completed");
-    const refusedParent = scenario.includes("-wrong-") || scenario.endsWith("-registered-child");
-    const normalTemp = path.join(scratch, "normal-temp");
-    const workerTemp = path.join(scratch, "openclaw-update-migrated-fixture");
-    const unsafePreferred = path.join(scratch, "unavailable-preferred");
-    if (scratchEnvironment) {
+    const completed = endsWith("-completed");
+    const refusedParent = scenario.includes("-wrong-") || endsWith("-registered-child");
+    const normalTemp = file("normal-temp");
+    const workerTemp = file("openclaw-update-migrated-fixture");
+    const unsafePreferred = file("unavailable-preferred");
+    if (scratchTemp) {
       fs.mkdirSync(normalTemp);
       fs.mkdirSync(workerTemp);
-      // Force the real POSIX fallback without touching /tmp/openclaw. Windows
-      // already skips preferredDir. Keep os.tmpdir and secure filesystem checks real.
+      // Force POSIX fallback without touching /tmp/openclaw; Windows skips preferredDir.
       fs.writeFileSync(unsafePreferred, "not a directory");
     }
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: scratch,
-      USERPROFILE: scratch,
-      OPENCLAW_HOME: scratch,
-      OPENCLAW_STATE_DIR: scratch,
-      OPENCLAW_CONFIG_PATH: configPath,
+      ...legacyEnvironment(scratch),
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
-      ...(completedByGateway ? { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" } : {}),
-      ...(scratchEnvironment
-        ? {
-            TMPDIR: ownedEnvironment ? workerTemp : normalTemp,
-            TMP: ownedEnvironment ? workerTemp : normalTemp,
-            TEMP: ownedEnvironment ? workerTemp : normalTemp,
-            OPENCLAW_TEST_LEGACY_TEMP_FALLBACK: "1",
-          }
-        : {}),
+      ...(completed && { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" }),
+      ...(scratchTemp && {
+        ...tempEnvironment(ownedTemp ? workerTemp : normalTemp),
+        OPENCLAW_TEST_LEGACY_TEMP_FALLBACK: "1",
+      }),
     };
     for (const name of [
       "OPENCLAW_SERVICE_KIND",
@@ -214,19 +210,17 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     ]) {
       delete env[name];
     }
-    let command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined;
+    let command: LegacyCommand | undefined;
     let releaseParent: (() => void) | undefined;
     let releaseChild: (() => void) | undefined;
     try {
-      fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-      if (completedByGateway) {
-        const candidateState = new DatabaseSync(path.join(scratch, "state", "openclaw.sqlite"), {
+      if (completed) {
+        const candidateState = new DatabaseSync(file("state/openclaw.sqlite"), {
           readOnly: true,
         });
         try {
-          // The shipped v2026.9.3 producer supports state schema 16. The real
-          // candidate below must own all access to this genuinely newer state.
+          // v2026.9.3 supports schema 16; only the candidate may access newer state.
           const version = candidateState.prepare("PRAGMA user_version").get()?.user_version;
           expect(version).toBeGreaterThan(16);
         } finally {
@@ -237,10 +231,8 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
         env.OPENCLAW_UPDATE_RUN_ID = runId;
       }
-      const originalEnvironment = ownedEnvironment
-        ? { ...env, TMPDIR: normalTemp, TMP: normalTemp, TEMP: normalTemp }
-        : env;
-      const leaseDirectory = scratchEnvironment
+      const originalEnv = ownedTemp ? { ...env, ...tempEnvironment(normalTemp) } : env;
+      const leaseDirectory = scratchTemp
         ? resolvePreferredOpenClawTmpDir({
             preferredDir: unsafePreferred,
             tmpdir: () => normalTemp,
@@ -249,25 +241,16 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       const databasePath = path.join(leaseDirectory, "managed-update-handoffs.sqlite");
       const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: env });
       const acquired = store.acquire(parentRoot, randomUUID(), { kind: "update" });
-      if (acquired.kind !== "acquired") {
-        throw new Error("Missing original owner");
-      }
+      assert(acquired.kind === "acquired", "Missing original owner");
       let parentLease = acquired.lease;
-      releaseParent = () => {
-        store.release(parentLease);
-      };
-      // Exact v2026.9.4 producer format (3a9d69db): real UUID child registration,
-      // parent row and private input, with no later lineage or database-pin fields.
+      releaseParent = () => store.release(parentLease);
+      // v2026.9.4 (3a9d69db) predates lineage/database pins: use its exact producer format.
       const child = store.acquire(`${parentRoot}/.openclaw-update-child-${randomUUID()}`, runId, {
         kind: "update",
       });
-      if (child.kind !== "acquired") {
-        throw new Error("Missing legacy child");
-      }
+      assert(child.kind === "acquired", "Missing legacy child");
       let bound = child.lease;
-      releaseChild = () => {
-        store.release(bound);
-      };
+      releaseChild = () => store.release(bound);
       const executor = {
         runId,
         root,
@@ -275,17 +258,15 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         parent: acquired.lease,
         childKey: child.lease.key,
       };
-      const entry = path.join(scratch, "native-entry.mjs");
+      const entry = file("native-entry.mjs");
       const loader = path.resolve("scripts/tsx.mjs");
-      // Both receiver imports share the same graph and service-authority scope.
       const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor);
       const exec = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href;
       const receiverUrl = movedRoot
         ? pathToFileURL(path.join(candidateRoot, `native-receiver${path.extname(owner.pathname)}`))
         : owner;
       if (movedRoot) {
-        // Keep the receiver's real package-root check, sharing its dependencies
-        // with the effect owner so both use the same authority scope.
+        // Retain the relocated package-root check while sharing the authority scope.
         fs.copyFileSync(fileURLToPath(owner), fileURLToPath(receiverUrl));
       }
       fs.writeFileSync(
@@ -322,25 +303,10 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       });
     `,
       );
-      const snapshot = {
-        path: configPath,
-        exists: true,
-        raw: "{}",
-        parsed: {},
-        sourceConfig: {},
-        resolved: {},
-        valid: true,
-        runtimeConfig: {},
-        config: {},
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      };
       const grantless = scenario.startsWith("grantless");
       if (legacyParent) {
-        // v2026.9.3 has no child grant: its managed updater keeps the root lease
-        // while awaiting the candidate's private result.json (migrated.ts:176).
-        if (!scenario.endsWith("-registered-child")) {
+        // v2026.9.3 awaits result.json under its root lease, without a child grant.
+        if (!endsWith("-registered-child")) {
           expect(store.release(bound)).toBe(true);
         }
       } else if (grantless && !incumbent) {
@@ -348,8 +314,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         expect(store.release(acquired.lease)).toBe(true);
       }
       if (switchedRoot) {
-        // The shipped package-to-Git publisher retargets the old package path.
-        fs.renameSync(parentRoot, path.join(scratch, "retained-installation"));
+        fs.renameSync(parentRoot, file("retained-installation"));
         fs.symlinkSync(
           candidateRoot,
           parentRoot,
@@ -357,15 +322,15 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         );
       }
       const input = {
-        ...(grantless ? {} : { executor }),
+        executor: grantless ? undefined : executor,
         bufferedSteps: [],
         resultPath: path.join(legacyParent ? workerTemp : scratch, "result.json"),
         params: {
           root: parentRoot,
-          ...(ownedEnvironment ? { ownedManagedUpdateEnv: originalEnvironment } : {}),
+          ownedManagedUpdateEnv: ownedTemp ? originalEnv : undefined,
           mutationStarted: true,
           installKindChanged: switchedRoot,
-          configSnapshot: snapshot,
+          configSnapshot: createTestConfigSnapshot({}, {}, env.OPENCLAW_CONFIG_PATH),
           requestedChannel: null,
           storedChannel: "stable",
           channel: "stable",
@@ -374,30 +339,22 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           opts: { json: true, yes: true, run: { runId, env } },
           result: {
             status: "ok",
-            ...(completedByGateway
-              ? { after: { version: "2026.9.5", buildId: "verified-migrated-candidate" } }
-              : {}),
-            mode: switchedRoot || scenario.endsWith("-git") ? "git" : movedRoot ? "pnpm" : "npm",
-            ...(legacyParent
-              ? {
-                  before: {
-                    version: scenario.endsWith("-wrong-version") ? "2026.9.4" : "2026.9.3",
-                  },
-                }
-              : {}),
+            after: completed
+              ? { version: "2026.9.5", buildId: "verified-migrated-candidate" }
+              : undefined,
+            mode: switchedRoot || endsWith("-git") ? "git" : movedRoot ? "pnpm" : "npm",
+            before: legacyParent
+              ? { version: endsWith("-wrong-version") ? "2026.9.4" : "2026.9.3" }
+              : undefined,
             root: candidateRoot,
             steps: [],
             durationMs: 0,
           },
           controlPlaneUpdateSentinelMeta: legacyParent
             ? {
-                runId: scenario.endsWith("-wrong-run") ? randomUUID() : runId,
-                handoffId: scenario.endsWith("-wrong-handoff")
-                  ? randomUUID()
-                  : acquired.lease.owner,
-                root: scenario.endsWith("-wrong-root")
-                  ? path.join(root, "other-installation")
-                  : parentRoot,
+                runId: endsWith("-wrong-run") ? randomUUID() : runId,
+                handoffId: endsWith("-wrong-handoff") ? randomUUID() : acquired.lease.owner,
+                root: endsWith("-wrong-root") ? path.join(root, "other-installation") : parentRoot,
               }
             : null,
           preUpdatePluginInstallRecords: {},
@@ -408,50 +365,31 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
             scenario === "rollback-state-unverified" ? scenario : "state-migrated-no-rollback",
         },
       };
-      command = commandRunner.runUtf8CommandWithTimeout(
-        [
-          testNodeExecPath,
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
-            testNodeExecPath,
-          ),
-          JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
-        ],
-        {
-          input: JSON.stringify(input),
-          env: scratchEnvironment
-            ? {
-                ...originalEnvironment,
-                TMPDIR: workerTemp,
-                TMP: scenario.endsWith("-wrong-scratch") ? normalTemp : workerTemp,
-                TEMP: workerTemp,
-              }
-            : env,
-          baseEnv: {},
-          cwd: root,
-          timeoutMs: 60000,
-          signal,
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-          beforeInput(pid) {
-            if (scenario.endsWith("-wrong-parent")) {
-              const reassigned = store.bind(parentLease, pid);
-              if (!reassigned) {
-                throw new Error("Parent reassignment failed");
-              }
-              parentLease = reassigned;
+      command = runLegacyCommand({
+        input: JSON.stringify(input),
+        cwd: root,
+        env: scratchTemp
+          ? {
+              ...originalEnv,
+              ...tempEnvironment(workerTemp),
+              TMP: endsWith("-wrong-scratch") ? normalTemp : workerTemp,
             }
-            if (grantless) {
-              return;
-            }
-            const registered = store.bind(child.lease, pid);
-            if (!registered) {
-              throw new Error("Legacy binding failed");
-            }
-            bound = registered;
-          },
+          : env,
+        signal,
+        beforeInput(pid) {
+          if (endsWith("-wrong-parent")) {
+            const reassigned = store.bind(parentLease, pid);
+            assert(reassigned, "Parent reassignment failed");
+            parentLease = reassigned;
+          }
+          if (grantless) {
+            return;
+          }
+          const registered = store.bind(child.lease, pid);
+          assert(registered, "Legacy binding failed");
+          bound = registered;
         },
-      );
+      });
       const result = await command;
       assertLegacyCommandJoined(result);
       signal.throwIfAborted();
@@ -459,14 +397,12 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       expect(result.termination, details).toBe("exit");
       if (incumbent || refusedParent) {
         expect(result.code, details).not.toBe(0);
-        expect(fs.existsSync(path.join(scratch, "receiver-pid"))).toBe(false);
+        expect(["receiver-pid", "native-effect"].map(exists)).toEqual([false, false]);
         expect(store.current(parentLease)).toBe(true);
-        expect(fs.existsSync(path.join(scratch, "native-effect"))).toBe(false);
         expect(fs.existsSync(input.resultPath)).toBe(false);
         expect(getUpdateRun(runId, { env })?.status).toBe("running");
-      } else if (scenario.endsWith("revoked") || scenario.endsWith("retargeted")) {
-        expect(fs.existsSync(path.join(scratch, "receiver-pid")), details).toBe(true);
-        expect(fs.existsSync(path.join(scratch, "native-effect")), details).toBe(false);
+      } else if (endsWith("revoked") || endsWith("retargeted")) {
+        expect(["receiver-pid", "native-effect"].map(exists), details).toEqual([true, false]);
         expect(result.code, details).not.toBe(0);
       } else {
         expect(
@@ -478,27 +414,25 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           terminalRunId: runId,
           result: { status: "ok", root: candidateRoot, runId },
         });
-        expect(fs.readFileSync(path.join(scratch, "native-effect"), "utf8")).toBe("restarted");
-        const receiver = JSON.parse(fs.readFileSync(path.join(scratch, "receiver-pid"), "utf8"));
-        expect(receiver.parent).toBe(
-          Number(fs.readFileSync(path.join(scratch, "finalizer-pid"), "utf8")),
-        );
+        expect(read("native-effect")).toBe("restarted");
+        const receiver = JSON.parse(read("receiver-pid"));
+        expect(receiver.parent).toBe(Number(read("finalizer-pid")));
         expect(receiver.pid).not.toBe(receiver.parent);
         expect(getUpdateRun(runId, { env })).toMatchObject({ status: "succeeded" });
         if (legacyParent) {
           expect(store.current(acquired.lease)).toBe(true);
           expect(store.hasUnsettledChildren(acquired.lease)).toBe(false);
-          expect(store.release(acquired.lease)).toBe(true);
         } else if (!grantless) {
           expect(store.release(bound)).toBe(true);
+        }
+        if (legacyParent || !grantless) {
           expect(store.release(acquired.lease)).toBe(true);
         }
         expect(store.read(parentRoot).kind).toBe("absent");
         expect(store.read(candidateRoot).kind).toBe("absent");
       }
-      if (scratchEnvironment) {
-        // Neither healthy completion nor refusal may create a worker-private
-        // competing lease database. This is the shipped producer's temp override.
+      if (scratchTemp) {
+        // Completion and refusal must both avoid a worker-private authority DB.
         const workerLeasePath = path.join(
           workerTemp,
           typeof process.getuid === "function" ? `openclaw-${process.getuid()}` : "openclaw",
@@ -516,11 +450,10 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
 }
 
 it.for(["joined", "uncertain"] as const)(
-  "joins the legacy fixture before releasing its inputs (cleanup=%s)",
+  "joins legacy finalization before releasing inputs (cleanup=%s)",
   async (cleanup, { signal: contextSignal }) => {
     contextSignal.throwIfAborted();
-    // A failed drain deliberately retains its claim. Isolate that expected
-    // refusal from the resource owner running the surrounding suite.
+    // Isolate the expected retained claim from the surrounding suite's owner.
     const namespace = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "legacy-cleanup-owner-")),
     );
@@ -543,13 +476,11 @@ it.for(["joined", "uncertain"] as const)(
     let childKey = "";
     let fixtureEnv: NodeJS.ProcessEnv | undefined;
     let identity: ReturnType<typeof requireNodeWorkerProcessIdentity> | undefined;
-    let command: ReturnType<typeof run> | undefined;
+    let command: LegacyCommand | undefined;
     let output = "";
     const root = fs.realpathSync(process.cwd());
     const leaseStore = () => {
-      if (!fixtureEnv) {
-        throw new Error("Legacy fixture command environment was not captured");
-      }
+      assert(fixtureEnv, "Legacy fixture command environment was not captured");
       return createManagedHandoffLeaseStore({
         databasePath: path.join(scratch, "managed-update-handoffs.sqlite"),
         serviceManagerEnv: fixtureEnv,
@@ -561,19 +492,14 @@ it.for(["joined", "uncertain"] as const)(
     };
     contextSignal.addEventListener("abort", unblock, { once: true });
     vi.spyOn(commandRunner, "runUtf8CommandWithTimeout").mockImplementation((_argv, options) => {
-      if (typeof options === "number") {
-        throw new Error("Legacy fixture lost its command options");
-      }
+      assert(typeof options !== "number", "Legacy fixture lost its command options");
       expect(options.signal).toBe(signal);
       fixtureEnv = options.env;
-      if (!fixtureEnv) {
-        throw new Error("Legacy fixture lost its command environment");
-      }
+      assert(fixtureEnv, "Legacy fixture lost its command environment");
       scratch = fixtureEnv.OPENCLAW_STATE_DIR!;
       childKey = (JSON.parse(String(options.input)) as { executor: { childKey: string } }).executor
         .childKey;
-      // Substitute only this fixture payload, not the real runner, admission,
-      // cancellation or process-tree owner used by the legacy scenario.
+      // Substitute the payload, retaining real runner/admission/cancellation ownership.
       command = run(
         [
           process.execPath,
@@ -597,7 +523,7 @@ it.for(["joined", "uncertain"] as const)(
           },
         },
       );
-      return command.then(async (result): Promise<Awaited<ReturnType<typeof run>>> => {
+      return command.then(async (result): Promise<Awaited<LegacyCommand>> => {
         assertLegacyCommandJoined(result);
         events.push("command-joined");
         joined.resolve();
@@ -632,8 +558,7 @@ it.for(["joined", "uncertain"] as const)(
       expect(identity).toBeDefined();
       expect(inspectNodeWorkerProcessIdentity(identity!)).toBe("live");
       cancellation.abort(reason);
-      // This driver is outside fixture.run: teardown must wait for the actual
-      // scenario continuation, not await itself or only the command's exit.
+      // Outside fixture.run: teardown must join the body, not itself or only the child.
       drain = fixture.cleanup().then(() => {
         drained = true;
       });
@@ -664,12 +589,10 @@ it.for(["joined", "uncertain"] as const)(
     } finally {
       try {
         unblock();
-        const result = await command;
-        assertLegacyCommandJoined(result);
+        assertLegacyCommandJoined(await command);
         await outcome;
         await (drain ?? fixture.cleanup()).catch(() => {});
-        // Only the injected uncertainty is rescued: the real command above
-        // has joined. Never delete another owner's retained or live inputs.
+        // Rescue only injected uncertainty after the real command has joined.
         if (scratch && fs.existsSync(scratch)) {
           for (const key of [childKey, root]) {
             const row = leaseStore().read(key);

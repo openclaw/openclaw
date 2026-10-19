@@ -27,6 +27,7 @@ import type {
   UpdateDoctorConfigWriteRefusal,
 } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
+import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
@@ -170,6 +171,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
     installRoot: string;
@@ -186,6 +188,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     signal: AbortSignal;
     assertCurrent?: () => void;
     warn: (message: string) => void;
+    pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   },
 ) {
   if (!input) {
@@ -225,6 +228,30 @@ export function createUpdateDoctorDatabaseWriteCapture(
     get receipt() {
       return receipt;
     },
+    run<T>(operation: () => T): T {
+      return runWithUpdateDoctorMigrationCapture(
+        {
+          expected: (pathname) => expectedGenerations?.[pathname],
+          assertCurrent: () => options.assertCurrent?.(),
+          accept(pathname, before, after) {
+            options.assertCurrent?.();
+            const expected = expectedGenerations;
+            if (!expected || expected[pathname] !== before) {
+              unchanged = false;
+              return;
+            }
+            expected[pathname] = after;
+          },
+          refuse(message) {
+            unchanged = false;
+            options.warn(
+              `Automatic database restoration cannot attribute migration writes: ${message}`,
+            );
+          },
+        },
+        operation,
+      );
+    },
     async admit() {
       receipt = undefined;
       const generations = await read();
@@ -239,8 +266,8 @@ export function createUpdateDoctorDatabaseWriteCapture(
     async settle() {
       const generations = await read();
       if (generations && expectedGenerations) {
-        // Maintenance excludes Gateway writers, not independent SQLite writers.
-        // Without transaction attribution, even Doctor-time changes are unknown.
+        // Only native migration publications advance the expected generation.
+        // Unattributed writes, including independent SQLite writers, remain unknown.
         unchanged &&= Object.entries(expectedGenerations).every(
           ([pathname, generation]) => generations[pathname] === generation,
         );

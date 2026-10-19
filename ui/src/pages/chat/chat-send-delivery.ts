@@ -1,4 +1,3 @@
-import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -9,6 +8,7 @@ import {
 } from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { chatOutboxDeliveryKey, storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
@@ -485,8 +485,8 @@ async function sendPreparedChatMessage(
       );
     }
     const restriction =
-      err instanceof GatewayRequestError
-        ? readAgentRuntimeRestrictionErrorDetails(err.details)
+      err instanceof GatewayRequestError && isAgentRuntimeRestrictionErrorDetails(err.details)
+        ? err.details
         : undefined;
     if (restriction) {
       const error = formatConnectError(err);

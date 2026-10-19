@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type {
@@ -43,7 +43,7 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
 export function readSessionCleanupSnapshotInDatabase(
   database: Parameters<typeof listSqliteSessionEntriesFromDatabase>[0],
   request: Pick<SessionCleanupReadInput, "env" | "fixMissing" | "continuation">,
-): SessionCleanupReadResult {
+): Omit<SessionCleanupReadResult, "retainedArtifactPaths"> {
   const read = () => {
     const entries = listSqliteSessionEntriesFromDatabase(
       database,
@@ -96,7 +96,7 @@ export function readSessionCleanupSnapshotInDatabase(
   };
   return readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
     request.fixMissing && !database.db.isTransaction
-      ? runSqliteDeferredTransactionSync(database.db, read)
+      ? runSqliteReadSnapshotSync(database.db, read)
       : read(),
   );
 }

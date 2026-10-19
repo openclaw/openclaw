@@ -169,8 +169,8 @@ describe("portal open authority fence", () => {
 
 describe("gateway portal service", () => {
   it.each([false, true])(
-    "owns all listeners after target-port collision exhaustion=%s",
-    async (exhausted) => {
+    "owns all listeners after target-port collision rejection=%s",
+    async (collision) => {
       await withServer(
         (_req, res) => res.end("target"),
         async (targetUrl) => {
@@ -178,29 +178,25 @@ describe("gateway portal service", () => {
           const actualListen = httpListen.listenGatewayHttpServer;
           const calls: Array<{ host: string; port: number }> = [];
           const attemptedServers = new Set<Server>();
-          let primaryAttempt = 0;
           const listen = vi
             .spyOn(httpListen, "listenGatewayHttpServer")
             .mockImplementation(async (params) => {
               calls.push({ host: params.bindHost, port: params.port });
               attemptedServers.add(params.httpServer);
               await actualListen(params);
-              if (params.bindHost === "127.0.0.1" && params.port === 0) {
-                primaryAttempt += 1;
-                if (exhausted || primaryAttempt === 1) {
-                  reportTargetPortCollision(params.httpServer, targetPort);
-                }
+              if (collision && params.bindHost === "127.0.0.1" && params.port === 0) {
+                reportTargetPortCollision(params.httpServer, targetPort);
               }
             });
           const { service, httpServers } = makeService(
-            exhausted ? ["127.0.0.1"] : ["127.0.0.1", "::1"],
+            collision ? ["127.0.0.1"] : ["127.0.0.1", "::1"],
           );
 
-          if (exhausted) {
+          if (collision) {
             await expect(service.open({ targetPort })).rejects.toThrow(
               `Portal listener repeatedly allocated target port ${targetPort}`,
             );
-            expect(listen).toHaveBeenCalledTimes(10);
+            expect(listen).toHaveBeenCalledOnce();
             expect(attemptedServers.size).toBe(1);
             expect(httpServers).toEqual([]);
             const [primaryServer] = attemptedServers;
@@ -217,7 +213,6 @@ describe("gateway portal service", () => {
           expect(await getStatus("::1", portal.listenPort, "/")).toBe(401);
           expect(portal.listenPort).not.toBe(targetPort);
           expect(calls).toEqual([
-            { host: "127.0.0.1", port: 0 },
             { host: "127.0.0.1", port: 0 },
             { host: "::1", port: portal.listenPort },
           ]);

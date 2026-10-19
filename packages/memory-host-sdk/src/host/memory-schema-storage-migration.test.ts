@@ -94,7 +94,7 @@ function binaryDatabase(
 
 function countStorageCatalogReads(db: DatabaseSync) {
   return trackSqliteStatementExecutions(db, ["catalog"], (sql) =>
-    /^\s*SELECT\b[\s\S]*?\bFROM main\.sqlite_schema\s+WHERE type = 'table'\s+AND name NOT LIKE 'sqlite_%'/i.test(
+    /^\s*SELECT\s+type,\s*name,\s*tbl_name,\s*sql\s+FROM main\.sqlite_schema\s+ORDER BY name/i.test(
       sql,
     )
       ? "catalog"
@@ -247,8 +247,9 @@ describe("memory storage migration", () => {
       "--input-type=module",
       "--eval",
       `
-        import { DatabaseSync } from 'node:sqlite';
+        import { requireNodeSqlite } from ${JSON.stringify(new URL("../../../../src/infra/node-sqlite.ts", import.meta.url).href)};
         import { migrateMemoryIndexStorage } from ${JSON.stringify(new URL("./memory-schema-storage-migration.ts", import.meta.url).href)};
+        const { DatabaseSync } = requireNodeSqlite();
         const embedding = JSON.stringify(Array.from({ length: 3072 }, (_, index) => (index + 0.1234567890123456) / 9000));
         const results = [];
         for (const kind of ['cache', 'chunks']) {

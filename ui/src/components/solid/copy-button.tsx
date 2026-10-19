@@ -9,6 +9,7 @@ import "../../styles/copy-button.css";
 
 export type CopyButtonProps = {
   text: string;
+  ref?: (element: HTMLButtonElement) => void;
   idleLabel?: string;
   bare?: boolean;
   buttonAttributes?: SolidJSX.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -20,27 +21,36 @@ export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
   const label = () => props.idleLabel ?? t("chat.actions.copyAsMarkdown");
   return (
     <For each={[props.text]}>
-      {(text) => (
-        <openclaw-tooltip prop:content={label()}>
-          <button
-            {...props.buttonAttributes}
-            class={props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
-            type="button"
-            aria-label={label()}
-            ref={nativeListener("click", (event) => void handleCopyButton(event, text, label()))}
-          >
-            <span class="chat-copy-btn__icon" aria-hidden="true">
-              <span class="chat-copy-btn__icon-copy">
-                <Icon name="copy" />
+      {(text) => {
+        let feedback!: HTMLSpanElement;
+        return (
+          <openclaw-tooltip prop:content={label()}>
+            <button
+              {...props.buttonAttributes}
+              class={props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
+              type="button"
+              aria-label={label()}
+              ref={[
+                (element) => props.ref?.(element),
+                nativeListener(
+                  "click",
+                  (event) => void handleCopyButton(event, text, label(), { feedback }),
+                ),
+              ]}
+            >
+              <span class="chat-copy-btn__icon" aria-hidden="true">
+                <span class="chat-copy-btn__icon-copy">
+                  <Icon name="copy" />
+                </span>
+                <span class="chat-copy-btn__icon-check">
+                  <Icon name="check" />
+                </span>
               </span>
-              <span class="chat-copy-btn__icon-check">
-                <Icon name="check" />
-              </span>
-            </span>
-          </button>
-          <span data-copy-feedback role="status" hidden />
-        </openclaw-tooltip>
-      )}
+            </button>
+            <span ref={(element) => (feedback = element)} data-copy-feedback role="status" hidden />
+          </openclaw-tooltip>
+        );
+      }}
     </For>
   );
 }

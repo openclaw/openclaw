@@ -324,13 +324,11 @@ let publishedInventoryEnvironment:
     }
   | undefined;
 
-/** Capture locators and bounded families without reading SQLite or assigning an owner. */
-export function prepareSessionStoreTargetInventory(
+/** Capture runtime routing without discovering physical store candidates. */
+export function captureSessionStoreEnvironment(
   cfg: OpenClawConfig,
-  inputAgentIds: readonly string[],
   inputEnv?: NodeJS.ProcessEnv,
-  selection?: SessionStoreTargetInventoryRequest["selection"],
-): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
+): InventoryEnvironment & { config: OpenClawConfig } {
   const config = captureRuntimeConfig(cfg);
   const publication =
     inputEnv === undefined && cfg === getRuntimeConfigSnapshot()
@@ -357,7 +355,17 @@ export function prepareSessionStoreTargetInventory(
       publishedInventoryEnvironment = { config, publication, captured: environment };
     }
   }
-  const { env, stateDir } = environment;
+  return { config, ...environment };
+}
+
+/** Capture locators and bounded families without reading SQLite or assigning an owner. */
+export function prepareSessionStoreTargetInventory(
+  cfg: OpenClawConfig,
+  inputAgentIds: readonly string[],
+  inputEnv?: NodeJS.ProcessEnv,
+  selection?: SessionStoreTargetInventoryRequest["selection"],
+): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
+  const { config, env, stateDir, serialized } = captureSessionStoreEnvironment(cfg, inputEnv);
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
   const configured = listConfiguredSessionStoreAgentIds(config);
   const paths = new Map(
@@ -423,7 +431,7 @@ export function prepareSessionStoreTargetInventory(
     selection,
     config,
     agentIds,
-    env: environment.serialized,
+    env: serialized,
     paths,
     candidates: [...candidates.values()],
     ...(perAgent && retired.size > 0

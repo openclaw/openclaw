@@ -1,10 +1,8 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -21,45 +19,27 @@ import { projectSource } from "../../lib/reactive/projection.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import {
-  buildDefaultsPatch,
-  DEFAULT_MODELS_REPLACE_PATHS,
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
   modelDefaultsActions,
   modelProviderErrorMessage,
   readModelBehaviorConfig,
   runModelProviderApiKeyMutation,
-  runModelProviderConfigMutation,
+  runModelProviderDefaultsMutation,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
-import {
-  buildModelProviderPresentation,
-  type DefaultsDraft,
-  type ModelProviderPendingLogout,
-} from "./data.ts";
+import { buildModelProviderPresentation, type DefaultsDraft } from "./data.ts";
 import { createModelProviderDiscovery } from "./discovery-controller.tsx";
 import { createInstalledAgents } from "./installed-agents.tsx";
-import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import { createModelProviderLogin } from "./login-controller.ts";
+import { createModelProvidersState, type ModelProvidersState } from "./page-state.ts";
 import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 import type { ModelProvidersViewProps } from "./view.tsx";
-type ModelProvidersState = {
-  data: ModelProvidersData | null;
-  busy: Record<string, boolean>;
-  messages: Record<string, ModelProviderRowMessage>;
-  probeResults: Record<string, ModelsProbeResult>;
-  keyEditorProvider: string | null;
-  keyDraft: string;
-  profileOrders: Record<string, string[]>;
-  addProviderId: string;
-  addProviderKey: string;
-  defaultsDraft: DefaultsDraft | null;
-  selectedAgentId: string;
-};
 
 export function createModelProviders(
   context: ApplicationContext,
@@ -82,22 +62,12 @@ export function createModelProviders(
   let loaderPending = false;
   let connected = false;
   const accountUsages = new Set<ModelAccountUsageElement>();
-  const state: ModelProvidersState = {
-    data: null,
-    busy: {},
-    messages: {},
-    probeResults: {},
-    keyEditorProvider: null,
-    keyDraft: "",
-    profileOrders: {},
-    addProviderId: "",
-    addProviderKey: "",
-    defaultsDraft: null,
-    selectedAgentId: "",
-  };
-  let logoutConfirmation: AbortController | null = null;
+  const state = createModelProvidersState();
   let pendingConnection = false;
   let pendingCredentialInvalidation = false;
+  let profilesVisible = false;
+  let readAccess = false;
+  let stopCatalog: (() => void) | undefined;
 
   function setState<Key extends keyof ModelProvidersState>(
     key: Key,
@@ -161,11 +131,31 @@ export function createModelProviders(
     invalidateRequests,
     ensureInitialData,
     onSnapshot: (change) => {
+      if (change.clientChanged) {
+        stopCatalog?.();
+        stopCatalog = change.snapshot.client
+          ? modelCatalog.subscribeModelCatalogCache(change.snapshot.client, notify, () => ({
+              agentId: state.selectedAgentId || undefined,
+            }))
+          : undefined;
+      }
       if (change.initial) {
         resetConnectionState();
       } else if (change.connectionChanged && !change.identityChanged) {
-        // Keep the last snapshot visible while the canonical reconnect load replaces it.
-        resetConnectionState({ preserveVisibleData: true });
+        setState("busy", {});
+        installedAgents.reset({ preserveVisibleData: true });
+      }
+      if (change.snapshot.phase === "connected") {
+        const auth = change.snapshot.hello?.auth;
+        const allowed = auth?.scopes !== undefined && hasOperatorAdminAccess(auth);
+        const canRead = hasOperatorReadAccess(auth ?? null);
+        if ((profilesVisible && !allowed) || (readAccess && !canRead)) {
+          gateway.invalidate();
+          invalidateRequests();
+          resetConnectionState();
+        }
+        profilesVisible = allowed;
+        readAccess = canRead;
       }
       installedAgents.synchronize();
       if (change.becameConnected && !change.initial && routeDataObserved && !loaderPending) {
@@ -202,8 +192,8 @@ export function createModelProviders(
   const discovery = createModelProviderDiscovery({
     canOpen: canMutate,
     getOwner: () => ({
-      client: gatewayState.read().snapshot.client,
-      agentId: selection.read().state.selectedId,
+      client: context.gateway.snapshot.client,
+      agentId: context.settingsAgentSelection.state.selectedId,
     }),
     onClose: () => void refresh("replacement"),
     onError: (error) =>
@@ -269,6 +259,7 @@ export function createModelProviders(
       routeDataObserved = true;
       setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
       if (
+        readAccess &&
         (data.agentId ?? "") === state.selectedAgentId &&
         data.selectionIntentRevision === context.settingsAgentSelection.intentRevision &&
         gateway.isRouteDataCurrent(data)
@@ -287,10 +278,12 @@ export function createModelProviders(
     notify();
   }
 
+  // Route results drive the Gateway loading owner while the page stays mounted.
   createEffect(
     () => ({ routeData: inputs.routeData, pending: inputs.loaderPending ?? false }),
     (value) => synchronizeRoute(value.routeData, value.pending),
   );
+  // Dispatch deferred login/catalog requests once their owner admits them.
   createEffect(
     () => ({
       revision: projection.revision(),
@@ -302,6 +295,7 @@ export function createModelProviders(
       if (!connected) {
         return;
       }
+      syncConfig();
       if (pendingConnection && state.data && canMutate() && !core.loading) {
         pendingConnection = false;
         void login.open();
@@ -311,23 +305,17 @@ export function createModelProviders(
       }
     },
   );
-  createEffect(
-    () => gatewayState.read().snapshot.client,
-    (client) => (client ? modelCatalog.subscribeModelCatalogCache(client, notify) : undefined),
-  );
+  function syncConfig() {
+    if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
+      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
+    profileActions.flushPendingOrders();
+  }
   onSettled(() => {
     connected = true;
     gateway.connect();
-    const syncConfig = () => {
-      if (
-        !context.runtimeConfig.state.configSnapshot &&
-        !context.runtimeConfig.state.configLoading
-      ) {
-        void context.runtimeConfig.ensureLoaded().catch(() => undefined);
-      }
-      profileActions.flushPendingOrders();
-    };
     const syncAgent = () => {
+      discovery.synchronize();
       syncSelectedAgent();
       installedAgents.synchronize();
     };
@@ -339,10 +327,9 @@ export function createModelProviders(
           void refresh("publication");
         }
       }),
+      // Config-change events refresh installed agents after externally committed enablement changes.
       installedAgents.subscribe(context.gateway),
-      context.runtimeConfig.subscribe(syncConfig),
-      context.overlays.subscribe(() => profileActions.flushPendingOrders()),
-      context.agents.subscribe(syncAgent),
+      // Selection receipts retire probes, logins, confirmations, and queued orders for the old agent.
       context.settingsAgentSelection.subscribe(syncAgent),
     ];
     syncConfig();
@@ -356,11 +343,15 @@ export function createModelProviders(
       }
       profileActions.resetOrders();
       refreshPolicy.dispose();
+      stopCatalog?.();
       gateway.dispose();
     };
   });
 
   function ensureInitialData() {
+    if (!readAccess) {
+      return;
+    }
     if (
       !context.agents.state.agentsList &&
       !context.agents.state.agentsLoading &&
@@ -388,7 +379,7 @@ export function createModelProviders(
     const { client, epoch } = gateway;
     const agentId = state.selectedAgentId;
     const capturedAgentEpoch = agentEpoch;
-    if (!gateway.connected || !client || !agentId) {
+    if (!gateway.connected || !readAccess || !client || !agentId) {
       return;
     }
     void core.discoverCatalog(
@@ -402,19 +393,20 @@ export function createModelProviders(
   }
 
   function invalidateRequests() {
-    logoutConfirmation?.abort();
+    profileActions.cancelLogout();
     core.invalidate();
     supplemental.invalidate();
+    login.invalidateInventory();
   }
 
-  function resetConnectionState(options: { preserveVisibleData?: boolean } = {}) {
-    if (!options.preserveVisibleData) {
-      setState("data", null);
-      dataClient = null;
-    }
+  function resetConnectionState() {
+    profilesVisible = false;
+    readAccess = false;
+    setState("data", null);
+    dataClient = null;
     refreshPolicy.resetPayload();
     discovery.cancelLoading();
-    installedAgents.reset(options);
+    installedAgents.reset();
     resetAgentScopeState();
     profileActions.resetProbes();
     setState("defaultsDraft", null);
@@ -427,7 +419,7 @@ export function createModelProviders(
     setState("messages", {});
     setState("probeResults", {});
     closeKeyEditor();
-    logoutConfirmation?.abort();
+    profileActions.cancelLogout();
     profileActions.resetOrders();
     setAddProviderOpen(false);
     setState("addProviderId", "");
@@ -464,7 +456,7 @@ export function createModelProviders(
       return Promise.resolve();
     }
     const client = gateway.client;
-    if (!gateway.connected || !client) {
+    if (!gateway.connected || !readAccess || !client) {
       refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
@@ -566,63 +558,21 @@ export function createModelProviders(
     }
   }
 
-  async function requestLogout(pending: ModelProviderPendingLogout) {
-    if (logoutConfirmation || !canMutate() || state.busy[`logout:${pending.cardId}`]) {
-      return;
-    }
-    // Agent changes, reconnects and navigation abort this decision before it can
-    // authorize a logout under a different scope.
-    const controller = new AbortController();
-    logoutConfirmation = controller;
-    const confirmed = await showConfirmDialog({
-      title: t("modelProviders.logout.actionFor", { account: pending.label }),
-      message: t("modelProviders.logout.confirm", { provider: pending.label }),
-      confirmLabel: t("modelProviders.logout.action"),
-      danger: true,
-      signal: controller.signal,
-    }).finally(() => {
-      logoutConfirmation = null;
-    });
-    if (confirmed && !controller.signal.aborted && canMutate()) {
-      await profileActions.logout(pending.cardId, pending.target);
-    }
-  }
-
   async function saveDefaults() {
     const defaults = state.defaultsDraft;
     if (!defaults) {
       return;
     }
-    const client = context.gateway.snapshot.client;
-    let mutation: Promise<void> | undefined;
-    // Global defaults remain editable when the configured roster is empty.
-    if (
-      client &&
-      !modelProviderConfigMutationBlockedReason(context) &&
-      !modelProviderConfigBusy(context) &&
-      !state.busy.defaults
-    ) {
-      const clientEpoch = gateway.epoch;
-      const capturedAgentEpoch = agentEpoch;
-      mutation = runModelProviderConfigMutation(
-        {
-          runtimeConfig: context.runtimeConfig,
-          isCurrentClient: () => gateway.isCurrent({ client, epoch: clientEpoch }),
-          isCurrentAgent: () => agentEpoch === capturedAgentEpoch,
-          setBusy: (busy) => setBusy("defaults", busy),
-          setMessage: (message) => setMessage("defaults", message),
-        },
-        {
-          raw: buildDefaultsPatch(defaults),
-          note: t("modelProviders.notes.defaultModel"),
-          replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
-        },
-      );
-    }
-    await mutation;
-    // Global defaults outlive agent selection. Connection resets clear the draft;
-    // object identity protects newer edits.
-    if (state.defaultsDraft === defaults) {
+    const capturedAgentEpoch = agentEpoch;
+    const settled = await runModelProviderDefaultsMutation(context, gateway, {
+      defaults,
+      busy: Boolean(state.busy.defaults),
+      isCurrentAgent: () => agentEpoch === capturedAgentEpoch,
+      setBusy: (busy) => setBusy("defaults", busy),
+      setMessage: (message) => setMessage("defaults", message),
+    });
+    // Retry retains rejected writes in the config owner; the picker shows saved defaults.
+    if (settled !== null && state.defaultsDraft === defaults) {
       setState("defaultsDraft", null);
     }
   }
@@ -636,11 +586,16 @@ export function createModelProviders(
     selection.read();
     overlays.read();
     const gatewaySnapshot = context.gateway.snapshot;
-    const operatorAuth = gatewaySnapshot.hello?.auth;
     const data = state.data ?? EMPTY_MODEL_PROVIDERS_DATA;
-    const configObject = currentConfigObject(context.runtimeConfig.state);
+    const configState = context.runtimeConfig.state;
+    // Retained config is presentation only; mutation admission still requires a current snapshot.
+    const configObject =
+      currentConfigObject(configState) ??
+      (gatewaySnapshot.phase !== "connected" && dataClient && dataClient === gatewaySnapshot.client
+        ? configState.configForm
+        : null);
     const catalog = modelCatalog.readAgentModelCatalog(
-      gatewaySnapshot.client,
+      readAccess ? gatewaySnapshot.client : null,
       state.selectedAgentId,
     );
     const { configuredDefaults, cards, noSelectableAgents, rosterError, agentLabel, values } =
@@ -678,11 +633,7 @@ export function createModelProviders(
         return () => accountUsages.delete(element);
       },
       connected: gatewaySnapshot.phase === "connected",
-      loading:
-        gatewaySnapshot.phase === "connected" &&
-        state.data === null &&
-        !rosterError &&
-        !noSelectableAgents,
+      loading: state.data === null && !rosterError && !noSelectableAgents,
       refreshing: core.loading,
       error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
       providerUsageFailed: data.providerUsage?.ok === false,
@@ -694,10 +645,7 @@ export function createModelProviders(
       catalogDiscovering: core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
       catalogDiscoveryError: core.catalogLoading ? null : (core.catalogError ?? data.catalogError),
       configBusy: modelProviderConfigBusy(context),
-      canViewProfiles:
-        gatewaySnapshot.phase === "connected" &&
-        operatorAuth?.scopes !== undefined &&
-        hasOperatorAdminAccess(operatorAuth),
+      canViewProfiles: profilesVisible,
       mutationBlockedReason: mutationBlockedReason(),
       defaultsMutationBlockedReason: modelProviderConfigMutationBlockedReason(context),
       providerUsageStalled: refreshPolicy.incompleteUsageExhausted,
@@ -729,7 +677,7 @@ export function createModelProviders(
         void mutateApiKey(provider, configKey, state.keyDraft.trim()),
       onRemoveKey: (provider, configKey) => void mutateApiKey(provider, configKey, null),
       onProbe: (cardId, providers) => void profileActions.probe(cardId, providers),
-      onRequestLogout: (pending) => void requestLogout(pending),
+      onRequestLogout: (pending) => void profileActions.requestLogout(pending),
       onProfileOrderChange: (cardId, provider, profileIds) =>
         profileActions.setOrder(cardId, provider, profileIds),
       onAddProviderToggle: () => {

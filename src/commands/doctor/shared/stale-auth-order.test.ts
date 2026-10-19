@@ -1,3 +1,4 @@
+import "../../../agents/auth-profiles/external-auth.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,7 +8,6 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../../../agents/auth-profiles/credential-fixtures.test-support.js";
-import { testing as externalAuthTesting } from "../../../agents/auth-profiles/external-auth.test-support.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
 import {
   resolveAuthProfileDatabasePath,
@@ -23,6 +23,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import {
   resolveLegacyAuthProfilesPath as resolveAuthStorePath,
   resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
@@ -31,7 +32,10 @@ import {
   collectStaleConfiguredAuthOrderWarnings,
   maybeRepairStaleConfiguredAuthOrders,
 } from "./stale-auth-order.js";
-import { repairStaleConfiguredAuthOrders, withStateDir } from "./stale-auth-order.test-support.js";
+import { withStateDir } from "./stale-auth-order.test-support.js";
+
+const { testing: externalAuthTesting } =
+  await import("../../../agents/auth-profiles/external-auth.test-support.js");
 
 const pluginMetadataMocks = vi.hoisted(() => {
   const snapshot = {
@@ -104,11 +108,7 @@ function anthropicOrderConfig(
   return { ...(agents ? { agents } : {}), auth: { order: { anthropic: [profileId] } } };
 }
 
-function repair(cfg: OpenClawConfig, stores: AuthProfileStore[]) {
-  return repairStaleConfiguredAuthOrders({ cfg, stores });
-}
-
-describe("repairStaleConfiguredAuthOrders", () => {
+describe("maybeRepairStaleConfiguredAuthOrders", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
@@ -171,7 +171,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
   it("preserves an explicit empty order", () => {
     const cfg = { auth: { order: { anthropic: [] } } } satisfies OpenClawConfig;
 
-    const result = repair(cfg, [tokenStore({ profileId: "claude-cli:setup-token" })]);
+    const result = maybeRepairStaleConfiguredAuthOrders({ cfg });
 
     expect(result).toEqual({ config: cfg, changes: [] });
   });
@@ -181,7 +181,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       auth: { order: { anthropic: "anthropic:missing" } },
     } as unknown as OpenClawConfig;
 
-    expect(repair(cfg, [tokenStore({ profileId: "claude-cli:setup-token" })])).toEqual({
+    expect(maybeRepairStaleConfiguredAuthOrders({ cfg })).toEqual({
       config: cfg,
       changes: [],
     });
@@ -201,7 +201,7 @@ describe("repairStaleConfiguredAuthOrders", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(repair(cfg, [tokenStore({ profileId: "claude-cli:setup-token" })])).toEqual({
+    expect(maybeRepairStaleConfiguredAuthOrders({ cfg })).toEqual({
       config: cfg,
       changes: [],
     });
@@ -211,55 +211,6 @@ describe("repairStaleConfiguredAuthOrders", () => {
         doctorFixCommand: "openclaw doctor --fix",
       }),
     ).toEqual([]);
-  });
-
-  it("removes stale aliases together and restores each agent's automatic selection", () => {
-    const cfg = {
-      auth: {
-        order: {
-          anthropic: ["anthropic:removed"],
-          "claude-cli": ["claude-cli:removed"],
-        },
-      },
-    } satisfies OpenClawConfig;
-    const mainStore: AuthProfileStore = createAuthProfileStoreFixture({
-      "anthropic:oauth": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "access",
-        refresh: "refresh",
-        expires: Date.now() + 60_000,
-      },
-    });
-    const childStore: AuthProfileStore = createAuthProfileStoreFixture({
-      "claude-cli:token": {
-        type: "token",
-        provider: "claude-cli",
-        token: "setup-token",
-      },
-    });
-
-    const before = buildAuthHealthSummary({ cfg, store: childStore });
-    const result = repair(cfg, [mainStore, childStore]);
-    const after = buildAuthHealthSummary({ cfg: result.config, store: childStore });
-
-    expect(before.providers).toEqual([
-      expect.objectContaining({ provider: "claude-cli", status: "missing", effectiveProfiles: [] }),
-    ]);
-    expect(result.config.auth?.order).toEqual({});
-    expect(after.providers).toEqual([
-      expect.objectContaining({
-        provider: "claude-cli",
-        status: "ok",
-        effectiveProfiles: [expect.objectContaining({ profileId: "claude-cli:token" })],
-      }),
-    ]);
-    expect(
-      resolveAuthProfileOrder({ cfg: result.config, store: mainStore, provider: "anthropic" }),
-    ).toEqual(["anthropic:oauth"]);
-    expect(
-      resolveAuthProfileOrder({ cfg: result.config, store: childStore, provider: "claude-cli" }),
-    ).toEqual(["claude-cli:token"]);
   });
 
   it("does not use a registered inactive store as the automatic fallback proof", async () => {
@@ -679,18 +630,65 @@ describe("repairStaleConfiguredAuthOrders", () => {
     });
   });
 
-  it("fails closed when an active auth database has only one auth table", async () => {
+  it("restores alias-group selection only while every active auth database is complete", async () => {
     await withStateDir("openclaw-partial-schema-auth-", async (stateDir) => {
       const workAgentDir = path.join(stateDir, "agents", "work", "agent");
-      writeMainToken(stateDir);
-      writeTokenStore(workAgentDir, { profileId: "anthropic:work", provider: "anthropic" });
-      closeAuthDatabases();
+      const mainStore: AuthProfileStore = createAuthProfileStoreFixture({
+        "anthropic:oauth": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
+      const childStore = tokenStore({ profileId: "claude-cli:token" });
+      writePersistedAuthProfileStoreRaw(mainStore, path.join(stateDir, "agents", "main", "agent"));
+      writePersistedAuthProfileStoreRaw(childStore, workAgentDir);
+      const cfg = {
+        agents: { entries: { main: {}, work: {} } },
+        auth: {
+          order: {
+            anthropic: ["anthropic:removed"],
+            "claude-cli": ["claude-cli:removed"],
+          },
+        },
+      } satisfies OpenClawConfig;
+      const before = buildAuthHealthSummary({ cfg, store: childStore });
+      const repaired = repairPersisted(cfg, stateDir);
+      const after = buildAuthHealthSummary({ cfg: repaired.config, store: childStore });
+
+      expect(before.providers).toEqual([
+        expect.objectContaining({
+          provider: "claude-cli",
+          status: "missing",
+          effectiveProfiles: [],
+        }),
+      ]);
+      expect(repaired.config.auth?.order).toEqual({});
+      expect(after.providers).toEqual([
+        expect.objectContaining({
+          provider: "claude-cli",
+          status: "ok",
+          effectiveProfiles: [expect.objectContaining({ profileId: "claude-cli:token" })],
+        }),
+      ]);
+      expect(
+        resolveAuthProfileOrder({ cfg: repaired.config, store: mainStore, provider: "anthropic" }),
+      ).toEqual(["anthropic:oauth"]);
+      expect(
+        resolveAuthProfileOrder({
+          cfg: repaired.config,
+          store: childStore,
+          provider: "claude-cli",
+        }),
+      ).toEqual(["claude-cli:token"]);
+
+      closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
       const rawDatabase = new DatabaseSync(resolveAuthProfileDatabasePath(workAgentDir));
       rawDatabase.exec("DROP TABLE auth_profile_state;");
       rawDatabase.close();
-      const cfg = anthropicOrderConfig("anthropic:missing", {
-        entries: { work: {} },
-      });
 
       const result = repairPersisted(cfg, stateDir);
 

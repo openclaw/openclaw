@@ -31,6 +31,23 @@ describe("session observer settings patches", () => {
     });
   });
 
+  it("preserves the utility chain when changing its primary or restoring automatic routing", () => {
+    const current = { primary: "fixture/utility", fallbacks: ["fixture/backup"] };
+    expect(
+      buildSessionObserverUtilityModelPatch({ kind: "model", model: "fixture/next" }, current),
+    ).toEqual({
+      agents: {
+        defaults: { utilityModel: { primary: "fixture/next", fallbacks: ["fixture/backup"] } },
+      },
+    });
+    expect(buildSessionObserverUtilityModelPatch({ kind: "auto" }, current)).toEqual({
+      agents: { defaults: { utilityModel: { primary: null, fallbacks: ["fixture/backup"] } } },
+    });
+    expect(buildSessionObserverUtilityModelPatch({ kind: "disabled" }, current)).toEqual({
+      agents: { defaults: { utilityModel: { primary: "", fallbacks: ["fixture/backup"] } } },
+    });
+  });
+
   it("keeps auto and disabled selectable when explicit models are unavailable", async () => {
     const container = document.createElement("div");
     mountSolid(

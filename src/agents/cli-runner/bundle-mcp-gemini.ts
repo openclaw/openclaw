@@ -14,7 +14,7 @@ const GEMINI_MCP_SERVER_FIELDS = { strings: ["type"], booleans: ["trust"] } as c
 
 async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
   const raw = await tryReadJson<unknown>(filePath);
-  return isRecord(raw) ? { ...raw } : {};
+  return isRecord(raw) ? raw : {};
 }
 
 async function readGeminiBaseSettings(
@@ -22,9 +22,7 @@ async function readGeminiBaseSettings(
 ): Promise<Record<string, unknown>> {
   const settingsPath =
     inheritedEnv?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
-  return typeof settingsPath === "string" && settingsPath.trim()
-    ? await readJsonObject(settingsPath)
-    : {};
+  return settingsPath?.trim() ? await readJsonObject(settingsPath) : {};
 }
 
 function mergeGeminiWebSearchDisabled(base: Record<string, unknown>): Record<string, unknown> {
@@ -38,7 +36,7 @@ async function writeGeminiSettings(
   settings: Record<string, unknown>,
   inheritedEnv: Record<string, string> | undefined,
   prefix = "openclaw-gemini-mcp-",
-): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
+) {
   const temporary = await writeTemporaryBundleMcpJson(prefix, settings);
   return {
     env: { ...inheritedEnv, GEMINI_CLI_SYSTEM_SETTINGS_PATH: temporary.filePath },
@@ -112,7 +110,7 @@ export async function writeGeminiSystemSettings(
   inheritedEnv: Record<string, string> | undefined,
   mcpToolsDeny?: Record<string, string[]>,
   webSearchEnabled?: boolean,
-): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
+) {
   const base = await readGeminiBaseSettings(inheritedEnv);
   const mcpServers = Object.fromEntries(
     Object.entries(mergedConfig.mcpServers).flatMap(([name, server]) => {
@@ -133,22 +131,13 @@ export async function writeGeminiSystemSettings(
       mcpServers,
     },
   ) as Record<string, unknown>;
-  return await writeGeminiSettings(settings, inheritedEnv);
-}
-
-/** Writes per-attempt Gemini settings with the active loopback capture token. */
-export async function writeGeminiMcpCaptureSettings(params: {
-  inheritedEnv: Record<string, string> | undefined;
-  captureKey: string;
-}): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
-  const existingSettingsPath = params.inheritedEnv?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
-  if (!existingSettingsPath) {
-    throw new Error("Gemini MCP capture requires prepared system settings");
-  }
-  const settings = await readJsonObject(existingSettingsPath);
-  return await writeGeminiSettings(
-    withOpenClawMcpCaptureHeader(settings, params.captureKey),
-    params.inheritedEnv,
-    "openclaw-gemini-mcp-attempt-",
-  );
+  return {
+    ...(await writeGeminiSettings(settings, inheritedEnv)),
+    prepareCaptureAttempt: (captureKey: string, env: Record<string, string> | undefined) =>
+      writeGeminiSettings(
+        withOpenClawMcpCaptureHeader(settings, captureKey),
+        env,
+        "openclaw-gemini-mcp-attempt-",
+      ),
+  };
 }

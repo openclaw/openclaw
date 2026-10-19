@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
-import { recordOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -33,7 +33,7 @@ describe("SQLite mutation worker ownership", () => {
       { scenario: "external-service", label: "reconcile-cold-quarantine" },
       async (state) => {
         openOpenClawStateDatabase();
-        recordOpenClawDatabaseQuarantine({
+        seedOpenClawDatabaseQuarantine({
           path: state.path("unrelated.sqlite"),
           kind: "agent",
           reason: "synthetic unrelated damage",

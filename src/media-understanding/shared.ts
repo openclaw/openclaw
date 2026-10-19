@@ -4,7 +4,6 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -31,6 +30,7 @@ import {
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { truncateOptionalText } from "../shared/text-truncate.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type { AudioTranscriptionRequest } from "./types.js";
 export {
@@ -324,14 +324,10 @@ function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
 }
 
 function sanitizeAuditContext(auditContext: string | undefined): string | undefined {
-  const cleaned = auditContext
-    ?.replace(/\p{Cc}+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return undefined;
-  }
-  return truncateUtf16Safe(cleaned, MAX_AUDIT_CONTEXT_CHARS);
+  return truncateOptionalText(
+    auditContext?.replace(/\p{Cc}+/gu, " ").replace(/\s+/g, " "),
+    MAX_AUDIT_CONTEXT_CHARS,
+  );
 }
 
 type ResolvedProviderHttpRequestConfig = {

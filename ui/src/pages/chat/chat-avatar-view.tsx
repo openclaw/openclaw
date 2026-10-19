@@ -10,7 +10,7 @@ import {
 import { ChannelAvatar } from "../../components/solid/channel-avatar.tsx";
 import {
   IdentityAvatarImage,
-  identityAvatarState,
+  createIdentityAvatarPresentation,
 } from "../../components/solid/identity-avatar-image.tsx";
 import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-view.ts";
 import {
@@ -129,11 +129,11 @@ function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user">) {
   const view = createMemo(() => {
     gateway();
     const source = url();
-    const imageUrl = source ? (resolveAvatarImageUrl(source) ?? source) : null;
+    const imageUrl = source ? resolveAvatarImageUrl(source, source) : null;
     return {
       fallback: resolveAvatarInitials({ name: name() }),
       imageUrl,
-      pending: typeof imageUrl !== "string",
+      pending: imageUrl !== null && typeof imageUrl !== "string",
     };
   });
   return (
@@ -212,9 +212,10 @@ function AgentAvatar(props: {
   const url = createMemo(() => props.avatar?.trim() || "");
   const view = createMemo(() => {
     gateway();
-    const imageUrl = resolveAvatarImageUrl(url()) ?? url();
-    return { imageUrl, pending: typeof imageUrl !== "string" };
+    const imageUrl = resolveAvatarImageUrl(url(), url());
+    return { imageUrl, pending: imageUrl !== null && typeof imageUrl !== "string" };
   });
+  const presentation = createIdentityAvatarPresentation(view);
   return (
     <Show
       when={
@@ -228,13 +229,18 @@ function AgentAvatar(props: {
         />
       }
     >
-      <span ref={identityAvatarState(view)} class="chat-avatar-slot">
-        <IdentityAvatarImage
-          view={view()}
-          fallbackSelector=".chat-avatar-slot"
-          class="chat-avatar assistant"
-          alt={props.name}
-        />
+      <span
+        data-avatar-state={presentation.state()}
+        class={["chat-avatar-slot", presentation.classes()]}
+      >
+        <Show when={Boolean(view().imageUrl)}>
+          <IdentityAvatarImage
+            view={view()}
+            onStateChange={presentation.onStateChange}
+            class="chat-avatar assistant"
+            alt={props.name}
+          />
+        </Show>
         <AgentIdentityAvatar
           agent={{ id: props.id, name: props.name, textAvatar: props.textAvatar }}
           class="chat-avatar assistant"

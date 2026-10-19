@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
-import { createSignedFileSharedActivityRequest } from "./monitor.test-fixtures.js";
+import { createFileSharedActivityBody } from "./monitor.test-fixtures.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 import type { NextcloudTalkIngressPayload } from "./webhook-spool-state.js";
@@ -86,7 +86,7 @@ describe("file-share caption mention admission", () => {
         pollIntervalMs: 60_000,
       });
       try {
-        const envelope = JSON.parse(createSignedFileSharedActivityRequest().body);
+        const envelope = JSON.parse(createFileSharedActivityBody());
         const content = JSON.parse(envelope.object.content);
         content.message = caption;
         content.parameters["mention-user1"] = { type: "user", id: "bert", name: "bert" };

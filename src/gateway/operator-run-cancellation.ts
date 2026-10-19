@@ -1,12 +1,16 @@
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { captureSessionControllerSourceSettlement } from "../sessions/session-controller.mailbox.js";
+import {
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  isRpcSourceQueued,
+  isRpcSourceRegistered,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../sessions/session-controller.rpc-sources.js";
 import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { createChatAbortOps } from "./chat-abort-ops.js";
-import {
-  abortChatRunById,
-  isChatAbortControllerEntryAbortable,
-  type ChatAbortControllerEntry,
-} from "./chat-abort.js";
-import { abortQueuedChatTurnById } from "./chat-queued-turns.js";
+import { abortChatRunById } from "./chat-abort.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -21,10 +25,7 @@ import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
   GatewayRequestContext,
-  | keyof Parameters<typeof createChatAbortOps>[0]
-  | "chatQueuedTurns"
-  | "logGateway"
-  | "trackExecution"
+  keyof Parameters<typeof createChatAbortOps>[0] | "logGateway" | "trackExecution"
 >;
 
 /** Retain authority before its execution or queue owner can arm cancellation. */
@@ -32,7 +33,7 @@ export async function retainGatewayOperatorRun(
   params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
-    entry?: ChatAbortControllerEntry;
+    entry?: RpcSourceRef;
     abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
   },
 ) {
@@ -47,8 +48,8 @@ export async function retainGatewayOperatorRun(
             ? { ok: true, value: params.abortSession }
             : await prepareChatAbortSessionSnapshot({
                 cfg: params.context.getRuntimeConfig(),
-                key: params.entry.sessionKey,
-                agentId: params.entry.agentId,
+                key: getRpcSourceIdentity(params.entry).sessionKey,
+                agentId: getRpcSourceIdentity(params.entry).agentId,
               }),
         )
       : undefined;
@@ -81,14 +82,13 @@ export async function retainGatewayOperatorRun(
 function createGatewayOperatorRunCancellation(params: {
   signal: AbortSignal;
   runId: string;
-  entry: ChatAbortControllerEntry;
+  entry: RpcSourceRef;
   context: OperatorRunCancellationContext;
   session: () => ChatAbortSessionSnapshot;
 }) {
   const { signal, runId, entry, context } = params;
-  const controller = entry.controller;
-  const sessionKey = entry.sessionKey;
-  const lifecycleGeneration = entry.lifecycleGeneration;
+  const sessionKey = getRpcSourceIdentity(entry).sessionKey;
+  const lifecycleGeneration = getRpcSourceLifecycleGeneration(entry);
   let released = false;
   let armed = false;
   let cancellationStarted = false;
@@ -100,30 +100,29 @@ function createGatewayOperatorRunCancellation(params: {
   // owner's abortability, not sidebar projection, distinguish terminal work.
   const ownsActiveRun = () =>
     ownsLifetime() &&
-    context.chatAbortControllers.get(runId) === entry &&
-    entry.controller === controller &&
-    entry.sessionKey === sessionKey &&
-    !entry.registrationCleanupRequested &&
-    entry.projectSessionTerminalPersistence === undefined &&
-    entry.projectSessionTerminalPersisted !== true &&
-    isChatAbortControllerEntryAbortable(entry);
+    isRpcSourceRegistered(entry) &&
+    getRpcSourceIdentity(entry).sessionKey === sessionKey &&
+    entry.adapter.projectSessionTerminalPersistence === undefined &&
+    entry.adapter.projectSessionTerminalPersisted !== true;
   const cancelQueuedTurn = () => {
-    const queued = context.chatQueuedTurns.get(runId);
-    if (!ownsLifetime() || queued?.controller !== controller || queued.abortable === false) {
-      return;
+    if (!ownsLifetime() || !isRpcSourceRegistered(entry) || !isRpcSourceQueued(entry)) {
+      return false;
     }
-    abortQueuedChatTurnById(context.chatQueuedTurns, {
-      runId,
-      sessionKey: queued.sessionKey,
-      stopReason: "rpc",
-      diagnosticReason: "authority-revoked",
+    entry.adapter.abortStopReason = "rpc";
+    entry.adapter.abortDiagnosticReason = "authority-revoked";
+    return requestRpcSourceCancellation(entry, signal.reason, () => {
+      if (!ownsLifetime() || !isRpcSourceRegistered(entry)) {
+        throw new Error("Operator cancellation source is no longer current");
+      }
     });
   };
   const cancel = async () => {
     // Queue custody supersedes the source admission even before its active entry
     // is removed. A collected source cannot fall back to aborting another owner.
-    if (context.chatQueuedTurns.get(runId)?.controller === controller) {
-      cancelQueuedTurn();
+    if (isRpcSourceRegistered(entry) && isRpcSourceQueued(entry)) {
+      if (cancelQueuedTurn()) {
+        await captureSessionControllerSourceSettlement(entry.input);
+      }
       return;
     }
     if (!ownsActiveRun()) {
@@ -132,17 +131,18 @@ function createGatewayOperatorRunCancellation(params: {
     // A provider can settle and release its run during source abortion. Capture
     // and stop this exact owner before yielding; children retain their own source.
     const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
+    const identity = getRpcSourceIdentity(entry);
     // Internal runs use a separate transcript target; coordination and progress
     // refresh output stay hidden. This snapshot would create a visible reply.
     const snapshot =
-      entry.controlUiVisible !== false && text.trim()
+      entry.adapter.controlUiVisible !== false && text.trim()
         ? captureAbortedPartial({
             runId,
             sessionKey,
-            sessionId: entry.sessionId,
+            sessionId: identity.sessionId,
             text,
             abortOrigin: "rpc",
-            resolveTerminalProducer: entry.resolveTerminalProducer,
+            resolveTerminalProducer: entry.adapter.resolveTerminalProducer,
             session: params.session(),
           })
         : undefined;
@@ -151,7 +151,13 @@ function createGatewayOperatorRunCancellation(params: {
       sessionKey,
       stopReason: "rpc",
       diagnosticReason: "authority-revoked",
-      onAbortCommitted: () => deferAbortedPartialPersistence(snapshot, context),
+      expectedEntry: entry,
+      assertCurrent: () => {
+        if (!ownsActiveRun()) {
+          throw new Error("Operator cancellation source is no longer current");
+        }
+      },
+      onAbortPrepared: () => deferAbortedPartialPersistence(snapshot, context),
     });
     if (!aborted) {
       return;
@@ -160,6 +166,7 @@ function createGatewayOperatorRunCancellation(params: {
     // The asynchronous writer stays outside admission's eager module graph.
     const settled = await Promise.allSettled([
       waitForChatAbortTerminalPersistence(entry),
+      captureSessionControllerSourceSettlement(entry.input),
       ...(snapshot
         ? [
             import("./server-methods/chat-transcript-persistence.runtime.js").then((transcript) =>

@@ -1,10 +1,11 @@
 import type http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
@@ -12,10 +13,6 @@ import { makeCall, makeBridge, makeHandler } from "./realtime-call-control.test-
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 async function openCall(params: {
   call: CallRecord;
@@ -43,7 +40,30 @@ async function openCall(params: {
       start: { streamSid: `MZ-${params.providerCallId}`, callSid: params.providerCallId },
     }),
   );
+  onTestFinished(async () => {
+    vi.useRealTimers();
+    await closeCall(params.handler, server, ws);
+  });
   return { server, ws };
+}
+
+async function connectCall(
+  providerCallId: string,
+  options: Omit<Parameters<typeof makeHandler>[0], "call" | "createBridge"> & {
+    call?: CallRecord;
+    bridge?: Partial<RealtimeVoiceBridge>;
+  } = {},
+) {
+  const call = options.call ?? makeCall(providerCallId);
+  const created = createDeferred<RealtimeBridgeRequest>();
+  const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+    created.resolve(request);
+    return makeBridge(options.bridge);
+  });
+  const fixture = makeHandler({ ...options, call, createBridge });
+  const connection = await openCall({ call, handler: fixture.handler, providerCallId });
+  await vi.waitFor(() => expect(createBridge).toHaveBeenCalledOnce());
+  return { ...fixture, ...connection, call, request: await created.promise };
 }
 
 async function closeCall(
@@ -62,29 +82,16 @@ async function closeCall(
 
 describe("realtime call control over the Twilio stream", () => {
   it("retires the realtime producer without ending a call before carrier playback", async () => {
-    const providerCallId = "CA-carrier-playback";
-    const call = makeCall(providerCallId);
-    const created = createDeferred<void>();
     const close = vi.fn();
-    const { handler, processEvent } = makeHandler({
-      call,
-      createBridge: () => {
-        created.resolve();
-        return makeBridge({ close });
-      },
+    const { call, handler, processEvent } = await connectCall("CA-carrier-playback", {
+      bridge: { close },
     });
-    const { server, ws } = await openCall({ call, handler, providerCallId });
-    try {
-      await created.promise;
-      await handler.prepareCarrierPlayback(call.callId);
-      expect(close).toHaveBeenCalledOnce();
-      expect(handler.speak(call.callId, "Too late")).toMatchObject({ success: false });
-      expect(processEvent.mock.calls).not.toContainEqual([
-        expect.objectContaining({ type: "call.ended" }),
-      ]);
-    } finally {
-      await closeCall(handler, server, ws);
-    }
+    await handler.prepareCarrierPlayback(call.callId);
+    expect(close).toHaveBeenCalledOnce();
+    expect(handler.speak(call.callId, "Too late")).toMatchObject({ success: false });
+    expect(processEvent.mock.calls).not.toContainEqual([
+      expect.objectContaining({ type: "call.ended" }),
+    ]);
   });
 
   it("abandons a pending realtime admission when carrier voicemail takes ownership", async () => {
@@ -99,7 +106,7 @@ describe("realtime call control over the Twilio stream", () => {
       await release.promise;
       record.metadata = update(record.metadata);
     });
-    const { server, ws } = await openCall({ call, handler, providerCallId });
+    const { ws } = await openCall({ call, handler, providerCallId });
     try {
       await entered.promise;
       call.metadata = { ...call.metadata, voicemailStatus: "pending" };
@@ -111,37 +118,35 @@ describe("realtime call control over the Twilio stream", () => {
       expect(endCall).not.toHaveBeenCalled();
     } finally {
       release.resolve();
-      await closeCall(handler, server, ws);
     }
   });
 
   it("keeps a native consult running when far-side speech arrives during silent model output", async () => {
-    let callbacks: RealtimeBridgeRequest | undefined;
     const receivedAudio = createDeferred<void>();
     const consultStarted = createDeferred<AbortSignal | undefined>();
     const consultResult = createDeferred<{ text: string }>();
     const handleBargeIn = vi.fn();
-    const call = makeCall("CA-silent-consult");
     let inputFrames = 0;
-    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-      callbacks = request;
-      return makeBridge({
+    const {
+      handler,
+      ws,
+      request: callbacks,
+    } = await connectCall("CA-silent-consult", {
+      nativeConsult: true,
+      bridge: {
         handleBargeIn,
         sendAudio: () => {
           if (++inputFrames === 4) {
             receivedAudio.resolve();
           }
         },
-      });
+      },
     });
-    const { handler } = makeHandler({ call, createBridge, nativeConsult: true });
     handler.registerToolHandler("openclaw_agent_consult", (_args, _callId, context) => {
       consultStarted.resolve(context?.abortSignal);
       return consultResult.promise;
     });
-    const { server, ws } = await openCall({ call, handler, providerCallId: "CA-silent-consult" });
     try {
-      await vi.waitFor(() => expect(callbacks).toBeDefined());
       vi.useFakeTimers();
       const pending = callbacks?.runAgentConsult?.({ prompt: "Check reservation availability" });
       const signal = await consultStarted.promise;
@@ -161,175 +166,117 @@ describe("realtime call control over the Twilio stream", () => {
       await expect(pending).resolves.toEqual({ text: "Reservations are available" });
     } finally {
       consultResult.resolve({ text: "Finished" });
-      vi.useRealTimers();
-      await closeCall(handler, server, ws);
     }
   });
 
   it("pauses speech-idle hang-up while an agent consult is in flight", async () => {
-    let callbacks: RealtimeBridgeRequest | undefined;
     const endCall = vi.fn(async () => ({ success: true }));
-    const call = makeCall("CA-idle");
-    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-      callbacks = request;
-      return makeBridge();
+    const { handler, request: callbacks } = await connectCall("CA-idle", {
+      endCall,
+      idleHangupMs: 1_000,
     });
-    const { handler } = makeHandler({ call, createBridge, endCall, idleHangupMs: 1_000 });
-    const { server, ws } = await openCall({ call, handler, providerCallId: "CA-idle" });
 
-    try {
-      await vi.waitFor(() => expect(callbacks).toBeDefined());
-      const consulted = createDeferred<{ text: string }>();
-      handler.registerToolHandler("openclaw_agent_consult", () => consulted.promise);
-      vi.useFakeTimers();
-      callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-      callbacks?.onToolCall?.({
-        itemId: "consult-idle",
-        callId: "consult-idle",
-        name: "openclaw_agent_consult",
-        args: { question: "Check it" },
-      } satisfies RealtimeVoiceToolCallEvent);
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(endCall).not.toHaveBeenCalled();
-      consulted.resolve({ text: "Done" });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(endCall).toHaveBeenCalledWith("call-1", { reason: "timeout" });
-    } finally {
-      vi.useRealTimers();
-      await closeCall(handler, server, ws);
-    }
+    const consulted = createDeferred<{ text: string }>();
+    handler.registerToolHandler("openclaw_agent_consult", () => consulted.promise);
+    vi.useFakeTimers();
+    callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    callbacks?.onToolCall?.({
+      itemId: "consult-idle",
+      callId: "consult-idle",
+      name: "openclaw_agent_consult",
+      args: { question: "Check it" },
+    } satisfies RealtimeVoiceToolCallEvent);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(endCall).not.toHaveBeenCalled();
+    consulted.resolve({ text: "Done" });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(endCall).toHaveBeenCalledWith("call-1", { reason: "timeout" });
   });
 
   it("keeps the call alive while buffered assistant audio is still playing out", async () => {
-    let callbacks: RealtimeBridgeRequest | undefined;
     const endCall = vi.fn(async () => ({ success: true }));
-    const call = makeCall("CA-playout");
-    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-      callbacks = request;
-      return makeBridge();
+    const { request: callbacks } = await connectCall("CA-playout", {
+      endCall,
+      idleHangupMs: 1_000,
     });
-    const { handler } = makeHandler({ call, createBridge, endCall, idleHangupMs: 1_000 });
-    const { server, ws } = await openCall({ call, handler, providerCallId: "CA-playout" });
 
-    try {
-      await vi.waitFor(() => expect(callbacks).toBeDefined());
-      vi.useFakeTimers();
-      // Three seconds of loud 8 kHz mu-law arrive at once; the pacer plays them out over time.
-      const loud = Buffer.alloc(24_000);
-      for (let index = 0; index < loud.length; index += 2) {
-        loud[index] = 0x00;
-        loud[index + 1] = 0x80;
-      }
-      callbacks?.onAudio(loud);
-      await vi.advanceTimersByTimeAsync(2_500);
-      expect(endCall).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(endCall).toHaveBeenCalledWith("call-1", { reason: "timeout" });
-    } finally {
-      vi.useRealTimers();
-      await closeCall(handler, server, ws);
+    vi.useFakeTimers();
+    // Three seconds of loud 8 kHz mu-law arrive at once; the pacer plays them out over time.
+    const loud = Buffer.alloc(24_000);
+    for (let index = 0; index < loud.length; index += 2) {
+      loud[index] = 0x00;
+      loud[index + 1] = 0x80;
     }
+    callbacks?.onAudio(loud);
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(endCall).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(endCall).toHaveBeenCalledWith("call-1", { reason: "timeout" });
   });
 
   it("keeps the call alive during sustained caller speech and ends after silence", async () => {
     let receivedFrame = createDeferred<void>();
     const endCall = vi.fn(async () => ({ success: true }));
-    const call = makeCall("CA-sustained-speech");
-    const createBridge = vi.fn((_request: RealtimeBridgeRequest) =>
-      makeBridge({
-        sendAudio: () => receivedFrame.resolve(),
-      }),
-    );
-    const { handler } = makeHandler({ call, createBridge, endCall, idleHangupMs: 1_000 });
-    const { server, ws } = await openCall({
-      call,
-      handler,
-      providerCallId: "CA-sustained-speech",
+    const { ws } = await connectCall("CA-sustained-speech", {
+      endCall,
+      idleHangupMs: 1_000,
+      bridge: { sendAudio: () => receivedFrame.resolve() },
     });
 
-    try {
-      await vi.waitFor(() => expect(createBridge).toHaveBeenCalledOnce());
-      vi.useFakeTimers();
-      const loudFrame = Buffer.alloc(160, 0x00).toString("base64");
-      for (let index = 0; index < 5; index += 1) {
-        receivedFrame = createDeferred<void>();
-        ws.send(JSON.stringify({ event: "media", media: { payload: loudFrame } }));
-        await receivedFrame.promise;
-        await vi.advanceTimersByTimeAsync(600);
-        expect(endCall).not.toHaveBeenCalled();
-      }
-
-      await vi.advanceTimersByTimeAsync(399);
+    vi.useFakeTimers();
+    const loudFrame = Buffer.alloc(160, 0x00).toString("base64");
+    for (let index = 0; index < 5; index += 1) {
+      receivedFrame = createDeferred<void>();
+      ws.send(JSON.stringify({ event: "media", media: { payload: loudFrame } }));
+      await receivedFrame.promise;
+      await vi.advanceTimersByTimeAsync(600);
       expect(endCall).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
-    } finally {
-      vi.useRealTimers();
-      await closeCall(handler, server, ws);
     }
+
+    await vi.advanceTimersByTimeAsync(399);
+    expect(endCall).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
   });
 
   it("waits for outbound speech and cancels the independent greeting fallback", async () => {
-    let callbacks: RealtimeBridgeRequest | undefined;
     const triggerGreeting = vi.fn();
     const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
     const call = makeCall("CA-opening", {
       direction: "outbound",
       metadata: { initialMessage: opening },
     });
-    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-      callbacks = request;
-      return makeBridge({ triggerGreeting });
+    const { request: callbacks } = await connectCall("CA-opening", {
+      call,
+      nativeConsult: true,
+      bridge: { triggerGreeting },
     });
-    const { handler } = makeHandler({ call, createBridge, nativeConsult: true });
-    const { server, ws } = await openCall({ call, handler, providerCallId: "CA-opening" });
 
-    try {
-      await vi.waitFor(() => expect(callbacks).toBeDefined());
-      expect(createBridge.mock.calls[0]?.[0].instructions).toContain(
-        `Answer: ${JSON.stringify(opening)}`,
-      );
-      vi.useFakeTimers();
-      callbacks?.onReady?.();
-      callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(triggerGreeting).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-      await closeCall(handler, server, ws);
-    }
+    expect(callbacks.instructions).toContain(`Answer: ${JSON.stringify(opening)}`);
+    vi.useFakeTimers();
+    callbacks?.onReady?.();
+    callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(triggerGreeting).not.toHaveBeenCalled();
   });
 
   it("keeps function-tool outbound greetings immediate with the original instructions", async () => {
-    let callbacks: RealtimeBridgeRequest | undefined;
     const triggerGreeting = vi.fn();
     const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
     const call = makeCall("CA-function-tool-opening", {
       direction: "outbound",
       metadata: { initialMessage: opening },
     });
-    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-      callbacks = request;
-      return makeBridge({ triggerGreeting });
-    });
-    const { handler } = makeHandler({ call, createBridge });
-    const { server, ws } = await openCall({
+    const { request: callbacks } = await connectCall("CA-function-tool-opening", {
       call,
-      handler,
-      providerCallId: "CA-function-tool-opening",
+      bridge: { triggerGreeting },
     });
 
-    try {
-      await vi.waitFor(() => expect(createBridge).toHaveBeenCalledOnce());
-      const request = createBridge.mock.calls[0]?.[0];
-      expect(request?.instructions).toBe("Be helpful.");
-      callbacks?.onReady?.();
-      expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith(
-        `Be helpful.\n\nStart the call by greeting the caller naturally. Include this greeting in your first spoken reply: "${opening}"`,
-      );
-    } finally {
-      await closeCall(handler, server, ws);
-    }
+    expect(callbacks.instructions).toBe("Be helpful.");
+    callbacks?.onReady?.();
+    expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith(
+      `Be helpful.\n\nStart the call by greeting the caller naturally. Include this greeting in your first spoken reply: "${opening}"`,
+    );
   });
 });

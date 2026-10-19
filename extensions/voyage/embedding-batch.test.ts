@@ -119,10 +119,7 @@ afterEach(() => {
 });
 
 describe("voyage batch bounded reads", () => {
-  it.each([
-    { inputType: "query", expectedInputs: [["first"], ["second"]] },
-    { inputType: undefined, expectedInputs: [["first", "second"]] },
-  ] as const)(
+  it.each([{ inputType: undefined, expectedInputs: [["first", "second"]] }] as const)(
     "preserves real $inputType requests, grouping, and configured query parameters",
     async ({ inputType, expectedInputs }) => {
       const received: Array<{

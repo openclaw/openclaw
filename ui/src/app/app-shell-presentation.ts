@@ -1,9 +1,16 @@
-import { createSignal } from "@solidjs/signals";
+import { createSignal, onSettled, runWithOwner } from "@solidjs/signals";
+import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
+import { readNativeHistoryState } from "./native-web-chrome.ts";
 
 /** Synchronous shell state publishes revisions; Solid commits settle its DOM waiters. */
-export class ShellPresentation {
+export abstract class ShellPresentation {
+  mobileGatewayStatus: GatewayStatusProps | null = null;
+  connectionRecovery = false;
+  protected connectionFlagVisible = false;
+  private connectionKind: GatewayStatusProps["kind"] | undefined;
+  private connectionRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private connectionFlagTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly readRevision: () => number;
   private readonly writeRevision: (next: (revision: number) => number) => number;
   readonly shellRevision = () => this.readRevision();
@@ -14,6 +21,8 @@ export class ShellPresentation {
     this.writeRevision = write;
   }
   private disposed = false;
+  private presentationMounted = false;
+  private pendingCommit: object | undefined;
   private commitPromise: Promise<boolean> = Promise.resolve(true);
   private resolveCommit: ((committed: boolean) => void) | undefined;
   private currentNavDrawerOpen = false;
@@ -25,17 +34,6 @@ export class ShellPresentation {
       return;
     }
     this.currentNavDrawerOpen = value;
-    this.invalidate();
-  }
-  private currentNavResizing = false;
-  get navResizing(): boolean {
-    return this.currentNavResizing;
-  }
-  set navResizing(value: boolean) {
-    if (Object.is(this.currentNavResizing, value)) {
-      return;
-    }
-    this.currentNavResizing = value;
     this.invalidate();
   }
   private currentDesktopNavigationExpanded = false;
@@ -82,20 +80,97 @@ export class ShellPresentation {
     this.currentRouteState = value;
     this.invalidate();
   }
-  private currentNativeHistoryState: NativeHistoryState = readNativeHistoryState();
-  get nativeHistoryState(): NativeHistoryState {
-    return this.currentNativeHistoryState;
-  }
-  set nativeHistoryState(value: NativeHistoryState) {
-    if (Object.is(this.currentNativeHistoryState, value)) {
-      return;
+  private readonly nativeHistory = createSignal(readNativeHistoryState(), { ownedWrite: true });
+  readonly nativeHistoryState = this.nativeHistory[0];
+  readonly setNativeHistoryState = this.nativeHistory[1];
+
+  protected syncConnectionFeedback(kind: GatewayStatusProps["kind"]): void {
+    // Only a kind transition replaces the brief recovery row and avatar flag timers.
+    if (kind !== this.connectionKind) {
+      const previous = this.connectionKind;
+      const wasRecovery = this.connectionRecovery;
+      const wasFlagVisible = this.connectionFlagVisible;
+      this.clearConnectionFeedbackTimers();
+      this.connectionKind = kind;
+      this.connectionRecovery =
+        kind === "connected" && previous != null && previous !== "connected";
+      this.connectionFlagVisible = Boolean(
+        kind && (kind !== "connected" || this.connectionRecovery),
+      );
+      if (this.connectionRecovery) {
+        this.connectionRecoveryTimer = setTimeout(() => {
+          this.connectionRecoveryTimer = undefined;
+          this.connectionRecovery = false;
+          this.invalidate();
+        }, 2_000);
+      }
+      if (this.connectionFlagVisible) {
+        this.connectionFlagTimer = setTimeout(() => {
+          this.connectionFlagTimer = undefined;
+          this.connectionFlagVisible = false;
+          this.invalidate();
+        }, 4_000);
+      }
+      if (
+        wasRecovery !== this.connectionRecovery ||
+        wasFlagVisible !== this.connectionFlagVisible
+      ) {
+        this.invalidate();
+      }
     }
-    this.currentNativeHistoryState = value;
-    this.invalidate();
+  }
+
+  protected resetConnectionFeedback(): void {
+    this.clearConnectionFeedbackTimers();
+    this.connectionKind = undefined;
+    this.connectionRecovery = false;
+    this.connectionFlagVisible = false;
+    this.mobileGatewayStatus = null;
+  }
+
+  private clearConnectionFeedbackTimers(): void {
+    clearTimeout(this.connectionRecoveryTimer);
+    clearTimeout(this.connectionFlagTimer);
+    this.connectionRecoveryTimer = undefined;
+    this.connectionFlagTimer = undefined;
   }
 
   get updateComplete(): Promise<boolean> {
     return this.commitPromise;
+  }
+
+  mountPresentation(): () => void {
+    this.presentationMounted = true;
+    this.scheduleCommit();
+    return () => {
+      this.presentationMounted = false;
+      this.suspendPresentation();
+    };
+  }
+
+  protected abstract afterCommit(): void;
+
+  private scheduleCommit(): void {
+    if (this.disposed || !this.presentationMounted || this.pendingCommit) {
+      return;
+    }
+    if (!this.resolveCommit) {
+      this.commitPromise = new Promise((resolve) => {
+        this.resolveCommit = resolve;
+      });
+    }
+    const commit = {};
+    this.pendingCommit = commit;
+    // Router notifications can run inside a render memo that retires before this commit.
+    runWithOwner(null, () =>
+      onSettled(() => {
+        if (this.pendingCommit !== commit) {
+          return;
+        }
+        this.pendingCommit = undefined;
+        this.afterCommit();
+      }),
+    );
   }
 
   invalidate(): void {
@@ -108,14 +183,17 @@ export class ShellPresentation {
       });
     }
     this.writeRevision((revision) => revision + 1);
+    this.scheduleCommit();
   }
 
   protected resumePresentation(): void {
     this.disposed = false;
+    this.scheduleCommit();
   }
 
   protected suspendPresentation(): void {
     this.disposed = true;
+    this.pendingCommit = undefined;
     this.resolveCommit?.(false);
     this.resolveCommit = undefined;
     this.commitPromise = Promise.resolve(false);

@@ -66,7 +66,7 @@ function parseAuditIdentityKey(row: AuditIdentityKeyRow): AuditIdentityKey {
   return { keyId: row.key_id, key };
 }
 
-/** Load the stable audit identity key or create it transactionally on first use. */
+/** Load the stable audit identity key or create it on first use. */
 export function loadOrCreateAuditIdentityKey(db: EngineConnection): AuditIdentityKey {
   const cached = identityByDatabase.get(db);
   if (cached) {
@@ -112,24 +112,9 @@ export function loadOrCreateAuditIdentityKey(db: EngineConnection): AuditIdentit
     key: randomBytes(AUDIT_IDENTITY_KEY_BYTES),
     created_at: Date.now(),
   };
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("audit_identity_keys")
-      .values(candidate)
-      .onConflict((conflict) => conflict.column("id").doNothing()),
-  );
-  const stored = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("audit_identity_keys")
-      .select(["key_id", "key"])
-      .where("id", "=", AUDIT_IDENTITY_SINGLETON_ID),
-  );
-  if (!stored) {
-    throw new Error("audit identity key could not be created");
-  }
-  const identity = parseAuditIdentityKey(stored);
+  executeSqliteQuerySync(db, kysely.insertInto("audit_identity_keys").values(candidate));
+  const identity = { keyId: candidate.key_id, key: candidate.key };
+  registerAuditIdentityKeyForRedaction(identity.key);
   identityByDatabase.set(db, identity);
   return identity;
 }

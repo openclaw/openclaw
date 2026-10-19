@@ -5,10 +5,10 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
+import { runUtilityCompletion } from "../../agents/utility-completion.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
@@ -47,7 +47,7 @@ type ConversationLabelFallbackParams = ConversationLabelParams & {
   regularModelRef: string;
   preferredProfile?: string;
   normalizeLabel?: (label: string) => string | null;
-  /** Speculative callers: one utility attempt at most, never the regular model. */
+  /** Speculative callers use only the utility chain, without regular-model recovery. */
   utilityOnly?: boolean;
 };
 
@@ -127,10 +127,12 @@ async function runLabelAttempts(
       }
       const model = { provider: selection.provider, model: selection.modelId };
       modelRef = `${selection.runtimeProvider ?? selection.provider}/${selection.modelId}`;
-      if (params.operatorAuthority?.modelPolicy?.allows(model) === false) {
-        continue;
+      if (attempt.phase !== "utility") {
+        if (params.operatorAuthority?.modelPolicy?.allows(model) === false) {
+          continue;
+        }
+        assertOperatorModelAllowed(params.operatorAuthority, model);
       }
-      assertOperatorModelAllowed(params.operatorAuthority, model);
       // The session's runtime override was resolved for its primary provider; a
       // utility model on another provider cannot run through that harness.
       const selectedRuntime = resolveCompatibleAgentRuntimeForProvider({
@@ -148,7 +150,7 @@ async function runLabelAttempts(
           });
       const agentHarnessRuntimeOverride =
         selectedRuntime ?? (automaticRuntime === "claude-cli" ? automaticRuntime : undefined);
-      const completion = await runIsolatedCompletion({
+      const completion = await runUtilityCompletion({
         purpose: "conversation-label",
         config: params.cfg,
         provider: selection.runtimeProvider ?? selection.provider,
@@ -156,6 +158,16 @@ async function runLabelAttempts(
         authProfileId: selection.profileId ?? attempt.preferredProfile,
         agentId: params.agentId,
         agentDir: params.agentDir ?? selection.agentDir,
+        useUtilityModel: attempt.phase === "utility",
+        onAttempt: ({ provider, model: modelId, authProfileId }) => {
+          seen.add(
+            resolveAttemptKey(params, {
+              modelRef: `${provider}/${modelId}`,
+              preferredProfile: authProfileId,
+              phase: attempt.phase,
+            }),
+          );
+        },
         ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
         systemPrompt: [
           params.prompt,
@@ -221,7 +233,7 @@ export async function generateConversationLabel(
   return await runLabelAttempts({ ...params, agentId, attempts });
 }
 
-/** Tries an explicit utility model once, then the regular model once when needed. */
+/** Tries the utility chain, then the regular model once when needed. */
 export async function generateConversationLabelWithFallback(
   params: ConversationLabelFallbackParams,
 ): Promise<string | null> {

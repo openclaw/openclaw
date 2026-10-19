@@ -1,4 +1,5 @@
-import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import type { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { ChatDivider, ChatNotice } from "./chat-divider.tsx";
 import type { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
@@ -9,15 +10,17 @@ import type {
 } from "./chat-message-stream-view.tsx";
 import type { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
+import type { ChatSystemEvents } from "./chat-system-events.tsx";
 import type { ChatThreadState } from "./chat-thread-interactions.ts";
 import type { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { ChatTypingIndicator } from "./chat-typing-indicator.tsx";
 import type { TurnRecapRow } from "./chat-working-indicator.tsx";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 
 export type NativeTranscriptView =
+  | ({ kind: "system-events" } & Parameters<typeof ChatSystemEvents>[0])
   | ({ kind: "group" } & Parameters<typeof MessageGroup>[0])
   | ({ kind: "activity" } & Parameters<typeof ActivityGroup>[0])
   | ({ kind: "stream" } & Parameters<typeof StreamGroup>[0])
@@ -40,6 +43,9 @@ export class GuardedTranscriptItem {
 }
 
 function itemDependencies(item: ChatRenderItem): readonly unknown[] {
+  if (item.kind === "system-event-group") {
+    return [item.key, ...item.events];
+  }
   if (item.kind === "stream-run") {
     return [item.key, ...item.parts];
   }

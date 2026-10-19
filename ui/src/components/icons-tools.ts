@@ -18,7 +18,7 @@ function renderIconNode(
   return node;
 }
 
-export function renderIconRegistry<Name extends string>(data: Record<Name, IconData>) {
+function renderIconRegistry<Name extends string>(data: Record<Name, IconData>) {
   const entries = Object.fromEntries(
     Object.entries<IconData>(data).map(([name, icon]) => [
       name,

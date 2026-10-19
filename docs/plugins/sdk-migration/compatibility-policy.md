@@ -26,19 +26,82 @@ compatibility day is **2026-12-31**. Removal ships in the **first January 2027
 stable release**, without a Plugin SDK major version. Other compatibility
 records retain their own separately announced windows.
 
-SQLite and SDK writer migrations use one shared runtime warning budget per plugin
-identity and deprecated capability family per Gateway process. Warnings occur on
-actual legacy use, never import, and survive plugin reloads. They name the invoked
-method, supported replacement, current compatibility promise, and removal in a
-later stable release after an announced deprecation period. Unknown direct SDK consumers share one bounded SDK-level
-warning per family. Diagnostics contain no database paths, credentials, payloads,
-or stack dumps. This policy replaces the earlier no-new-runtime-warnings rule for
-these writer migrations; documentation-only reader records retain their own policy.
+Synchronous SQLite migrations emit one runtime warning per plugin identity,
+deprecated capability family, and method per Gateway process. Other SDK writer
+migrations retain one warning per plugin identity and capability family. Warnings
+occur on actual legacy use, never import, and survive plugin reloads. They name
+the invoked method, supported replacement, current compatibility promise, and
+removal release. Unknown direct SDK consumers share an SDK-level budget with the
+same family and method rules. Diagnostics contain no database paths, credentials,
+payloads, or stack dumps. This policy replaces the earlier no-new-runtime-warnings
+rule for these migrations; unrelated documentation-only records retain their own
+policy.
 
 Synchronous compatibility writers that retain native adapters still commit before
 returning. Retired adapters reject calls as documented in their records below.
-Awaited mutations complete only after committed facts have been installed. SessionManager and its
-extension/provider adapters share the session-persistence warning budget.
+Awaited mutations complete only after committed facts have been installed.
+SessionManager and its extension/provider adapters share the session-persistence
+family, with a separate warning for each deprecated method.
+
+### Session-controller cutover exception
+
+The session-controller cutover has three explicitly approved immediate breaks,
+without compatibility aliases or a deprecation window:
+
+- Session-keyed `setActiveEmbeddedRun(...)` requires a host-admitted harness
+  attempt. Unadmitted calls throw `AgentHarnessPreflightError` with code
+  `SESSION_CONTROLLER_ADMISSION_REQUIRED` and migration guidance.
+- Gateway handler context no longer exposes mutable `chatAbortControllers` or
+  `chatQueuedTurns` maps. Compose authorized Gateway methods and read session
+  projections instead of mutating session ownership.
+- `AgentTurnStartOwner.observe()` replaces `expiresAtMs` with
+  `startDeadlineAtMs`, which describes the controller's execution-start budget.
+  It is optional and nullable; it is not an execution-authority expiry.
+
+Reading a removed map or the old observation property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and identifies the removed capability. Follow the
+[session-controller migration](/plugins/sdk-migration#session-keyed-harness-registration)
+before upgrading. This exception does not change other compatibility records,
+including Gateway placement and publication services, opaque model-request
+generation identity, or the `recoveringModelAttempt` result from
+`abortAndDrainAgentHarnessRun`.
+
+With `forceClear: true`, `abortAndDrainAgentHarnessRun` asks the session controller
+to revoke the captured writer's authority. `forceCleared: true` records that
+successful cleanup; `drained` remains false while the backend is still settling.
+Cleanup preserves committed outcomes and successor sessions. If the writer cannot
+be safely revoked, `forceCleared` stays false and its custody remains retained.
+
+### Channel prepared tool policy
+
+`BuildChannelInboundEventContextParams.access.toolPolicy` and
+`MsgContext.ConversationToolPolicy` are deprecated as of October 12, 2026.
+They remain source-compatible until a **later stable release**, after a separately
+announced deprecation window and explicit maintainer approval for removal. No
+removal date is set; the `stable-deprecation-period` gate does not itself authorize
+removal. The synchronous SQLite cutoff does not apply to these fields. Legacy use
+emits the bounded `DEP_CHANNEL_PREPARED_TOOL_POLICY` warning.
+
+The compatibility adapter retains the supplied policy for the **original external
+request**, including time waiting in its queued turn. That snapshot does not
+refresh when configuration changes. It remains local to that execution and is not
+copied into requester provenance or passed to a new delegation.
+
+Move configuration-derived policy to `security.resolveDirectToolPolicy` for direct
+conversations or `groups.resolveToolPolicy` for shared conversations. The host calls
+these adapters at execution admission with current configuration and preserved
+authenticated sender, account, and conversation facts. An admitted execution keeps
+that prepared policy; a newly admitted delegated execution resolves policy again
+for its original requester at the destination. These callbacks do not change the
+separate spawned-child authority envelope contract.
+
+Bundled Telegram direct messages use `security.resolveDirectToolPolicy`; X guest
+mentions use their existing `groups.resolveToolPolicy` adapter. External
+plugins still supplying the deprecated field retain snapshot behavior, so fresh
+configuration at admission requires migrating that producer. A plugin with a
+restriction supplied by an external authority must define its original-request
+lifetime with that authority; the deprecated field does not grant an indefinite
+restriction over descendant work.
 
 ### Harness deletion companions
 
@@ -747,6 +810,16 @@ Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+For legacy SQLite migrations, declare
+`sqliteOnly: { family: "state" }` (or the destination's other configurable
+database family) on `PluginDoctorStateMigration`. The host runs detection before
+porting that family to PostgreSQL and refuses pending work with
+`openclaw doctor --fix` guidance. When the family's effective engine is already
+PostgreSQL, the host skips detection, repair, and backup-resource callbacks and
+records an intentional non-outcome. An optional `postgresNote` in `sqliteOnly`
+can explain retained legacy artifacts or rebuilding from authoritative sources.
+Migrations without this declaration keep their existing behavior.
 
 Migrations may supply a read-only `collectBackupResources` callback, including
 through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with

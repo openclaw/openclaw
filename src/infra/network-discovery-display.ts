@@ -1,4 +1,3 @@
-// Formats network discovery details for startup and config output.
 import type { GatewayBindMode } from "../config/types.js";
 import { pickPrimaryLanIPv4, resolveGatewayBindHost } from "../gateway/net.js";
 import { pickPrimaryTailnetIPv4 } from "./tailnet.js";

@@ -177,7 +177,7 @@ export class ModelRegistry {
     this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
 
-  /** @deprecated Use createAsync or fromCapturedSources. Supported through 2026-12-31. */
+  /** @deprecated Use createAsync or fromCapturedSources. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   static create(
     authStorage: AuthStorage,
     modelsJsonPath: string = join(getAgentDir(), "models.json"),
@@ -227,10 +227,16 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /** @deprecated Await refreshAsync for disk-backed catalogs. Supported through 2026-12-31. */
+  /** @deprecated Await refreshAsync for disk-backed catalogs. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   refresh(): void {
     if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       ModelRegistry.warnNativeCatalogRead("ModelRegistry.refresh", "ModelRegistry.refreshAsync");
+    }
+    this.refreshFromStorage();
+  }
+
+  private refreshFromStorage(): void {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       // Legacy SDK callers retain synchronous disk freshness through 2026-12-31.
       this.pluginCatalogs = undefined;
       this.pluginCatalogReadError = undefined;
@@ -656,6 +662,7 @@ export class ModelRegistry {
       contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
       ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
       contextTokens: model.contextTokens,
+      ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
       contextWindows: model.contextWindows,
       contextWindowDefault: model.contextWindowDefault,
       maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
@@ -709,10 +716,6 @@ export class ModelRegistry {
     return config;
   }
 
-  private getModelRequestKey(provider: string, modelId: string): string {
-    return JSON.stringify([provider, modelId]);
-  }
-
   private storeProviderRequestConfig(
     providerName: string,
     config: {
@@ -746,7 +749,7 @@ export class ModelRegistry {
     modelId: string,
     headers?: Record<string, string>,
   ): void {
-    const key = this.getModelRequestKey(providerName, modelId);
+    const key = JSON.stringify([providerName, modelId]);
     if (!headers || Object.keys(headers).length === 0) {
       this.modelRequestHeaders.delete(key);
       return;
@@ -758,7 +761,7 @@ export class ModelRegistry {
     return resolveModelRegistryRequestAuth({
       model,
       providerConfig: this.getModelProviderRequestConfig(model),
-      modelHeaders: this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
+      modelHeaders: this.modelRequestHeaders.get(JSON.stringify([model.provider, model.id])),
       authStorage: this.authStorage,
     });
   }
@@ -856,14 +859,20 @@ export class ModelRegistry {
    * Also resets dynamic OAuth and API stream registrations before reapplying
    * remaining dynamic providers.
    * Has no effect if the provider was never registered.
-   * @deprecated Use unregisterProviderAsync for disk-backed registries. Supported through 2026-12-31.
+   * @deprecated Use unregisterProviderAsync for disk-backed registries. Supported through 2026-12-31; removal ships in the first January 2027 stable release.
    */
   unregisterProvider(providerName: string): void {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
+      ModelRegistry.warnNativeCatalogRead(
+        "ModelRegistry.unregisterProvider",
+        "ModelRegistry.unregisterProviderAsync",
+      );
+    }
     if (!this.registeredProviders.has(providerName)) {
       return;
     }
     this.registeredProviders.delete(providerName);
-    this.refresh();
+    this.refreshFromStorage();
   }
 
   async unregisterProviderAsync(providerName: string): Promise<void> {

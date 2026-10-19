@@ -107,7 +107,7 @@ function normalizeVoiceSettings(
 
 function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.elevenlabs) ?? asOptionalRecord(rawConfig.elevenlabs);
+  const raw = asOptionalRecord(providers?.elevenlabs);
   const rawVoiceSettings = asOptionalRecord(raw?.voiceSettings);
   return {
     apiKey: normalizeResolvedSecretInputString({
@@ -130,7 +130,7 @@ function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
 
 function readElevenLabsProviderConfig(config: SpeechProviderConfig) {
   return normalizeElevenLabsProviderConfig({
-    elevenlabs: { ...config, apiKey: trimToUndefined(config.apiKey) },
+    providers: { elevenlabs: { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
 }
 

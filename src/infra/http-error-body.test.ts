@@ -19,16 +19,6 @@ describe("readResponseBodySnippet", () => {
     expect(result).toBe(text ?? "");
   });
 
-  it("does not split multi-byte UTF-8 characters at the byte boundary", async () => {
-    const text = "ab😀cd";
-    // 2 ASCII bytes (ab) + cut before the 4-byte emoji
-    const result = await readResponseBodySnippet(new Response(text), {
-      maxBytes: 3,
-      maxChars: 100,
-    });
-    expect(result).toBe("ab");
-  });
-
   it("returns empty string when maxBytes is 0", async () => {
     const result = await readResponseBodySnippet(new Response("some text"), {
       maxBytes: 0,
@@ -39,20 +29,28 @@ describe("readResponseBodySnippet", () => {
 
   it.each([
     {
-      name: "response under the byte limit",
+      name: "character-limited response",
       maxBytes: 1024,
+      expected: "a" + "🦞".repeat(4),
     },
     {
-      name: "response truncated by the byte limit",
-      maxBytes: 30,
+      name: "byte-limited response",
+      // Cut a UTF-8 sequence before the character cap can hide it.
+      maxBytes: 7,
+      expected: "a🦞",
     },
-  ])("preserves surrogate pairs for $name", async ({ maxBytes }) => {
+    {
+      name: "character-limited response after byte truncation",
+      maxBytes: 30,
+      expected: "a" + "🦞".repeat(4),
+    },
+  ])("keeps Unicode intact for $name", async ({ maxBytes, expected }) => {
     const result = await readResponseBodySnippet(new Response("a" + "🦞".repeat(10)), {
       maxBytes,
       maxChars: 10,
     });
 
-    expect(result).toBe("a" + "🦞".repeat(4));
+    expect(result).toBe(expected);
   });
 });
 

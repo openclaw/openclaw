@@ -47,6 +47,40 @@ const unknownSharingAuthorities = resolveGlobalSet<string>(
   "close-and-restart",
 );
 
+/** ID selection cannot pass a worker commit whose identity facts are not yet published. */
+export function isSessionIdSelectionPublished(params: {
+  databaseIdentity: string;
+  sessionId: string;
+  sessionKey?: string;
+}): boolean {
+  const prefix = `${params.databaseIdentity}\0`;
+  for (const key of unknownSharingAuthorities) {
+    if (key.startsWith(prefix)) {
+      return false;
+    }
+  }
+  for (const [key, publications] of pendingSessionEntryPublications) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const sessionKey = key.slice(prefix.length);
+    for (const publication of publications) {
+      if (
+        !publication.settled &&
+        !publication.superseded.has(sessionKey) &&
+        !publication.generationUnchanged.has(sessionKey) &&
+        (sessionKey === params.sessionKey ||
+          !publication.entryPostimages?.has(sessionKey) ||
+          publication.entryPostimages.get(sessionKey)?.sessionId?.trim() ===
+            params.sessionId.trim())
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 /** A fresh snapshot cannot settle a write whose outcome the authority owner lost. */
 export function markSessionSharingAuthorityUnknown(
   database: SessionEntryCacheDatabase | string,
@@ -354,16 +388,18 @@ export function retainPreparedSessionEntryPredicate(params: {
   sessionKey: string;
   entry: SessionEntry | undefined;
   matches: (before: SessionEntry | undefined, after: SessionEntry | undefined) => boolean;
+  acquiring?: boolean;
 }) {
+  const { acquiring, ...retention } = params;
   const predicate: PreparedSessionEntryPredicate = {
     entry: params.entry,
-    matches: (entry) => params.matches(params.entry, entry),
-    state: "current",
+    matches: (entry) => params.matches(acquiring ? predicate.entry : params.entry, entry),
+    state: acquiring ? "acquiring" : "current",
     revision: 0,
     pending: new Set(),
   };
   const retained = retainPreparedSessionSharingFacts({
-    ...params,
+    ...retention,
     predicate,
     membership: new Set(),
   });
@@ -379,7 +415,14 @@ export function retainPreparedSessionEntryPredicate(params: {
     canRefresh,
     captureRevision: () => predicate.revision,
     acknowledge: (entry: SessionEntry | undefined, revision: number) => {
-      if (!canRefresh() || retained.hasPendingPublication() || revision !== predicate.revision) {
+      if (predicate.state === "acquiring" && predicate.revision === 0) {
+        predicate.entry = entry;
+      }
+      if (
+        !canRefresh() ||
+        retained.hasPendingPublication() ||
+        (revision !== predicate.revision && predicate.state !== "acquiring")
+      ) {
         return false;
       }
       if (!predicate.matches(entry)) {

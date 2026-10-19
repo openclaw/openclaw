@@ -63,8 +63,7 @@ function unwrapInvokePayload(raw: unknown): SnapshotPayload | null {
       return null;
     }
   }
-  // Tolerate transports that already deliver the bare node payload.
-  return "base64" in envelope || "error" in envelope ? (envelope as SnapshotPayload) : null;
+  return null;
 }
 
 /** Capture commands in preference order: app nodes first, headless node hosts second. */
@@ -104,11 +103,7 @@ export class LogbookService {
       throw new Error("Logbook service cannot be started again");
     }
     this.starting = this.trackOperation(async () => {
-      const store = await LogbookStore.open(
-        this.deps.dataDir,
-        this.deps.workerModuleUrl,
-        this.deps.fullConfig,
-      );
+      const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
       this.store = store;
       try {
         if (this.deps.scheduler.signal.aborted) {

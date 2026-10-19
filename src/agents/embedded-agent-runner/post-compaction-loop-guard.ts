@@ -115,30 +115,3 @@ export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
 
   return { armPostCompaction, observe };
 }
-
-export class PostCompactionLoopPersistedError extends Error {
-  readonly detector: "compaction_loop_persisted";
-  readonly count: number;
-  readonly toolName: string;
-
-  constructor(
-    message: string,
-    details: {
-      detector: "compaction_loop_persisted";
-      count: number;
-      toolName: string;
-    },
-  ) {
-    super(message);
-    this.name = "PostCompactionLoopPersistedError";
-    this.detector = details.detector;
-    this.count = details.count;
-    this.toolName = details.toolName;
-  }
-
-  static fromVerdict(
-    verdict: Extract<PostCompactionGuardVerdict, { shouldAbort: true }>,
-  ): PostCompactionLoopPersistedError {
-    return new PostCompactionLoopPersistedError(verdict.message, verdict);
-  }
-}

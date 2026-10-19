@@ -111,14 +111,12 @@ it.each(
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
         } else {
-          const sql = writer === "batched" ? observeHostDataSql() : undefined;
+          const sql = observeHostDataSql();
           try {
             await reset();
-            if (sql) {
-              expect(sql.queries, "batched reset caller-thread SQL").toEqual([]);
-            }
+            expect(sql.queries, `${writer} reset caller-thread SQL`).toEqual([]);
           } finally {
-            sql?.restore();
+            sql.restore();
           }
         }
       } finally {

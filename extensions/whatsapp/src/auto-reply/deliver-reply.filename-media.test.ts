@@ -75,7 +75,6 @@ describe("WhatsApp filename-only media delivery", () => {
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger: { info: vi.fn(), warn: vi.fn() },
-        skipLog: true,
       });
 
       expect(sendMedia).toHaveBeenCalledOnce();

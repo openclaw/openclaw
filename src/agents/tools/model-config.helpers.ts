@@ -5,6 +5,7 @@ import {
 } from "../../config/model-input.js";
 import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProviderAuthScope } from "../../plugins/provider-auth-scope.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
@@ -87,6 +88,9 @@ export function hasAuthForProvider(params: {
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
 }): boolean {
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return false;
+  }
   // Env-key resolution is config/workspace aware: plugin-provider env candidates
   // come from the metadata snapshot resolved for this config. Non-bundled or
   // config-scoped provider plugins are invisible without it, so a config-blind
@@ -171,6 +175,10 @@ export async function prepareToolAuthProfileStore(options?: {
 }
 
 export function hasProviderAuthForTool(params: Parameters<typeof hasAuthForProvider>[0]): boolean {
+  // Tool preparation excludes plugin auth; agent profiles cannot substitute for its owner.
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return false;
+  }
   const store = params.authStore;
   if (params.capability && store) {
     const binding = resolveProviderEntryApiKeyProfileReference({ ...params, store });
@@ -346,6 +354,15 @@ export function resolveOpenAiImageMediaCandidate(params: {
   openAiModel: string;
   resolveCodexMediaRoute?: () => { model: string } | undefined;
 }): OpenAiImageMediaCandidateDecision {
+  if (
+    resolveProviderAuthScope({
+      provider: OPENAI_PROVIDER_ID,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }) === "plugin"
+  ) {
+    return { kind: "drop" };
+  }
   const openAiModel = params.openAiModel.trim();
   if (!openAiModel) {
     return { kind: "drop" };

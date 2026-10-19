@@ -24,7 +24,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import "../../components/native-chrome-setup.ts";
+import "../../components/native-chrome-setup.tsx";
 import "./device.css";
 
 declare module "@solidjs/web" {

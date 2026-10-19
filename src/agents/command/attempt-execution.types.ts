@@ -60,6 +60,8 @@ export type AgentAttemptParams = Pick<
       data?: Record<string, unknown>;
       sessionKey?: string;
     }) => void | Promise<void>;
+    onAttemptStart?: RunEmbeddedAgentInternalParams["onAttemptStart"];
+    onAttemptTerminalReplaced?: RunEmbeddedAgentInternalParams["onAttemptTerminalReplaced"];
     deferTerminalLifecycle?: boolean;
     deferredLifecycle?: DeferredEmbeddedRunLifecycleManager;
     authProfileProvider: string;

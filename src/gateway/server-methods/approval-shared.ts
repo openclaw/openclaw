@@ -109,21 +109,6 @@ export function respondApprovalStorageUnavailable(params: {
   );
 }
 
-export async function registerPendingApprovalRecord<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
-  record: ExecApprovalRecord<TPayload>;
-  timeoutMs: number;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-}): Promise<{ decision: Promise<ExecApprovalDecision | null> } | undefined> {
-  try {
-    return await params.manager.register(params.record, params.timeoutMs);
-  } catch (err) {
-    respondApprovalStorageUnavailable({ ...params, operation: "request", error: err });
-    return undefined;
-  }
-}
-
 export function buildRequestedApprovalEvent<
   TPayload extends ApprovalTurnSourceFields,
   TKind extends ChannelApprovalKind,

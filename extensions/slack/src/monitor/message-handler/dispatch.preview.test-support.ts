@@ -14,16 +14,13 @@ export function createSlackPlatformError(
 
 export const requireRecord = createRequireRecord("object", "label-not-object");
 
-export function expectRecordFields(
-  record: Record<string, unknown>,
-  fields: Record<string, unknown>,
-) {
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
   }
 }
 
-export function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
+function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
   const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
   if (!call) {
     throw new Error(`missing ${label} call ${index + 1}`);

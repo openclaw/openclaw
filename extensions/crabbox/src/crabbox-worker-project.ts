@@ -1,11 +1,6 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
-import {
-  crabboxCommandOutput,
-  leaseRunArgs,
-  runCrabboxCommand,
-  type CrabboxCommandRunner,
-} from "./crabbox-worker-command.js";
+import { crabboxCommandOutput, leaseRunArgs, runCrabboxCommand } from "./crabbox-worker-command.js";
 import { createCrabboxNodeRuntimeSetup } from "./crabbox-worker-node-enrollment.js";
 import { runProvisionSetup } from "./crabbox-worker-provision-commands.js";
 import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
@@ -76,7 +71,6 @@ export async function prepareCrabboxProjectFiles(params: {
   binary: string;
   provider: string;
   id: string;
-  runCommand: CrabboxCommandRunner;
   timeoutMs: () => number;
   signal?: AbortSignal;
   inspectPrepared?: true;
@@ -111,7 +105,6 @@ export async function prepareCrabboxProjectFiles(params: {
             action: "project preparation",
             args,
             binary: params.binary,
-            runCommand: params.runCommand,
             signal: commandSignal,
             input: createScript?.(timeoutMs),
             timeoutMs,

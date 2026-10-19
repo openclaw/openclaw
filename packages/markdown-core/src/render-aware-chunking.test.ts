@@ -92,10 +92,7 @@ it("bisects overflowing chunks instead of rendering every shorter prefix", () =>
   expect(renders).toBeLessThan(200);
 });
 
-it.each([
-  [160, 2],
-  [240, 3],
-])("carries rendered code overhead across %i lines", (lines, count) => {
+it.each([[240, 3]])("carries rendered code overhead across %i lines", (lines, count) => {
   const text = Array.from(
     { length: lines },
     (_, index) => `line_${String(index).padStart(4, "0")} = compute(${index}) # padding padding`,

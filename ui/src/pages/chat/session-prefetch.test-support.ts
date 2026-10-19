@@ -4,6 +4,10 @@ import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
 import { createSessionPrefetch } from "./session-prefetch.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
@@ -26,6 +30,31 @@ export type SessionPrefetchUpdate = {
   hiddenConversationSessionKeys?: readonly string[];
   rows: readonly GatewaySessionRow[] | null;
 };
+
+export function prefetchState(
+  request: GatewayRequestHandler,
+  rows: SessionPrefetchUpdate["rows"],
+  overrides: Partial<SessionPrefetchUpdate> = {},
+): SessionPrefetchUpdate {
+  return {
+    client: createTestGatewayClient(request),
+    listRevision: 1,
+    openSessionKeys: ["agent:main:foreground"],
+    rows,
+    ...overrides,
+  };
+}
+
+export function prefetchHistoryRequest() {
+  return vi.fn(async (_method: string, params: unknown) =>
+    prefetchHistoryResult(prefetchSessionKeyFromCall([_method, params])),
+  );
+}
+
+export async function advanceSessionPrefetch(milliseconds = 300) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await settleSessionPrefetch();
+}
 
 export function prefetchSessionRow(
   key: string,
@@ -144,6 +173,13 @@ export function createSessionPrefetchFixture() {
     host,
     shell,
     updatePrefetch,
+    intend: (sessionKey: string, parent: Element = shell, eventType = "pointerover") => {
+      const target = document.createElement("a");
+      target.dataset.sessionKey = sessionKey;
+      parent.append(target);
+      target.dispatchEvent(new Event(eventType, { bubbles: true }));
+      return target;
+    },
     setVisibility: (value: DocumentVisibilityState) => {
       visibility = value;
     },

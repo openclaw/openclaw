@@ -21,6 +21,33 @@ import {
 } from "./session-delivery-queue-storage.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 
+type Delivery = Parameters<typeof enqueueSessionDelivery>[0];
+function agentTurn(
+  messageId: string,
+  overrides: Partial<Extract<Delivery, { kind: "agentTurn" }>> = {},
+): Extract<Delivery, { kind: "agentTurn" }> {
+  return {
+    kind: "agentTurn",
+    sessionKey: "agent:main:main",
+    message: "generated image ready",
+    messageId,
+    ...overrides,
+  };
+}
+function systemEvent(idempotencyKey: string, permanent = false): Delivery {
+  return {
+    kind: "systemEvent",
+    sessionKey: "agent:main:main",
+    text: "restart complete",
+    idempotencyKey,
+    ...(permanent ? { completionRetention: "permanent" } : {}),
+  };
+}
+const mediaAttachments = {
+  "/tmp/one.png": { type: "image" as const, path: "/tmp/one.png", mimeType: "image/png" },
+  "/tmp/two.png": { type: "image" as const, path: "/tmp/two.png", mimeType: "image/png" },
+};
+
 describe("session-delivery queue storage", () => {
   async function settleSessionDelivery(
     id: string,
@@ -46,13 +73,9 @@ describe("session-delivery queue storage", () => {
 
   it("grants one initial-attempt lease and releases it for recovery", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const payload = {
-        kind: "agentTurn" as const,
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-lease:agent-loop",
+      const payload = agentTurn("image:task-lease:agent-loop", {
         idempotencyKey: "image:task-lease:agent-loop",
-      };
+      });
       const first = await enqueueClaimedSessionDelivery(payload, 60_000, queueContext);
       const duplicate = await enqueueClaimedSessionDelivery(payload, 60_000, queueContext);
 
@@ -71,13 +94,9 @@ describe("session-delivery queue storage", () => {
 
   it("reports a dead-letter conflict instead of claiming it as pending", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const payload = {
-        kind: "agentTurn" as const,
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-dead-letter:agent-loop",
+      const payload = agentTurn("image:task-dead-letter:agent-loop", {
         idempotencyKey: "image:task-dead-letter:agent-loop",
-      };
+      });
       const first = await enqueueClaimedSessionDelivery(payload, 60_000, queueContext);
       await moveSessionDeliveryToFailed(first.id, queueContext);
 
@@ -91,12 +110,7 @@ describe("session-delivery queue storage", () => {
 
   it("lets an explicit enqueue replace a deleted ordinary failure", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const payload = {
-        kind: "systemEvent" as const,
-        sessionKey: "agent:main:main",
-        text: "restart complete",
-        idempotencyKey: "restart:revive-failed",
-      };
+      const payload = systemEvent("restart:revive-failed");
       const id = await enqueueSessionDelivery(payload, queueContext);
       await moveSessionDeliveryToFailed(id, queueContext);
 
@@ -108,13 +122,7 @@ describe("session-delivery queue storage", () => {
 
   it("never revives a failed permanent producer intent", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const payload = {
-        kind: "systemEvent" as const,
-        sessionKey: "agent:main:main",
-        text: "restart complete",
-        idempotencyKey: "restart:permanent-failed",
-        completionRetention: "permanent" as const,
-      };
+      const payload = systemEvent("restart:permanent-failed", true);
       const id = await enqueueSessionDelivery(payload, queueContext);
       await moveSessionDeliveryToFailed(id, queueContext);
 
@@ -126,13 +134,9 @@ describe("session-delivery queue storage", () => {
 
   it("reports a completed conflict after acknowledgement", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const payload = {
-        kind: "agentTurn" as const,
-        sessionKey: "agent:main:main",
-        message: "generated image ready",
-        messageId: "image:task-completed:agent-loop",
+      const payload = agentTurn("image:task-completed:agent-loop", {
         idempotencyKey: "image:task-completed:agent-loop",
-      };
+      });
       const first = await enqueueClaimedSessionDelivery(payload, 60_000, queueContext);
       await settleSessionDelivery(first.id, queueContext);
 
@@ -185,12 +189,7 @@ describe("session-delivery queue storage", () => {
   it("records which agent run attempt consumed retry budget", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
       const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-charge:agent-loop",
-        },
+        agentTurn("image:task-charge:agent-loop"),
         queueContext,
       );
 
@@ -213,11 +212,8 @@ describe("session-delivery queue storage", () => {
   it("persists agent-loop routing and provenance for restart replay", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
       await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
+        agentTurn("image:task-1:agent-loop", {
           sessionKey: "agent:main:discord:channel:123",
-          message: "generated image ready",
-          messageId: "image:task-1:agent-loop",
           route: {
             channel: "discord",
             to: "channel:123",
@@ -232,7 +228,7 @@ describe("session-delivery queue storage", () => {
           },
           sourceReplyDeliveryMode: "message_tool_only",
           expectedMediaUrls: ["/tmp/proof.png"],
-        },
+        }),
         queueContext,
       );
 
@@ -254,17 +250,11 @@ describe("session-delivery queue storage", () => {
     try {
       await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
         const id = await enqueueSessionDelivery(
-          {
-            kind: "agentTurn",
-            sessionKey: "agent:main:main",
+          agentTurn("image:task-retry:agent-loop", {
             message: "all generated media",
-            messageId: "image:task-retry:agent-loop",
             expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
-            expectedMediaAttachments: {
-              "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
-              "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
-            },
-          },
+            expectedMediaAttachments: mediaAttachments,
+          }),
           queueContext,
         );
 
@@ -301,7 +291,6 @@ describe("session-delivery queue storage", () => {
           {
             message: "only missing media",
             expectedMediaUrls: ["/tmp/two.png"],
-            suppressTextDelivery: true,
           },
           queueContext,
         );
@@ -311,15 +300,11 @@ describe("session-delivery queue storage", () => {
           retryCount: 1,
           message: "only missing media",
           expectedMediaUrls: ["/tmp/two.png"],
-          expectedMediaAttachments: {
-            "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
-            "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
-          },
+          expectedMediaAttachments: mediaAttachments,
           preparedMediaBlocks: {
             "/tmp/one.png": [{ type: "image", artifactId: "artifact-one" }],
             "/tmp/two.png": [{ type: "image", artifactId: "artifact-two" }],
           },
-          suppressTextDelivery: true,
         });
       });
       sqlCalls.expectIdle();
@@ -330,13 +315,7 @@ describe("session-delivery queue storage", () => {
 
   it("retains a permanent completion receipt", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const payload = {
-        kind: "systemEvent" as const,
-        sessionKey: "agent:main:main",
-        text: "restart complete",
-        idempotencyKey: "restart:permanent-completed",
-        completionRetention: "permanent" as const,
-      };
+      const payload = systemEvent("restart:permanent-completed", true);
       const id = await enqueueSessionDelivery(payload, queueContext);
       await settleSessionDelivery(id, queueContext);
 

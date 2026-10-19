@@ -30,6 +30,15 @@ describe("archived session composer banner", () => {
     )!;
     action.focus();
     const banner = action.parentElement;
+    expect(new Set(banner?.classList)).toEqual(
+      new Set([
+        "agent-chat__disabled-banner",
+        "agent-chat__disabled-banner--replacement",
+        "callout",
+        "info",
+        "callout--action",
+      ]),
+    );
 
     renderComposerInto(container, {
       ...props,
@@ -96,8 +105,15 @@ describe("archived session composer banner", () => {
       ".agent-chat__disabled-banner button",
     );
     const banner = container.querySelector(".agent-chat__disabled-banner");
-    expect(banner?.classList.contains("info")).toBe(false);
-    expect(banner?.classList.contains("agent-chat__disabled-banner--neutral")).toBe(true);
+    expect(new Set(banner?.classList)).toEqual(
+      new Set([
+        "agent-chat__disabled-banner",
+        "agent-chat__disabled-banner--replacement",
+        "callout",
+        "agent-chat__disabled-banner--neutral",
+        "callout--action",
+      ]),
+    );
     expect(banner?.querySelector(".agent-chat__disabled-banner-icon")).not.toBeNull();
     expect(banner?.querySelector(".agent-chat__disabled-banner-title")?.textContent).toContain(
       "This task was interrupted by a restart.",
@@ -105,7 +121,7 @@ describe("archived session composer banner", () => {
     expect(banner?.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toContain(
       "Your transcript is safe. Resume to continue in this session.",
     );
-    expect(action?.classList.contains("primary")).toBe(true);
+    expect(new Set(action?.classList)).toEqual(new Set(["btn", "btn--sm", "primary"]));
     expect(action?.disabled).toBe(true);
     expect(action?.getAttribute("aria-busy")).toBe("true");
     expect(action?.textContent).toContain("Resuming…");

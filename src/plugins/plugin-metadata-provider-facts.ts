@@ -23,6 +23,10 @@ const PROVIDER_ENDPOINT_CLASSES = new Set(
   ),
 );
 
+export function isPluginProviderEndpointClass(endpointClass: string): boolean {
+  return PROVIDER_ENDPOINT_CLASSES.has(endpointClass);
+}
+
 function normalizeProviderHosts(value: unknown): string[] {
   return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
 }
@@ -48,7 +52,7 @@ function hostMatchesSuffix(host: string, suffix: string): boolean {
     : host === suffix || host.endsWith(`.${suffix}`);
 }
 
-/** Shares declared endpoint matching between request classification and catalog eligibility. */
+/** Matches endpoint facts normalized by their metadata or catalog preparation owner. */
 export function matchesPluginProviderEndpoint(
   endpoint: PluginManifestProviderEndpoint,
   params: {
@@ -59,18 +63,11 @@ export function matchesPluginProviderEndpoint(
   return (
     (endpoint.hosts ?? []).includes(params.host) ||
     (endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix)) ||
-    Boolean(
-      params.normalizedBaseUrl &&
-      (endpoint.baseUrls ?? []).some(
-        (baseUrl) =>
-          baseUrl === params.normalizedBaseUrl ||
-          normalizePluginProviderBaseUrl(baseUrl) === params.normalizedBaseUrl,
-      ),
-    )
+    Boolean(params.normalizedBaseUrl && endpoint.baseUrls?.includes(params.normalizedBaseUrl))
   );
 }
 
-function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
+export function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -80,7 +77,7 @@ function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoin
       continue;
     }
     const endpointClass = normalizeOptionalString(endpoint.endpointClass);
-    if (!endpointClass || !PROVIDER_ENDPOINT_CLASSES.has(endpointClass)) {
+    if (!endpointClass) {
       continue;
     }
     const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
@@ -153,9 +150,9 @@ export function buildPluginMetadataProviderFacts(
   plugins: readonly PluginManifestRecord[],
   enabledPluginIds?: ReadonlySet<string>,
 ) {
-  const providerEndpoints = plugins.flatMap((plugin) =>
-    prepareProviderEndpoints(plugin.providerEndpoints),
-  );
+  const providerEndpoints = [...plugins, ...listOfficialExternalProviderEndpointManifests()]
+    .flatMap((plugin) => prepareProviderEndpoints(plugin.providerEndpoints))
+    .filter((endpoint) => isPluginProviderEndpointClass(endpoint.endpointClass));
   const providerRequests = new Map(
     [...collectPluginProviderRequestOwners(plugins)].map(([provider, { policy }]) => [
       provider,
@@ -197,9 +194,6 @@ export function buildPluginMetadataProviderFacts(
         fallbackProviderRefs,
       });
     }
-  }
-  for (const manifest of listOfficialExternalProviderEndpointManifests()) {
-    providerEndpoints.push(...prepareProviderEndpoints(manifest.providerEndpoints));
   }
   return {
     providerEndpoints,

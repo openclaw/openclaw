@@ -132,6 +132,50 @@ afterEach(() => {
 });
 
 describe("authenticated GitHub identity sync", () => {
+  it("adopts trusted Enterprise GitHub account metadata through the canonical profile worker and preserves a chosen name", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const params: Parameters<typeof createAuthenticatedGitHubIdentitySync>[0] = {
+        authResult: { ok: true, method: "trusted-proxy", user: "github:ghe.example.test:101" },
+        config: { gateway: { github: { host: "ghe.example.test" } } },
+        authConfig: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-factory-principal" } },
+        requestHeaders: { "x-factory-github-login": "ada", "x-factory-github-name": "Ada" },
+      };
+      const sync = createAuthenticatedGitHubIdentitySync(params);
+      assert(sync);
+      const result = await sync();
+      expect(result.enterprise).toEqual({ accountId: 101, login: "ada" });
+      expect(getUserProfileListItem(result.profileId)).toMatchObject({ displayName: "Ada" });
+      setDisplayName(result.profileId, "Chosen name");
+      const nextSync = createAuthenticatedGitHubIdentitySync({
+        ...params,
+        requestHeaders: {
+          "x-factory-github-login": "ada",
+          "x-factory-github-name": "Changed upstream",
+        },
+      });
+      assert(nextSync);
+      expect((await nextSync()).profileId).toBe(result.profileId);
+      expect(getUserProfileListItem(result.profileId)).toMatchObject({
+        displayName: "Chosen name",
+      });
+      for (const config of [{}, { gateway: { github: { host: "other.example.test" } } }]) {
+        expect(createAuthenticatedGitHubIdentitySync({ ...params, config })).toBeUndefined();
+      }
+      expect(
+        createAuthenticatedGitHubIdentitySync({
+          ...params,
+          authResult: { ...params.authResult, method: "token" },
+        }),
+      ).toBeUndefined();
+      expect(
+        createAuthenticatedGitHubIdentitySync({
+          ...params,
+          authResult: { ...params.authResult, user: "github:ghe.example.test:9007199254740992" },
+        }),
+      ).toBeUndefined();
+    });
+  });
+
   it("verifies public Access identity without using the Enterprise repository credential", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({

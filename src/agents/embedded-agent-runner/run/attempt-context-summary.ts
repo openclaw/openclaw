@@ -14,7 +14,7 @@ export function summarizeSessionContext(messages: AgentMessage[]): {
   let maxMessageTextChars = 0;
 
   for (const msg of messages) {
-    const role = typeof msg.role === "string" ? msg.role : "unknown";
+    const role = msg.role;
     roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
 
     const content = (msg as { content?: unknown }).content;

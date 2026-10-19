@@ -15,7 +15,6 @@ import {
 // Backups older than two weeks no longer provide a useful routine recovery point.
 const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
 
-/** Format the compact status overview value for the latest backup attempt. */
 export function buildBackupStatusValue(params: {
   freshness: BackupRunFreshness;
   now?: number;
@@ -31,7 +30,6 @@ export function buildBackupStatusValue(params: {
     : `last attempt failed ${age} (${latest.kind})`;
 }
 
-/** Build the informational Doctor hint for missing or stale successful backups. */
 function buildBackupDoctorHint(freshness: BackupRunFreshness): string | null {
   const latestOk = freshness.latestOk;
   if (latestOk?.pushFailed) {

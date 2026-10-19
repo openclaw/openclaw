@@ -10,6 +10,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+import { saveChatSessionScrollPosition } from "./scroll.ts";
 
 let container: ReturnType<typeof createComposerContainer>;
 let transcript: ReturnType<typeof createTestTranscript>;
@@ -22,7 +23,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   disposeChatView(container);
-  transcript.hostDisconnected();
+  transcript.dispose();
   resetChatViewState();
   resetTranscriptTestDom();
   vi.useRealTimers();
@@ -141,6 +142,11 @@ it("retains live running activity when history contains an unfinished call", () 
 });
 
 it("limits live copy to the newest activity group in the active run, not history or another run", () => {
+  transcript = createTestTranscript("activity-headline-history");
+  saveChatSessionScrollPosition("activity-headline-history", "main", {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
   draw(
     [
       tool("history", "Historical file", "completed", "old-run", 0),

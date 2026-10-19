@@ -33,14 +33,14 @@ export async function authenticate(
 
   try {
     if (!response.ok) {
-      throw new UrbitAuthError("auth_failed", `Login failed with status ${response.status}`);
+      throw new UrbitAuthError(`Login failed with status ${response.status}`);
     }
 
     // Finish normal login responses for connection reuse, but cancel as soon as the cap is reached.
     await readResponseTextLimited(response, MAX_AUTH_BODY_DRAIN_BYTES).catch(() => undefined);
     const cookie = response.headers.get("set-cookie");
     if (!cookie) {
-      throw new UrbitAuthError("missing_cookie", "No authentication cookie received");
+      throw new UrbitAuthError("No authentication cookie received");
     }
     return cookie;
   } finally {

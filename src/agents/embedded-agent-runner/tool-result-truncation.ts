@@ -6,6 +6,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import type { TranscriptRewriteReplacement as ToolResultReplacement } from "../../context-engine/types.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -19,7 +20,7 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
 import { readCacheTtlCheckpoint } from "./cache-ttl-checkpoint.js";
-import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+import * as truncationNotice from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
   recordToolResultPromptProjection,
@@ -306,7 +307,7 @@ type ToolResultTruncationOptions = {
   minimumRawWeight?: number;
 };
 
-const DEFAULT_SUFFIX = formatContextLimitTruncationNotice;
+const DEFAULT_SUFFIX = truncationNotice.formatContextLimitTruncationNotice;
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
 const AGGREGATE_ELISION_MARKER =
@@ -394,6 +395,11 @@ function hasImportantTail(text: string): boolean {
   const tail = normalizeLowercaseStringOrEmpty(sliceUtf16Safe(text, -2000));
   return (
     /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
+    // Exec/process append terminal facts after output; they may not contain
+    // "error" or "failed", but dropping them makes a failed command look successful.
+    /\b(exited with (?:code|signal)|timed out|aborted|stopped by request|not found|not executable)\b/.test(
+      tail,
+    ) ||
     /\}\s*$/.test(tail.trim()) ||
     /\b(total|summary|result|complete|finished|done)\b/.test(tail)
   );
@@ -513,7 +519,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
+  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
   const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
   const content = (msg as { content?: unknown }).content;
@@ -757,11 +763,6 @@ function buildToolResultPlanningBranch(messages: AgentMessage[]): ToolResultMess
     message,
   }));
 }
-
-type ToolResultReplacement = {
-  entryId: string;
-  message: AgentMessage;
-};
 
 type MeasuredToolResultBranchEntry = {
   readonly entry: ToolResultBranchEntry;

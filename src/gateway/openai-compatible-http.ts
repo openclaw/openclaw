@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { z } from "zod";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.types.js";
 import { logWarn } from "../logger.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
@@ -194,12 +195,12 @@ export function startOpenAiCompatibleStream(params: {
       finish();
     });
   };
-  const unsubscribe = onAgentEventForRun(runId, (evt) => {
+  const unsubscribe = onAgentEventForRun(runId, (evt: AgentEventRuntimePayload) => {
     if (closed) {
       return;
     }
     if (evt.stream === "assistant") {
-      const { delta, replacement } = textStream.update(evt.data);
+      const { delta, replacement } = textStream.update(evt.data, evt.assistantProjection?.rawDelta);
       if (chat && replacement === "unrepresentable") {
         streamError ??= { message: REPLACEMENT_ERROR, type: "api_error" };
         return;

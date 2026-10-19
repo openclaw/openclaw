@@ -29,7 +29,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationSeconds } from "../infra/format-time/format-duration.js";
-import { readGatewayLastInstallationReplacement } from "../infra/gateway-boot-lifecycle.js";
+import { readGatewayLastInstallationReplacementAsync } from "../infra/gateway-boot-lifecycle.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
@@ -54,15 +54,27 @@ function formatGatewayHealthDiagnostic(value: unknown): string {
   return scrubDoctorErrorMessage(sanitizeTerminalText(redactSensitiveUrlLikeString(raw)));
 }
 
-function readLocalInstallationReplacement(
+async function readLocalInstallationReplacement(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-): string | undefined {
-  const replacement =
-    cfg.gateway?.mode === "remote" ? undefined : readGatewayLastInstallationReplacement(env);
-  return replacement
-    ? `Previous installation replacement (${new Date(replacement.completedAtMs).toISOString()}): ${formatGatewayHealthDiagnostic(replacement.reason)}`
-    : undefined;
+): Promise<Pick<HealthFinding, "severity" | "message"> | undefined> {
+  if (cfg.gateway?.mode === "remote") {
+    return undefined;
+  }
+  try {
+    const replacement = await readGatewayLastInstallationReplacementAsync(env);
+    return replacement
+      ? {
+          severity: "info",
+          message: `Previous installation replacement (${new Date(replacement.completedAtMs).toISOString()}): ${formatGatewayHealthDiagnostic(replacement.reason)}`,
+        }
+      : undefined;
+  } catch (error) {
+    return {
+      severity: "warning",
+      message: `Previous installation replacement unavailable: ${formatGatewayHealthDiagnostic(error)}`,
+    };
+  }
 }
 
 export async function collectGatewayHealthFindings(
@@ -70,13 +82,12 @@ export async function collectGatewayHealthFindings(
 ): Promise<readonly HealthFinding[]> {
   const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
   const gatewayPath = mode === "remote" ? "gateway.remote.url" : "gateway.mode";
-  const replacement = readLocalInstallationReplacement(ctx.cfg, ctx.env);
+  const replacement = await readLocalInstallationReplacement(ctx.cfg, ctx.env);
   const historyFindings: HealthFinding[] = replacement
     ? [
         {
           checkId: "core/doctor/gateway-health",
-          severity: "info",
-          message: replacement,
+          ...replacement,
           path: "gateway.mode",
         },
       ]
@@ -270,9 +281,9 @@ export async function checkGatewayHealth(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
 }): Promise<{ healthOk: boolean; authenticated: boolean; status?: StatusSummary }> {
-  const replacement = readLocalInstallationReplacement(params.cfg);
+  const replacement = await readLocalInstallationReplacement(params.cfg);
   if (replacement) {
-    note(replacement, "Previous Gateway installation replacement");
+    note(replacement.message, "Previous Gateway installation replacement");
   }
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });

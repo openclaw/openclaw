@@ -35,6 +35,7 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
 import { collectGatewayServiceStartRepairIssues } from "./service-start-repair.js";
@@ -123,6 +124,7 @@ export async function startGatewayService(
     await service.start({ ...args, env: state.env });
     nextState = await readGatewayServiceState(service, { env: state.env });
   } catch (err) {
+    assertServiceInspectionFallbackAllowed(err);
     const recoveryState = await readGatewayServiceState(service, { env: state.env });
     if (!recoveryState.installed) {
       return {

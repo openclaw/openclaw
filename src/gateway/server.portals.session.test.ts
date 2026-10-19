@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   acquireGatewayTestWebSocket,
@@ -197,13 +196,8 @@ async function createSessionPortalProof() {
   let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
   const cleanup = () =>
     runQaGatewayFixture(
-      async () => {
-        try {
-          await gateway?.close();
-        } finally {
-          environment.restore();
-        }
-      },
+      async () => gateway?.close(),
+      () => environment.restore(),
       async () => {
         vi.restoreAllMocks();
         destination.closeAllConnections();
@@ -223,385 +217,345 @@ async function createSessionPortalProof() {
     const runtime = await runtimeFactory.mock.results.at(-1)!.value;
     const serviceOptions = serviceFactory.mock.calls.at(-1)?.[0];
     assert(serviceOptions, "Gateway must own the worker bundle producer");
-    return {
-      auth,
-      origin,
-      cleanup,
-      run: async (signal: AbortSignal) => {
+    const run = async (signal: AbortSignal) => {
+      const createPause = () => {
+        const entered = createDeferred();
+        const resume = createDeferred();
+        return {
+          wait: (pending: Promise<unknown>, message: string) =>
+            withinTest(awaitGateBeforeSettlement(entered.promise, pending, message), signal),
+          release: () => resume.resolve(),
+          pause: async () => {
+            entered.resolve();
+            await resume.promise;
+          },
+        };
+      };
+      signal.throwIfAborted();
+      const { config, registry } = createPluginRegistryFixture();
+      registerVirtualTestPlugin({
+        config,
+        registry,
+        id: "preview-proof",
+        name: "Preview proof provider",
+        contracts: { workerProviders: ["preview-proof"] },
+        register(api) {
+          api.registerWorkerProvider({
+            id: "preview-proof",
+            supportedExecutionModes: ["remote-exec"],
+            resolveAllocation: async () => ({ leaseId: "preview-lease", sharedHost: false }),
+            provision: async () => {
+              throw new Error("The proof seeds an already provisioned dedicated lease");
+            },
+            inspect: async () => ({ status: "active", sharedHost }),
+            destroy: async () => {},
+          });
+        },
+      });
+      const record = registry.registry.plugins[0]!;
+      const liveRegistry = startup.getPluginRegistry();
+      // Adopt the validated provider instance into the real Gateway's cleanup owner.
+      projectPluginContributions(registry.registry, record, liveRegistry);
+      liveRegistry.plugins.push(record);
+      adoptPluginRegistryRecords(liveRegistry);
+      const context = startup.resolveGatewayContext();
+      assert(context);
+      const environments = runtime.workerEnvironmentService;
+      const portals = context.portalService;
+      assert(environments && portals);
+      const store = startup.startup.store;
+      const artifact = await serviceOptions.prepareInstallation("bundle");
+      const { bundleHash, openclawVersion, protocolFeatures } = artifact;
+      const sockets: WebSocket[] = [];
+      const controllers = new Map<string, AbortController>();
+      const running = new Set<Promise<void>>();
+      const track = (work: Promise<unknown>) => {
+        const completion = work.then(() => {});
+        running.add(completion);
+        void completion.finally(() => running.delete(completion)).catch(() => {});
+      };
+      const invocations: string[] = [];
+      let releasePairing: (() => void) | undefined;
+      let releasePersistence: (() => void) | undefined;
+      const connect = async (label: string, node = false) => {
         signal.throwIfAborted();
-        const { config, registry } = createPluginRegistryFixture();
-        registerVirtualTestPlugin({
-          config,
-          registry,
-          id: "preview-proof",
-          name: "Preview proof provider",
-          contracts: { workerProviders: ["preview-proof"] },
-          register(api) {
-            api.registerWorkerProvider({
-              id: "preview-proof",
-              supportedExecutionModes: ["remote-exec"],
-              resolveAllocation: async () => ({ leaseId: "preview-lease", sharedHost: false }),
-              provision: async () => {
-                throw new Error("The proof seeds an already provisioned dedicated lease");
-              },
-              inspect: async () => ({ status: "active", sharedHost }),
-              destroy: async () => {},
-            });
+        const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: {
+            origin,
+            "x-forwarded-for": "203.0.113.50",
+            "x-forwarded-proto": "https",
+            "x-forwarded-user": `preview-${label}@example.test`,
           },
         });
-        const record = registry.registry.plugins[0]!;
-        const liveRegistry = startup.getPluginRegistry();
-        // Adopt the validated provider instance into the real Gateway's cleanup owner.
-        projectPluginContributions(registry.registry, record, liveRegistry);
-        liveRegistry.plugins.push(record);
-        adoptPluginRegistryRecords(liveRegistry);
-        const context = startup.resolveGatewayContext();
-        assert(context);
-        const environments = runtime.workerEnvironmentService;
-        const portals = context.portalService;
-        assert(environments && portals);
-        const store = startup.startup.store;
-        const artifact = await serviceOptions.prepareInstallation("bundle");
-        const bootstrapReceipt: WorkerAdmissionHandshake = {
-          bundleHash: artifact.bundleHash,
-          openclawVersion: artifact.openclawVersion,
-          protocolFeatures: [...artifact.protocolFeatures],
+        sockets.push(socket);
+        trackConnectChallengeNonce(socket);
+        let abortClose: Promise<void> | undefined;
+        const abort = () => {
+          abortClose = closeGatewayTestWebSocket(socket);
+          void abortClose.catch(() => {});
         };
-        const sockets: WebSocket[] = [];
-        const controllers = new Map<string, AbortController>();
-        const running = new Set<Promise<void>>();
-        const invocations: string[] = [];
-        let releasePairing: (() => void) | undefined;
-        let releasePersistence: (() => void) | undefined;
-        const connect = async (label: string, email: string, node = false) => {
-          signal.throwIfAborted();
-          const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
-            headers: {
-              origin,
-              "x-forwarded-for": "203.0.113.50",
-              "x-forwarded-proto": "https",
-              "x-forwarded-user": email,
-            },
-          });
-          sockets.push(socket);
-          trackConnectChallengeNonce(socket);
-          let abortClose: Promise<void> | undefined;
-          const abort = () => {
-            abortClose = closeGatewayTestWebSocket(socket);
-            void abortClose.catch(() => {});
-          };
-          signal.addEventListener("abort", abort, { once: true });
-          try {
-            await acquireGatewayTestWebSocket(socket, 30_000);
-            signal.throwIfAborted();
-            let deviceIdentityPath = path.join(process.env.OPENCLAW_STATE_DIR!, `${label}.sqlite`);
-            if (node) {
-              const paired = await pairDeviceIdentity({
-                name: label,
-                role: "node",
-                scopes: [],
-                clientId: NODE_CLIENT.id,
-                clientMode: NODE_CLIENT.mode,
-                platform: NODE_CLIENT.platform,
-              });
-              deviceIdentityPath = paired.identityPath;
-              // Device identity approval and machine capability consent are separate grants.
-              const pairing = await nodePairingWrites.requestNodePairing({
-                nodeId: paired.identity.deviceId,
-                platform: NODE_CLIENT.platform,
-                caps: [],
-                commands: [],
-              });
-              const approved = await nodePairingWrites.approveNodePairing(
-                pairing.request.requestId,
-                {
-                  callerScopes: ["operator.pairing", "operator.write"],
-                },
-              );
-              assert(approved && "node" in approved, "Node capability approval must succeed");
-            }
-            signal.throwIfAborted();
-            const result = await connectReq(socket, {
-              skipDefaultAuth: true,
-              prePairDevice: true,
-              scopes: node ? [] : ["operator.sessions.write"],
-              role: node ? "node" : "operator",
-              client: node ? NODE_CLIENT : CONTROL_UI_CLIENT,
-              deviceIdentityPath,
-              browserOrigin: node ? undefined : origin,
-            });
-            expect(result.ok, JSON.stringify(result.error)).toBe(true);
-            return {
-              socket,
-              deviceId: loadOrCreateDeviceIdentity({ path: deviceIdentityPath }).deviceId,
-            };
-          } finally {
-            signal.removeEventListener("abort", abort);
-            await abortClose;
-          }
-        };
+        signal.addEventListener("abort", abort, { once: true });
         try {
-          const allowed = await connect("writer", "preview-writer@example.test");
-          const denied = await connect("outsider", "preview-outsider@example.test");
-          const node = await connect("node", "preview-node@example.test", true);
-          node.socket.on("message", (data) => {
-            const event = JSON.parse(rawDataToString(data)) as {
-              event?: string;
-              payload?: unknown;
-            };
-            if (event.event === "node.invoke.cancel") {
-              const cancellation = coerceNodeInvokeCancelPayload(event.payload);
-              if (cancellation) {
-                controllers.get(cancellation.invokeId)?.abort();
-              }
-              return;
-            }
-            if (event.event !== "node.invoke.request") {
-              return;
-            }
-            const frame = coerceNodeInvokePayload(event.payload);
-            if (frame?.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
-              const maintenance = (async () => {
-                await rpcReq(node.socket, "node.invoke.result", {
-                  id: frame.id,
-                  nodeId: frame.nodeId,
-                  ok: true,
-                  payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
-                });
-              })();
-              running.add(maintenance);
-              void maintenance.finally(() => running.delete(maintenance)).catch(() => {});
-              return;
-            }
-            assert(frame && frame.command === NODE_WORKER_PORTAL_STREAM_COMMAND);
-            invocations.push(frame.id);
-            const controller = new AbortController();
-            controllers.set(frame.id, controller);
-            const invocation = (async () => {
-              try {
-                await invokeNodeWorkerPortalStream({
-                  paramsJSON: frame.paramsJSON,
-                  gatewayUrl: `ws://127.0.0.1:${port}`,
-                  signal: controller.signal,
-                });
-                await rpcReq(node.socket, "node.invoke.result", {
-                  id: frame.id,
-                  nodeId: frame.nodeId,
-                  ok: true,
-                  payloadJSON: JSON.stringify({ status: "closed" }),
-                });
-              } finally {
-                controllers.delete(frame.id);
-              }
-            })();
-            running.add(invocation);
-            void invocation.finally(() => running.delete(invocation)).catch(() => {});
-          });
-          // Hello precedes pairing bookkeeping; this manual RPC does not use the node host's retry owner.
-          await withinTest(nodeConnectionRecorded.promise, signal);
-          const inventory = await rpcReq(node.socket, "node.runnerInventory.update", {
-            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-            workerHost: {
-              enabled: true,
-              capacity: { total: 1, available: 1 },
-              environmentSession: 1,
-              portalStream: NODE_WORKER_PORTAL_STREAM_VERSION,
-            },
-          });
-          expect(inventory.ok, JSON.stringify(inventory.error)).toBe(true);
-
-          const environmentId = "preview-machine";
-          await store.createSessionAttachmentIntent(
-            {
-              ...identity,
-              environmentId,
-              providerId: "preview-proof",
-              profileId: "preview",
-              profileSnapshot: { settings: {} },
-              provisionOperationId: "preview-provision",
-            },
-            () => {},
-          );
-          await store.transition({ environmentId, from: "requested", to: "provisioning" });
-          await store.transition({
-            environmentId,
-            from: "provisioning",
-            to: "ready",
-            patch: {
-              leaseId: "preview-lease",
-              nodeDeviceId: node.deviceId,
-              sshEndpoint: null,
-              sharedHost: false,
-              bootstrapReceipt,
-              credential: {
-                credentialHash: hashWorkerCredential("preview-wire-credential"),
-                sessionId: null,
-                rpcSetVersion: 1,
-                expiresAtMs: Date.now() + 60_000,
-              },
-            },
-          });
-          await environments.reconcileOnce(environmentId);
+          await acquireGatewayTestWebSocket(socket, 30_000);
           signal.throwIfAborted();
-          const params = { sessionKey: identity.sessionKey, environmentId, port: destinationPort };
-          expect((await rpcReq(denied.socket, "portal.session.open", params)).ok).toBe(false);
-          expect(portals.list()).toEqual([]);
-          expect(invocations).toEqual([]);
-          expect(connections).toBe(0);
-
-          for (const rejectPersistence of [false, true]) {
-            signal.throwIfAborted();
-            sharedHost = false;
-            await environments.reconcileOnce(environmentId);
-            const qualification = environments.getDedicatedNodeLeaseSignal(environmentId);
-            const reconciled = store.get(environmentId);
-            assert(
-              qualification,
-              JSON.stringify({
-                state: reconciled?.state,
-                lastError: reconciled?.lastError,
-                sharedHost: reconciled?.sharedHost,
-                ownerEpoch: reconciled?.ownerEpoch,
-              }),
-            );
-            const opened = await rpcReq<{ url: string }>(
-              allowed.socket,
-              "portal.session.open",
-              params,
-            );
-            expect(opened.ok, JSON.stringify(opened.error)).toBe(true);
-            assert(opened.payload?.url);
-            const url = new URL(opened.payload.url);
-            const response = await fetch(url, { signal });
-            expect(response.status).toBe(200);
-            expect(await response.text()).toBe("preview-ok");
-            url.pathname = "/stream";
-            const committed = createDeferred();
-            const publish = createDeferred();
-            const targetConnected = createDeferred();
-            const onTargetConnection = () => targetConnected.resolve();
-            const activity = probe.command(
-              stateWorkerStore,
-              async (command, executeOptions, scope) => {
-                const result = await scope.execute(command, executeOptions);
-                if (command.type === "workerEnvironments.reconcileSharedHost") {
-                  committed.resolve();
-                  await publish.promise;
-                }
-                return result;
-              },
-            );
-            const maintenance = store.reconcileSharedHost({
-              environmentId,
-              state: reconciled!.state,
-              leaseId: "preview-lease",
-              sharedHost: false,
+          let deviceIdentityPath = path.join(process.env.OPENCLAW_STATE_DIR!, `${label}.sqlite`);
+          if (node) {
+            const paired = await pairDeviceIdentity({
+              name: label,
+              role: "node",
+              scopes: [],
+              clientId: NODE_CLIENT.id,
+              clientMode: NODE_CLIENT.mode,
+              platform: NODE_CLIENT.platform,
             });
-            let streaming: Response;
-            try {
-              await withinTest(
-                awaitGateBeforeSettlement(
-                  committed.promise,
-                  maintenance,
-                  "Metadata maintenance settled before its commit was observed",
-                ),
-                signal,
-              );
-              destination.once("connection", onTargetConnection);
-              const requested = fetch(url, { signal });
-              await withinTest(Promise.race([targetConnected.promise, requested]), signal);
-              publish.resolve();
-              await maintenance;
-              streaming = await requested;
-            } finally {
-              publish.resolve();
-              await maintenance;
-              destination.off("connection", onTargetConnection);
-              activity.mockRestore();
-            }
-            const reader = streaming.body!.getReader();
-            expect(new TextDecoder().decode((await reader.read()).value)).toBe("preview-stream");
-            const activePeersClosed = Promise.all(
-              [...peers].map((socket) => once(socket, "close")),
-            );
-            const priorConnections = connections;
-            const priorInvocations = invocations.length;
-
-            const pairingEntered = createDeferred();
-            const pairingResume = createDeferred();
-            releasePairing = () => pairingResume.resolve();
-            pairingGate = async () => {
-              pairingEntered.resolve();
-              await pairingResume.promise;
-            };
-            url.pathname = "/blocked";
-            const pending = fetch(url, { signal }).then(
-              (result) => result.status,
-              () => 0,
-            );
-            await withinTest(
-              awaitGateBeforeSettlement(
-                pairingEntered.promise,
-                pending,
-                "Preview settled before node discovery",
-              ),
-              signal,
-            );
-            const persistenceEntered = createDeferred();
-            const persistenceResume = createDeferred();
-            releasePersistence = () => persistenceResume.resolve();
-            const reconcileSharedHost = store.reconcileSharedHost.bind(store);
-            const persistence = vi
-              .spyOn(store, "reconcileSharedHost")
-              .mockImplementation(async (...args) => {
-                persistenceEntered.resolve();
-                await persistenceResume.promise;
-                if (rejectPersistence) {
-                  throw new Error("deliberately rejected provider metadata persistence");
-                }
-                return await reconcileSharedHost(...args);
-              });
-            sharedHost = undefined;
-            const reconcile = environments.reconcileOnce(environmentId);
-            await withinTest(
-              awaitGateBeforeSettlement(
-                persistenceEntered.promise,
-                reconcile,
-                "Inspection settled before persistence",
-              ),
-              signal,
-            );
-            expect(qualification.aborted).toBe(true);
-            expect(portals.list()).toEqual([]);
-            pairingGate = undefined;
-            pairingResume.resolve();
-            expect(await pending).not.toBe(200);
-            await withinTest(activePeersClosed, signal);
-            await reader.cancel().catch(() => {});
-            expect(connections).toBe(priorConnections);
-            expect(invocations).toHaveLength(priorInvocations);
-            expect(requests).not.toContain("/blocked");
-            persistenceResume.resolve();
-            await reconcile;
-            persistence.mockRestore();
-            expect(environments.getDedicatedNodeLeaseSignal(environmentId)).toBeUndefined();
+            deviceIdentityPath = paired.identityPath;
+            // Device identity approval and machine capability consent are separate grants.
+            const pairing = await nodePairingWrites.requestNodePairing({
+              nodeId: paired.identity.deviceId,
+              platform: NODE_CLIENT.platform,
+              caps: [],
+              commands: [],
+            });
+            const approved = await nodePairingWrites.approveNodePairing(pairing.request.requestId, {
+              callerScopes: ["operator.pairing", "operator.write"],
+            });
+            assert(approved && "node" in approved, "Node capability approval must succeed");
           }
+          signal.throwIfAborted();
+          const result = await connectReq(socket, {
+            skipDefaultAuth: true,
+            prePairDevice: true,
+            scopes: node ? [] : ["operator.sessions.write"],
+            role: node ? "node" : "operator",
+            client: node ? NODE_CLIENT : CONTROL_UI_CLIENT,
+            deviceIdentityPath,
+            browserOrigin: node ? undefined : origin,
+          });
+          expect(result.ok, JSON.stringify(result.error)).toBe(true);
+          return {
+            socket,
+            deviceId: loadOrCreateDeviceIdentity({ path: deviceIdentityPath }).deviceId,
+          };
         } finally {
-          pairingGate = undefined;
-          releasePairing?.();
-          releasePersistence?.();
-          const closing = portals.closeAll();
-          for (const controller of controllers.values()) {
-            controller.abort();
-          }
-          await runQaGatewayFixture(
-            () => closing,
-            () => Promise.allSettled(running),
-            () => Promise.all(sockets.map(closeGatewayTestWebSocket)),
-          );
+          signal.removeEventListener("abort", abort);
+          await abortClose;
         }
-      },
+      };
+      try {
+        const allowed = await connect("writer");
+        const denied = await connect("outsider");
+        const node = await connect("node", true);
+        const reportResult = (frame: { id: string; nodeId: string }, payload: unknown) =>
+          rpcReq(node.socket, "node.invoke.result", {
+            id: frame.id,
+            nodeId: frame.nodeId,
+            ok: true,
+            payloadJSON: JSON.stringify(payload),
+          });
+        node.socket.on("message", (data) => {
+          const event = JSON.parse(rawDataToString(data)) as {
+            event?: string;
+            payload?: unknown;
+          };
+          if (event.event === "node.invoke.cancel") {
+            const cancellation = coerceNodeInvokeCancelPayload(event.payload);
+            if (cancellation) {
+              controllers.get(cancellation.invokeId)?.abort();
+            }
+            return;
+          }
+          if (event.event !== "node.invoke.request") {
+            return;
+          }
+          const frame = coerceNodeInvokePayload(event.payload);
+          if (frame?.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
+            track(reportResult(frame, { applied: true, deleted: 0, hasMore: false }));
+            return;
+          }
+          assert(frame && frame.command === NODE_WORKER_PORTAL_STREAM_COMMAND);
+          invocations.push(frame.id);
+          const controller = new AbortController();
+          controllers.set(frame.id, controller);
+          track(
+            invokeNodeWorkerPortalStream({
+              paramsJSON: frame.paramsJSON,
+              gatewayUrl: `ws://127.0.0.1:${port}`,
+              signal: controller.signal,
+            })
+              .then(() => reportResult(frame, { status: "closed" }))
+              .finally(() => controllers.delete(frame.id)),
+          );
+        });
+        // Hello precedes pairing bookkeeping; this manual RPC does not use the node host's retry owner.
+        await withinTest(nodeConnectionRecorded.promise, signal);
+        const inventory = await rpcReq(node.socket, "node.runnerInventory.update", {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: {
+            enabled: true,
+            capacity: { total: 1, available: 1 },
+            environmentSession: 1,
+            portalStream: NODE_WORKER_PORTAL_STREAM_VERSION,
+          },
+        });
+        expect(inventory.ok, JSON.stringify(inventory.error)).toBe(true);
+
+        const environmentId = "preview-machine";
+        await store.createSessionAttachmentIntent(
+          {
+            ...identity,
+            environmentId,
+            providerId: "preview-proof",
+            profileId: "preview",
+            profileSnapshot: { settings: {} },
+            provisionOperationId: "preview-provision",
+          },
+          () => {},
+        );
+        await store.transition({ environmentId, from: "requested", to: "provisioning" });
+        await store.transition({
+          environmentId,
+          from: "provisioning",
+          to: "ready",
+          patch: {
+            leaseId: "preview-lease",
+            nodeDeviceId: node.deviceId,
+            sshEndpoint: null,
+            sharedHost: false,
+            bootstrapReceipt: {
+              bundleHash,
+              openclawVersion,
+              protocolFeatures: [...protocolFeatures],
+            },
+            credential: {
+              credentialHash: hashWorkerCredential("preview-wire-credential"),
+              sessionId: null,
+              rpcSetVersion: 1,
+              expiresAtMs: Date.now() + 60_000,
+            },
+          },
+        });
+        await environments.reconcileOnce(environmentId);
+        signal.throwIfAborted();
+        const params = { sessionKey: identity.sessionKey, environmentId, port: destinationPort };
+        expect((await rpcReq(denied.socket, "portal.session.open", params)).ok).toBe(false);
+        expect(portals.list()).toEqual([]);
+        expect(invocations).toEqual([]);
+        expect(connections).toBe(0);
+
+        for (const rejectPersistence of [false, true]) {
+          signal.throwIfAborted();
+          sharedHost = false;
+          await environments.reconcileOnce(environmentId);
+          const qualification = environments.getDedicatedNodeLeaseSignal(environmentId);
+          const reconciled = store.get(environmentId);
+          assert(qualification, "Reconciled dedicated lease must remain qualified");
+          const opened = await rpcReq<{ url: string }>(
+            allowed.socket,
+            "portal.session.open",
+            params,
+          );
+          expect(opened.ok, JSON.stringify(opened.error)).toBe(true);
+          assert(opened.payload?.url);
+          const url = new URL(opened.payload.url);
+          const response = await fetch(url, { signal });
+          expect(response.status).toBe(200);
+          expect(await response.text()).toBe("preview-ok");
+          url.pathname = "/stream";
+          const metadata = createPause();
+          const targetConnected = createDeferred();
+          const onTargetConnection = () => targetConnected.resolve();
+          const activity = probe.command(
+            stateWorkerStore,
+            async (command, executeOptions, scope) => {
+              const result = await scope.execute(command, executeOptions);
+              if (command.type === "workerEnvironments.reconcileSharedHost") {
+                await metadata.pause();
+              }
+              return result;
+            },
+          );
+          const maintenance = store.reconcileSharedHost({
+            environmentId,
+            state: reconciled!.state,
+            leaseId: "preview-lease",
+            sharedHost: false,
+          });
+          let streaming: Response;
+          try {
+            await metadata.wait(maintenance, "Metadata maintenance settled before commit");
+            destination.once("connection", onTargetConnection);
+            const requested = fetch(url, { signal });
+            await withinTest(Promise.race([targetConnected.promise, requested]), signal);
+            metadata.release();
+            await maintenance;
+            streaming = await requested;
+          } finally {
+            metadata.release();
+            await maintenance;
+            destination.off("connection", onTargetConnection);
+            activity.mockRestore();
+          }
+          const reader = streaming.body!.getReader();
+          expect(new TextDecoder().decode((await reader.read()).value)).toBe("preview-stream");
+          const activePeersClosed = Promise.all([...peers].map((socket) => once(socket, "close")));
+          const priorConnections = connections;
+          const priorInvocations = invocations.length;
+
+          const pairing = createPause();
+          releasePairing = pairing.release;
+          pairingGate = pairing.pause;
+          url.pathname = "/blocked";
+          const pending = fetch(url, { signal }).then(
+            (result) => result.status,
+            () => 0,
+          );
+          await pairing.wait(pending, "Preview settled before node discovery");
+          const persistenceGate = createPause();
+          releasePersistence = persistenceGate.release;
+          const reconcileSharedHost = store.reconcileSharedHost.bind(store);
+          const persistence = vi
+            .spyOn(store, "reconcileSharedHost")
+            .mockImplementation(async (...args) => {
+              await persistenceGate.pause();
+              if (rejectPersistence) {
+                throw new Error("deliberately rejected provider metadata persistence");
+              }
+              return await reconcileSharedHost(...args);
+            });
+          sharedHost = undefined;
+          const reconcile = environments.reconcileOnce(environmentId);
+          await persistenceGate.wait(reconcile, "Inspection settled before persistence");
+          expect(qualification.aborted).toBe(true);
+          expect(portals.list()).toEqual([]);
+          pairingGate = undefined;
+          pairing.release();
+          expect(await pending).not.toBe(200);
+          await withinTest(activePeersClosed, signal);
+          await reader.cancel().catch(() => {});
+          expect(connections).toBe(priorConnections);
+          expect(invocations).toHaveLength(priorInvocations);
+          expect(requests).not.toContain("/blocked");
+          persistenceGate.release();
+          await reconcile;
+          persistence.mockRestore();
+          expect(environments.getDedicatedNodeLeaseSignal(environmentId)).toBeUndefined();
+        }
+      } finally {
+        pairingGate = undefined;
+        releasePairing?.();
+        releasePersistence?.();
+        const closing = portals.closeAll();
+        for (const controller of controllers.values()) {
+          controller.abort();
+        }
+        await runQaGatewayFixture(
+          () => closing,
+          () => Promise.allSettled(running),
+          () => Promise.all(sockets.map(closeGatewayTestWebSocket)),
+        );
+      }
     };
+    return { auth, origin, cleanup, run };
   } catch (error) {
     return await runQaGatewayFixture(async () => {
       throw error;

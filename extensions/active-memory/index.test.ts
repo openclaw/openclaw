@@ -2119,7 +2119,6 @@ describe("active-memory plugin", () => {
     }
     expectEmbeddedChannel("telegram");
     expect(api.runtime.agent.session.getSessionEntryByIdAsync).toHaveBeenCalledOnce();
-    expect(api.runtime.agent.session.getSessionEntryAsync).not.toHaveBeenCalled();
     expect(lastEmbeddedRunParams().fastMode).toBe(initialFast);
     expectLinesToContain(getInfoLines(), "fast=off start");
     delete expectDefined(hoisted.sessionStore["agent:main:main"], "parent session").fastMode;

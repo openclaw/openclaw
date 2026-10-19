@@ -16,13 +16,25 @@ import {
   readSqliteDatabaseGeneration,
   isSqliteDatabaseAdmissionFactCurrent as valid,
   type Admission,
+  type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission-record.js";
 
-const SQLITE_DATABASE_SEAL_SCHEMA = sqliteDatabaseSealSchemaFor();
+const sealSchemas: Partial<Record<"agent" | "state" | "other", string>> = {};
+
+function sealSchema(names: string[]): string | undefined {
+  const agent = names.includes("agent.schema-metadata");
+  const state = names.includes("state.schema-version");
+  // Custom paths cannot identify the database family. Its admitted facts can;
+  // unknown or mixed catalogs conservatively depend on both schemas.
+  const kind = agent === state ? "other" : agent ? "agent" : "state";
+  // The native runtime probe must finish before a storage identity can be cached.
+  return (sealSchemas[kind] ??= sqliteDatabaseSealSchemaFor(kind));
+}
 
 export const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
   name: "sqlite.full-verification",
+  lifetime: "process",
   read: (value) => (typeof value === "number" && Number.isSafeInteger(value) ? value : undefined),
 };
 
@@ -81,8 +93,8 @@ export class SqliteDatabaseCleanCloseSeals {
   constructor(
     private readonly publishFact: (
       record: Admission,
-      key: Pick<SqliteDatabaseAdmissionKey<unknown>, "name" | "schemaDependent">,
-      value: unknown,
+      key: Pick<SqliteDatabaseAdmissionKey<unknown>, "name" | "schemaDependent" | "lifetime">,
+      value: AdmissionFactValue,
       revision: number,
     ) => void,
     private readonly references: {
@@ -107,7 +119,6 @@ export class SqliteDatabaseCleanCloseSeals {
     this.loaded.add(record);
     const seal = readSqliteCleanCloseSeal(
       record.location,
-      SQLITE_DATABASE_SEAL_SCHEMA,
       fs.fstatSync(record.descriptor, { bigint: true }),
     );
     if (!seal || typeof seal.facts !== "string") {
@@ -132,6 +143,9 @@ export class SqliteDatabaseCleanCloseSeals {
       ) {
         return;
       }
+      if (seal.schemaIdentity !== sealSchema(facts.map(([name]) => name))) {
+        return;
+      }
       const schema = facts.find(([name]) => name === "sqlite-schema")?.[2];
       // Reject old completed-validation receipts before publishing any reader-visible facts.
       if (!(schema.tableSql instanceof Map) || hasPendingAgentStartupColumns(schema.tableSql)) {
@@ -140,8 +154,8 @@ export class SqliteDatabaseCleanCloseSeals {
       for (const [name, schemaDependent, value] of facts) {
         this.publishFact(
           record,
-          { name, schemaDependent },
-          value,
+          { name, schemaDependent, lifetime: "process" },
+          { value },
           readSqliteDatabaseFactRevision(record, schemaDependent),
         );
       }
@@ -202,6 +216,10 @@ export class SqliteDatabaseCleanCloseSeals {
       facts.map(([name, fact]) => [name, fact.schemaDependent, fact.value]),
       encodeSealValue,
     );
+    const schemaIdentity = sealSchema(facts.map(([name]) => name));
+    if (!schemaIdentity) {
+      return () => false;
+    }
     return () => {
       if (
         database.isOpen ||
@@ -219,12 +237,10 @@ export class SqliteDatabaseCleanCloseSeals {
         if (identity(fs.statSync(record.location, { bigint: true })) !== record.identity) {
           return false;
         }
-        const written = writeSqliteCleanCloseSeal(
-          record.location,
-          SQLITE_DATABASE_SEAL_SCHEMA,
-          file,
-          { verifiedAt, facts: serialized },
-        );
+        const written = writeSqliteCleanCloseSeal(record.location, schemaIdentity, file, {
+          verifiedAt,
+          facts: serialized,
+        });
         Atomics.store(
           new Int32Array(record.generation),
           SqliteDatabaseGenerationSlot.sealPresent,

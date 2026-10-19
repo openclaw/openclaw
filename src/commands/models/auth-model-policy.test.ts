@@ -37,13 +37,8 @@ describe("provider model access consent", () => {
     await state.cleanup();
   });
 
-  it.each(["agent"])("widens only the consenting %s owner", async (owner) => {
-    if (owner === "agent") {
-      config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
-    } else if (owner === "legacy") {
-      delete config.agents!.defaults!.modelPolicy;
-      config.agents!.defaults!.models = { "other/current": {} };
-    }
+  it("widens only the consenting agent owner", async () => {
+    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
     await state.writeConfig(config);
     const outcome = await completeProviderModelAccess({ prepared: prepare(), prompter, runtime });
     expect(outcome.message).toContain("Application by the running Gateway is not confirmed");
@@ -51,15 +46,8 @@ describe("provider model access consent", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("models are now visible"));
     const saved = await readSaved();
     expect(saved.agents?.defaults?.model).toBe("other/current");
-    expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(
-      owner === "agent" ? ["other/current"] : ["other/current", "sample/*"],
-    );
-    if (owner === "agent") {
-      expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual([
-        "other/private",
-        "sample/*",
-      ]);
-    }
+    expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
+    expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual(["other/private", "sample/*"]);
   });
 
   it("keeps restrictions without writing config", async () => {

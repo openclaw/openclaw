@@ -47,7 +47,6 @@ async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
 ): Promise<SandboxRegistryOperations[Key]["output"]> {
   guard?.assertHost?.();
   guard?.beforeLegacyApply?.();
-  const input = structuredClone(command.input);
   const assertCurrent = () => {
     guard?.assertHost?.();
     context.admission.assertCurrent();
@@ -58,18 +57,14 @@ async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
     await import("../../state/openclaw-state-worker-store.js");
   // Reservation checks stay outside grants; the worker checks its authoritative rows.
   guard?.beforeLegacyApply?.();
-  return runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: command.type, input }),
-    {
-      assertCurrent,
-      createAdmission: withSandboxRegistryPublication(
-        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
-        () => context.admission.identity.key,
-        () => context.admission.assertCurrent(),
-      ),
-    },
-  );
+  return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
+    assertCurrent,
+    createAdmission: withSandboxRegistryPublication(
+      createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+      () => context.admission.identity.key,
+      () => context.admission.assertCurrent(),
+    ),
+  });
 }
 
 function writeRegistry(
@@ -98,9 +93,6 @@ export async function readRegistry(): Promise<SandboxRegistry> {
   if (!reply) {
     return { entries: [] };
   }
-  if (!reply.ok || reply.type !== "sandboxRegistry.list") {
-    throw new Error("Unexpected sandbox registry list result");
-  }
   return { entries: install("container", reply.entries) };
 }
 
@@ -118,9 +110,6 @@ export async function readRegistryEntry(
   if (!reply) {
     return null;
   }
-  if (!reply.ok || reply.type !== "sandboxRegistry.get") {
-    throw new Error("Unexpected sandbox registry lookup result");
-  }
   return reply.entry ? install("container", [reply.entry])[0]! : null;
 }
 
@@ -135,9 +124,6 @@ export async function readRegisteredSandboxRuntimeIds(params: {
   );
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "sandboxRegistry.runtimeIds") {
-    throw new Error("Unexpected sandbox runtime ID result");
   }
   return reply.runtimeIds;
 }
@@ -228,11 +214,11 @@ export async function removeSandboxRegistryRuntime(
     options.guard?.beforeLegacyApply?.();
   };
   assertCurrent();
-  const input = structuredClone({
+  const input = {
     entry,
     reserveRuntime: options.reserveRuntime,
     prune: options.prune,
-  });
+  };
   return withSandboxRegistrySettlement(context, async () => {
     const selected = await executeRegistry(
       { type: "sandboxRegistry.beginRemoval", input },
@@ -265,9 +251,6 @@ export async function removeSandboxRegistryRuntime(
           { context, current: true },
         );
         assertCurrent();
-        if (reply && (!reply.ok || reply.type !== "sandboxRegistry.get")) {
-          throw new Error("Unexpected sandbox registry removal lookup result");
-        }
         const current = reply?.entry;
         if (
           !current ||
@@ -297,9 +280,6 @@ export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
   );
   if (!reply) {
     return { entries: [] };
-  }
-  if (!reply.ok || reply.type !== "sandboxRegistry.browsers") {
-    throw new Error("Unexpected sandbox browser registry result");
   }
   return { entries: install("browser", reply.entries) };
 }

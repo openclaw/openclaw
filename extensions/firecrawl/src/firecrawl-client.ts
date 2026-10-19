@@ -106,7 +106,7 @@ type FirecrawlScrapeParams = {
   signal?: AbortSignal;
 };
 
-export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+function assertFirecrawlScrapeTargetAllowed(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -480,7 +480,7 @@ export async function runFirecrawlSearch(
   return result;
 }
 
-export function parseFirecrawlScrapePayload(params: {
+function parseFirecrawlScrapePayload(params: {
   payload: Record<string, unknown>;
   url: string;
   extractMode: "markdown" | "text";
@@ -615,10 +615,3 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
     maxChars,
   });
 }
-
-export const testing = {
-  assertFirecrawlScrapeTargetAllowed,
-  parseFirecrawlScrapePayload,
-  resolveEndpoint,
-  resolveSearchItems,
-};

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -394,6 +395,8 @@ describe("session resolution metadata", () => {
 
   it.each(selectors)("resolves %j without decoding unrelated saved prompts", async (p) => {
     await withOpenClawTestState({ label: "resolve-prompts" }, async () => {
+      // Distinguish saved data from test source maps parsed lazily by the runtime.
+      const promptMarker = `unrelated-resolve-prompt:${randomUUID()}`;
       replaceSessionEntrySync(scope, entry);
       for (let index = 0; index < 3; index++) {
         replaceSessionEntrySync(
@@ -401,7 +404,7 @@ describe("session resolution metadata", () => {
           {
             sessionId: `sibling-${index}`,
             updatedAt: 1,
-            skillsSnapshot: { prompt: "unrelated-resolve-prompt".repeat(1024), skills: [] },
+            skillsSnapshot: { prompt: promptMarker.repeat(1024), skills: [] },
           },
         );
       }
@@ -409,9 +412,7 @@ describe("session resolution metadata", () => {
       const parse = vi.spyOn(JSON, "parse");
       try {
         expect(await resolve(p)).toEqual(resolved);
-        expect(
-          parse.mock.calls.filter(([json]) => json.includes("unrelated-resolve-prompt")),
-        ).toHaveLength(0);
+        expect(parse.mock.calls.filter(([json]) => json.includes(promptMarker))).toHaveLength(0);
       } finally {
         parse.mockRestore();
       }

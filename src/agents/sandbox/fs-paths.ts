@@ -50,10 +50,11 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
   }));
 }
 
-/** Select an unchanged read-only subtree, including the container's overlay precedence. */
+/** Select a read-only copy whose original source is also protected from guest writes. */
 export function resolveProtectedSandboxDirectory(
   sandbox: SandboxFsBridgeContext,
   hostDirectory: string,
+  originalSourceDirectory: string,
 ): string | null {
   const mounts = buildSandboxFsMounts(sandbox);
   const containerOnlyMounts = resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map(
@@ -74,27 +75,30 @@ export function resolveProtectedSandboxDirectory(
     return null;
   }
   const source = resolveSandboxHostPathViaExistingAncestor(hostDirectory);
-  const writableAlias = mounts.some((mount) => {
-    if (!mount.writable) {
-      return false;
-    }
-    const hostRoot = resolveSandboxHostPathViaExistingAncestor(mount.hostRoot);
-    const relative = isPathInside(hostRoot, source)
-      ? path.relative(hostRoot, source)
-      : isPathInside(source, hostRoot)
-        ? ""
-        : null;
-    if (relative === null) {
-      return false;
-    }
-    const alias = path.posix.join(mount.containerRoot, ...relative.split(path.sep));
-    // The normal writable workspace is safe when its protected child wins here;
-    // a second visible writable mapping still permits replacement of the source.
-    return (
-      resolveSandboxFsMount(mounts, alias, containerOnlyMounts, {
-        containerOnlyAsUnmapped: true,
-      }) === mount
-    );
+  const writableAlias = [source, originalSourceDirectory].some((directory) => {
+    const canonicalDirectory = resolveSandboxHostPathViaExistingAncestor(directory);
+    return mounts.some((mount) => {
+      if (!mount.writable) {
+        return false;
+      }
+      const hostRoot = resolveSandboxHostPathViaExistingAncestor(mount.hostRoot);
+      const relative = isPathInside(hostRoot, canonicalDirectory)
+        ? path.relative(hostRoot, canonicalDirectory)
+        : isPathInside(canonicalDirectory, hostRoot)
+          ? ""
+          : null;
+      if (relative === null) {
+        return false;
+      }
+      const alias = path.posix.join(mount.containerRoot, ...relative.split(path.sep));
+      // The normal writable workspace is safe when its protected child wins here;
+      // a second visible writable mapping still permits replacement of the source.
+      return (
+        resolveSandboxFsMount(mounts, alias, containerOnlyMounts, {
+          containerOnlyAsUnmapped: true,
+        }) === mount
+      );
+    });
   });
   if (
     resolved.writable ||

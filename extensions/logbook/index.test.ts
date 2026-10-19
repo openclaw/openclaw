@@ -157,7 +157,6 @@ describe("logbook gateway methods", () => {
         expect(open).toHaveBeenCalledExactlyOnceWith(
           path.join("/unused", "logbook"),
           pathToFileURL(path.resolve(worker)),
-          config,
         );
       } finally {
         await scheduler.stop();

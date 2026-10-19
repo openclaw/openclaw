@@ -1,4 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
@@ -41,7 +42,9 @@ export async function runOpenClawAgentWriteWithYieldingAdmission<T>(
       },
       {
         ...transactionOptions,
-        busyTimeoutMs: readSqliteBusyTimeout(database.db),
+        ...(isPostgresSqlConnection(database.db)
+          ? {}
+          : { busyTimeoutMs: readSqliteBusyTimeout(database.db) }),
         databaseLabel: database.path,
         operationLabel: transactionOptions.operationLabel ?? "agent.write",
         withCommit: getAgentDeletionDatabaseCleanup(captured)?.withCommit,

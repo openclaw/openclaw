@@ -179,21 +179,15 @@ describe("A2A channel inbound dispatch", () => {
     }
   });
 
-  it("records dispatch failures on their task", async () => {
+  it("propagates dispatch failures to the HTTP task owner", async () => {
     const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(
-      new Error("provider unavailable"),
-    );
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status).toEqual(
-      expect.objectContaining({
-        state: "TASK_STATE_FAILED",
-        message: expect.objectContaining({ parts: [{ text: "provider unavailable" }] }),
-      }),
-    );
-    fixture.store.stop();
+    const failure = new Error("provider unavailable");
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(failure);
+    try {
+      await expect(dispatchA2aInbound(fixture.params)).rejects.toBe(failure);
+    } finally {
+      fixture.store.stop();
+    }
   });
 
   it("isolates route sessions and replies when distinct peers reuse one context ID", async () => {

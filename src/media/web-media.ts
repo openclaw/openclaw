@@ -14,7 +14,6 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { EncodedImage } from "rastermill";
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -716,22 +715,6 @@ function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   }
 }
 
-function logOptimizedImage(originalSize: number, optimized: EncodedImage): void {
-  if (!shouldLogVerbose() || optimized.bytes >= originalSize) {
-    return;
-  }
-  const resizeSide = optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height);
-  if (optimized.format === "png") {
-    logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px)`,
-    );
-    return;
-  }
-  logVerbose(
-    `Optimized media from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px, q=${optimized.chosen.quality})`,
-  );
-}
-
 /** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
 export async function optimizeImageBufferForWebMedia(params: {
   buffer: Buffer;
@@ -782,10 +765,6 @@ export async function optimizeImageBufferForWebMedia(params: {
     search: { maxSide: grid.sides, quality: grid.qualities },
     transparency: "auto",
   });
-  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
-  }
-  logOptimizedImage(params.buffer.length, optimized);
   if (optimized.data.length > cap) {
     throw new ImageOptimizationLimitError(
       formatCapReduce("Media", cap, optimized.data.length),

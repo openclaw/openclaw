@@ -8,6 +8,7 @@
  * and retires that binding on every committed navigation or process termination.
  * Commands arrive as openclaw:native-conversation-command CustomEvent.detail.
  * Every requestId receives one command-result; document mismatches fail closed.
+ * Chat owns the page, panes, and composer; this bridge consumes their registered handles.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
@@ -17,6 +18,7 @@ import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
@@ -30,8 +32,6 @@ import {
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPageHost } from "../pages/chat/chat-page-types.ts";
-import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
@@ -131,6 +131,13 @@ export function createNativeConversationBridge(
   host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] = binding;
   const postMessage = handler.postMessage;
   const post = postMessage.bind(handler);
+  const chatPanes = () => {
+    const outlet = context.routeOutlet;
+    const page = outlet?.renderedElement?.("openclaw-chat-page");
+    return (outlet?.renderedElements?.("openclaw-chat-pane") ?? []).filter((pane) =>
+      page?.contains(pane),
+    );
+  };
   let disposed = false;
   let presentation = { visible: true, active: true };
   let conversation: Conversation | undefined;
@@ -290,9 +297,9 @@ export function createNativeConversationBridge(
           agentId,
         ),
       );
-      const pane = [
-        ...document.querySelectorAll<ChatPaneElement>("openclaw-chat-page openclaw-chat-pane"),
-      ].find((candidate) => areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey));
+      const pane = chatPanes().find((candidate) =>
+        areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+      );
       const activity = pane?.runActivity;
       const paneActive =
         activity?.client === context.gateway.snapshot.client && activity?.agentId === agentId
@@ -416,9 +423,9 @@ export function createNativeConversationBridge(
           return "navigate-rejected";
         }
         if (openActions) {
-          const page = document.querySelector<ChatPageHost>("openclaw-chat-page");
+          const page = context.routeOutlet?.renderedElement?.("openclaw-chat-page");
           await page?.updateComplete;
-          const pane = page?.querySelector<ChatPaneElement>(".chat-pane-cache__pane--active");
+          const pane = chatPanes().find((candidate) => candidate.active);
           await pane?.updateComplete;
           if (!active() || !targetSelected() || !pane) {
             return "unavailable";
@@ -429,6 +436,10 @@ export function createNativeConversationBridge(
             pane,
             signal,
             isCurrent: () => active() && targetSelected(),
+            getMenu: () =>
+              context.routeOutlet
+                ?.renderedElements?.("openclaw-chat-header-session-menu")
+                .find((menu) => pane.contains(menu)),
           });
           return opened ? undefined : "unavailable";
         }
@@ -447,13 +458,15 @@ export function createNativeConversationBridge(
         if (!emptyPayload.safeParse(command.payload).success) {
           return "invalid-command";
         }
-        const composer = document.querySelector<HTMLTextAreaElement>(
-          "openclaw-chat-pane.chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
-        );
-        if (!presentation.visible || !presentation.active || !composer || composer.disabled) {
+        if (
+          !presentation.visible ||
+          !presentation.active ||
+          !chatPanes()
+            .find((pane) => pane.active)
+            ?.focusComposerInput()
+        ) {
           return "unavailable";
         }
-        composer.focus({ preventScroll: true });
         return undefined;
       }
       default:
@@ -537,18 +550,19 @@ export function createNativeConversationBridge(
       event.preventDefault();
     }
   };
-  window.addEventListener(COMMAND_EVENT, onCommand);
-  document.addEventListener("click", onClick);
+  const stops = [listen(window, COMMAND_EVENT, onCommand), listen(document, "click", onClick)];
   void send({
     ...binding,
     type: "ready",
     surface: "conversation",
     capabilities: ["navigate", "presentation", "focus-composer", ...features],
   });
-  document.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
-  document.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-  const stopStores = (["gateway", "router", "sessions"] as const).map((key) =>
-    context[key].subscribe(refreshConversation),
+  stops.push(
+    listen(document, CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation),
+    listen(document, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation),
+    ...(["gateway", "router", "sessions"] as const).map((key) =>
+      context[key].subscribe(refreshConversation),
+    ),
   );
   refreshConversation();
   return {
@@ -562,12 +576,8 @@ export function createNativeConversationBridge(
     dispose() {
       disposed = true;
       pending.forEach((expire) => expire());
-      document.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
-      document.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-      stopStores.forEach((stop) => stop());
+      stops.forEach((stop) => stop());
       listeners.clear();
-      window.removeEventListener(COMMAND_EVENT, onCommand);
-      document.removeEventListener("click", onClick);
       if (host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] === binding) {
         delete host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"];
       }

@@ -1,6 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryEntryOriginsSchema,
+  isPostgresSqlConnection,
   loadSqliteVecExtensionFromPath,
   readMemoryEntryOriginsInDatabase,
   recordMemoryEntryOriginsInDatabase,
@@ -25,7 +26,7 @@ import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 /** The existing agent executor owns this connection and its native lifetime. */
 export function bindSqliteWorkerBackend(
   input: MemoryEntryOriginBinding,
-  context: { database: DatabaseSync; admit(stage: "transaction" | "commit"): void },
+  context: { database: EngineConnection; admit(stage: "transaction" | "commit"): void },
 ) {
   const db = context.database;
   const admission = {
@@ -45,7 +46,7 @@ export function bindSqliteWorkerBackend(
       { withCommit: admission.withCommit },
     );
   if (input.kind === "forget") {
-    if (input.extensionPath) {
+    if (input.extensionPath && !isPostgresSqlConnection(db)) {
       try {
         loadSqliteVecExtensionFromPath(db, input.extensionPath);
       } catch (error) {
@@ -55,10 +56,18 @@ export function bindSqliteWorkerBackend(
         );
       }
     }
-    if (input.prepareTombstones && !tableExists(db, "memory_session_tombstones")) {
+    if (
+      input.prepareTombstones &&
+      !isPostgresSqlConnection(db) &&
+      !tableExists(db, "memory_session_tombstones")
+    ) {
       withSqlitePostCommitPublications(db, () => transact(() => ensureMemorySessionTombstones(db)));
     }
-  } else if (input.kind === "origin" && !tableExists(db, "memory_entry_origins")) {
+  } else if (
+    input.kind === "origin" &&
+    !isPostgresSqlConnection(db) &&
+    !tableExists(db, "memory_entry_origins")
+  ) {
     // A rejected origin batch must not undo the original additive schema preparation.
     withSqlitePostCommitPublications(db, () => transact(() => ensureMemoryEntryOriginsSchema(db)));
   }

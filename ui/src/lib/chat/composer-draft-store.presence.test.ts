@@ -1,6 +1,6 @@
 /* @vitest-environment node */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discardDurableComposerRecovery,
   listDurableChatDraftPresence,
@@ -20,6 +20,17 @@ const owner = { gatewayOwner: "ws://draft-presence.test", recoveryScope: "princi
 const now = 1_800_000_000_000;
 const chatKey = (name: string) => `agent:main:${name}\u0000agent:main`;
 const scope = (name: string) => ({ ...owner, scopeKey: `chat:v3:${chatKey(name)}` });
+const legacyScope = { ...owner, scopeKey: "global\u0000agent:main" };
+const attachment = (text: string, fileName?: string) => ({
+  blob: new Blob([text]),
+  mimeType: "text/plain",
+  ...(fileName ? { fileName } : {}),
+});
+const textlessDrafts = [
+  { name: "attachment", attachments: [attachment("saved", "saved.txt")] },
+  { name: "goal", goalMode: { action: "start" as const } },
+  { name: "reply", replyTarget: { messageId: "message", text: "quoted" } },
+];
 
 function storedRecord(scopeKey: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -36,7 +47,7 @@ function storedRecord(scopeKey: string, overrides: Record<string, unknown> = {})
   };
 }
 
-async function seedRecords(records: unknown[]) {
+async function seedRecords(...records: unknown[]) {
   const database = await openControlUiDatabase();
   const transaction = database.transaction("composerDrafts", "readwrite");
   const store = transaction.objectStore("composerDrafts");
@@ -45,6 +56,14 @@ async function seedRecords(records: unknown[]) {
   }
   await transactionComplete(transaction);
   return database;
+}
+
+async function readStoredRecord(key: string) {
+  const database = await openControlUiDatabase();
+  const transaction = database.transaction("composerDrafts", "readonly");
+  const record = await requestResult(transaction.objectStore("composerDrafts").get(key));
+  await transactionComplete(transaction);
+  return record;
 }
 
 beforeEach(() => {
@@ -62,49 +81,30 @@ afterEach(async () => {
 });
 
 describe("durable recovery", () => {
-  const legacyScope = { ...owner, scopeKey: "global\u0000agent:main" };
-  async function recoveryEntry() {
+  const legacyRecord = (overrides: Record<string, unknown> = {}) =>
+    storedRecord(legacyScope.scopeKey, overrides);
+  async function recoveryEntries(count: number) {
     const result = await prepareDurableComposerRecovery(owner);
-    if (result.status !== "ready" || result.entries.length !== 1) {
-      throw new Error("Expected one recovery draft");
-    }
-    return result.entries[0]!;
+    assert(result.status === "ready", "Recovery unavailable");
+    expect(result.entries).toHaveLength(count);
+    return result.entries;
   }
-
   it("preserves textless draft metadata and ignores clear fences without deleting them", async () => {
-    const drafts = [
-      {
-        name: "attachment",
-        attachments: [{ blob: new Blob(["saved"]), mimeType: "text/plain", fileName: "saved.txt" }],
-      },
-      { name: "goal", goalMode: { action: "start" } },
-      { name: "reply", replyTarget: { messageId: "message", text: "quoted" } },
-    ];
-    await seedRecords([
-      ...drafts.map(({ name, ...draft }) =>
+    await seedRecords(
+      ...textlessDrafts.map(({ name, ...draft }) =>
         storedRecord("global\u0000agent:" + name, { text: "", ...draft }),
       ),
-      storedRecord(legacyScope.scopeKey, { text: "" }),
-    ]);
-    const result = await prepareDurableComposerRecovery(owner);
-    expect(result.status).toBe("ready");
-    if (result.status !== "ready") {
-      throw new Error("Recovery unavailable");
+      legacyRecord({ text: "" }),
+    );
+    const entries = await recoveryEntries(3);
+    for (const entry of entries) {
+      expect(entry).toMatchObject({ updatedAt: now, owner });
     }
-    expect(result.entries).toHaveLength(3);
-    expect(
-      result.entries.every(
-        (entry) =>
-          entry.updatedAt === now &&
-          entry.owner.gatewayOwner === owner.gatewayOwner &&
-          entry.owner.recoveryScope === owner.recoveryScope,
-      ),
-    ).toBe(true);
-    expect(result.entries.find((entry) => entry.attachmentNames.length)?.attachmentNames).toEqual([
+    expect(entries.find((entry) => entry.attachmentNames.length)?.attachmentNames).toEqual([
       "saved.txt",
     ]);
-    expect(result.entries.find((entry) => entry.goalMode)?.goalMode).toEqual({ action: "start" });
-    expect(result.entries.find((entry) => entry.replyTarget)?.replyTarget).toEqual({
+    expect(entries.find((entry) => entry.goalMode)?.goalMode).toEqual({ action: "start" });
+    expect(entries.find((entry) => entry.replyTarget)?.replyTarget).toEqual({
       messageId: "message",
       text: "quoted",
     });
@@ -116,24 +116,13 @@ describe("durable recovery", () => {
   });
 
   it("discards attachment bytes behind a higher clear fence and rejects stale writers", async () => {
-    await seedRecords([
-      storedRecord(legacyScope.scopeKey, {
-        attachments: [{ blob: new Blob(["private bytes"]), mimeType: "text/plain" }],
-      }),
-    ]);
-    const entry = await recoveryEntry();
+    await seedRecords(legacyRecord({ attachments: [attachment("private bytes")] }));
+    const entry = (await recoveryEntries(1))[0]!;
     expect(await discardDurableComposerRecovery(owner, entry, () => true)).toEqual({
       status: "discarded",
     });
     expect(await prepareDurableComposerRecovery(owner)).toEqual({ status: "ready", entries: [] });
-    const database = await openControlUiDatabase();
-    const transaction = database.transaction("composerDrafts", "readonly");
-    const record = await requestResult(
-      transaction
-        .objectStore("composerDrafts")
-        .get(JSON.stringify([owner.gatewayOwner, owner.recoveryScope, legacyScope.scopeKey])),
-    );
-    await transactionComplete(transaction);
+    const record = await readStoredRecord(legacyRecord().key);
     expect(record).toMatchObject({ text: "", attachments: [] });
     expect(record.revision).toBeGreaterThan(entry.revision);
     expect(
@@ -151,22 +140,14 @@ describe("durable recovery", () => {
   it.each(["owner", "revision", "writeId", "current", "storage"] as const)(
     "preserves recovery when discard is blocked by %s",
     async (change) => {
-      await seedRecords([
-        storedRecord(
-          legacyScope.scopeKey,
-          change === "storage"
-            ? { attachments: [{ blob: new Blob(["keep bytes"]), mimeType: "text/plain" }] }
-            : {},
-        ),
-      ]);
-      const entry = await recoveryEntry();
+      await seedRecords(
+        legacyRecord(change === "storage" ? { attachments: [attachment("keep bytes")] } : {}),
+      );
+      const entry = (await recoveryEntries(1))[0]!;
       if (change === "revision" || change === "writeId") {
-        await seedRecords([
-          storedRecord(
-            legacyScope.scopeKey,
-            change === "revision" ? { revision: 11 } : { writeId: "replacement" },
-          ),
-        ]);
+        await seedRecords(
+          legacyRecord(change === "revision" ? { revision: 11 } : { writeId: "replacement" }),
+        );
       }
       const before = await readDurableComposerDraft(legacyScope);
       const write =
@@ -187,10 +168,7 @@ describe("durable recovery", () => {
       const retained = await readDurableComposerDraft(legacyScope);
       expect(retained).toEqual(before);
       if (change === "storage") {
-        expect(retained.status).toBe("found");
-        if (retained.status !== "found") {
-          throw new Error("Missing retained draft");
-        }
+        assert(retained.status === "found", "Missing retained draft");
         expect(await retained.draft.attachments[0]!.blob.text()).toBe("keep bytes");
         expect(retained.draft.revision).toBe(entry.revision);
       }
@@ -202,18 +180,7 @@ describe("durable chat draft presence", () => {
   it("reports every chat draft kind and retirement fence for only the requested owner", async () => {
     const drafts = [
       { name: "text", text: "unsent", attachments: [] },
-      {
-        name: "attachment",
-        text: "",
-        attachments: [{ blob: new Blob(["attachment"]), mimeType: "text/plain" }],
-      },
-      { name: "goal", text: "", attachments: [], goalMode: { action: "start" as const } },
-      {
-        name: "reply",
-        text: "",
-        attachments: [],
-        replyTarget: { messageId: "message-1", text: "quoted message" },
-      },
+      ...textlessDrafts.map((draft) => Object.assign({ text: "", attachments: [] }, draft)),
     ];
     for (const draft of drafts) {
       expect(
@@ -225,11 +192,8 @@ describe("durable chat draft presence", () => {
       ).toMatchObject({ status: "persisted" });
     }
     const retired = await retireDurableComposerDraft(scope("retired"), 10);
-    expect(retired.status).toBe("persisted");
-    if (retired.status !== "persisted") {
-      throw new Error("Draft retirement failed");
-    }
-    await seedRecords([
+    assert(retired.status === "persisted", "Draft retirement failed");
+    await seedRecords(
       storedRecord(scope("other-owner").scopeKey, {
         ownerKey: JSON.stringify([owner.gatewayOwner, "principal-b"]),
         recoveryScope: "principal-b",
@@ -240,7 +204,7 @@ describe("durable chat draft presence", () => {
       storedRecord(chatKey("legacy")),
       storedRecord("new-session"),
       storedRecord(scope("invalid").scopeKey, { revision: -1 }),
-    ]);
+    );
 
     expect(await listDurableChatDraftPresence(owner)).toEqual({
       status: "ready",
@@ -254,9 +218,9 @@ describe("durable chat draft presence", () => {
   it("projects expired drafts as pending clears without writing or reading Blob bytes", async () => {
     const expired = storedRecord(scope("expired").scopeKey, {
       updatedAt: now - 8 * 24 * 60 * 60 * 1_000,
-      attachments: [{ blob: new Blob(["keep these bytes"]), mimeType: "text/plain" }],
+      attachments: [attachment("keep these bytes")],
     });
-    const database = await seedRecords([expired]);
+    const database = await seedRecords(expired);
     const transactions = vi.spyOn(database, "transaction");
     const blobText = vi.spyOn(Blob.prototype, "text");
     const blobBytes = vi.spyOn(Blob.prototype, "arrayBuffer");
@@ -273,12 +237,7 @@ describe("durable chat draft presence", () => {
       expect(blobText).not.toHaveBeenCalled();
       expect(blobBytes).not.toHaveBeenCalled();
       expect(listener).not.toHaveBeenCalled();
-      const transaction = database.transaction("composerDrafts", "readonly");
-      const stored = await requestResult(
-        transaction.objectStore("composerDrafts").get(expired.key),
-      );
-      await transactionComplete(transaction);
-      expect(stored).toEqual(expired);
+      expect(await readStoredRecord(expired.key)).toEqual(expired);
     } finally {
       unsubscribe();
     }

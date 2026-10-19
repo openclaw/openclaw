@@ -1,8 +1,5 @@
 import { isBlockedHostnameOrIp } from "../api.js";
 
-// Webhook exposure checks for providers that must reach local voice-call webhooks.
-
-/** Minimal config needed to evaluate webhook exposure. */
 type VoiceCallWebhookExposureConfig = {
   provider?: string;
   publicUrl?: string;
@@ -14,7 +11,6 @@ type VoiceCallWebhookExposureConfig = {
   };
 };
 
-/** Return true when a provider requires a public webhook URL or tunnel. */
 export function providerRequiresPublicWebhook(providerName: string | undefined): boolean {
   return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
 }

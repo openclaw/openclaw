@@ -1,11 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { showToast } from "../toast.ts";
-import { canSplitSessionView, runSessionNavigationAction } from "./session-menu-navigation.ts";
+import {
+  canSplitSessionView,
+  registerSessionSplitHost,
+  runSessionNavigationAction,
+} from "./session-menu-navigation.ts";
 
 vi.mock("../clipboard.ts", () => ({ copyToClipboard: vi.fn(async () => true) }));
 vi.mock("../toast.ts", () => ({ showToast: vi.fn() }));
@@ -263,7 +267,7 @@ describe("session menu navigation actions", () => {
     const params = fixture().params;
     expect(canSplitSessionView()).toBe(false);
     const chatPage = document.createElement("openclaw-chat-page");
-    Object.assign(chatPage, { sessionSplitAvailable: true });
+    onTestFinished(registerSessionSplitHost(chatPage, () => true));
     document.body.append(chatPage);
     expect(canSplitSessionView()).toBe(true);
     const received = vi.fn((event: Event) => event.preventDefault());

@@ -51,7 +51,6 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
   const nativeProcessOwner =
     getInheritedNativeProcessOwner() ??
     (process.platform === "linux" &&
-    !process.versions.bun &&
     (typeof WORKER_DEPLOY_BUILD !== "boolean" || !WORKER_DEPLOY_BUILD)
       ? resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href
       : undefined);

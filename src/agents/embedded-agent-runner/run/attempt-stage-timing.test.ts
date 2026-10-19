@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import {
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
-  formatEmbeddedRunStageSummary,
   logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 
@@ -70,7 +69,9 @@ describe("embedded run stage timing", () => {
     tracker.mark("runtime-context");
     tracker.mark("runtime-plugins");
 
-    expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
+    const log = { isEnabled: () => true, warn: vi.fn(), trace: vi.fn() };
+    logEmbeddedRunStageSummary(tracker.snapshot(), log, () => "startup");
+    expect(log.trace).toHaveBeenCalledExactlyOnceWith(
       `startup pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=21 stages=workspace:2ms@2ms,harness-selection:5ms@7ms,prepared-runtime:11ms@18ms,runtime-context:3ms@21ms,runtime-plugins:0ms@21ms`,
     );
   });
@@ -90,7 +91,9 @@ describe("embedded run stage timing", () => {
     clock = 91;
     tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
 
-    expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
+    const log = { isEnabled: () => true, warn: vi.fn(), trace: vi.fn() };
+    logEmbeddedRunStageSummary(tracker.snapshot(), log, () => "startup");
+    expect(log.trace).toHaveBeenCalledExactlyOnceWith(
       `startup pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=91 stages=attempt-workspace:10ms@10ms,attempt-prompt:30ms@40ms,attempt-runtime-plan:50ms@90ms,attempt-dispatch:1ms@91ms`,
     );
   });

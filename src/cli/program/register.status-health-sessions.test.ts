@@ -60,12 +60,8 @@ async function run(args: string | string[]) {
 function expectOptions(owner: typeof mocks.sessionsCommand, options: Record<string, unknown>) {
   expect(owner).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(options), mocks.runtime);
 }
-async function runSession(placement: string, command: string, options: string[], extra = "") {
-  await run([
-    "sessions",
-    ...(placement === "parent" ? [...options, command] : [command, ...options]),
-    ...extra.split(" ").filter(Boolean),
-  ]);
+async function runSession(command: string, options: string[], extra = "") {
+  await run(["sessions", ...options, command, ...extra.split(" ").filter(Boolean)]);
 }
 async function expectRejection(
   args: string[],
@@ -157,16 +153,15 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(mocks.statusCommand).not.toHaveBeenCalled();
   });
 
-  it.each(["parent"])("list preserves %s options and blank store", async (placement) => {
+  it("list preserves parent options and blank store", async () => {
     const options = [...blankStore, "--json", "--verbose", ...selection];
-    await runSession(placement, "list", options);
+    await runSession("list", options);
     expect(mocks.setVerbose).toHaveBeenCalledWith(true);
     expectOptions(mocks.sessionsCommand, listOptions);
   });
-  it.each(["parent"])("cleanup preserves %s options and blank store", async (placement) => {
+  it("cleanup preserves parent options and blank store", async () => {
     const options = [...blankStore, "--all-agents", "--json"];
     await runSession(
-      placement,
       "cleanup",
       options,
       `--dry-run --enforce --fix-missing --fix-dm-scope --active-key ${key}`,
@@ -183,9 +178,9 @@ describe("registerStatusHealthSessionsCommands", () => {
       json: true,
     });
   });
-  it.each(["parent"])("tail preserves %s options and blank store", async (placement) => {
+  it("tail preserves parent options and blank store", async () => {
     const options = [...blankStore, "--agent", "work"];
-    await runSession(placement, "tail", options, `--session-key ${key} --tail 5 --follow`);
+    await runSession("tail", options, `--session-key ${key} --tail 5 --follow`);
     expectOptions(mocks.sessionsTailCommand, {
       sessionKey: key,
       store: "",
@@ -195,11 +190,10 @@ describe("registerStatusHealthSessionsCommands", () => {
       tail: "5",
     });
   });
-  it.each(["parent"])("export preserves %s options and blank store", async (placement) => {
+  it("export preserves parent options and blank store", async () => {
     const options = [...blankStore, "--json"];
     const request = "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ";
     await runSession(
-      placement,
       "export-trajectory",
       options,
       `--session-key ${key} --workspace /workspace --output bug-123 --request-json-base64 ${request}`,
@@ -214,10 +208,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
-  it.each([false])("compact leaf override=%s (#91378)", async (override) => {
-    await run(
-      `sessions --agent ${override ? "main" : "work"} --json compact ${key}${override ? " --agent work" : ""}`,
-    );
+  it("compact inherits parent agent and JSON options (#91378)", async () => {
+    await run(`sessions --agent work --json compact ${key}`);
     expectOptions(mocks.sessionsCompactCommand, { key, agent: "work", json: true });
   });
   it("forwards archive keys, inherited scope and RPC options", async () => {

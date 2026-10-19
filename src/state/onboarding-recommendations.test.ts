@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
 import {
   createOnboardingRecommendationsStore,
@@ -29,9 +32,30 @@ const matches: OnboardingRecommendationMatch[] = [
   },
 ];
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+function storeFor(state: OpenClawTestState, workspaceDir = state.workspaceDir) {
+  return createOnboardingRecommendationsStore({ workspaceDir, database: { env: state.env } });
+}
+
+function withStore(
+  label: string,
+  run: (store: ReturnType<typeof storeFor>, state: OpenClawTestState) => Promise<void>,
+) {
+  return withOpenClawTestState({ label }, (state) => run(storeFor(state), state));
+}
+
+function writeOffer(
+  store: ReturnType<typeof storeFor>,
+  overrides: Partial<Parameters<typeof store.writeOffer>[0]> = {},
+) {
+  return store.writeOffer({
+    inventory: [{ label: "Chat" }],
+    matches,
+    answered: false,
+    ...overrides,
+  });
+}
+
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("onboarding recommendations store", () => {
   it("confines worker writes and deletion to the onboarding namespace", async () => {
@@ -43,6 +67,7 @@ describe("onboarding recommendations store", () => {
       };
       writeConfigMachineState("authProfiles.store", credentials, options);
       const context = captureOpenClawStateWorkerContext(options);
+      const read = (key: string) => readConfigMachineStateWithMetadata(key, options)?.value;
       // A raw key from a retained caller must not override the worker's namespace.
       const input = {
         workspaceKey: "authProfiles.store",
@@ -53,22 +78,18 @@ describe("onboarding recommendations store", () => {
         type: "onboardingRecommendations.writeOffer",
         input,
       });
-      expect(readConfigMachineStateWithMetadata("authProfiles.store", options)?.value).toEqual(
-        credentials,
-      );
-      expect(
-        readConfigMachineStateWithMetadata("onboarding.recommendations.authProfiles.store", options)
-          ?.value,
-      ).toMatchObject({ inventoryHash: "synthetic", offeredAt: 1 });
+      expect(read("authProfiles.store")).toEqual(credentials);
+      expect(read("onboarding.recommendations.authProfiles.store")).toMatchObject({
+        inventoryHash: "synthetic",
+        offeredAt: 1,
+      });
       expect(
         await executeOpenClawStateWorker(context, {
           type: "onboardingRecommendations.clear",
           input,
         }),
       ).toBe(true);
-      expect(readConfigMachineStateWithMetadata("authProfiles.store", options)?.value).toEqual(
-        credentials,
-      );
+      expect(read("authProfiles.store")).toEqual(credentials);
     });
   });
 
@@ -106,22 +127,10 @@ describe("onboarding recommendations store", () => {
 
   it("isolates offers by workspace", async () => {
     await withOpenClawTestState({ label: "onboarding-recommendations-scopes" }, async (state) => {
-      const database = { env: state.env };
-      const workspaceA = createOnboardingRecommendationsStore({
-        workspaceDir: state.path("workspace-a"),
-        database,
-      });
-      const workspaceB = createOnboardingRecommendationsStore({
-        workspaceDir: state.path("workspace-b"),
-        database,
-      });
+      const workspaceA = storeFor(state, state.path("workspace-a"));
+      const workspaceB = storeFor(state, state.path("workspace-b"));
 
-      const written = await workspaceA.writeOffer({
-        inventory: [{ label: "Chat" }],
-        matches,
-        answered: false,
-        nowMs: 1_234,
-      });
+      const written = await writeOffer(workspaceA, { nowMs: 1_234 });
 
       expect(await workspaceB.read()).toBeNull();
       expect(await workspaceB.acknowledge({ nowMs: 2_345 })).toBeNull();
@@ -130,23 +139,11 @@ describe("onboarding recommendations store", () => {
   });
 
   it("round-trips the workspace offer and answer timestamps", async () => {
-    await withOpenClawTestState({ label: "onboarding-recommendations" }, async (state) => {
-      const database = { env: state.env };
-      const store = createOnboardingRecommendationsStore({
-        workspaceDir: state.workspaceDir,
-        database,
-      });
+    await withStore("onboarding-recommendations", async (store, state) => {
       const inventory = [{ label: "Chat", bundleId: "com.example.chat" }];
-
       expect(await store.read()).toBeNull();
       expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
-      const written = await store.writeOffer({
-        inventory,
-        matches,
-        answered: true,
-        nowMs: 1_234,
-      });
-
+      const written = await writeOffer(store, { inventory, answered: true, nowMs: 1_234 });
       expect(written).toEqual({
         inventoryHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
         matches,
@@ -155,11 +152,9 @@ describe("onboarding recommendations store", () => {
         updatedAt: 1_234,
       });
       expect(await store.read()).toEqual(written);
-
-      const staleCompletion = await store.writeOffer({
+      const staleCompletion = await writeOffer(store, {
         inventory: [{ label: "Different" }],
         matches: [],
-        answered: false,
         nowMs: 2_000,
       });
       expect(staleCompletion).toEqual(written);
@@ -167,115 +162,49 @@ describe("onboarding recommendations store", () => {
   });
 
   it("updates pending matches without changing the inventory identity", async () => {
-    await withOpenClawTestState({ label: "onboarding-recommendations-retry" }, async (state) => {
-      const database = { env: state.env };
-      const store = createOnboardingRecommendationsStore({
-        workspaceDir: state.workspaceDir,
-        database,
-      });
-      const record = await store.writeOffer({
+    await withStore("onboarding-recommendations-retry", async (store) => {
+      const record = await writeOffer(store, {
         inventory: [{ label: "Chat" }, { label: "Notes" }],
-        matches,
-        answered: false,
         nowMs: 2_000,
       });
       const retryMatch = { ...matches[0]!, reason: "Retry this install" };
-
       const updated = await store.updatePending({
         matches: [retryMatch],
         expected: record,
         nowMs: 3_000,
       });
-
-      expect(updated).toEqual({
-        ...record,
-        matches: [retryMatch],
-        updatedAt: 3_000,
-      });
-      expect(updated?.inventoryHash).toBe(record.inventoryHash);
+      expect(updated).toEqual({ ...record, matches: [retryMatch], updatedAt: 3_000 });
     });
   });
 
   it("does not overwrite a concurrently replaced pending offer", async () => {
-    await withOpenClawTestState({ label: "onboarding-recommendations-stale" }, async (state) => {
-      const database = { env: state.env };
-      const store = createOnboardingRecommendationsStore({
-        workspaceDir: state.workspaceDir,
-        database,
-      });
-      const original = await store.writeOffer({
-        inventory: [{ label: "Chat" }],
-        matches,
-        answered: false,
-        nowMs: 2_000,
-      });
-      const replacement = await store.writeOffer({
+    await withStore("onboarding-recommendations-stale", async (store) => {
+      const original = await writeOffer(store, { nowMs: 2_000 });
+      const replacement = await writeOffer(store, {
         inventory: [{ label: "Notes" }],
         matches: [],
-        answered: false,
         nowMs: 2_500,
       });
-
-      expect(
-        await store.updatePending({
-          matches,
-          expected: original,
-          nowMs: 3_000,
-        }),
-      ).toBeNull();
-      expect(
-        await store.acknowledge({
-          expected: original,
-          nowMs: 3_000,
-        }),
-      ).toBeNull();
+      expect(await store.updatePending({ matches, expected: original, nowMs: 3_000 })).toBeNull();
+      expect(await store.acknowledge({ expected: original, nowMs: 3_000 })).toBeNull();
       expect(await store.read()).toEqual(replacement);
     });
   });
 
   it("clears only pending offers", async () => {
-    await withOpenClawTestState(
-      { label: "onboarding-recommendations-pending-clear" },
-      async (state) => {
-        const database = { env: state.env };
-        const store = createOnboardingRecommendationsStore({
-          workspaceDir: state.workspaceDir,
-          database,
-        });
-        const pending = await store.writeOffer({
-          inventory: [{ label: "Chat" }],
-          matches,
-          answered: false,
-        });
-
-        expect(await store.clearPending({ expected: pending })).toBe(true);
-        expect(await store.read()).toBeNull();
-
-        const accepted = await store.writeOffer({
-          inventory: [{ label: "Chat" }],
-          matches,
-          answered: true,
-        });
-        expect(await store.clearPending({ expected: accepted })).toBe(false);
-        expect((await store.read())?.acceptedAt).toBeTypeOf("number");
-      },
-    );
+    await withStore("onboarding-recommendations-pending-clear", async (store) => {
+      const pending = await writeOffer(store);
+      expect(await store.clearPending({ expected: pending })).toBe(true);
+      expect(await store.read()).toBeNull();
+      const accepted = await writeOffer(store, { answered: true });
+      expect(await store.clearPending({ expected: accepted })).toBe(false);
+      expect((await store.read())?.acceptedAt).toBeTypeOf("number");
+    });
   });
 
   it("deletes the stored offer so recommendations can be scanned again", async () => {
-    await withOpenClawTestState({ label: "onboarding-recommendations-clear" }, async (state) => {
-      const database = { env: state.env };
-      const store = createOnboardingRecommendationsStore({
-        workspaceDir: state.workspaceDir,
-        database,
-      });
-      await store.writeOffer({
-        inventory: [{ label: "Chat" }],
-        matches,
-        answered: true,
-        nowMs: 4_567,
-      });
-
+    await withStore("onboarding-recommendations-clear", async (store) => {
+      await writeOffer(store, { answered: true, nowMs: 4_567 });
       expect(await store.clear()).toBe(true);
       expect(await store.read()).toBeNull();
       expect(await store.clear()).toBe(false);

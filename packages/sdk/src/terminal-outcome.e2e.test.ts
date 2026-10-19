@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { claimAgentSessionWriter } from "../../../src/agents/embedded-agent-runner/run/session-bootstrap.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../../src/agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../../src/agents/embedded-agent-runner/runs.test-support.js";
 import { resolveDefaultSessionStorePath } from "../../../src/config/sessions/paths.js";
 import {
   loadSessionEntry,

@@ -8,7 +8,7 @@ import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import "../../../styles/chat/skill-learned-notice.css";
 
 type UndoState = "idle" | "pending" | "done" | { error: string };

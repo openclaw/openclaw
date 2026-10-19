@@ -386,13 +386,13 @@ describe("native transcript catalog SDK", () => {
       } finally {
         sql.restore();
       }
+      // The shared display projection removes the standalone trailing control line.
       expect(first.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "Answer"],
-        ["agentMessage", "NO_REPLY"],
-      ]);
-      const second = await read(2, first.nextCursor);
-      expect(second.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "Second answer part"],
+      ]);
+      const second = await read(1, first.nextCursor);
+      expect(second.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "First answer part"],
       ]);
       const third = await read(2, second.nextCursor);

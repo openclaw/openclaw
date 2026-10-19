@@ -55,19 +55,6 @@ export function bindAgentsApiTranscriptAuthority(
     : assertCurrent;
 }
 
-async function assertTranscriptCurrent(assertCurrent: TranscriptAssertion): Promise<void> {
-  if (!assertCurrent.prepareSessionSource) {
-    assertCurrent();
-    return;
-  }
-  const source = await assertCurrent.prepareSessionSource();
-  try {
-    source.assertCurrent();
-  } finally {
-    await source.release?.();
-  }
-}
-
 /** Canonical native facts use the same durable identities during live and historical repair. */
 export async function recordAgentsApiNativeToolTranscript(
   params: AgentHarnessAttemptParamsV2,
@@ -83,7 +70,7 @@ export async function recordAgentsApiNativeToolTranscript(
     historical?: boolean;
   } = {},
 ): Promise<boolean> {
-  await assertTranscriptCurrent(assertCurrent);
+  assertCurrent();
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !["completed", "failed", "incomplete"].includes(item.status ?? "")) {
     // A failed parent turn can retire before its command completes. Do not
@@ -149,7 +136,7 @@ export async function recordAgentsApiNativeToolInvocation(
   nextTimestamp: () => number,
   historical = false,
 ): Promise<boolean> {
-  await assertTranscriptCurrent(assertCurrent);
+  assertCurrent();
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !canRecordAgentsApiNativeToolInvocation(item)) {
     return false;
@@ -218,7 +205,7 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
   assistantItemIds?: readonly string[],
   historical = false,
 ): Promise<TMessage> {
-  await assertTranscriptCurrent(assertCurrent);
+  assertCurrent();
   const target = requireAgentsApiSessionTarget(params);
   // A native item can outlive its submitting OpenClaw run. Retain the stored
   // attribution while the writer still compares every other canonical field.
@@ -229,7 +216,7 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
     const facts = await withSessionTranscriptWrite(target, (transcript) =>
       transcript.readMessageFacts({ idempotencyKeys: [idempotencyKey] }),
     );
-    await assertTranscriptCurrent(assertCurrent);
+    assertCurrent();
     if (facts.existingIdempotencyKeys.has(idempotencyKey)) {
       const stored = asOptionalRecord(facts.messagesByIdempotencyKey.get(idempotencyKey));
       const storedRunId = asOptionalRecord(stored?.["__openclaw"])?.runId;
@@ -251,7 +238,7 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
     message: attributedMessage,
     preparation: { source: assertCurrent },
   });
-  await assertTranscriptCurrent(assertCurrent);
+  assertCurrent();
   if (append.kind !== "result") {
     throw new Error("Agents API transcript append was refused");
   }
@@ -268,7 +255,7 @@ export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMes
         assistantItemIds,
       },
     });
-    await assertTranscriptCurrent(assertCurrent);
+    assertCurrent();
   }
   return append.result.message;
 }
@@ -414,7 +401,6 @@ export async function recordAgentsApiNativeHistory(
 ): Promise<void> {
   for (const { turn, items } of entries) {
     for (const item of items) {
-      assertCurrent();
       await recordAgentsApiNativeToolTranscript(
         params,
         nativeSessionId,

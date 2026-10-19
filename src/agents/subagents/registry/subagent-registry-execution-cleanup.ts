@@ -1,12 +1,15 @@
 import {
-  captureChatAbortExecution,
-  isCurrentChatAbortExecution,
-} from "../../../gateway/chat-abort-lifecycle-internal.js";
-import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
-import {
   clearGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  type RpcSourceRef,
+} from "../../../sessions/session-controller.rpc-sources.js";
+import { sessionTargetOwnersMatch } from "../../../sessions/session-controller.target.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
@@ -14,18 +17,17 @@ import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-me
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
-type ExecutionCleanupObservation = {
-  readonly sessionId: string;
-  readonly sessionLifecycleRevision: string | undefined;
-  readonly settlement: NonNullable<ChatAbortControllerEntry["executionSettlement"]>;
-  matchesRecord(): boolean;
-  isCurrent(): boolean;
-  isSelf(): boolean;
+// A retired row retains only its exact source reference; the controller owns cleanup.
+// Empty weak slots prevent that runtime incarnation from adopting a replacement.
+const retiredExecutions = new WeakMap<object, RpcSourceRef | undefined>();
+
+export type CapturedSubagentExecution = {
+  readonly entry: SubagentRunRecord;
+  readonly runId: string;
+  readonly execution: RpcSourceRef;
 };
 
-// Immutable row publications preserve their existing physical execution owner.
-const executionCleanups = new WeakMap<object, ExecutionCleanupObservation>();
-
+/** Captures the exact physical backend of a legacy row, not a replacement session. */
 export function captureSubagentEmbeddedExecution(entry: SubagentRunRecord) {
   if (resolveSubagentChildAuthority(entry).status === "mismatch") {
     return undefined;
@@ -38,146 +40,69 @@ export function captureSubagentEmbeddedExecution(entry: SubagentRunRecord) {
     : undefined;
 }
 
-export async function captureSubagentReplyExecution(entry: SubagentRunRecord) {
+/** Captures the exact controller source owned by the selected subagent run. */
+export function captureSubagentExecution(params: {
+  entry: SubagentRunRecord;
+  session: Pick<SubagentKillSession, "agentId" | "storePath" | "entry">;
+}): CapturedSubagentExecution | undefined {
+  const entry = getCurrentSubagentRunOwner(subagentRuns, params.entry) ?? params.entry;
   const authority = resolveSubagentChildAuthority(entry);
   if (authority.status === "mismatch") {
     return undefined;
   }
-  const [{ resolveReplyOperationsForSession }, { getAttachedBackend }] = await Promise.all([
-    import("../../../auto-reply/reply/reply-run-registry.registry.js"),
-    import("../../../auto-reply/reply/reply-run-registry.state.js"),
-  ]);
-  const current = () =>
-    resolveReplyOperationsForSession({
-      agentId: authority.childAgentId,
-      sessionKeys: [entry.childSessionKey],
-      sessionId: entry.childSessionIdentity?.sessionId,
-    }).find(
-      (operation) =>
-        operation.key === entry.childSessionKey &&
-        getAttachedBackend(operation)?.runId === entry.runId,
-    );
-  const operation = current();
-  if (!operation) {
+  const target = captureSessionTarget({
+    storeScope: params.session.storePath,
+    sessionKey: entry.childSessionKey,
+    agentId: params.session.agentId,
+    incarnation:
+      authority.status === "legacy-unverified"
+        ? entry.childSessionIdentity?.sessionId
+        : params.session.entry?.sessionId,
+  });
+  const runtimeKey = getSubagentRunRuntimeKey(entry);
+  const retiredExecution = retiredExecutions.get(runtimeKey);
+  const execution = retiredExecutions.has(runtimeKey)
+    ? retiredExecution
+    : getRpcSourceForGateway(entry.runId, getGatewayContextResolver(entry), target);
+  const retiredTarget = retiredExecution?.input.mailbox.owner.target;
+  if (
+    !execution ||
+    execution.adapter.kind !== "agent" ||
+    (retiredTarget && !sessionTargetOwnersMatch(retiredTarget, target))
+  ) {
     return undefined;
   }
-  const backend = getAttachedBackend(operation);
-  const isCurrent = () => current() === operation && getAttachedBackend(operation) === backend;
-  return {
-    sessionId: operation.sessionId,
-    settlement: operation.ownerSettlement,
-    isCurrent,
-    abort: () => isCurrent() && operation.abortByUser(),
-  };
+  const identity = getRpcSourceIdentity(execution);
+  const lifecycleGeneration = getRpcSourceLifecycleGeneration(execution);
+  if (
+    identity.sessionKey !== entry.childSessionKey ||
+    identity.agentId !== authority.childAgentId ||
+    entry.childSessionIdentity?.lifecycleRevision !== params.session.entry?.lifecycleRevision ||
+    (authority.status === "legacy-unverified"
+      ? entry.childSessionIdentity?.sessionId !== undefined &&
+        identity.sessionId !== entry.childSessionIdentity.sessionId
+      : identity.sessionId !== params.session.entry?.sessionId) ||
+    (entry.execution.lifecycleGeneration !== undefined &&
+      lifecycleGeneration !== entry.execution.lifecycleGeneration)
+  ) {
+    return undefined;
+  }
+  return { entry, runId: entry.runId, execution };
 }
 
-export function captureSubagentExecution(params: {
-  entry: SubagentRunRecord;
-  session: SubagentKillSession;
-}) {
-  const entry = getCurrentSubagentRunOwner(subagentRuns, params.entry) ?? params.entry;
-  const resolver = getGatewayContextResolver(entry);
-  const context = resolver?.();
-  const execution =
-    context &&
-    captureChatAbortExecution({
-      entries: context.chatAbortControllers,
-      runId: entry.runId,
-      sessionKey: entry.childSessionKey,
-      sessionId:
-        resolveSubagentChildAuthority(entry).status === "legacy-unverified"
-          ? (entry.childSessionIdentity?.sessionId ??
-            context.chatAbortControllers.get(entry.runId)?.sessionId)
-          : params.session.entry?.sessionId,
-      lifecycleGeneration: entry.execution.lifecycleGeneration,
-    });
-  return context && execution
-    ? { entry, resolver, context, runId: entry.runId, execution }
-    : undefined;
-}
-
-/** Retire execution authority while its raw owner still supplies cleanup observation. */
+/** Retires the registry projection; controller source settlement retains physical cleanup. */
 export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void {
   const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;
-  const key = getSubagentRunRuntimeKey(entry);
-  const resolver = getGatewayContextResolver(entry);
-  try {
-    const context = resolver?.();
-    const execution = context?.chatAbortControllers.get(entry.runId);
-    const settlement = execution?.executionSettlement;
-    const { runId, childSessionKey, generation, createdAt } = entry;
-    const lifecycleGeneration = entry.execution.lifecycleGeneration;
-    if (
-      !resolver ||
-      !context ||
-      !execution ||
-      !settlement ||
-      settlement.cleanupSettled ||
-      execution.kind !== "agent" ||
-      execution.sessionKey !== childSessionKey ||
-      (entry.childSessionIdentity !== undefined &&
-        execution.sessionId !== entry.childSessionIdentity.sessionId) ||
-      (lifecycleGeneration !== undefined && execution.lifecycleGeneration !== lifecycleGeneration)
-    ) {
-      return;
+  const runtimeKey = getSubagentRunRuntimeKey(entry);
+  if (!retiredExecutions.has(runtimeKey)) {
+    const execution = getRpcSourceForGateway(entry.runId, getGatewayContextResolver(entry));
+    retiredExecutions.set(runtimeKey, execution);
+    if (execution) {
+      const release = () => {
+        retiredExecutions.set(runtimeKey, undefined);
+      };
+      void execution.input.settlement.promise.then(release, release);
     }
-    const { sessionId, lifecycleGeneration: executionGeneration } = execution;
-    const recordSessionId = entry.childSessionIdentity?.sessionId;
-    const sessionLifecycleRevision = entry.childSessionIdentity?.lifecycleRevision;
-    const currentEntry = () => getCurrentSubagentRunOwner(subagentRuns, entry) ?? entry;
-    const matchesRecord = () => {
-      const current = currentEntry();
-      return (
-        current.runId === runId &&
-        current.childSessionKey === childSessionKey &&
-        current.generation === generation &&
-        current.createdAt === createdAt &&
-        current.execution.lifecycleGeneration === lifecycleGeneration &&
-        current.childSessionIdentity?.sessionId === recordSessionId &&
-        current.childSessionIdentity?.lifecycleRevision === sessionLifecycleRevision
-      );
-    };
-    const observation: ExecutionCleanupObservation = {
-      sessionId,
-      sessionLifecycleRevision,
-      settlement,
-      matchesRecord,
-      isSelf: () => isCurrentChatAbortExecution(execution),
-      isCurrent: () => {
-        const current = context.chatAbortControllers.get(runId);
-        return (
-          matchesRecord() &&
-          getGatewayContextResolver(currentEntry()) === undefined &&
-          resolver() === context &&
-          execution.sessionKey === childSessionKey &&
-          execution.sessionId === sessionId &&
-          execution.lifecycleGeneration === executionGeneration &&
-          execution.executionSettlement === settlement &&
-          (current === execution || (current === undefined && settlement.cleanupSettled))
-        );
-      },
-    };
-    executionCleanups.set(key, observation);
-    const release = () => {
-      if (settlement.cleanupSettled && executionCleanups.get(key) === observation) {
-        executionCleanups.delete(key);
-      }
-    };
-    void settlement.completion.then(release, release);
-  } finally {
-    clearGatewayContextResolver(entry);
   }
-}
-
-export function getSubagentExecutionCleanup(
-  observed: SubagentRunRecord,
-  session: SubagentRunRecord["childSessionIdentity"],
-): ExecutionCleanupObservation | undefined {
-  const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;
-  const observation = executionCleanups.get(getSubagentRunRuntimeKey(entry));
-  return observation?.sessionId === session?.sessionId &&
-    observation?.matchesRecord() &&
-    observation.sessionLifecycleRevision === session?.lifecycleRevision
-    ? observation
-    : undefined;
+  clearGatewayContextResolver(entry);
 }

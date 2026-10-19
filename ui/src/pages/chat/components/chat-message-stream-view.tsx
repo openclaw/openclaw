@@ -48,7 +48,7 @@ type StreamMessageOptions = Pick<
   | "agentId"
   | "runActive"
   | "asyncQuestions"
-  | "onRequestUpdate"
+  | "mediaOwner"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "mediaPolicyKey"
@@ -74,7 +74,6 @@ export type StreamGroupOptions = StreamMessageOptions & {
   branding?: ThemeBranding;
   bubbleMode?: boolean;
   firstBubbleKey?: string | null;
-  entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: ChatAvatarProps["assistant"];
@@ -219,7 +218,6 @@ function StreamingMessage(props: {
       options={{
         ...props.options,
         isStreaming: part().isStreaming,
-        entryRef: props.options.entryRefFor?.(part().key),
         showReasoning: Boolean(part().thinking),
         messageActions: actions(),
       }}
@@ -263,6 +261,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         },
       ]}
       data-chat-row-key={props.parts[0]?.key}
+      data-chat-streaming={active() ? "true" : undefined}
     >
       <Show when={hasAvatar()}>
         <ChatAvatar role="assistant" assistant={props.options.assistant} />
@@ -362,6 +361,8 @@ function WorkGroupSummaryBody(props: {
   summary: ReturnType<typeof prepareWorkGroupSummary>;
   options: WorkGroupSummaryOptions;
 }) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const compact = () => props.options.bubbleMode;
   return (
     <div
@@ -377,11 +378,14 @@ function WorkGroupSummaryBody(props: {
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
         aria-expanded={props.options.expanded ? "true" : "false"}
-        onPointerEnter={syncToolDisclosureOverflow}
-        onFocus={syncToolDisclosureOverflow}
+        onPointerEnter={syncOverflow}
+        onFocus={syncOverflow}
         onClick={() => props.options.onToggle()}
       >
-        <span class="chat-tool-disclosure__content">
+        <span
+          ref={(element) => (disclosureContent = element)}
+          class="chat-tool-disclosure__content"
+        >
           <span class="chat-activity-group__label">{props.summary.label}</span>
         </span>
         <Show when={props.options.expanded && props.summary.total > 0}>

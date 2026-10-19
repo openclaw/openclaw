@@ -193,7 +193,7 @@ describe("provider terminal reply delivery", () => {
           expected: "I started the watcher. NO_REPLY",
         },
         { id: "trimmed", raw: " \tNO_REPLY\n", expected: undefined },
-        { id: "lowercase", raw: "no_reply", expected: "no_reply" },
+        { id: "lowercase", raw: "no_reply", expected: undefined },
         { id: "quoted", raw: '"NO_REPLY"', expected: '"NO_REPLY"' },
         { id: "literal", raw: "NO_REPLY\nNO_REPLY", expected: "NO_REPLY" },
         { id: "crlf", raw: "NO_REPLY\r\nAnswer", expected: "NO_REPLY\r\nAnswer" },

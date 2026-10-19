@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   hasSessionPendingInputsSchema,
@@ -17,7 +17,7 @@ import type { InternalSessionEntry } from "./types.js";
 
 /** Cold storage preserves logical owners; only activity and explicit cross-generation references protect bytes. */
 export function readSessionColdStorageProtection(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   beforeMs: number,
   liveSessionKeys: ReadonlySet<string>,
 ): Set<string> {

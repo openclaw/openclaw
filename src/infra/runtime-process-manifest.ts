@@ -38,7 +38,11 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
+    pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
     pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
+    pluginGenerationPreparation: runtimeProcessEntrypoint(
+      "plugins/plugin-generation-preparation.worker",
+    ),
     agentDatabaseExecution: runtimeProcessEntrypoint("state/openclaw-agent-execution.worker"),
     workspaceMemory: runtimeProcessEntrypoint("worker/memory-worker-entry"),
     localAgentAvatar: runtimeProcessEntrypoint("agents/identity-avatar-file.worker"),

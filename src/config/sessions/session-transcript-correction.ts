@@ -225,7 +225,6 @@ async function runPreparedTranscriptCorrection<T>(
             await restoreSessionColdTranscript(source.scope, assertCurrent);
           },
           beforeWrite: assertCurrent,
-          async release() {},
         }),
         async run(worker, commit) {
           const hydration = await source.owner.readTranscript({

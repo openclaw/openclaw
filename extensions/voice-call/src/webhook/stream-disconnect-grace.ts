@@ -1,5 +1,3 @@
-// Voice Call plugin module owns reconnect grace for carrier media streams.
-
 const STREAM_DISCONNECT_GRACE_MS = 2_000;
 
 export type StreamDisconnectLifecycle = {

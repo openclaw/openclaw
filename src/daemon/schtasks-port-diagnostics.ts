@@ -1,6 +1,8 @@
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import type { PortUsageStatus } from "../infra/ports-types.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
+import { sleep } from "../utils.js";
 
 export async function describeUnverifiedPortListeners(
   port: number,
@@ -28,4 +30,36 @@ export async function describeUnverifiedPortListeners(
     ? ` If one of these is this gateway, stop it with "Stop-Process -Id <pid> -Force" and retry.`
     : "";
   return ` Remaining listener(s): ${described.join(", ")}. If gateway.cmd redirects output, quote the entire redirection target, including environment variables.${hint}`;
+}
+
+export async function waitForGatewayPortRelease(
+  port: number,
+  probeHosts: readonly string[],
+): Promise<boolean> {
+  const deadline = Date.now() + 5_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+  let status: PortUsageStatus = "unknown";
+  try {
+    while (Date.now() < deadline) {
+      const diagnostics = await inspectPortUsage(port, {
+        probeHosts,
+        signal: controller.signal,
+        deadlineMs: deadline,
+      }).catch(() => null);
+      status = diagnostics?.status ?? "unknown";
+      if (status === "free") {
+        return true;
+      }
+      await sleep(Math.max(0, Math.min(250, deadline - Date.now())));
+    }
+    if (status === "unknown") {
+      throw new Error(
+        `gateway port ${port} release is inconclusive after five seconds; run "openclaw gateway status --deep" to inspect the listener.`,
+      );
+    }
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }

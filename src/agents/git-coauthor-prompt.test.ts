@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
-import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
+import {
+  resolveRequestGitCoauthorPrompt,
+  resolveSessionGitCoauthorPrompt,
+} from "./git-coauthor-prompt.js";
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 
@@ -26,7 +29,55 @@ describe("resolveSessionGitCoauthorPrompt", () => {
     warn.mockReset();
   });
 
-  it.each(["agent:main:main", "agent:main:cron:nightly"])(
+  it("places changing requester trailers only in the current-request prompt", async () => {
+    const source = { config: {}, agentId: "main", sessionKey: "agent:main:main" };
+    for (const [requesterProfileId, login, accountId] of [
+      ["profile-c", "requester-c", 9101],
+      ["profile-d", "requester-d", 9104],
+    ] as const) {
+      const trailer =
+        "Co-authored-by: " + login + " <" + accountId + "+" + login + "@users.noreply.github.com>";
+      vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue({
+        logins: [login],
+        trailers: [trailer],
+      });
+      const prompt = await resolveRequestGitCoauthorPrompt({ ...source, requesterProfileId });
+      expect(prompt).toContain(trailer);
+      expect(prompt).not.toContain("unrelated-a");
+      expect(resolveGitCoauthorAttribution).toHaveBeenLastCalledWith({
+        ...source,
+        requesterProfileId,
+      });
+    }
+    vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue(undefined);
+    expect(await resolveRequestGitCoauthorPrompt(source)).toContain(
+      "no host-verified requester trailer",
+    );
+  });
+
+  it("keeps shared-main guidance stable without roster trailers", async () => {
+    vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue({
+      trailers,
+      logins: ["ada", "grace"],
+    });
+    const prompt = await resolveSessionGitCoauthorPrompt({
+      config: { session: { mainKey: "home" } },
+      agentId: "work",
+      sessionKey: "agent:work:home",
+    });
+    expect(prompt).toContain("Its participant roster is not a task's contributor list");
+    expect(prompt).not.toContain("Co-authored-by:");
+    expect(resolveGitCoauthorAttribution).not.toHaveBeenCalled();
+    expect(
+      await resolveSessionGitCoauthorPrompt({
+        config: {},
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(prompt);
+  });
+
+  it.each(["agent:main:task", "agent:main:cron:nightly"])(
     "resolves credit for a stable session %s",
     async (sessionKey) => {
       vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue({
@@ -91,7 +142,7 @@ describe("resolveSessionGitCoauthorPrompt", () => {
       await resolveSessionGitCoauthorPrompt({
         config: {},
         agentId: "main",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:task",
       }),
     ).toBeUndefined();
     expect(resolveGitCoauthorAttribution).toHaveBeenCalledOnce();
@@ -105,7 +156,7 @@ describe("resolveSessionGitCoauthorPrompt", () => {
       await resolveSessionGitCoauthorPrompt({
         config: {},
         agentId: "main",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:task",
       }),
     ).toBeUndefined();
     expect(warn).toHaveBeenCalledExactlyOnceWith("failed to resolve session Git co-authors", {

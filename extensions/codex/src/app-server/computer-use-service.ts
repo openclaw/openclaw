@@ -1,4 +1,3 @@
-/** Native Computer Use service provisioning for isolated Codex homes. */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -224,7 +223,6 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     ) {
       await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await fs.rename(backupPath, operationTargetPath);
-      backupCreated = false;
     }
     throw error;
   } finally {

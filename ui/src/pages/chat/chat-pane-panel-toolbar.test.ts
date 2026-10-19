@@ -2,7 +2,6 @@
 
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -24,6 +23,10 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
   });
   const slot = "plugin:fixture/notes";
   const refresh = vi.fn();
+  const refreshButton = document.createElement("button");
+  refreshButton.setAttribute("aria-label", "Refresh notes");
+  refreshButton.textContent = "Refresh notes";
+  refreshButton.addEventListener("click", refresh);
   const definitions: SidebarPanelDefinition[] = [
     ...sidebarPanelDefinitions(),
     {
@@ -31,16 +34,10 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
       label: "Fixture notes",
       icon: sidebarPanelDefinitions()[0]!.icon,
       available: true,
-      content: solidContent(() => document.createTextNode("Notes"), {}),
-      loading: solidContent(() => document.createTextNode("Loading notes"), {}),
+      content: "Notes",
+      loading: { variant: "files", label: "Loading notes" },
       empty: { description: "No notes" },
-      headerAction: solidContent(() => {
-        const button = document.createElement("button");
-        button.setAttribute("aria-label", "Refresh notes");
-        button.textContent = "Refresh notes";
-        button.addEventListener("click", refresh);
-        return button;
-      }, {}),
+      headerAction: refreshButton,
     },
   ];
   state.sidebarLayout = promoteSidebarPanel(openSlot({ columns: [] }, slot), slot);

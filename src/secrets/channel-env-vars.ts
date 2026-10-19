@@ -46,7 +46,7 @@ function resolveChannelEnvVars(
 export function getChannelEnvVars(channelId: string, params?: ChannelEnvVarLookupParams): string[] {
   const channelEnvVars = resolveChannelEnvVars(params);
   const envVars = Object.hasOwn(channelEnvVars, channelId) ? channelEnvVars[channelId] : undefined;
-  return Array.isArray(envVars) ? [...envVars] : [];
+  return [...(envVars ?? [])];
 }
 
 /**

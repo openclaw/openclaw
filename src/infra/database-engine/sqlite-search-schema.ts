@@ -1,4 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { SqliteSchemaCatalog } from "../sqlite-schema-catalog-types.js";
+import { createSqliteTableContractReader } from "../sqlite-schema-catalog.js";
+import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
+import type { SearchSchema } from "./contract.js";
+import {
+  buildSqliteMemoryBodyFtsSchema,
+  buildSqliteMemoryPathFtsSchema,
+  matchesSqliteMemorySearchFragment,
+} from "./sqlite-memory-search-fragments.js";
 
 export const MEMORY_INDEX_SOURCES_TABLE = "memory_index_sources";
 export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
@@ -6,99 +15,74 @@ export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 
 type FtsTableSchemaStatus = "missing" | "matching" | "mismatched" | "not-fts";
+type SearchSchemaObject = { type: string; name: string; sql: string | null };
 
-/** Check every persisted FTS column declaration and supported table option. */
-function ftsTableMatchesSchema(params: {
-  db: DatabaseSync;
-  tableName: string;
-  expectedColumns: readonly string[];
-  tokenizeClause: string;
-}): FtsTableSchemaStatus {
-  const table = params.db
+/** One catalog read covers both optional indexes and their maintenance triggers. */
+function inspectMemoryFts(
+  db: DatabaseSync,
+  tableNames: string[],
+  tokenizer: "unicode61" | "trigram",
+) {
+  const names = [
+    ...tableNames,
+    ...MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS.map(({ name }) => name),
+    ...MEMORY_PATH_FTS_TRIGGER_DEFINITIONS.map(({ name }) => name),
+  ];
+  const rows = db
     .prepare(
-      "SELECT type, sql FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE",
+      `SELECT type, name, sql FROM sqlite_schema WHERE name COLLATE NOCASE IN (${names.map(() => "?").join(", ")})`,
     )
-    .get(params.tableName);
-  if (table?.type === "view") {
-    throw new Error(`cannot modify ${params.tableName} because it is a view`);
-  }
-  if (typeof table?.sql !== "string") {
-    return "missing";
-  }
-  const definition =
-    /^\s*CREATE\s+VIRTUAL\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[^\s(]+)\s+USING\s+fts5\s*\(([\s\S]*)\)\s*$/iu.exec(
-      table.sql,
-    )?.[1];
-  if (definition === undefined) {
-    return "not-fts";
-  }
-
-  const declarations = definition
-    .split(",")
-    .map((declaration) => declaration.trim().replace(/\s+/g, " ").toLowerCase());
-  const expectedDeclarations = params.expectedColumns.map((column, index) =>
-    index === 0 ? column : `${column} unindexed`,
-  );
-  if (
-    declarations.length < expectedDeclarations.length ||
-    expectedDeclarations.some((column, index) => declarations[index] !== column)
-  ) {
-    return "mismatched";
-  }
-
-  // The configured tokenizer is the sole supported FTS option. Accept the
-  // shipped explicit unicode61 spelling, but rebuild contentless/external tables.
-  const options = declarations.slice(expectedDeclarations.length);
-  const tokenizerOption = options[0] ?? "";
-  const tokenizerMatches = params.tokenizeClause.includes("trigram")
-    ? options.length === 1 &&
-      /^tokenize\s*=\s*(['"])trigram case_sensitive 0\1$/u.test(tokenizerOption)
-    : options.length === 0 ||
-      (options.length === 1 && /^tokenize\s*=\s*(['"])unicode61\1$/u.test(tokenizerOption));
-  if (!tokenizerMatches) {
-    return "mismatched";
-  }
-
-  const columns = params.db
-    .prepare("SELECT name FROM pragma_table_info(?) ORDER BY cid")
-    .all(params.tableName);
-  return columns.length === params.expectedColumns.length &&
-    columns.every((column, index) => column.name === params.expectedColumns[index])
-    ? "matching"
-    : "mismatched";
+    // SAFETY: SQLite owns these catalog columns. Names are bound, including deprecated custom names.
+    .all(...names) as SearchSchemaObject[];
+  const objects = new Map(rows.map((row) => [row.name.toLowerCase(), row]));
+  let catalog: SqliteSchemaCatalog | undefined;
+  const tableStatus = (tableName: string): FtsTableSchemaStatus => {
+    const row = objects.get(tableName.toLowerCase());
+    if (row?.type === "view") {
+      throw new Error(`cannot modify ${tableName} because it is a view`);
+    }
+    if (!row?.sql) {
+      return "missing";
+    }
+    if (!/^CREATE VIRTUAL TABLE\b/iu.test(row.sql) || !/\bUSING\s+fts5\s*\(/iu.test(row.sql)) {
+      return "not-fts";
+    }
+    catalog ??= createSqliteTableContractReader(db).readCatalog([], tableNames);
+    return matchesSqliteMemorySearchFragment(catalog, {
+      kind: tableName === MEMORY_INDEX_PATHS_FTS_TABLE ? "path-fts" : "body-fts",
+      tableName,
+      tokenizer,
+    })
+      ? "matching"
+      : "mismatched";
+  };
+  return { objects, tableStatus };
 }
 
 /** Remove only derived FTS state whose persisted schema no longer matches. */
-function dropMismatchedFtsTable(params: {
-  db: DatabaseSync;
-  tableName: string;
-  expectedColumns: readonly string[];
-  tokenizeClause: string;
-}): void {
-  const status = ftsTableMatchesSchema(params);
+function dropMismatchedFtsTable(
+  db: DatabaseSync,
+  tableName: string,
+  status: FtsTableSchemaStatus,
+): void {
   if (status === "missing" || status === "matching") {
     return;
   }
-
-  // Deprecated custom names never establish ownership of an existing ordinary
-  // table. Failing closed here prevents a name collision from deleting memories.
+  // Custom names never establish ownership of an ordinary table containing user data.
   if (
     status === "not-fts" &&
-    params.tableName !== MEMORY_INDEX_FTS_TABLE &&
-    params.tableName !== MEMORY_INDEX_PATHS_FTS_TABLE
+    tableName !== MEMORY_INDEX_FTS_TABLE &&
+    tableName !== MEMORY_INDEX_PATHS_FTS_TABLE
   ) {
-    throw new Error(`Memory FTS table "${params.tableName}" collides with a non-FTS table`);
+    throw new Error(`Memory FTS table "${tableName}" collides with a non-FTS table`);
   }
-
-  // Path triggers target this table; remove them before replacing its schema
-  // so canonical source writes never run against missing derived columns.
-  if (params.tableName === MEMORY_INDEX_PATHS_FTS_TABLE) {
-    dropMemoryPathFtsTriggers(params.db);
+  if (tableName === MEMORY_INDEX_PATHS_FTS_TABLE) {
+    dropMemoryPathFtsTriggers(db);
   }
-  if (params.tableName === MEMORY_INDEX_FTS_TABLE) {
-    dropMemoryChunkFtsTriggers(params.db);
+  if (tableName === MEMORY_INDEX_FTS_TABLE) {
+    dropMemoryChunkFtsTriggers(db);
   }
-  params.db.exec(`DROP TABLE ${params.tableName}`);
+  db.exec(`DROP TABLE ${tableName}`);
 }
 
 function buildMemoryFtsTriggers<
@@ -184,11 +168,13 @@ export function reconcileMemoryChunkFtsRows(
   ftsTable: string,
   force = false,
 ): void {
+  // Admitted body FTS DDL keeps the default columnsize=1, so FTS5 stores one %_docsize row per
+  // document; counting it returns COUNT(*) of the FTS table without a full scan of %_content.
   const rowCounts = db
     .prepare(
       `SELECT
          (SELECT COUNT(*) FROM ${MEMORY_INDEX_CHUNKS_TABLE}) AS canonical_count,
-         (SELECT COUNT(*) FROM ${ftsTable}) AS derived_count`,
+         (SELECT COUNT(*) FROM ${ftsTable}_docsize) AS derived_count`,
     )
     // SAFETY: both scalar aggregate subqueries always return their named numeric columns.
     .get() as { canonical_count: number; derived_count: number };
@@ -206,59 +192,76 @@ export function backfillMemoryPathFtsRows(db: DatabaseSync): void {
   `);
 }
 
-/** Reconcile and backfill the derived body index in one atomic savepoint. */
-export function ensureMemoryChunkFtsSchema(params: {
-  db: DatabaseSync;
-  ftsTable: string;
-  tokenizeClause: string;
-}): void {
-  // Body and path indexes have incompatible columns and maintenance triggers.
-  // Reject SQLite's case-insensitive path alias before replacing either index.
-  if (params.ftsTable.toLowerCase() === MEMORY_INDEX_PATHS_FTS_TABLE.toLowerCase()) {
-    throw new Error(`Memory body FTS table "${params.ftsTable}" collides with the path FTS index`);
+/** Admit memory's portable declaration and bind its engine-owned derived table names. */
+export function admitSqliteMemoryTextSearch(
+  db: DatabaseSync,
+  definition: SearchSchema,
+): SearchSchema {
+  const body = definition.text!.body!;
+  const ftsTable =
+    definition.text!.paths && body.table === MEMORY_INDEX_CHUNKS_TABLE
+      ? MEMORY_INDEX_FTS_TABLE
+      : body.table;
+  // The portable declarations are already persisted on PostgreSQL; retain their exact shape.
+  const tokenizer = body.postgres?.mode === "trigram" ? "trigram" : "unicode61";
+  if (ftsTable.toLowerCase() === MEMORY_INDEX_PATHS_FTS_TABLE.toLowerCase()) {
+    throw new Error(`Memory body FTS table "${ftsTable}" collides with the path FTS index`);
   }
+  const canonical = ftsTable === MEMORY_INDEX_FTS_TABLE;
+  const tables = canonical ? [ftsTable, MEMORY_INDEX_PATHS_FTS_TABLE] : [ftsTable];
+  const { objects, tableStatus } = inspectMemoryFts(db, tables, tokenizer);
+  // Read before mutation so both fragments share one native catalog snapshot.
+  const bodyStatus = tableStatus(ftsTable);
+  const pathStatus = canonical ? tableStatus(MEMORY_INDEX_PATHS_FTS_TABLE) : undefined;
+  const matchingTrigger = (trigger: { name: string; sql: string }) =>
+    normalizeSchemaSql(objects.get(trigger.name)?.sql ?? null) ===
+    normalizeSchemaSql(trigger.sql.replace(`main.${trigger.name}`, trigger.name));
+  const bodyTriggersMatch =
+    !canonical || MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS.every(matchingTrigger);
+  const pathTriggersMatch = canonical && MEMORY_PATH_FTS_TRIGGER_DEFINITIONS.every(matchingTrigger);
 
-  params.db.exec("SAVEPOINT ensure_memory_index_chunks_fts");
+  db.exec("SAVEPOINT ensure_memory_search");
   try {
-    dropMismatchedFtsTable({
-      db: params.db,
-      tableName: params.ftsTable,
-      expectedColumns: ["text", "id", "path", "source", "model", "start_line", "end_line"],
-      tokenizeClause: params.tokenizeClause,
-    });
-    params.db.exec(
-      `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
-        `  text,\n` +
-        `  id UNINDEXED,\n` +
-        `  path UNINDEXED,\n` +
-        `  source UNINDEXED,\n` +
-        `  model UNINDEXED,\n` +
-        `  start_line UNINDEXED,\n` +
-        `  end_line UNINDEXED\n` +
-        `${params.tokenizeClause});`,
-    );
-    // FTS is fully derived. A cardinality mismatch proves that an ordinary
-    // schema ensure cannot leave the populated index untouched.
-    const canonical = params.ftsTable === MEMORY_INDEX_FTS_TABLE;
-    const hasRowidMaintenance =
-      !canonical ||
-      MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS.every((trigger) =>
-        params.db
-          .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
-          .get(trigger.name),
-      );
-    // Pre-rowid indexes can have matching counts but unrelated FTS identities.
-    // Installing their maintenance contract owns the one-time identity rebuild.
-    reconcileMemoryChunkFtsRows(params.db, params.ftsTable, !hasRowidMaintenance);
-    if (canonical) {
-      ensureMemoryChunkFtsTriggers(params.db);
+    dropMismatchedFtsTable(db, ftsTable, bodyStatus);
+    if (bodyStatus !== "matching") {
+      db.exec(buildSqliteMemoryBodyFtsSchema({ tableName: ftsTable, tokenizer }));
     }
-    params.db.exec("RELEASE ensure_memory_index_chunks_fts");
+    // Installing rowid maintenance owns the one-time rebuild of pre-rowid indexes.
+    reconcileMemoryChunkFtsRows(db, ftsTable, !bodyTriggersMatch);
+    if (canonical && (bodyStatus !== "matching" || !bodyTriggersMatch)) {
+      if (bodyStatus === "matching") {
+        dropMemoryChunkFtsTriggers(db);
+      }
+      ensureMemoryChunkFtsTriggers(db);
+    }
+    if (canonical) {
+      dropMismatchedFtsTable(db, MEMORY_INDEX_PATHS_FTS_TABLE, pathStatus!);
+      if (pathStatus !== "matching") {
+        db.exec(buildSqliteMemoryPathFtsSchema({ tokenizer }));
+      }
+      backfillMemoryPathFtsRows(db);
+      if (pathStatus !== "matching" || !pathTriggersMatch) {
+        if (pathStatus === "matching") {
+          dropMemoryPathFtsTriggers(db);
+        }
+        ensureMemoryPathFtsTriggers(db);
+      }
+    }
+    db.exec("RELEASE ensure_memory_search");
   } catch (err) {
-    params.db.exec("ROLLBACK TO ensure_memory_index_chunks_fts");
-    params.db.exec("RELEASE ensure_memory_index_chunks_fts");
+    db.exec("ROLLBACK TO ensure_memory_search");
+    db.exec("RELEASE ensure_memory_search");
     throw err;
   }
+  return {
+    ...definition,
+    text: {
+      body: { ...body, table: ftsTable },
+      ...(canonical
+        ? { paths: { ...definition.text!.paths!, table: MEMORY_INDEX_PATHS_FTS_TABLE } }
+        : {}),
+    },
+  };
 }
 
 export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enabled: boolean): void {
@@ -290,36 +293,5 @@ export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
   // FTS update/delete a direct rowid lookup instead of a virtual-table scan.
   for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
     db.exec(trigger.sql);
-  }
-}
-
-export function ensureMemoryPathFtsSchema(params: {
-  db: DatabaseSync;
-  tokenizeClause: string;
-}): void {
-  params.db.exec("SAVEPOINT ensure_memory_index_paths_fts");
-  try {
-    dropMismatchedFtsTable({
-      db: params.db,
-      tableName: MEMORY_INDEX_PATHS_FTS_TABLE,
-      expectedColumns: ["path", "source"],
-      tokenizeClause: params.tokenizeClause,
-    });
-    params.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE} USING fts5(
-        path,
-        source UNINDEXED
-        ${params.tokenizeClause}
-      );
-    `);
-    // The initial copy and trigger installation share this savepoint. Once
-    // populated, the triggers own completeness; per-row FTS probes are too costly.
-    backfillMemoryPathFtsRows(params.db);
-    ensureMemoryPathFtsTriggers(params.db);
-    params.db.exec("RELEASE ensure_memory_index_paths_fts");
-  } catch (err) {
-    params.db.exec("ROLLBACK TO ensure_memory_index_paths_fts");
-    params.db.exec("RELEASE ensure_memory_index_paths_fts");
-    throw err;
   }
 }

@@ -20,7 +20,7 @@ export type BaseRunOptions = {
 };
 
 export function createBaseRun(options: BaseRunOptions = {}) {
-  const sessionKey = options.run?.sessionKey ?? "main";
+  const sessionKey = options.run?.sessionKey ?? options.reply?.sessionKey ?? "main";
   const messageProvider = options.run?.messageProvider ?? "whatsapp";
   const typing = createMockTypingController();
   const sessionCtx = createTestTemplateContext(
@@ -70,7 +70,7 @@ export function createBaseRun(options: BaseRunOptions = {}) {
   const replyParams = {
     commandBody: "hello",
     followupRun,
-    queueKey: "main",
+    queueKey: sessionKey,
     resolvedQueue,
     shouldSteer: false,
     shouldFollowup: false,

@@ -19,14 +19,14 @@ import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js"
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 
+type ViewerResizeFailure = NonNullable<
+  ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["viewerResize"]
+>;
+
 /** Serialized into the fixture page; observe the real client without replacing its transport. */
 export function observeDesktopProofRfbLifecycle(element: Element) {
   const panel = element as Element & { desktopClientFactory: () => Pick<DesktopClient, "connect"> };
   type Options = Parameters<DesktopClient["connect"]>[0];
-  type Report = ReturnType<typeof desktopProofTestReport>;
-  type ViewerResizeFailure = NonNullable<
-    Report["files"][number]["assertions"][number]["viewerResize"]
-  >;
   type Event = NonNullable<ViewerResizeFailure["rfbLifecycle"]>["events"][number];
   const originalFactory = panel.desktopClientFactory;
   const events: Array<{ path: string | null; event: Event }> = [];
@@ -157,13 +157,7 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
     reject: (error: Error) => void;
   };
   const peers = new Set<Socket>();
-  const terminalEvents: Array<{
-    connectionIndex: number;
-    side: "client" | "upstream" | "fixture";
-    event: "end" | "error" | "close" | "cleanup";
-    errorCategory: "reset" | "broken-pipe" | "refused" | "timeout" | "other" | null;
-    hadError: boolean | null;
-  }> = [];
+  const terminalEvents: NonNullable<ViewerResizeFailure["endpointCloses"]>["events"] = [];
   const pendingTerminals = new Set<() => void>();
   let connectionCount = 0;
   let omitted = 0;
@@ -352,6 +346,7 @@ function hasPinnedProvenance(provenance: unknown): boolean {
     return false;
   }
   const sha256 = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+  const nonempty = (value: unknown) => typeof value === "string" && value.length > 0;
   if (provenance.kind === "crabbox") {
     return (
       typeof provenance.commit === "string" &&
@@ -361,21 +356,14 @@ function hasPinnedProvenance(provenance: unknown): boolean {
   }
   return (
     provenance.kind === "upstream-os" &&
-    typeof provenance.osRelease === "string" &&
-    provenance.osRelease.length > 0 &&
-    typeof provenance.packageOrigin === "string" &&
-    provenance.packageOrigin.length > 0 &&
+    nonempty(provenance.osRelease) &&
+    nonempty(provenance.packageOrigin) &&
     sha256(provenance.serverBinarySha256) &&
     Array.isArray(provenance.packages) &&
     provenance.packages.length > 0 &&
     provenance.packages.every(
       (entry) =>
-        isRecord(entry) &&
-        typeof entry.name === "string" &&
-        entry.name.length > 0 &&
-        typeof entry.version === "string" &&
-        entry.version.length > 0 &&
-        sha256(entry.sha256),
+        isRecord(entry) && nonempty(entry.name) && nonempty(entry.version) && sha256(entry.sha256),
     )
   );
 }
@@ -403,23 +391,19 @@ export async function readDesktopResizeFixture(file: string): Promise<DesktopRes
 export async function writeDesktopResizeProvider(root: string, fixture: DesktopResizeFixture) {
   const pluginDir = path.join(root, "desktop-resize-fixture");
   await mkdir(pluginDir, { recursive: true });
-  await writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "desktop-resize-fixture",
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    }),
-  );
-  await writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "desktop-resize-fixture",
-      activation: { onStartup: true },
-      contracts: { workerProviders: ["desktop-resize-fixture", "desktop-unmanaged-fixture"] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  const writeJson = (name: string, value: unknown) =>
+    writeFile(path.join(pluginDir, name), JSON.stringify(value));
+  await writeJson("package.json", {
+    name: "desktop-resize-fixture",
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  });
+  await writeJson("openclaw.plugin.json", {
+    id: "desktop-resize-fixture",
+    activation: { onStartup: true },
+    contracts: { workerProviders: ["desktop-resize-fixture", "desktop-unmanaged-fixture"] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   await writeFile(
     path.join(pluginDir, "index.js"),
     `export default {

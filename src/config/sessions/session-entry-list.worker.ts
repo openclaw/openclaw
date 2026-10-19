@@ -2,16 +2,17 @@ import { jsonExtractText, jsonPathValue } from "../../infra/database-engine/json
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import {
-  runSqliteDeferredTransactionSync,
-  runSqliteReadSnapshotSync,
-} from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
+import {
+  hasMainSessionRecoveryClaim,
+  hasOrphanedMainSessionWork,
+} from "./restart-recovery-state.js";
 import {
   listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
@@ -47,6 +48,67 @@ export function readSessionEntryList(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (scope.mainSessionRecovery) {
+          const keys = executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where((eb) =>
+                eb(jsonExtractText(database.db, eb.ref("entry_json"), "archivedAt"), "is", null),
+              )
+              .where((eb) =>
+                eb(
+                  jsonPathValue(
+                    database.db,
+                    eb.ref("entry_json"),
+                    eb.val("$.mainRestartRecovery.tombstone"),
+                  ),
+                  "is",
+                  null,
+                ),
+              )
+              .where((eb) =>
+                eb.or([
+                  ...[
+                    "mainRestartRecovery",
+                    "restartRecoveryRuns",
+                    "restartRecoveryDeliveryRunId",
+                    "pendingFinalDelivery",
+                  ].map((field) =>
+                    eb(jsonExtractText(database.db, eb.ref("entry_json"), field), "is not", null),
+                  ),
+                  ...(scope.mainSessionRecovery === "orphans"
+                    ? [
+                        eb(
+                          eb.cast<string>(
+                            jsonExtractText(database.db, eb.ref("entry_json"), "abortedLastRun"),
+                            "text",
+                          ),
+                          "in",
+                          ["1", "true"],
+                        ),
+                        eb(
+                          jsonExtractText(database.db, eb.ref("entry_json"), "status"),
+                          "=",
+                          "interrupted",
+                        ),
+                      ]
+                    : []),
+                ]),
+              ),
+          ).rows.map((row) => row.session_key);
+          // Terminal run fences alone are not custody; completed rows with remaining claims still settle.
+          // Startup still validates pending canonical rows even when no orphan needs recovery.
+          return keys.length || scope.mainSessionRecovery === "orphans"
+            ? readSelectedSessionEntriesInDatabase(database, keys).filter(
+                ({ entry, sessionKey }) =>
+                  scope.mainSessionRecovery === "orphans"
+                    ? hasOrphanedMainSessionWork(entry, sessionKey)
+                    : hasMainSessionRecoveryClaim(entry),
+              )
+            : [];
+        }
         if (scope.pendingExecRecovery) {
           const page = scope.pendingExecRecovery;
           const keys = executeSqliteQuerySync(
@@ -146,7 +208,7 @@ export function readSessionEntryList(
           return entries;
         }
         return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-          runSqliteDeferredTransactionSync(database.db, () => {
+          runSqliteReadSnapshotSync(database.db, () => {
             const identities = executeSqliteQuerySync(
               database.db,
               getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)

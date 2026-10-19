@@ -7,7 +7,7 @@ import {
 } from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import * as sqliteQueries from "../infra/kysely-sync.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -25,6 +25,9 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
 
 const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
 type Backend = Parameters<typeof fixture>[0];
+const isPullCreation = (argv: string[]) =>
+  argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"));
+const published = (url: string, headCommit: string) => ({ status: "published", url, headCommit });
 
 async function prepareExistingPullRequest(backend: Backend) {
   const f = await fixture(backend);
@@ -32,9 +35,7 @@ async function prepareExistingPullRequest(backend: Backend) {
   if (first.status !== "published") {
     throw new Error("The original fixture publication did not complete.");
   }
-  const created = mocks.runCommand.mock.calls.findLast(
-    ([argv]) => argv.includes("POST") && argv.some((arg: string) => arg.endsWith("/pulls")),
-  );
+  const created = mocks.runCommand.mock.calls.findLast(([argv]) => isPullCreation(argv));
   const receipt = f.readReceipt(first.requestId)!;
   const pullRequest = f.repository?.runtime.pr ?? {
     url: first.url,
@@ -65,108 +66,120 @@ async function prepareExistingPullRequest(backend: Backend) {
   };
 }
 
-describe("shared GitHub publication reconciliation", () => {
-  installGitHubPublicationTestHarness({
-    creatorEmail: "publication-guest@example.test",
-    sandbox: "required",
-    realWorktree: true,
-  });
+installGitHubPublicationTestHarness({
+  creatorEmail: "publication-guest@example.test",
+  sandbox: "required",
+  realWorktree: true,
+});
 
-  it.each(["local", "repository"] as const)(
-    "settles the accepted %s publication before stopping recovery between requests",
-    async (backend) => {
-      const f = await fixture(backend);
-      const claim = await holdWorkerTurn(f);
-      const requests = [
-        await f.coordinator.requestForSessionV2(f.request("shutdown-first", f.guest)),
-        await f.coordinator.requestForSessionV2(f.request("shutdown-second", f.guest)),
-      ];
-      expect(requests.map((request) => request.status)).toEqual(["requested", "requested"]);
-      await f.placements.releaseTurn(claim);
+it.each(["local", "repository"] as const)(
+  "settles the accepted %s publication before stopping recovery between requests",
+  async (backend) => {
+    const f = await fixture(backend);
+    const claim = await holdWorkerTurn(f);
+    const requests = [
+      await f.coordinator.requestForSessionV2(f.request("shutdown-first", f.guest)),
+      await f.coordinator.requestForSessionV2(f.request("shutdown-second", f.guest)),
+    ];
+    expect(requests.map((request) => request.status)).toEqual(["requested", "requested"]);
+    await f.placements.releaseTurn(claim);
 
-      const dispatched = Promise.withResolvers<void>();
-      const response = Promise.withResolvers<void>();
-      const transport = mocks.runCommand.getMockImplementation()!;
-      let stopping = false;
-      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-        const result = await transport(argv, options);
-        if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-          dispatched.resolve();
-          await response.promise;
-        }
-        return result;
-      });
+    const dispatched = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<void>();
+    const transport = mocks.runCommand.getMockImplementation()!;
+    let stopping = false;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      const result = await transport(argv, options);
+      if (isPullCreation(argv)) {
+        dispatched.resolve();
+        await response.promise;
+      }
+      return result;
+    });
 
-      const recovery = f.coordinator.resumeSessionRequests(() => stopping);
-      await dispatched.promise;
-      stopping = true;
-      response.resolve();
-      await recovery;
+    const recovery = f.coordinator.resumeSessionRequests(() => stopping);
+    await dispatched.promise;
+    stopping = true;
+    response.resolve();
+    await recovery;
 
-      expect(f.publishedTitles).toHaveLength(1);
-      expect(
-        requests
-          .map((request) => f.readReceipt(request.requestId)?.status)
-          .toSorted((left, right) => String(left).localeCompare(String(right))),
-      ).toEqual(["published", "requested"]);
-    },
-  );
+    expect(f.publishedTitles).toHaveLength(1);
+    expect(
+      requests
+        .map((request) => f.readReceipt(request.requestId)?.status)
+        .toSorted((left, right) => String(left).localeCompare(String(right))),
+    ).toEqual(["published", "requested"]);
+  },
+);
 
-  it.each(["local", "repository"] as const)(
-    "finds an older open PR beyond the first page after an accepted %s push loses authority",
-    async (backend) => {
-      const { f, first, pullRequest, transport, observePush } =
-        await prepareExistingPullRequest(backend);
-      const closed = Array.from({ length: 30 }, (_, index) => ({
-        ...pullRequest,
-        url: pullRequest.url.replace(/\d+$/u, String(100 + index)),
-        state: "closed",
-        body: `<!-- openclaw-publication:earlier-closed-${index} -->`,
-      }));
-      let revoked = false;
-      let recoveryLookup = false;
-      let acceptedWrites: string[] | undefined;
-      const hostScans = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
-      let recoveryScanStart = 0;
-      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-        if (argv.includes("state=all")) {
-          recoveryLookup ||= revoked;
-          // gh emits one compact JSON array per page; without pagination the open PR is absent.
+it.each([
+  { backend: "local", mode: "paged" },
+  { backend: "local", mode: "interrupted" },
+  { backend: "repository", mode: "paged" },
+  { backend: "repository", mode: "interrupted" },
+] as const)(
+  "reconciles a $mode $backend update after authority ends",
+  async ({ backend, mode }) => {
+    const { f, first, pullRequest, transport, observePush } =
+      await prepareExistingPullRequest(backend);
+    const closed = Array.from({ length: 30 }, (_, index) => ({
+      ...pullRequest,
+      url: pullRequest.url.replace(/\d+$/u, String(100 + index)),
+      state: "closed",
+      body: `<!-- openclaw-publication:earlier-closed-${index} -->`,
+    }));
+    let pushed = false,
+      readbackAvailable = false,
+      recoveryLookup = false,
+      unavailableLookups = 0;
+    let acceptedWrites: string[] = [];
+    const hostScans = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
+    let recoveryScanStart = 0;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (argv.includes("state=all")) {
+        recoveryLookup ||= pushed;
+        if (mode === "paged") {
+          // gh emits one array per page; the matching open PR is beyond page one.
           return commandResult(
             [closed, ...(argv.includes("--paginate") ? [[pullRequest]] : [])]
               .map((page) => JSON.stringify(page))
               .join("\n"),
           );
         }
-        const response = await transport(argv, options);
-        if (argv.includes("push") || argv.includes("graphql")) {
-          await observePush();
-          await f.revoke();
-          revoked = true;
-          recoveryScanStart = hostScans.mock.calls.length;
-          acceptedWrites = [...f.externalWrites];
+        if (pushed && !readbackAvailable) {
+          unavailableLookups++;
+          return commandResult("", 1);
         }
-        return response;
-      });
-
-      const result = await f.coordinator.requestForSessionV2(f.request("paged-update", f.guest));
-
+        return commandResult(JSON.stringify([pullRequest]));
+      }
+      const response = await transport(argv, options);
+      if (argv.includes("push") || argv.includes("graphql")) {
+        await observePush();
+        if (mode === "paged") {
+          await f.revoke();
+        }
+        pushed = true;
+        recoveryScanStart = hostScans.mock.calls.length;
+        acceptedWrites = [...f.externalWrites];
+      }
+      return response;
+    });
+    const idempotencyKey = `${mode}-update`;
+    const publication = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
+    let requestId: string;
+    if (mode === "paged") {
+      const result = await publication;
+      expect(result).toMatchObject(published(first.url, pullRequest.headSha));
+      expect(result.requestId).not.toBe(first.requestId);
+      requestId = result.requestId;
+      expect({ pushed, recoveryLookup }).toEqual({ pushed: true, recoveryLookup: true });
       expect(
         hostScans.mock.calls
           .slice(recoveryScanStart)
           .map(([, query]) => query.compile().sql)
           .filter((sql) => /from "github_(?:repository_)?publication_requests"/u.test(sql)),
       ).toEqual([]);
-
-      expect(result).toMatchObject({
-        status: "published",
-        url: first.url,
-        headCommit: pullRequest.headSha,
-      });
-      expect(result.requestId).not.toBe(first.requestId);
-      expect(revoked).toBe(true);
-      expect(recoveryLookup).toBe(true);
-      expect(f.readReceipt(result.requestId)).toMatchObject({
+      expect(f.readReceipt(requestId)).toMatchObject({
         status: "published",
         pull_request_url: first.url,
         head_commit: pullRequest.headSha,
@@ -174,46 +187,15 @@ describe("shared GitHub publication reconciliation", () => {
       expect(f.externalWrites).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["first-publication"]);
       await f.restart().resumeSessionRequests();
-      expect(f.externalWrites).toEqual(acceptedWrites);
-      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
-    },
-  );
-
-  it.each(["local", "repository"] as const)(
-    "recovers an interrupted %s update to a known PR closed before requester-denied restart",
-    async (backend) => {
-      const { f, first, pullRequest, transport, observePush } =
-        await prepareExistingPullRequest(backend);
-      let pushed = false;
-      let readbackAvailable = false;
-      let unavailableLookups = 0;
-      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-        if (argv.includes("state=all")) {
-          if (pushed && !readbackAvailable) {
-            unavailableLookups += 1;
-            return commandResult("", 1);
-          }
-          return commandResult(JSON.stringify([pullRequest]));
-        }
-        const response = await transport(argv, options);
-        if (argv.includes("push") || argv.includes("graphql")) {
-          await observePush();
-          pushed = true;
-        }
-        return response;
-      });
-
-      const idempotencyKey = "interrupted-existing-pr-update";
-      const pending = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
-      let requestId: string;
+    } else {
       if (backend === "local") {
-        await expect(pending).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
+        await expect(publication).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
         requestId = readGitHubPublicationRequest(f.database.db, {
           sessionId: f.session.sessionId,
           idempotencyKey,
         })!.request_id;
       } else {
-        const result = await pending;
+        const result = await publication;
         expect(result.status).toBe("requested");
         requestId = result.requestId;
       }
@@ -225,9 +207,8 @@ describe("shared GitHub publication reconciliation", () => {
       });
       expect(pullRequest.body).not.toContain(`<!-- openclaw-publication:${requestId} -->`);
       expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
-      const acceptedWrites = [...f.externalWrites];
-
-      // The accepted update survives a later close; its existing PR retains the original body.
+      acceptedWrites = [...f.externalWrites];
+      // Closing the known PR cannot undo an accepted update.
       pullRequest.state = "closed";
       await f.revoke();
       expect(f.guest.assertCurrent).toThrow();
@@ -245,8 +226,8 @@ describe("shared GitHub publication reconciliation", () => {
       const pendingReceipt = f.readReceipt(requestId)!;
       try {
         await expect(restarted.resumeSessionRequests()).rejects.toThrow("unconfirmed");
-        expect(["requested", "publishing"]).toContain(f.readReceipt(requestId)?.status);
         expect(f.readReceipt(requestId)).toMatchObject({
+          status: expect.stringMatching(/^(requested|publishing)$/u),
           request_digest: pendingReceipt.request_digest,
           head_commit: pendingReceipt.head_commit,
           pull_request_url: null,
@@ -256,15 +237,12 @@ describe("shared GitHub publication reconciliation", () => {
         unavailableRead.mockRestore();
       }
       await restarted.resumeSessionRequests();
-
-      expect(await restarted.readAsync(requestId)).toMatchObject({
-        status: "published",
-        url: first.url,
-        headCommit: pullRequest.headSha,
-      });
-      expect(await restarted.readAsync(first.requestId)).toEqual(first);
-      expect(f.externalWrites).toEqual(acceptedWrites);
-      expect(f.publishedTitles).toEqual(["first-publication"]);
-    },
-  );
-});
+      expect(await restarted.readAsync(requestId)).toMatchObject(
+        published(first.url, pullRequest.headSha),
+      );
+    }
+    expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
+    expect(f.externalWrites).toEqual(acceptedWrites);
+    expect(f.publishedTitles).toEqual(["first-publication"]);
+  },
+);

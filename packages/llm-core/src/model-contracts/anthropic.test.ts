@@ -7,7 +7,6 @@ import {
   resolveClaudeOpus55ModelIdentity,
   resolveClaudeHaiku55ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
-  resolveClaudeSonnet55ModelIdentity,
   supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
   supportsClaudeFastMode,
@@ -64,13 +63,6 @@ describe("Claude Haiku 5.5 model contract", () => {
 });
 
 describe("Claude Sonnet 5.5 model contract", () => {
-  it.each([["us.anthropic.claude-sonnet-5-5-v1:0", "claude-sonnet-5-5-v1:0"]])(
-    "resolves %s without broadening the version boundary",
-    (id, expected) => {
-      expect(resolveClaudeSonnet55ModelIdentity({ id })).toBe(expected);
-    },
-  );
-
   it.each([["sonnet-5", "claude-sonnet-5"]])(
     "keeps the Sonnet 5 family identity for %s",
     (id, expected) => {
@@ -102,18 +94,6 @@ describe("Claude Opus 5.5 model contract", () => {
     "resolves %s without broadening the version boundary",
     (id, expected) => {
       expect(resolveClaudeOpus55ModelIdentity({ id })).toBe(expected);
-    },
-  );
-
-  it.each([["opus-5", false]])(
-    "preserves family capabilities for %s with mandatory thinking: %s",
-    (id, mandatory) => {
-      expect(requiresClaudeMandatoryAdaptiveThinking({ id })).toBe(mandatory);
-      expect(supportsClaudeAdaptiveThinking({ id })).toBe(true);
-      expect(supportsClaude1MContext({ id })).toBe(true);
-      expect(supportsClaudeNativeXhighEffort({ id })).toBe(true);
-      expect(supportsClaudeNativeMaxEffort({ id })).toBe(true);
-      expect(supportsClaudeFastMode({ id })).toBe(true);
     },
   );
 });

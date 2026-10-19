@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 
 const text = z.string();
 const event = z
@@ -120,22 +119,7 @@ export const debugProxyCliCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("capture.purgeAll"), input: z.undefined().optional() }).strict(),
 ]);
 
-export type DebugProxyCliStore = Pick<
-  AsyncDebugProxyCaptureStore,
-  | "dbPath"
-  | "upsertSession"
-  | "endSession"
-  | "recordEvent"
-  | "recordEventWithPayload"
-  | "listSessions"
-  | "readBlob"
-  | "queryPreset"
-  | "purgeAll"
->;
-
-export function encodeDebugProxyPayload(
-  payload: import("./store.worker-contract.js").CapturePayloadInput,
-) {
+export function encodeDebugProxyPayload<T extends { data?: Buffer | string | null }>(payload: T) {
   return {
     ...payload,
     ...(Buffer.isBuffer(payload.data)

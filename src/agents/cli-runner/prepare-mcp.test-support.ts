@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -135,6 +136,17 @@ export function registerCliMcpPreparationTests({
     expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
       context: {
         sessionKey: "agent:main:telegram:group:chat123",
+        requesterOrigin: {
+          sessionKey: "agent:main:telegram:group:chat123",
+          messageProvider: "discord",
+          senderId: "canonical-sender",
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+        },
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
         runtimePolicyAgentId: "worker",
         agentId: "main",
@@ -190,6 +202,7 @@ export function registerCliMcpPreparationTests({
       },
       runtimeOwnerToken: "loopback-owner-token",
       admittedRunContext: context.params.admittedRunContext,
+      toolPolicyConfig: {},
       sessionEventSourcePolicy: {
         toolsAllow: undefined,
         settings: { permissionMode: undefined, toolOverrides: undefined },
@@ -306,6 +319,57 @@ export function registerCliMcpPreparationTests({
     );
   });
 
+  it("hands the admitted turn's memory audience to the CLI grant and releases it at run end", async () => {
+    const sessionKey = "agent:main:telegram:direct:owner";
+    const memoryAudience: MemoryAudience = Object.freeze({
+      kind: "owner-private",
+      agentId: "main",
+    });
+    const release = vi.fn();
+    const resolveCliMcpMemoryAudience = vi.fn(async (..._args: unknown[]) => ({
+      memoryAudience,
+      release,
+    }));
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant,
+      revokeMcpLoopbackClientGrant,
+      resolveCliMcpMemoryAudience,
+    });
+    const sessionEntry = { sessionId: "session-test", chatType: "direct", updatedAt: 1 } as const;
+
+    const context = await getFixture().prepare({
+      sessionKey,
+      senderIsOwner: true,
+      sessionEntry,
+      config: createConfig(),
+    });
+
+    expect(resolveCliMcpMemoryAudience).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionEntry, senderIsOwner: true }),
+      { agentId: "main", sessionKey },
+    );
+    expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryAudience,
+        context: expect.not.objectContaining({ memoryAudience: expect.anything() }),
+      }),
+    );
+    expect(release).not.toHaveBeenCalled();
+    await context.preparedBackend.cleanup?.();
+    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledWith("loopback-token");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("binds one live prepared admission to tool projection and the CLI MCP grant", async () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
@@ -365,4 +429,14 @@ export function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { plu
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [backend],
   });
+}
+
+export function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
+  return {
+    command,
+    args: ["--print"],
+    output: "jsonl",
+    input: "stdin",
+    sessionMode: "existing",
+  };
 }

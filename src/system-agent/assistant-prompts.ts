@@ -121,7 +121,7 @@ export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [
   "- open gateway wizard",
   "- plugins list",
   "- plugins search <query>",
-  "- plugin install <npm-or-clawhub-spec>",
+  "- plugin install <package|clawhub:package|npm:official-package> (ClawHub by default)",
   "- audit",
   "- validate config",
   "- set default model <provider/model>",

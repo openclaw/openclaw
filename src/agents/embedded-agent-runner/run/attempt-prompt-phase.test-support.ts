@@ -92,6 +92,7 @@ export function createPromptAssemblyResult(
       activeProjectKeys: [...(input.attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
       modelProviderId: input.attempt.model.provider,
       modelId: input.attempt.model.id,
+      contextTokenBudget: input.attempt.contextTokenBudget ?? input.attempt.model.contextWindow,
       inputProvenance: input.attempt.inputProvenance,
     },
     effectivePrompt: input.attempt.prompt,
@@ -291,7 +292,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           Object.assign(this.current, mocks.applyPromptToolsAllow({ toolsAllow }));
           return this.current;
         },
-        prepareForDispatch: () => undefined,
+        hasBaselineTools: () => true,
         refresh() {
           return this.current;
         },

@@ -158,7 +158,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 1024 * 1024,
+      maxBytes: 2 * 1024 * 1024,
       toolResultMaxChars: 2_000,
       offset: 2,
     });

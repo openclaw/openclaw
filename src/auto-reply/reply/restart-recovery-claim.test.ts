@@ -35,12 +35,12 @@ import {
   isAgentRunStaleLifecycleError,
   isRestartRecoveryClaimChangedError,
 } from "../../infra/agent-lifecycle-error.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
@@ -901,6 +901,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const scope = { storePath, sessionKey };
       const sessionId = "channel-session-id";
       const sourceTurnId = "telegram-update-new";
+      const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId: "bob" };
       const deliveryContext = {
         channel: "telegram",
         to: "chat",
@@ -981,8 +982,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
           entry = next;
         },
         sourceTurnId,
+        requesterOrigin,
         ...scope,
       });
+      requesterOrigin.senderId = "alice";
 
       if (change === "metadata") {
         await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
@@ -991,6 +994,13 @@ describe("createReplyRestartRecoveryClaimController", () => {
         expect(persisted).toMatchObject({
           model: "gpt-5.6-luna",
           restartRecoveryDeliverySourceRunId: sourceTurnId,
+          restartRecoveryRequesterSource: {
+            agentId: "main",
+            sessionKey,
+            sessionId,
+            sourceRunId: sourceTurnId,
+            requesterOrigin: { senderId: "bob" },
+          },
         });
         expect(persisted?.status).toBeUndefined();
       } else {

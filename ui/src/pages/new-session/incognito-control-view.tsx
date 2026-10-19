@@ -48,7 +48,7 @@ function VisibilityToggle(props: {
       >
         <Icon name={draft() ? "pencil" : "incognito"} />
         {active() ? (
-          <span class={`new-session-page__${props.mode}-toggle-label`}>{label()}</span>
+          <span class={[`new-session-page__${props.mode}-toggle-label`]}>{label()}</span>
         ) : undefined}
       </button>
     </openclaw-tooltip>

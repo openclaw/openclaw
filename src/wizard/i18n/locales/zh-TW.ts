@@ -50,6 +50,8 @@ export const zh_TW = {
       modelAlias: "模型別名（選填）",
       modelAliasPlaceholder: "例如 local、ollama",
       modelId: "模型 ID",
+      modelIdManual: "手動輸入模型 ID",
+      modelDiscoveryUnavailable: "無法從此端點探索模型。請檢查基礎 URL 和憑證，或手動輸入模型 ID。",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
       noAuthConfirm:
@@ -210,6 +212,8 @@ export const zh_TW = {
       returningToSelection: "返回選擇。",
       arrayPromptSuffix: "（逗號分隔，留空則清除）",
       arrayPlaceholder: "value1, value2",
+      invalidInteger: "請輸入 JSON 整數。",
+      invalidNumber: "請輸入有效的 JSON 數字。",
       sensitiveField:
         '"{label}" 是敏感欄位。請透過以下方式設定：\n  openclaw config set plugins.entries.{plugin}.config.{field} <value>\n或使用 Web UI 設定頁。',
       sensitiveTitle: "敏感欄位",

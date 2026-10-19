@@ -30,6 +30,7 @@ import {
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
   refreshSessionWorkspaceState,
+  sessionWorkspaceForHost,
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type {
@@ -43,7 +44,6 @@ import { hasUniformLineEndings } from "./chat-sidebar-file-view.tsx";
 registerFilePreviewEnglish();
 
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
-export { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
 export type {
   SessionWorkspaceHost,
   SessionWorkspaceProps,
@@ -175,7 +175,7 @@ async function loadArtifactSidebarContent(
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
-    state.requestUpdate?.();
+    sessionWorkspaceForHost(state).publish();
   }
 }
 
@@ -512,7 +512,7 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.filter = "all";
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
-  state.requestUpdate?.();
+  sessionWorkspaceForHost(state).publish();
 }
 
 function openArtifact(
@@ -636,13 +636,18 @@ export function createSessionWorkspaceProps(
       ),
     onSetFilter: (filter) => {
       workspace.filter = filter;
-      state.requestUpdate?.();
+      sessionWorkspaceForHost(state).publish();
+    },
+    onRetry: () => {
+      clearWorkspaceTimer(workspace);
+      loadSessionWorkspace(state, workspace, true);
     },
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;
       workspace.browserSearch = "";
       loadSessionWorkspace(state, workspace, true);
+      sessionWorkspaceForHost(state).publish();
     },
     onOpenFile: (path, origin) => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
@@ -655,7 +660,7 @@ export function createSessionWorkspaceProps(
     },
     onSearch: (search) => {
       workspace.browserSearch = search;
-      state.requestUpdate?.();
+      sessionWorkspaceForHost(state).publish();
       clearWorkspaceTimer(workspace);
       workspace.browserSearchTimer = globalThis.setTimeout(() => {
         workspace.browserSearchTimer = null;

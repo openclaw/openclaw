@@ -11,7 +11,7 @@ import {
   prepareChatMessageRender,
   MessageActions,
   resolveMessageActionDetails,
-} from "./chat-message-markdown.ts";
+} from "./chat-message-markdown-view.tsx";
 
 const importKey = "example-catalog:thread:item";
 const wrap = (text: string) =>

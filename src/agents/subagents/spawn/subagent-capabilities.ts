@@ -37,7 +37,7 @@ export type {
   SessionCapabilityStore,
 } from "./subagent-session-store.js";
 
-export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
+type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 type SubagentControlScope = "children" | "none";
 
 type PersistedSubagentToolPolicyEnvelope = {
@@ -260,6 +260,20 @@ export function isSubagentEnvelopeSession(
     store,
     entry: opts?.entry,
   });
+}
+
+/** Visible spawns are interactive sessions; a dashboard key alone grants nothing. */
+export function isVisibleSpawnedSession(
+  sessionKey: string,
+  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
+): boolean {
+  if (!isDashboardSessionKey(sessionKey)) {
+    return false;
+  }
+  const entry = resolveSessionCapabilityEntry({ sessionKey, ...opts });
+  return (
+    entry?.createdVia === "spawn" && isStoredSubagentEnvelopeSession({ sessionKey, ...opts, entry })
+  );
 }
 
 /**

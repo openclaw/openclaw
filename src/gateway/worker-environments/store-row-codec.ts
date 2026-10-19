@@ -28,12 +28,7 @@ import {
   normalizeCredentialHash,
   normalizeWorkerSshEndpoint,
 } from "./store-validation.js";
-import type {
-  WorkerEnvironmentFacts,
-  WorkerEnvironmentPruneReadInput,
-  WorkerEnvironmentPrunePage,
-} from "./store.types.js";
-import { readTerminalWorkerEnvironmentPrunePage } from "./terminal-environment-retention.js";
+import type { WorkerEnvironmentFacts } from "./store.types.js";
 type WorkerDb = Pick<
   StateDatabase,
   | "device_pair_setup_completions"
@@ -240,19 +235,5 @@ export function readWorkerEnvironmentFacts(
     environments,
     credentials,
     attachments,
-  };
-}
-
-export function readWorkerEnvironmentPrunePage(
-  db: EngineConnection,
-  input: WorkerEnvironmentPruneReadInput,
-): WorkerEnvironmentPrunePage {
-  const { rows, ...page } = readTerminalWorkerEnvironmentPrunePage(db, input);
-  return {
-    ...page,
-    candidates: rows.map((observed) => ({
-      observed,
-      record: decodeWorkerEnvironmentRow(observed, []),
-    })),
   };
 }

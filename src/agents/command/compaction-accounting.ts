@@ -107,7 +107,7 @@ export function createCommandCompactionAccounting(params: {
           ];
           accounting = {
             ...fact,
-            ...(transitions.length ? { admissionTransitions: Object.freeze(transitions) } : {}),
+            ...(transitions.length ? { admissionTransitions: transitions } : {}),
             count: carriedCount + fact.count,
             currentContextSnapshot:
               fact.currentContextSnapshot ?? accounting?.currentContextSnapshot,

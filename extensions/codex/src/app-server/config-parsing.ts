@@ -232,12 +232,12 @@ export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
 }
 
 export function isCodexSandboxExecServerEnabled(
-  pluginConfig?: unknown,
+  pluginConfig?: ParsedCodexPluginConfig,
   sandbox?: unknown,
 ): boolean {
   return (
     isCodexRemoteExecPlacementSandbox(sandbox) ||
-    readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true
+    pluginConfig?.appServer?.experimental?.sandboxExecServer === true
   );
 }
 
@@ -282,8 +282,10 @@ export function assertCodexAppServerCommandHasNoInlineArgs(params: {
   );
 }
 
-export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
-  const config = readCodexPluginConfig(pluginConfig).codexPlugins;
+export function resolveCodexPluginsPolicy(
+  pluginConfig?: ParsedCodexPluginConfig,
+): ResolvedCodexPluginsPolicy {
+  const config = pluginConfig?.codexPlugins;
   const enabled = config?.enabled === true;
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {

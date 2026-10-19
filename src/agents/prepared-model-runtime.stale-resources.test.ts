@@ -14,8 +14,8 @@ import { getPluginRegistryInspectionResources } from "../plugins/registry-inspec
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -29,8 +29,7 @@ const engineId = "stale-owner-engine";
 const providerId = "stale-owner-provider";
 type Retention = "gateway" | "direct";
 
-// A selected provider outside the configured chain forces an acquired inspection to borrow
-// the full-only Gateway engine. No network request or synthetic publication owner is needed.
+// Off-chain provider selection acquires an inspection borrowing the full-only Gateway engine.
 async function withStaleResourceFixture(
   retention: Retention,
   run: (fixture: {
@@ -39,26 +38,29 @@ async function withStaleResourceFixture(
     useEngine: (lease: PreparedModelRuntimeLease) => Promise<void>;
   }) => Promise<void>,
 ) {
-  await withOpenClawTestState({ label: "stale-runtime-resources" }, async (state) => {
-    const bundled = state.path("bundled");
-    fs.mkdirSync(bundled);
-    const pluginPaths = [engineId, providerId].map((id) => {
-      const rootDir = state.path(id);
-      fs.mkdirSync(rootDir);
-      const fixture = createColdPluginFixture({
-        rootDir,
-        pluginId: id,
-        manifest: {
-          providers: id === providerId ? [providerId] : [],
-          channels: [],
-          channelConfigs: {},
-          providerAuthChoices: [],
-        },
-      });
-      fs.writeFileSync(
-        fixture.runtimeSource,
-        id === engineId
-          ? `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  await withOpenClawTestState(
+    {
+      label: "stale-runtime-resources",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+    },
+    async (state) => {
+      const pluginPaths = [engineId, providerId].map((id) => {
+        const rootDir = state.path(id);
+        fs.mkdirSync(rootDir);
+        const fixture = createColdPluginFixture({
+          rootDir,
+          pluginId: id,
+          manifest: {
+            providers: id === providerId ? [providerId] : [],
+            channels: [],
+            channelConfigs: {},
+            providerAuthChoices: [],
+          },
+        });
+        fs.writeFileSync(
+          fixture.runtimeSource,
+          id === engineId
+            ? `module.exports = { id: ${JSON.stringify(id)}, register(api) {
               if (api.registrationMode !== "full") return;
               api.registerContextEngine(${JSON.stringify(id)}, () => ({
                 info: { id: ${JSON.stringify(id)}, name: "Retained donor" },
@@ -69,84 +71,64 @@ async function withStaleResourceFixture(
                 dispose: async () => {},
               }));
             } };`
-          : `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+            : `module.exports = { id: ${JSON.stringify(id)}, register(api) {
               api.registerProvider({ id: ${JSON.stringify(id)}, label: "Selected provider", auth: [] });
             } };`,
-      );
-      return rootDir;
-    });
-    const config: OpenClawConfig = {
-      agents: {
-        entries: { main: {}, sibling: {} },
-        defaults: {
-          workspace: state.workspaceDir,
-          model: { primary: "base/model" },
-          models: { "base/model": {}, [`${providerId}/model`]: {} },
+        );
+        return rootDir;
+      });
+      const provider = () => ({
+        api: "openai-completions" as const,
+        apiKey: "synthetic-test-key",
+        baseUrl: "https://fixture.invalid/v1",
+        models: [{ ...makeModel("model"), contextWindow: 8192, maxTokens: 1024 }],
+      });
+      const config: OpenClawConfig = {
+        agents: {
+          entries: { main: {}, sibling: {} },
+          defaults: {
+            workspace: state.workspaceDir,
+            model: { primary: "base/model" },
+            models: { "base/model": {}, [`${providerId}/model`]: {} },
+          },
         },
-      },
-      models: {
-        mode: "replace",
-        providers: Object.fromEntries(
-          ["base", providerId].map((id) => [
-            id,
-            {
-              api: "openai-completions",
-              apiKey: "synthetic-test-key",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [
-                {
-                  id: "model",
-                  name: "Fixture model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          ]),
-        ),
-      },
-      plugins: {
-        allow: [engineId, providerId],
-        load: { paths: pluginPaths },
-        entries: { [engineId]: { enabled: true }, [providerId]: { enabled: true } },
-        slots: { memory: "none", contextEngine: engineId },
-      },
-    };
-    const leases: PreparedModelRuntimeLease[] = [];
-    await withEnvAsync(
-      { OPENCLAW_BUNDLED_PLUGINS_DIR: bundled, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-      async () => {
-        await resetPreparedModelRuntimeSnapshotsForTest();
-        clearPluginMetadataLifecycleCaches();
-        try {
-          const root = await loadAndActivateRootPluginRegistry({
-            config,
-            cache: false,
-            onlyPluginIds: [engineId],
-            workspaceDir: state.workspaceDir,
+        models: {
+          mode: "replace",
+          providers: { base: provider(), [providerId]: provider() },
+        },
+        plugins: {
+          allow: [engineId, providerId],
+          load: { paths: pluginPaths },
+          entries: { [engineId]: { enabled: true }, [providerId]: { enabled: true } },
+          slots: { memory: "none", contextEngine: engineId },
+        },
+      };
+      await resetPreparedModelRuntimeSnapshotsForTest();
+      clearPluginMetadataLifecycleCaches();
+      try {
+        await using leases = new AsyncDisposableStack();
+        const root = await loadAndActivateRootPluginRegistry({
+          config,
+          cache: false,
+          onlyPluginIds: [engineId],
+          workspaceDir: state.workspaceDir,
+        });
+        const record = expectDefined(
+          root.plugins.find((plugin) => plugin.id === engineId),
+          "Gateway context engine record",
+        );
+        const donor = expectDefined(getPluginInstance(record), "Gateway context engine instance");
+        if (retention === "gateway") {
+          await refreshPreparedModelRuntimeSnapshots(config, {
+            gatewayLifecycle: true,
+            catalogMode: "static",
           });
-          const donor = expectDefined(
-            getPluginInstance(
-              expectDefined(
-                root.plugins.find((record) => record.id === engineId),
-                "Gateway context engine record",
-              ),
-            ),
-            "Gateway context engine instance",
-          );
-          if (retention === "gateway") {
-            await refreshPreparedModelRuntimeSnapshots(config, {
-              gatewayLifecycle: true,
-              catalogMode: "static",
-            });
-          }
-          await run({
-            donor,
-            acquire: async (agentId = "main") => {
-              const lease = await acquireAgentRunPreparedModelRuntime(
+        }
+        await run({
+          donor,
+          acquire: async (agentId = "main") => {
+            const lease = leases.use(
+              await acquireAgentRunPreparedModelRuntime(
                 {
                   config,
                   agentId,
@@ -155,53 +137,47 @@ async function withStaleResourceFixture(
                   runtimePluginSelections: [{ provider: providerId, modelId: "model", agentId }],
                 },
                 { retainIdleRunOwner: retention === "direct" },
-              );
-              leases.push(lease);
-              expect(
-                getPluginRegistryInspectionResources(
-                  expectDefined(lease.snapshot.pluginRegistry, "selected run registry"),
-                ),
-              ).toBeDefined();
-              return lease;
-            },
-            useEngine: async (lease) => {
-              const engine = await withPluginRuntimeRegistryScope(
+              ),
+            );
+            expect(
+              getPluginRegistryInspectionResources(
                 expectDefined(lease.snapshot.pluginRegistry, "selected run registry"),
-                () =>
-                  createContextEngineLogicalTurnLease({
-                    identity: {
-                      runId: "stale-resources-turn",
-                      sessionId: "stale-resources-session",
-                    },
-                    config,
-                    workspaceDir: state.workspaceDir,
-                  }),
-              );
-              try {
-                expect(engine.degraded).toBe(false);
-                await expect(
-                  engine
-                    .begin()
-                    .engine.assemble({ sessionId: "stale-resources-session", messages: [] }),
-                ).resolves.toMatchObject({ systemPromptAddition: "live donor" });
-              } finally {
-                await engine.dispose();
-              }
-            },
-          });
-        } finally {
-          for (const lease of leases) {
-            await lease[Symbol.asyncDispose]();
-          }
-          await resetPreparedModelRuntimeSnapshotsForTest();
-          await clearActivePluginRegistry();
-          resetPluginLoaderTestStateForTest();
-          cleanupPluginLoaderFixturesForTest();
-          clearPluginMetadataLifecycleCaches();
-        }
-      },
-    );
-  });
+              ),
+            ).toBeDefined();
+            return lease;
+          },
+          useEngine: async (lease) => {
+            const sessionId = "stale-resources-session";
+            const engine = await withPluginRuntimeRegistryScope(
+              expectDefined(lease.snapshot.pluginRegistry, "selected run registry"),
+              () =>
+                createContextEngineLogicalTurnLease({
+                  identity: {
+                    runId: "stale-resources-turn",
+                    sessionId,
+                  },
+                  config,
+                  workspaceDir: state.workspaceDir,
+                }),
+            );
+            await using _ = { [Symbol.asyncDispose]: () => engine.dispose() };
+            expect(engine.degraded).toBe(false);
+            await expect(
+              engine.begin().engine.assemble({ sessionId, messages: [] }),
+            ).resolves.toMatchObject({
+              systemPromptAddition: "live donor",
+            });
+          },
+        });
+      } finally {
+        await resetPreparedModelRuntimeSnapshotsForTest();
+        await clearActivePluginRegistry();
+        resetPluginLoaderTestStateForTest();
+        cleanupPluginLoaderFixturesForTest();
+        clearPluginMetadataLifecycleCaches();
+      }
+    },
+  );
 }
 
 it.each(["direct", "gateway"] as const)(

@@ -200,6 +200,9 @@ describe("Models provider login", () => {
           page.querySelector<HTMLButtonElement>("[data-model-readiness] button")?.disabled,
         ).toBe(false);
       });
+      if (setup) {
+        expect(page.view.props.loading).toBe(true);
+      }
       page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
       await page.updateComplete;
     } else {
@@ -725,12 +728,13 @@ describe("Models provider login", () => {
             },
           ],
         },
+        { provider: "quick-key-only", apiKeySupported: true, quickApiKeySetup: true },
         { provider: "unsupported", apiKeySupported: false, quickApiKeySetup: false },
       ],
     });
     const page = appendPage(context);
     await openPicker(page);
-    expect(providerChoices(page)).toEqual(["alpha", "example", "zebra"]);
+    expect(providerChoices(page)).toEqual(["alpha", "example", "quick-key-only", "zebra"]);
     expect(page.querySelector("[data-models-login-choice]")).toBeNull();
     expect(page.querySelector("[data-models-login-discover]")).not.toBeNull();
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
@@ -764,8 +768,15 @@ describe("Models provider login", () => {
       "No providers match",
     );
     await searchProviders(page, "");
-    expect(providerChoices(page)).toEqual(["alpha", "example", "zebra"]);
+    expect(providerChoices(page)).toEqual(["alpha", "example", "quick-key-only", "zebra"]);
+    await selectProvider(page, "quick-key-only");
+    expect(page.querySelector("[data-models-login-choice] button")).toBeNull();
+    expect(document.activeElement).toBe(page.querySelector("[data-models-login-api-key]"));
+    page.querySelector<HTMLButtonElement>("[data-models-login-back]")!.click();
+    await page.updateComplete;
+    expect(document.activeElement).toBe(page.querySelector("[data-models-login-search]"));
     await selectProvider(page, "zebra");
+    expect(document.activeElement).toBe(page.querySelector("[data-models-login-choice] button"));
     await startSelectedLogin(page, "Device sign-in");
     expect(request).toHaveBeenCalledWith(
       "models.authLogin",

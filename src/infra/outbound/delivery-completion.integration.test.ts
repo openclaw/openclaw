@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -12,50 +12,21 @@ import { clearPendingFinalDeliveryAfterSuccess } from "../../auto-reply/reply/di
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
 import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { inspectOpenClawAgentDatabaseOwner } from "../../state/openclaw-agent-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
+  createPendingFinalFixture,
   loadPendingDeliveries,
-  installDeliveryQueueTmpDirHooks,
+  installDeliveryCompletionHooks,
 } from "./delivery-queue.test-helpers.js";
 
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
-
 describe("pending-final durable delivery completion", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  let tmpDir: string;
-
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-
-  beforeEach(() => {
-    tmpDir = fixtures.tmpDir();
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-        },
-      ]),
-    );
-  });
-
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
+  const { tmpDir, deliver: deliverOutboundPayloads } = installDeliveryCompletionHooks(true);
+  const destination = { channel: "matrix", to: "!room:example" } as const;
 
   function pendingFinal(
     name: string,
@@ -63,75 +34,76 @@ describe("pending-final durable delivery completion", () => {
     sessionKey = "global",
     store = "sessions.json",
   ) {
-    const completion = {
-      kind: "pending-final" as const,
-      deliveryId: `${name}-delivery`,
-      intentId: `${name}-intent`,
+    return createPendingFinalFixture(path.join(tmpDir(), store), `${name}-delivery`, sessionKey, {
+      text,
+    });
+  }
+  async function prepareWriter(name: string) {
+    const scope = {
+      agentId: "main",
+      sessionKey: `agent:main:matrix:direct:${name}`,
+      storePath: path.join(tmpDir(), "sessions.json"),
+    };
+    const entry = {
       sessionId: `${name}-session`,
-      sessionKey,
-      storePath: path.join(tmpDir, store),
+      lifecycleRevision: `${name}-revision`,
+      activeWriterRunId: `${name}-writer`,
+      updatedAt: 1,
     };
-    return {
-      completion,
-      entry: {
-        sessionId: completion.sessionId,
-        updatedAt: 1,
-        pendingFinalDelivery: {
-          kind: "replayable" as const,
-          text,
-          createdAt: 1,
-          intentId: completion.intentId,
-          deliveries: [{ id: completion.deliveryId, state: "prepared" as const }],
-        },
-      },
+    const authority = {
+      ...scope,
+      expectedSessionId: entry.sessionId,
+      expectedLifecycleRevision: entry.lifecycleRevision,
+      expectedWriterRunId: entry.activeWriterRunId,
     };
+    await replaceSessionEntry(scope, entry);
+    return { scope, entry, authority };
+  }
+  function markFinal(
+    scope: { agentId: string; sessionKey: string; storePath: string },
+    entry: NonNullable<ReturnType<typeof loadSessionEntry>>,
+    payloads: Parameters<typeof persistPendingFinalDeliveryMarker>[0]["payloads"],
+  ) {
+    return persistPendingFinalDeliveryMarker({
+      ...scope,
+      sessionEntry: entry,
+      sessionStore: { [scope.sessionKey]: entry },
+      payloads,
+      deliver: true,
+      suppressVisibleSessionEffects: false,
+      sessionReboundDuringRun: false,
+      deliveryContext: destination,
+      runOwnedSessionId: entry.sessionId,
+    });
   }
 
   it.each(["global", "unknown"])(
     "retains the selected owner through a queued %s final, settlement, and repeat suppression",
     async (sessionKey) => {
-      const storePath = path.join(tmpDir, "sessions.json");
+      const storePath = path.join(tmpDir(), "sessions.json");
       const main = { agentId: "main", sessionKey, storePath };
       const ops = { agentId: "ops", sessionKey, storePath };
       await replaceSessionEntry(main, { sessionId: "main-session", updatedAt: 1, label: "main" });
       await replaceSessionEntry(ops, { sessionId: "ops-session", updatedAt: 1, label: "ops" });
       const mainBefore = loadSessionEntry(main);
       const entry = loadSessionEntry(ops);
-      if (!entry) {
-        throw new Error("Expected the selected agent's session");
-      }
+      assert(entry, "Expected the selected agent's session");
       const payloads = [{ text: "the selected agent's final" }];
-      const marker = await persistPendingFinalDeliveryMarker({
-        agentId: "ops",
-        deliver: true,
-        sessionStore: { [sessionKey]: entry },
-        sessionKey,
-        sessionEntry: entry,
-        storePath,
-        suppressVisibleSessionEffects: false,
-        sessionReboundDuringRun: false,
-        payloads,
-        deliveryContext: { channel: "matrix", to: "!room:example" },
-        runOwnedSessionId: entry.sessionId,
-      });
+      const marker = await markFinal(ops, entry, payloads);
       expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
       const completion = resolvePendingFinalDeliveryCompletion(payloads);
-      if (!completion) {
-        throw new Error("Expected a durable completion from the marker");
-      }
+      assert(completion, "Expected a durable completion from the marker");
       const sendMatrix = vi.fn(async () => {
-        expect((await loadPendingDeliveries(tmpDir))[0]?.deliveryCompletion).toMatchObject({
+        expect((await loadPendingDeliveries(tmpDir()))[0]?.deliveryCompletion).toMatchObject({
           agentId: "ops",
           sessionId: "ops-session",
           sessionKey,
         });
         return { messageId: "ops-final-message" };
       });
-
       const params = {
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
+        cfg: {},
+        ...destination,
         payloads,
         deps: { matrix: sendMatrix },
         queuePolicy: "required" as const,
@@ -146,51 +118,21 @@ describe("pending-final durable delivery completion", () => {
       ]);
       await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
       expect(sendMatrix).toHaveBeenCalledOnce();
-      expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+      expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
       await clearPendingFinalDeliveryAfterSuccess(completion);
       expect(loadSessionEntry(ops)?.pendingFinalDelivery).toBeUndefined();
       expect(loadSessionEntry(main)).toEqual(mainBefore);
-      expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+      expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
     },
   );
 
   it("retains the writer in queued custody after a channel transforms a direct final", async () => {
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:matrix:direct:rendered-final",
-      storePath: path.join(tmpDir, "sessions.json"),
-    };
-    const authority = {
-      ...scope,
-      expectedSessionId: "rendered-session",
-      expectedLifecycleRevision: "rendered-revision",
-      expectedWriterRunId: "rendered-writer",
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: authority.expectedSessionId,
-      lifecycleRevision: authority.expectedLifecycleRevision,
-      activeWriterRunId: authority.expectedWriterRunId,
-      updatedAt: 1,
-    });
-    const entry = loadSessionEntry(scope);
-    if (!entry) {
-      throw new Error("Expected the direct delivery session");
-    }
+    const { scope, entry, authority } = await prepareWriter("rendered-final");
     const payload = setReplyPayloadMetadata(
       { text: "original final" },
       { sessionWriterDeliveryAuthority: authority },
     );
-    await persistPendingFinalDeliveryMarker({
-      ...scope,
-      deliver: true,
-      sessionStore: { [scope.sessionKey]: entry },
-      sessionEntry: entry,
-      suppressVisibleSessionEffects: false,
-      sessionReboundDuringRun: false,
-      payloads: [payload],
-      deliveryContext: { channel: "matrix", to: "!room:example" },
-      runOwnedSessionId: entry.sessionId,
-    });
+    await markFinal(scope, entry, [payload]);
     const custody = await createDirectPendingFinalCustody(payload, scope.storePath);
     const completion = resolvePendingFinalDeliveryCompletion([payload]);
     if (!custody || !completion) {
@@ -198,62 +140,36 @@ describe("pending-final durable delivery completion", () => {
     }
     let queuedAuthority: SessionWriterDeliveryAuthority | undefined;
     const sendMatrix = vi.fn(async () => {
-      const queued = (await loadPendingDeliveries(tmpDir))[0]?.deliveryCompletion;
+      const queued = (await loadPendingDeliveries(tmpDir()))[0]?.deliveryCompletion;
       queuedAuthority =
         queued?.kind === "pending-final" ? queued.sessionWriterDeliveryAuthority : undefined;
       return { messageId: "rendered-final-message" };
     });
     const rendered = custody.bindPendingFinalDelivery?.({ text: "channel-rendered final" });
-    if (!rendered) {
-      throw new Error("Expected the direct owner to bind the rendered payload");
-    }
-
+    assert(rendered, "Expected the direct owner to bind the rendered payload");
     const result = await sendDurableMessageBatchCore({
       cfg: {},
-      channel: "matrix",
-      to: "!room:example",
+      ...destination,
       payloads: [rendered],
       onPlatformSendDispatch: custody.onPlatformSendDispatch,
       assertDirectAdapterHandoff: custody.assertPlatformSendAuthorized,
       deps: { matrix: sendMatrix },
     });
-
     expect(result.status).toBe("sent");
     expect(sendMatrix).toHaveBeenCalledOnce();
     expect(queuedAuthority).toEqual(authority);
     expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
       { id: completion.deliveryId, state: "delivered" },
     ]);
-    expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+    expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
     custody.release();
   });
 
   it("revokes prepared direct delivery after a writer commit without host SQL", async () => {
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:matrix:direct:replaced-writer",
-      storePath: path.join(tmpDir, "sessions.json"),
-    };
-    const entry = {
-      sessionId: "session",
-      lifecycleRevision: "revision",
-      activeWriterRunId: "writer",
-      updatedAt: 1,
-    };
-    await replaceSessionEntry(scope, entry);
+    const { scope, entry, authority } = await prepareWriter("replaced-writer");
     const sql = observeHostDataSql();
     const custody = await createDirectPendingFinalCustody(
-      setReplyPayloadMetadata(
-        { text: "final" },
-        {
-          sessionWriterDeliveryAuthority: {
-            ...scope,
-            expectedSessionId: entry.sessionId,
-            expectedLifecycleRevision: entry.lifecycleRevision,
-            expectedWriterRunId: entry.activeWriterRunId,
-          },
-        },
-      ),
+      setReplyPayloadMetadata({ text: "final" }, { sessionWriterDeliveryAuthority: authority }),
     );
     try {
       expect(sql.queries).toEqual([]);
@@ -283,65 +199,44 @@ describe("pending-final durable delivery completion", () => {
   it("recovers an older serialized completion with its original locator semantics", async () => {
     const { completion, entry } = pendingFinal("legacy", "legacy final");
     const { sessionKey, storePath } = completion;
-    await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
-    await replaceSessionEntry({ agentId: "ops", sessionKey, storePath }, entry);
+    const main = { agentId: "main", sessionKey, storePath };
+    const ops = { agentId: "ops", sessionKey, storePath };
+    await replaceSessionEntry(main, entry);
+    await replaceSessionEntry(ops, entry);
     await enqueueDeliveryOnce(
       {
-        channel: "matrix",
-        to: "!room:example",
+        ...destination,
         payloads: [{ text: "legacy final" }],
         deliveryCompletion: completion,
       },
       completion.deliveryId,
-      tmpDir,
+      tmpDir(),
     );
-    expect((await loadPendingDeliveries(tmpDir))[0]?.deliveryCompletion).not.toHaveProperty(
+    expect((await loadPendingDeliveries(tmpDir()))[0]?.deliveryCompletion).not.toHaveProperty(
       "agentId",
     );
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "legacy-message" });
     await recoverPendingDeliveries({
       cfg: {},
-      stateDir: tmpDir,
+      stateDir: tmpDir(),
       log: createRecoveryLog(),
       deliver: (params) => deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
     });
-
     expect(sendMatrix).toHaveBeenCalledOnce();
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath })?.pendingFinalDelivery
-        ?.deliveries,
-    ).toEqual([{ id: completion.deliveryId, state: "delivered" }]);
-    expect(
-      loadSessionEntry({ agentId: "ops", sessionKey, storePath })?.pendingFinalDelivery,
-    ).toEqual(entry.pendingFinalDelivery);
-    expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+    expect(loadSessionEntry(main)?.pendingFinalDelivery?.deliveries).toEqual([
+      { id: completion.deliveryId, state: "delivered" },
+    ]);
+    expect(loadSessionEntry(ops)?.pendingFinalDelivery).toEqual(entry.pendingFinalDelivery);
+    expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
   });
 
   it.each([
-    {
-      owner: "missing-owner",
-      store: "sessions.json",
-      agentId: "other",
-      writer: undefined,
-      state: "stale",
-    },
-    {
-      owner: "conflicting-writer",
-      store: "sessions.json",
-      agentId: "ops",
-      writer: "main",
-      state: "stale",
-    },
-    {
-      owner: "shared-schema-owner",
-      store: "shared.sqlite",
-      agentId: "ops",
-      writer: "ops",
-      state: "delivered",
-    },
+    ["missing-owner", "sessions.json", "other", undefined, "stale"],
+    ["conflicting-writer", "sessions.json", "ops", "main", "stale"],
+    ["shared-schema-owner", "shared.sqlite", "ops", "ops", "delivered"],
   ] as const)(
-    "settles only the logical pending-final owner: $owner",
-    async ({ store, agentId, writer, state }) => {
+    "settles only the logical pending-final owner: %s",
+    async (_owner, store, agentId, writer, state) => {
       const { completion, entry } = pendingFinal("owned", "owned final", "global", store);
       const { sessionKey, storePath } = completion;
       await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
@@ -389,7 +284,7 @@ describe("pending-final durable delivery completion", () => {
       "agent:main:matrix:direct:unknown-live",
     );
     const { sessionKey, storePath, deliveryId } = completion;
-    const context = { channel: "matrix", to: "!room:example" };
+    const context = destination;
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -401,25 +296,19 @@ describe("pending-final durable delivery completion", () => {
     const sendMatrix = vi.fn().mockResolvedValue({});
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-
-    try {
-      await expect(
-        deliverOutboundPayloads({
-          cfg: {} as OpenClawConfig,
-          channel: "matrix",
-          to: "!room:example",
-          payloads: [{ text: "delivery identity may have been lost" }],
-          deps: { matrix: sendMatrix },
-          queuePolicy: "required",
-          deliveryIntentId: deliveryId,
-          deliveryCompletion: completion,
-        }),
-      ).resolves.toEqual([]);
-    } finally {
-      unsubscribe();
-    }
-
-    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        ...destination,
+        payloads: [{ text: "delivery identity may have been lost" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId: deliveryId,
+        deliveryCompletion: completion,
+      }),
+    ).resolves.toEqual([]);
+    unsubscribe();
+    expect((await loadPendingDeliveries(tmpDir()))[0]).toMatchObject({
       id: deliveryId,
       recoveryState: "unknown_after_send",
     });

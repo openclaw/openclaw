@@ -4,11 +4,9 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import {
-  collectRuntimeToolSchemaFindingsWithRuntime,
-  createRuntimeToolSchemaCheck,
-} from "../flows/doctor-tool-schema-check.js";
+import { runtimeToolSchemaCheck } from "../flows/doctor-tool-schema-check.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+import type { HealthCheckContext } from "../flows/health-checks.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { acquirePluginRegistryForInspection } from "../plugins/loader-runtime-load.js";
 import {
@@ -157,13 +155,16 @@ export default {
         getBaseSnapshot: () => baseSnapshot,
         env: state.env,
       });
-      const check = createRuntimeToolSchemaCheck({
-        collectRuntimeToolSchemaFindings: (ctx) =>
-          collectRuntimeToolSchemaFindingsWithRuntime({
+      const check = {
+        ...runtimeToolSchemaCheck,
+        detect(ctx: HealthCheckContext) {
+          const preparedContext = {
             ...ctx,
             runWithPluginMetadataSnapshot: prepared.run,
-          }),
-      });
+          };
+          return runtimeToolSchemaCheck.detect(preparedContext);
+        },
+      };
       contributions.resolve.mockResolvedValue([check]);
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       const inspect = async (cache: PluginCache) => {

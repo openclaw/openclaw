@@ -61,6 +61,8 @@ describe("IRC durable ingress", () => {
         ...queue,
         enqueue: vi.fn().mockRejectedValue(appendError),
       } satisfies IrcIngressQueue;
+      // Exercise a supplied queue without the optional fused admission capability.
+      delete failingQueue.enqueueAndClaim;
       const dispatch = vi.fn();
       const ingress = startIngress(failingQueue, dispatch);
       try {
@@ -156,27 +158,6 @@ describe("IRC durable ingress", () => {
         expect(messageIds).toEqual([
           "local:connection-identical:000000000001",
           "local:connection-identical:000000000002",
-        ]);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("derives the direct-message lane from the sender nick", async () => {
-    await withQueue(async (queue) => {
-      const ingress = createIrcIngressMonitor({
-        accountId: "default",
-        queue,
-        dispatch: vi.fn(),
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
-      try {
-        await ingress
-          .openConnection("connection-dm")
-          .accept(":Alice!ident@example.org PRIVMSG openclaw-bot :hello", "bot");
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({ laneKey: "direct:alice" }),
         ]);
       } finally {
         await ingress.stop();

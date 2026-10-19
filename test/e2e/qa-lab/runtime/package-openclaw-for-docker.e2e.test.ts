@@ -731,6 +731,9 @@ describe("package-openclaw-for-docker", () => {
   it("loads from a trusted harness checkout without installed dependencies", async () => {
     const tempRoot = tempDirs.make("openclaw-package-harness-");
     const copiedFiles = [
+      "cli-invocation.mjs",
+      "cli-parent-lifetime.mjs",
+      "gateway-shutdown-budget.mjs",
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
@@ -1041,9 +1044,9 @@ describe("package-openclaw-for-docker", () => {
     expect(entries).not.toContain("package/dist/runtime-OLDHASH.js");
   });
 
-  it.skipIf(process.platform === "win32")(
-    "reports the final artifact after normalizing owner-only packed modes",
-    async () => {
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "reports portable artifacts from owner-only sources (pnpm=%s)",
+    async (pnpmPack) => {
       const sourceDir = createPackageSourceFixture("openclaw-package-modes-source-");
       const outputDir = tempDirs.make("openclaw-package-modes-output-");
       const distDir = path.join(sourceDir, "dist");
@@ -1060,11 +1063,13 @@ describe("package-openclaw-for-docker", () => {
           bin: { openclaw: "openclaw.mjs" },
           files: ["dist", "openclaw.mjs"],
           name: "openclaw",
+          packageManager: JSON.parse(fs.readFileSync("package.json", "utf8")).packageManager,
           version: "2026.8.26",
         })}\n`,
       );
 
       const callerNpmCache = tempDirs.make("openclaw-package-modes-npm-cache-");
+      let packedBytes: Buffer | undefined;
       const tarball = await withEnvAsync(
         {
           npm_config_cache: callerNpmCache,
@@ -1078,7 +1083,21 @@ describe("package-openclaw-for-docker", () => {
           packOpenClawPackageForDocker(sourceDir, outputDir, {
             ...skipDocsMapLifecycle,
             outputName: "openclaw-current.tgz",
-            packJsonPath: path.join(outputDir, "pack.json"),
+            ...(pnpmPack
+              ? {
+                  pnpmPack: true,
+                  runCaptureImpl: async (...args: Parameters<typeof runCaptureForTest>) => {
+                    const umask = process.umask(0o077);
+                    try {
+                      const output = await runCaptureForTest(...args);
+                      packedBytes = fs.readFileSync(path.join(outputDir, "openclaw-2026.8.26.tgz"));
+                      return output;
+                    } finally {
+                      process.umask(umask);
+                    }
+                  },
+                }
+              : { packJsonPath: path.join(outputDir, "pack.json") }),
             prepareBundledAiRuntime: skipBundledAiRuntime,
             prepareChangelog: async () => {},
             restoreChangelog: async () => {},
@@ -1110,6 +1129,34 @@ describe("package-openclaw-for-docker", () => {
       expect(entryModes.get("package/dist/index.js")).toBe(0o644);
       expect(entryModes.get("package/openclaw.mjs")).toBe(0o755);
       expect(entryModes.get("package/package.json")).toBe(0o644);
+      if (pnpmPack) {
+        expect(bytes).toEqual(packedBytes);
+        const installDir = tempDirs.make("openclaw-package-modes-installed-");
+        await runCommandForTest(
+          "npm",
+          [
+            "install",
+            "--ignore-scripts",
+            "--offline",
+            "--no-audit",
+            "--no-fund",
+            "--package-lock=false",
+            "--cache",
+            callerNpmCache,
+            "--prefix",
+            installDir,
+            tarball,
+          ],
+          sourceDir,
+          { timeoutMs: 20_000 },
+        );
+        const installed = path.join(installDir, "node_modules/openclaw");
+        expect(fs.readFileSync(path.join(installed, "dist/index.js"), "utf8")).toBe("export {};\n");
+        expect(fs.statSync(path.join(installed, "dist")).mode & 0o555).toBe(0o555);
+        expect(fs.statSync(path.join(installed, "openclaw.mjs")).mode & 0o555).toBe(0o555);
+        expect(fs.readdirSync(outputDir)).toEqual(["openclaw-current.tgz"]);
+        return;
+      }
       const receipt = JSON.parse(fs.readFileSync(path.join(outputDir, "pack.json"), "utf8"));
       expect(receipt).toEqual([
         expect.objectContaining({

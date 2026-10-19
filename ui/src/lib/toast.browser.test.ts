@@ -31,6 +31,45 @@ async function showArchiveToast(options: Partial<ToastOptions> = {}) {
 }
 
 describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
+  it("shows the selected agent avatar at notification size without crowding the action", async () => {
+    const { page } = await import("vitest/browser");
+    await useViewport(390, 844);
+    const options = {
+      message: "Garden plan: Done",
+      actionLabel: "Open session",
+      onAction: vi.fn(),
+      durationMs: 60_000,
+    };
+    const host = await showArchiveToast(options);
+    const notice = host.querySelector<HTMLElement>(".app-toast")!;
+    await page
+      .elementLocator(notice)
+      .screenshot({ path: "../../../.vitest/attachments/background-toast-before.png" });
+    const avatar =
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="#ff9138"/><circle cx="38" cy="40" r="5"/><circle cx="62" cy="40" r="5"/><path d="M40 62 Q50 72 60 62" fill="none" stroke="#000" stroke-width="4"/></svg>',
+      );
+    showToast({ ...options, avatar: { id: "gardener", name: "Garden keeper", avatar } });
+    await waitForSolid(() =>
+      expect(
+        host.querySelector<HTMLImageElement>(".app-toast__avatar img")?.naturalWidth,
+      ).toBeGreaterThan(0),
+    );
+    const image = host.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
+    expect(image.getAttribute("src")).toBe(avatar);
+    const avatarBounds = image.getBoundingClientRect();
+    expect(avatarBounds.width).toBe(28);
+    expect(avatarBounds.height).toBe(28);
+    const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+    expect(action.getBoundingClientRect().right).toBeLessThanOrEqual(390);
+    await page
+      .elementLocator(notice)
+      .screenshot({ path: "../../../.vitest/attachments/background-toast-after.png" });
+    action.click();
+    expect(options.onAction).toHaveBeenCalledOnce();
+  });
+
   beforeEach(async () => {
     await i18n.setLocale("en");
   });

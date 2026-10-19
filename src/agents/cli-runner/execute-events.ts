@@ -1,5 +1,5 @@
 import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentEventStream } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -259,12 +259,20 @@ export function createCliEventHandlers(params: {
     // Claude enforces this MCP response timeout. Keep recovery behind that
     // deadline while the request is still in the CLI's own tool runtime.
     const timeoutMs = context.managedMcpToolTimeoutMs;
-    emitTrustedDiagnosticEvent(
+    const deadlineAtMs =
       timeoutMs !== undefined && event.name.startsWith("mcp__openclaw__")
-        ? markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, {
-            deadlineAtMs: startedAt + timeoutMs,
-          })
-        : diagnosticEvent,
+        ? startedAt + timeoutMs
+        : undefined;
+    runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+      phase: "start",
+      toolName: event.name,
+      toolCallId: event.toolCallId,
+      deadlineAtMs,
+    });
+    emitTrustedDiagnosticEvent(
+      deadlineAtMs === undefined
+        ? diagnosticEvent
+        : markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, { deadlineAtMs }),
     );
     emitToolUseStart(event, true);
   };
@@ -278,6 +286,13 @@ export function createCliEventHandlers(params: {
     activeParsedTools.delete(event.toolCallId);
     const trustedOutcome = params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId);
     const toolName = activeTool?.toolName ?? event.name;
+    if (!event.incomplete) {
+      runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+        phase: "end",
+        toolName,
+        toolCallId: event.toolCallId,
+      });
+    }
     const now = Date.now();
     const trustedTerminalReason =
       trustedOutcome &&
@@ -376,7 +391,7 @@ export function createCliEventHandlers(params: {
     }
   };
   const emitCliCommentaryText = (text: string) => {
-    if (!emitLiveEvents) {
+    if (!emitLiveEvents || params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
     }
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
@@ -400,20 +415,23 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:assistant");
       observedCliActivity = true;
       signalExecutionPhase("assistant_output_started");
     }
-    const candidate = text.trimStart();
+    const candidate = text.trimStart().toUpperCase();
+    const stripped = stripMixedSilentReplyTokens(text);
     if (
-      !text.startsWith(`${SILENT_REPLY_TOKEN}\n`) &&
-      (SILENT_REPLY_TOKEN.startsWith(candidate) ||
-        (candidate.startsWith(SILENT_REPLY_TOKEN) &&
-          !candidate.slice(SILENT_REPLY_TOKEN.length).trim()))
+      stripped === null &&
+      (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate))
     ) {
       return;
     }
-    const sourceText = stripMixedSilentReplyTokens(text) ?? text;
+    const sourceText = stripped ?? text;
     const sourceDelta = sourceText.startsWith(assistantVisibleText)
       ? sourceText.slice(assistantVisibleText.length)
       : sourceText;
@@ -432,7 +450,11 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:completed_reply");
       observedCliActivity = true;
     }
     assistantVisibleText = "";
@@ -453,6 +475,9 @@ export function createCliEventHandlers(params: {
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
   const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
       observedCliActivity = true;
     }

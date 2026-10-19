@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import {
@@ -28,190 +29,130 @@ vi.mock("./agents.providers.js", () => ({
   summarizeBindings: () => [],
 }));
 
-function instrumentParentSql() {
-  requireNodeSqlite();
-  const sql = observeMainThreadSql({ includeClose: true });
-  try {
-    sql.calibrate();
-    return sql;
-  } catch (error) {
-    sql.restore();
-    throw error;
-  }
-}
+const runtime = {
+  ...createTestRuntime(),
+  writeStdout: vi.fn<(value: string) => void>(),
+  writeJson: vi.fn<(value: unknown) => void>(),
+};
 
-function instrumentProvenanceWorkerRequests() {
+let state: Parameters<Parameters<typeof withOpenClawTestState>[1]>[0];
+let sql: ReturnType<typeof observeMainThreadSql> | undefined;
+let restore: (() => void) | undefined;
+it.aroundEach(async (runTest) => {
+  await withOpenClawTestState(
+    { layout: "state-only", label: "provenance-cli" },
+    async (fixture) => {
+      state = fixture;
+      recordAgentDatabaseAdmissions([], { env: state.env });
+      vi.clearAllMocks();
+      try {
+        await runTest();
+        await closeOpenClawStateDatabaseAsync();
+        sql?.expectIdle();
+      } finally {
+        restore?.();
+        sql?.restore();
+        sql = undefined;
+        restore = undefined;
+        await closeOpenClawStateDatabaseAsync();
+      }
+    },
+  );
+});
+
+function observe(parentSql = false) {
   const commands: string[] = [];
-  // oxlint-disable-next-line typescript/unbound-method -- Every intercepted call supplies the original Worker receiver.
-  const originalPostMessage = Worker.prototype.postMessage;
-  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    message,
-    transferList,
-  ) {
-    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
-      const command: unknown = deserialize(message.input);
+  restore = onInternalDiagnosticEvent(
+    (event) => {
       if (
-        isRecord(command) &&
-        typeof command.type === "string" &&
-        command.type.startsWith("agentProvenance.")
+        event.type === "worker.request" &&
+        event.phase === "queued" &&
+        event.requestClass === "agentProvenance"
       ) {
-        commands.push(command.type);
+        commands.push(event.kind);
       }
-    }
-    originalPostMessage.call(this, message, transferList);
-  });
-  return { commands, restore: () => spy.mockRestore() };
+    },
+    { include: ["worker.request"] },
+  );
+  if (parentSql) {
+    requireNodeSqlite();
+    sql = observeMainThreadSql({ includeClose: true });
+    sql.calibrate();
+  }
+  return commands;
 }
 
-it("does not create provenance storage for an empty JSON roster", async () => {
-  await withOpenClawTestState(
-    { layout: "state-only", label: "provenance-empty-roster" },
-    async (state) => {
-      state.applyEnv();
-      config = { agents: { ownership: "explicit", entries: {} } };
-      recordAgentDatabaseAdmissions([], { env: state.env });
-      const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
-      const requests = instrumentProvenanceWorkerRequests();
-      try {
-        await agentsListCommand({ json: true }, runtime);
-        expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual([]);
-        expect(requests.commands).toEqual([]);
-        expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
-      } finally {
-        requests.restore();
-        await closeOpenClawStateDatabaseAsync();
-      }
+function configureRoster(ids: string[]) {
+  config = {
+    agents: {
+      ownership: "explicit",
+      entries: Object.fromEntries(ids.map((id) => [id, { workspace: path.join(state.root, id) }])),
     },
+  };
+}
+
+it("keeps an empty JSON roster free of provenance storage", async () => {
+  configureRoster([]);
+  const commands = observe();
+  await agentsListCommand({ json: true }, runtime);
+  expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual([]);
+  expect(commands).toEqual([]);
+  expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
+});
+
+it("reads absent provenance without creating state or parent SQL", async () => {
+  const databasePath = resolveOpenClawStateSqlitePath(state.env);
+  expect(existsSync(databasePath)).toBe(false);
+  observe(true);
+  const options = { env: { ...state.env }, path: databasePath };
+  const ids = ["main"];
+  const reading = readAgentProvenanceForDisplay(ids, options);
+  ids.push("later");
+  const laterPath = path.join(state.stateDir, "later.sqlite");
+  options.path = laterPath;
+  options.env.OPENCLAW_STATE_DIR = path.join(state.stateDir, "later");
+  expect(await reading).toEqual([]);
+  expect(existsSync(databasePath)).toBe(false);
+  expect(existsSync(laterPath)).toBe(false);
+});
+
+it("serves JSON and tree output from worker provenance through reopen", async () => {
+  configureRoster(["main", "child", "legacy"]);
+  const at = (nowMs: number) => ({ env: state.env, nowMs });
+  await recordAgentProvenance("Main", { createdVia: "operator" }, at(10));
+  await recordAgentProvenance("Child", { createdVia: "agent", creatorAgentId: "Main" }, at(20));
+  await recordAgentProvenance("retired", { createdVia: "claw" }, at(30));
+  await closeOpenClawStateDatabaseAsync();
+  const commands = observe(true);
+  await agentsListCommand({ json: true }, runtime);
+  const output = runtime.writeJson.mock.calls[0]?.[0];
+  expect(output).toMatchObject([
+    { id: "main", createdVia: "operator", createdAt: 10 },
+    { id: "child", createdVia: "agent", creatorAgentId: "main", createdAt: 20 },
+    { id: "legacy" },
+  ]);
+  expect(output).not.toHaveProperty("2.createdVia");
+  await waitForDiagnosticEventsDrained();
+  expect(commands).toEqual(["stateRead"]);
+  await agentsListCommand({ tree: true }, runtime);
+  expect(runtime.log).toHaveBeenCalledWith("Agents:\n- main\n  - child\n- legacy");
+  await closeOpenClawStateDatabaseAsync();
+  const storedIds = (await listAgentProvenance({ env: state.env })).map((row) => row.agentId);
+  expect(storedIds).toEqual(["child", "main", "retired"]);
+});
+
+it("enriches growing rosters with bounded requests in configured order", async () => {
+  const ids = Array.from({ length: 300 }, (_, index) => `worker-${299 - index}`);
+  configureRoster(ids);
+  for (const [index, id] of ids.entries()) {
+    await recordAgentProvenance(id, { createdVia: "operator" }, { env: state.env, nowMs: index });
+  }
+  await closeOpenClawStateDatabaseAsync();
+  const commands = observe();
+  await agentsListCommand({ json: true }, runtime);
+  expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject(
+    ids.map((id, createdAt) => ({ id, createdVia: "operator", createdAt })),
   );
-});
-
-it("creates an empty provenance database on the worker and closes without parent SQL", async () => {
-  await withOpenClawTestState({ layout: "state-only", label: "provenance-cold" }, async (state) => {
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    expect(existsSync(databasePath)).toBe(false);
-    const sql = instrumentParentSql();
-    try {
-      const options = { env: { ...state.env }, path: databasePath };
-      const ids = ["main"];
-      const reading = readAgentProvenanceForDisplay(ids, options);
-      ids.push("later");
-      const laterPath = path.join(state.stateDir, "later.sqlite");
-      options.path = laterPath;
-      options.env.OPENCLAW_STATE_DIR = path.join(state.stateDir, "later");
-      expect(await reading).toEqual([]);
-      expect(existsSync(databasePath)).toBe(true);
-      expect(existsSync(laterPath)).toBe(false);
-      await closeOpenClawStateDatabaseAsync();
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
-});
-
-it("serves actual JSON and tree command output from worker provenance through reopen", async () => {
-  await withOpenClawTestState({ layout: "state-only", label: "provenance-cli" }, async (state) => {
-    state.applyEnv();
-    config = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: { workspace: path.join(state.root, "main") },
-          child: { workspace: path.join(state.root, "child") },
-          legacy: { workspace: path.join(state.root, "legacy") },
-        },
-      },
-    };
-    recordAgentDatabaseAdmissions([], { env: state.env });
-    await recordAgentProvenance("Main", { createdVia: "operator" }, { env: state.env, nowMs: 10 });
-    await recordAgentProvenance(
-      "Child",
-      { createdVia: "agent", creatorAgentId: "Main" },
-      { env: state.env, nowMs: 20 },
-    );
-    await recordAgentProvenance("retired", { createdVia: "claw" }, { env: state.env, nowMs: 30 });
-    await closeOpenClawStateDatabaseAsync();
-    const runtime = {
-      ...createTestRuntime(),
-      writeStdout: vi.fn<(value: string) => void>(),
-      writeJson: vi.fn<(value: unknown) => void>(),
-    };
-    const sql = instrumentParentSql();
-    const requests = instrumentProvenanceWorkerRequests();
-    try {
-      await agentsListCommand({ json: true }, runtime);
-      expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual([
-        expect.objectContaining({ id: "main", createdVia: "operator", createdAt: 10 }),
-        expect.objectContaining({
-          id: "child",
-          createdVia: "agent",
-          creatorAgentId: "main",
-          createdAt: 20,
-        }),
-        expect.objectContaining({ id: "legacy" }),
-      ]);
-      const output = runtime.writeJson.mock.calls[0]?.[0];
-      if (Array.isArray(output)) {
-        expect(output[2]).not.toHaveProperty("createdVia");
-      }
-      expect(requests.commands).toHaveLength(1);
-      await agentsListCommand({ tree: true }, runtime);
-      expect(runtime.log).toHaveBeenCalledWith("Agents:\n- main\n  - child\n- legacy");
-      await closeOpenClawStateDatabaseAsync();
-      expect((await listAgentProvenance({ env: state.env })).map((row) => row.agentId)).toEqual([
-        "child",
-        "main",
-        "retired",
-      ]);
-      await closeOpenClawStateDatabaseAsync();
-      sql.expectIdle();
-    } finally {
-      requests.restore();
-      sql.restore();
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
-});
-
-it("enriches a growing configured roster with bounded worker requests in configured order", async () => {
-  await withOpenClawTestState(
-    { layout: "state-only", label: "provenance-large-roster" },
-    async (state) => {
-      state.applyEnv();
-      const ids = Array.from({ length: 300 }, (_, index) => `worker-${299 - index}`);
-      config = {
-        agents: {
-          ownership: "explicit",
-          entries: Object.fromEntries(
-            ids.map((id) => [id, { workspace: path.join(state.root, id) }]),
-          ),
-        },
-      };
-      recordAgentDatabaseAdmissions([], { env: state.env });
-      for (const [index, id] of ids.entries()) {
-        await recordAgentProvenance(
-          id,
-          { createdVia: "operator" },
-          { env: state.env, nowMs: index },
-        );
-      }
-      await closeOpenClawStateDatabaseAsync();
-      const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
-      const requests = instrumentProvenanceWorkerRequests();
-      try {
-        await agentsListCommand({ json: true }, runtime);
-        expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual(
-          ids.map((id, index) =>
-            expect.objectContaining({ id, createdVia: "operator", createdAt: index }),
-          ),
-        );
-        expect(requests.commands).toHaveLength(2);
-      } finally {
-        requests.restore();
-        await closeOpenClawStateDatabaseAsync();
-      }
-    },
-  );
+  await waitForDiagnosticEventsDrained();
+  expect(commands).toEqual(["stateRead", "stateRead"]);
 });

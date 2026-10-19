@@ -47,8 +47,8 @@ it.each([
         expiresAt: Date.now() + 60_000,
       },
     } satisfies GatewaySessionRow;
-    Reflect.set(pane, "swarmHydrator", { rows: [child], hydrated: true, childrenRead: true });
-    Reflect.set(pane, "swarmEnabled", false);
+    Reflect.set(pane.swarm, "hydrator", { rows: [child], hydrated: true, childrenRead: true });
+    Reflect.set(pane.swarm, "enabled", false);
     const container = document.body.appendChild(document.createElement("div"));
     try {
       const roster = pane.projectChildRoster(pane.resolveChatReadTarget());
@@ -78,7 +78,7 @@ it.each([
       });
     } finally {
       container.remove();
-      Reflect.set(pane, "swarmHydrator", null);
+      Reflect.set(pane.swarm, "hydrator", null);
       vi.useRealTimers();
     }
   },

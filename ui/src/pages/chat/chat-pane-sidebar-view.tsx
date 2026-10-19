@@ -1,6 +1,8 @@
-import { For, Show } from "solid-js";
+import type { JSX as SolidJSX } from "@solidjs/web";
+import { For, Show, onCleanup } from "solid-js";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type {
   RegionProps,
@@ -17,6 +19,10 @@ import {
 } from "./sidebar-layout.ts";
 
 export type SidebarRegionParams = {
+  onRegionElementRef?: (element: HTMLElement) => void | (() => void);
+  onRegionViewRef?: (
+    element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"],
+  ) => void | (() => void);
   presentationId: string;
   conversationTab?: RegionProps["conversationTab"];
   fetchFavicon?: LinkFaviconFetcher;
@@ -29,19 +35,47 @@ export type SidebarRegionParams = {
   sideFocusManaged?: boolean;
   sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
-  header?: unknown;
-  background?: unknown;
-  primary: unknown;
-  requestUpdate: () => void;
+  header?: SolidJSX.Element;
+  background?: SolidJSX.Element;
+  primary?: SolidJSX.Element;
 };
 
-type SidebarRegionViewProps = SidebarRegionParams & {
+export type SidebarRegionViewProps = SidebarRegionParams & {
   panelIdPrefix: string;
   panelDefinitions: SidebarPanelDefinition[];
-  regionError: unknown;
+  regionError: Parameters<typeof LazyViewError>[0] | null | undefined;
 };
 
+function regionRef<T extends HTMLElement>(
+  register: ((element: T) => void | (() => void)) | undefined,
+) {
+  let release: void | (() => void);
+  onCleanup(() => release?.());
+  return (element: T) => {
+    release = register?.(element);
+  };
+}
+
 export function SidebarRegionView(props: SidebarRegionViewProps) {
+  let shell!: HTMLDivElement;
+  let header!: HTMLDivElement;
+  let primary!: HTMLDivElement;
+  let outlet!: HTMLDivElement;
+  // The lazy native region mounts after this caller's refs have attached.
+  const elements: NonNullable<RegionProps["elements"]> = {
+    get shell() {
+      return shell;
+    },
+    get header() {
+      return header;
+    },
+    get primary() {
+      return primary;
+    },
+    get outlet() {
+      return outlet;
+    },
+  };
   const column = () => props.layout.columns[0];
   const chatMain = () =>
     !sidebarMainPanel(props.layout) || sidebarMainPanel(props.layout)?.slot === "conversation";
@@ -50,6 +84,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
     (props.availableWidth > 0 && props.availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX);
   return (
     <div
+      ref={[(element) => (shell = element), regionRef(props.onRegionElementRef)]}
       class={[
         "sidebar-region",
         `sidebar-region--${sidebarDock(props.layout)}`,
@@ -76,11 +111,11 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
               : "side-header / side-header / side / side",
           }}
         >
-          <LitContent value={props.background} />
+          {props.background}
         </div>
       </Show>
-      <div class="sidebar-region__header">
-        <LitContent value={props.header} />
+      <div class="sidebar-region__header" ref={(element) => (header = element)}>
+        {props.header}
       </div>
       <Show
         when={props.regionError === undefined}
@@ -93,17 +128,17 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                     panel.slot !== "conversation" && isSidebarSlotVisible(props.layout, panel.slot),
                 ) ?? []
               }
+              keyed={(panel) => panel.id}
             >
               {(panel) => (
                 <div
                   class="side-panel__panel"
-                  data-region={panel.id === props.layout.mainPanelId ? "main" : "side"}
+                  data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
                 >
-                  <LitContent
-                    value={
-                      props.panelDefinitions.find((definition) => definition.slot === panel.slot)
-                        ?.loading
-                    }
+                  <PanelLoadingSkeleton
+                    {...props.panelDefinitions.find(
+                      (definition) => definition.slot === panel().slot,
+                    )!.loading}
                   />
                 </div>
               )}
@@ -112,6 +147,8 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         }
       >
         <openclaw-chat-sidebar-region
+          ref={[regionRef(props.onRegionViewRef)]}
+          prop:elements={elements}
           prop:panelIdPrefix={props.panelIdPrefix}
           prop:conversationTab={props.conversationTab}
           prop:layout={props.layout}
@@ -128,19 +165,22 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       <div
         id={`${props.panelIdPrefix}-conversation`}
         class="sidebar-region__primary"
+        ref={(element) => (primary = element)}
         role="region"
         aria-label={t("chat.sidePanel.conversation")}
         data-region={chatMain() ? "main" : "side"}
         hidden={!isSidebarSlotVisible(props.layout, "conversation")}
       >
-        <LitContent value={props.primary} />
+        {props.primary}
       </div>
       <Show
         when={props.regionError != null}
-        fallback={<div class="sidebar-region__right-runtime" />}
+        fallback={
+          <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)} />
+        }
       >
-        <div class="sidebar-region__right-runtime">
-          <LitContent value={props.regionError} />
+        <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)}>
+          <LazyViewError {...props.regionError!} />
         </div>
       </Show>
     </div>

@@ -121,6 +121,9 @@
 }
 
 .chat-workspace-rail__state--error {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
   color: var(--danger);
 }
 

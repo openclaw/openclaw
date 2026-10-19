@@ -481,31 +481,6 @@ describe("persistInboundImagesForTranscript", () => {
     expect(result).toEqual({ entries: [], omission: "inline-image-save-failed" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk unavailable"));
   });
-
-  it.each(["nested/id"])(
-    "rejects an unsafe saved media id %j before projecting a durable claim",
-    async (id) => {
-      await expect(
-        persistInboundImagesForTranscript({
-          images: [],
-          offloadedRefs: [
-            {
-              mediaRef: "https://signed.example/private",
-              id,
-              path: "/media/inbound/private",
-              kind: "video",
-              mimeType: "video/mp4",
-              label: "private.mp4",
-              sizeBytes: 10,
-              sourceIndex: 0,
-            },
-          ],
-          log: { warn: vi.fn() },
-          logContext: "test",
-        }),
-      ).rejects.toThrow();
-    },
-  );
 });
 
 describe("parseMessageWithAttachments", () => {

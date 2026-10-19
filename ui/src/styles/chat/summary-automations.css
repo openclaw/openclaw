@@ -15,7 +15,7 @@ openclaw-chat-summary-automations {
   align-items: center;
   min-height: 32px;
   gap: 10px;
-  padding: 8px 4px;
+  padding: 8px 0;
   border-radius: 8px;
   color: var(--text);
   text-decoration: none;

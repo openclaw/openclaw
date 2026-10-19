@@ -73,9 +73,6 @@ final class ScreenRecordService {
             try stream.addStreamOutput(recorder, type: .audio, sampleHandlerQueue: recorder.queue)
         }
 
-        self.logger.info(
-            "screen record start idx=\(idx) durationMs=\(durationMs) fps=\(fps) out=\(outURL.path, privacy: .public)")
-
         var started = false
         do {
             try await stream.startCapture()
@@ -173,10 +170,7 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             return
         }
         _ = stream
-        if let msg = self.pendingErrorMessage {
-            let source = type == .audio ? "audio " : ""
-            self.logger
-                .error("screen record \(source, privacy: .public)aborting due to prior error: \(msg, privacy: .public)")
+        if self.pendingErrorMessage != nil {
             return
         }
         if self.didFinish { return }

@@ -259,6 +259,33 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   );
 
   it.each([
+    { toolName: "browser", verboseLevel: "off", expected: "⚠️ Browser failed: invalid arguments" },
+    { toolName: "exec", verboseLevel: "on", expected: "⚠️ Exec failed: invalid arguments" },
+    {
+      toolName: "exec",
+      verboseLevel: "full",
+      expected: "⚠️ Exec failed: PRIVATE_VALIDATOR_DETAIL",
+    },
+  ] as const)(
+    "describes $toolName validation errors at $verboseLevel verbosity",
+    ({ toolName, verboseLevel, expected }) => {
+      expectSinglePayloadText(
+        buildPayloads({
+          lastToolError: {
+            toolName,
+            executionStarted: false,
+            validationErrorSummary: `${toolName} tool validation failed: invalid arguments`,
+            error: "PRIVATE_VALIDATOR_DETAIL",
+          },
+          verboseLevel,
+        }),
+        expected,
+        true,
+      );
+    },
+  );
+
+  it.each([
     {
       title: "prefers raw exec metadata when tool progress detail includes it",
       meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",

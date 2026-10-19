@@ -1,5 +1,6 @@
 export {
   SessionGitHubActionParamsSchema,
+  SessionGitHubBaseRefreshResultSchema,
   SessionGitHubActionResultSchema,
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,

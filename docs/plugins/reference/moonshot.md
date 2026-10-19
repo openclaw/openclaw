@@ -15,7 +15,7 @@ Adds Moonshot model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/moonshot-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/moonshot-provider`
+- Install route: npm or ClawHub: `@openclaw/moonshot-provider`
 
 ## Surface
 

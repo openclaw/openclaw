@@ -53,7 +53,11 @@ export function createSqliteWorkerBackend(
                 metadata: {
                   ...target.metadata,
                   comments: [
-                    { id: "replacement-comment", body: "First row", createdAt: 1000 },
+                    ...Array.from({ length: 65 }, (_, index) => ({
+                      id: `replacement-comment-${index}`,
+                      body: `Row ${index}`,
+                      createdAt: 1000,
+                    })),
                     invalidComment,
                   ],
                 },

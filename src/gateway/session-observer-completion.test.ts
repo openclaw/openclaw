@@ -53,8 +53,6 @@ describe("session observer completion", () => {
         agentDir: "/tmp/agent",
       })),
       completeModel,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
       isCurrent: () => true,
     });
     const state: SessionObserverState = {

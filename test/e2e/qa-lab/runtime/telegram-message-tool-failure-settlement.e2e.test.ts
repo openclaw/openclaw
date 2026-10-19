@@ -29,12 +29,47 @@ function succeed(res: ServerResponse, result: unknown = true) {
   writeJson(res, 200, { ok: true, result });
 }
 
-test("visibly settles a message-tool-only Telegram turn after a provider failure", async () => {
+test("visibly settles a message-tool-only Telegram turn after a provider failure", async ({
+  signal,
+  onTestFailed,
+  onTestFinished,
+}) => {
   const pendingPolls = new Set<ServerResponse>();
   const telegramSends: JsonObject[] = [];
   const providerBodies: JsonObject[] = [];
   let providerRequests = 0;
   let updateDelivered = false;
+  const started = performance.now();
+  let phase = "test-enter";
+  let reported = false;
+  // Raw stderr remains visible under the E2E configuration silent mode.
+  const emitPhase = (event: "enter" | "failure") => {
+    process.stderr.write(
+      `[qa-phase] ${JSON.stringify({
+        event,
+        phase,
+        elapsedMs: Math.round(performance.now() - started),
+        providerRequests,
+        updateDelivered,
+        sends: telegramSends.length,
+      })}\n`,
+    );
+  };
+  const enterPhase = (next: string) => {
+    phase = next;
+    emitPhase("enter");
+  };
+  const report = () => {
+    if (reported) {
+      return;
+    }
+    reported = true;
+    emitPhase("failure");
+  };
+  signal.addEventListener("abort", report, { once: true });
+  onTestFailed(report);
+  onTestFinished(() => signal.removeEventListener("abort", report));
+  emitPhase("enter");
 
   const update = {
     update_id: 1,
@@ -103,18 +138,22 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
     succeed(res);
   };
 
+  enterPhase("http-start");
   await withServer(
     (req, res) => {
       void handleRequest(req, res).catch((error: unknown) => {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
       });
     },
-    async (apiRoot) =>
-      await withTempDir("openclaw-telegram-failure-settlement-", async (workspace) => {
+    async (apiRoot) => {
+      enterPhase("temp-dir-start");
+      return await withTempDir("openclaw-telegram-failure-settlement-", async (workspace) => {
         const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
+          enterPhase("gateway-start");
           const gateway = await gatewayOwner.start({
+            onListening: () => enterPhase("gateway-listening"),
             repoRoot,
             providerBaseUrl: `${apiRoot}/v1`,
             transportBaseUrl: apiRoot,
@@ -166,6 +205,8 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
             },
           });
 
+          enterPhase("gateway-ready");
+          enterPhase("turn");
           await expect
             .poll(
               () => ({
@@ -182,6 +223,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
               providerRequests: expect.any(Number),
               sends: [{ chatId: String(CHAT_ID), silent: true, text: FAILURE_TEXT }],
             });
+          enterPhase("delivery-observed");
           expect(providerRequests).toBeGreaterThan(0);
           expect(providerBodies[1]?.model).toBe(providerBodies[0]?.model);
           expect(JSON.stringify(providerBodies[1]?.input)).toContain(REQUEST_TEXT);
@@ -191,11 +233,13 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
           expect(publicReplies).not.toContain(RAW_ERROR_DETAIL);
           expect(publicReplies).not.toContain(RAW_ERROR_CANARY);
         } finally {
+          enterPhase("cleanup");
           await stopQaGatewayFixture(gatewayOwner);
           for (const poll of pendingPolls) {
             poll.destroy();
           }
         }
-      }),
+      });
+    },
   );
 }, 120_000);

@@ -16,6 +16,7 @@ import {
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { GATEWAY_SERVICE_KIND, isGatewayServiceEnv } from "./constants.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
@@ -228,7 +229,12 @@ export async function admitUserUnitActivationPastUnverifiableOwnership(
   const capability = await readSystemdDefinitionMutationCapability(env, {
     requireLoaded: true,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  }).catch(() => undefined);
+  }).catch((inspectionError: unknown) => {
+    if (hasCommandProcessCleanupError(inspectionError)) {
+      throw inspectionError;
+    }
+    return undefined;
+  });
   if (capability?.kind !== "writable") {
     throw error;
   }
@@ -503,14 +509,16 @@ async function findSystemdGatewayScope(
   for (const name of names) {
     const unitName = `${name}.service`;
     for (const dir of directories) {
-      let unitPath: string;
+      const unitPath =
+        dir === undefined
+          ? resolveSystemdUnitPathForName(env, name)
+          : path.posix.join(dir, unitName);
       try {
-        unitPath =
-          dir === undefined
-            ? resolveSystemdUnitPathForName(env, name)
-            : path.posix.join(dir, unitName);
         await fs.access(unitPath);
-      } catch {
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
         continue;
       }
       return {

@@ -186,7 +186,9 @@ function SecretsTable(props: SecretsStoreViewProps) {
                           </code>
                         </td>
                         <td data-label={t("secretsStore.access")}>
-                          <span class={`secrets-store__mode secrets-store__mode--${entry().kind}`}>
+                          <span
+                            class={["secrets-store__mode", `secrets-store__mode--${entry().kind}`]}
+                          >
                             {t(
                               entry().kind === "secret"
                                 ? "secretsStore.protectedSecret"

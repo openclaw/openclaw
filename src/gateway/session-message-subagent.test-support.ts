@@ -67,6 +67,7 @@ export function registerRecoveredSubagentSessionEventTest({
       notifyContextEngineSubagentEnded: vi.fn(async () => {}),
       retireSupersededRun: vi.fn(async () => {}),
       resumeSubagentRun: vi.fn(),
+      confirmProvisionalKill: vi.fn(),
       callGateway: async <T = Record<string, unknown>>() => ({}) as T,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
       runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),

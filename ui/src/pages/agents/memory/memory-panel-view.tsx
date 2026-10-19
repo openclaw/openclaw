@@ -32,7 +32,10 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
               )}
             </span>
             <button
-              class={`dreams__phase-toggle ${model().header.dreamingOn ? "dreams__phase-toggle--on" : ""}`}
+              class={[
+                "dreams__phase-toggle",
+                { "dreams__phase-toggle--on": model().header.dreamingOn },
+              ]}
               disabled={
                 !model().header.canUpdateConfig ||
                 model().header.loading ||

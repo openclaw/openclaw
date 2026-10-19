@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OpenClawNativeState
 import OpenClawProtocol
 import OSLog
 import Synchronization
@@ -1160,7 +1161,7 @@ extension GatewayChannelActor {
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
                     if case let .event(evt) = frame, evt.event == "connect.challenge" {
                         guard let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                              let challenge = GatewayConnectChallengeSupport.challenge(from: payload)
+                              let challenge = GatewayConnectChallenge(payload: payload)
                         else {
                             throw ConnectChallengeError.invalid
                         }
@@ -1516,6 +1517,7 @@ extension GatewayChannelActor {
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
         if error is CancellationError ||
+            error is OpenClawNativeStateError ||
             error is GatewayConnectAuthError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||

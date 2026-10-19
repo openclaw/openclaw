@@ -1,4 +1,3 @@
-// iMessage plugin module owns raw-row durable admission and replay.
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
