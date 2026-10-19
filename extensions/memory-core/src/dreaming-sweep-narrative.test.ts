@@ -123,9 +123,11 @@ async function createSweep(
   };
   setRuntimeConfigSnapshot(config);
   const narratives: CompletionInput[] = [];
+  const consolidations: CompletionInput[] = [];
   const complete = vi.fn(async (input: CompletionInput) => {
     if (!input.extraSystemPrompt?.includes("You are keeping a dream diary")) {
       // Deliberately use the real append-only promotion fallback, not a fabricated plan.
+      consolidations.push(input);
       return { text: "" };
     }
     narratives.push(input);
@@ -204,6 +206,7 @@ async function createSweep(
     workspaceDir,
     config,
     narratives,
+    consolidations,
     resolveTimeout,
     logger,
     run,
@@ -250,6 +253,12 @@ describe("dreaming sweep diary publication", () => {
       expectHandled(await sweep.run());
       const narrative = expectNarrative(sweep, promote ? "openai/gpt-5.4" : "xai/grok-4.1-fast");
       expect(narrative).toMatchObject({ agentId: "main", timeoutMs: 180_000 });
+      if (promote) {
+        expect(sweep.consolidations).toHaveLength(1);
+        expect(sweep.consolidations[0]).toMatchObject({ timeoutMs: 180_000 });
+      } else {
+        expect(sweep.consolidations).toHaveLength(0);
+      }
       expect(sweep.resolveTimeout).toHaveBeenCalledWith({ cfg: sweep.config });
       expect(narrative?.message).toContain(`Current sweep: ${DAY}`);
       if (!promote) {

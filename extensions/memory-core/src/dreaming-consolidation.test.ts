@@ -103,6 +103,28 @@ async function prepareRecall(
 }
 
 describe("memory consolidation", () => {
+  it("uses the resolved agent timeout while retaining the bounded default", async () => {
+    const promoted = candidate("owner");
+    const output = decisionOutput(promoted);
+    const base = {
+      existingMemory: "# Memory\n",
+      candidates: [promoted],
+      maxPriorEntryLossFraction: 0.25,
+      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+      logger,
+    };
+
+    const configured = createSubagent(output);
+    await consolidateMemory({ ...base, subagent: configured, timeoutMs: 600_000 });
+    expect(configured.complete).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 600_000 }),
+    );
+
+    const fallback = createSubagent(output);
+    await consolidateMemory({ ...base, subagent: fallback });
+    expect(fallback.complete).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
+  });
+
   it("hard-excludes untrusted and system candidates before prompt construction", async () => {
     const candidates = [
       candidate("owner"),
