@@ -6,7 +6,7 @@ import {
 } from "../../components/config-form.analyze.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ConfigViewState } from "./view-types.ts";
+import type { ConfigViewState } from "./view-state.ts";
 
 export function asConfigSchema(value: unknown): JsonSchema | null {
   if (!isRecord(value)) {
