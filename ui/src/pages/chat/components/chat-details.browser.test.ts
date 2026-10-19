@@ -226,8 +226,8 @@ describe("chat Details presentation", () => {
     const contextHeading = context.querySelector("summary")!;
     const budget = context.querySelector(".chat-details__context-budget")!;
     const stats = context.querySelector(".chat-details__stats")!;
-    const progressHeading = panel.querySelector(".session-progress-card__summary")!;
-    const progressBody = panel.querySelector(".session-progress-card__body")!;
+    const progressHeading = panel.querySelector(".task-progress-details__summary")!;
+    const progressBody = panel.querySelector(".task-progress-details__body")!;
     for (const width of [600, 300]) {
       const frame = panel.closest<HTMLElement>(".chat-main__conversation-frame")!;
       frame.style.width = width + "px";
@@ -251,7 +251,7 @@ describe("chat Details presentation", () => {
         progressBody.getBoundingClientRect().left +
           Number.parseFloat(getComputedStyle(progressBody).paddingLeft) -
           headingLeft,
-      ).toBe(8);
+      ).toBe(0);
       expect(row.height).toBeGreaterThanOrEqual(36);
       expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
     }
@@ -395,7 +395,7 @@ describe("chat Details presentation", () => {
     await session.updateComplete;
     flush();
     const sessionSection = session.querySelector<HTMLElement>(".chat-details-session")!;
-    const progressSection = progress.querySelector<HTMLDetailsElement>(".session-progress-card")!;
+    const progressSection = progress.querySelector<HTMLDetailsElement>(".task-progress-details")!;
     expect(sessionSection.querySelector(":scope > summary")).toBeNull();
     expect(progressSection.open).toBe(true);
     expect(session.querySelector("[data-details-group]")).toBeNull();
@@ -474,7 +474,7 @@ describe("chat Details presentation", () => {
     menu.querySelector<HTMLButtonElement>("button")!.click();
     await expect.poll(() => menuSurface.dataset.phase).toBe("open");
     expect(menuSurface.matches(":popover-open")).toBe(true);
-    expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
+    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
         trigger.click();
@@ -495,7 +495,7 @@ describe("chat Details presentation", () => {
     expect(clear).not.toHaveBeenCalled();
     await select("collapse");
     expect(collapse).toHaveBeenCalledWith(true);
-    expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
+    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     await select("settings");
     expect(settings).toHaveBeenCalledOnce();
     await select("dismiss");
