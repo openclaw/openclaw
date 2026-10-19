@@ -262,6 +262,9 @@ export function normalizeWakePayload(
     return { ok: false, error: "text required" };
   }
   const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
+  if (payload.mode !== undefined && payload.mode !== mode) {
+    return { ok: false, error: "mode must be now or next-heartbeat" };
+  }
   const agentId = normalizeHookPayloadAgentId(payload.agentId);
   if (!agentId.ok) {
     return agentId;
@@ -633,6 +636,9 @@ export function normalizeAgentPayload(
     MAX_HOOK_IDEMPOTENCY_KEY_LENGTH,
   );
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
+  if (payload.wakeMode !== undefined && payload.wakeMode !== wakeMode) {
+    return { ok: false, error: "wakeMode must be now or next-heartbeat" };
+  }
   const sessionKey = normalizeOptionalString(payload.sessionKey);
   if (payload.sessionKey !== undefined && !sessionKey) {
     return { ok: false, error: "sessionKey must be a non-empty string" };

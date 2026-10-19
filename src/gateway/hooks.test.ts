@@ -168,6 +168,25 @@ describe("gateway hooks helpers", () => {
     });
   });
 
+  test("rejects unknown wake modes instead of waking immediately", () => {
+    expect(normalizeWakePayload({ text: "wake", mode: "next_heartbeat" })).toEqual({
+      ok: false,
+      error: "mode must be now or next-heartbeat",
+    });
+    expect(normalizeWakePayload({ text: "wake", mode: "now" })).toEqual({
+      ok: true,
+      value: { text: "wake", mode: "now" },
+    });
+    expect(normalizeAgentPayload({ message: "hello", wakeMode: "later" })).toEqual({
+      ok: false,
+      error: "wakeMode must be now or next-heartbeat",
+    });
+    expect(normalizeAgentPayload({ message: "hello", wakeMode: "next-heartbeat" })).toMatchObject({
+      ok: true,
+      value: { wakeMode: "next-heartbeat" },
+    });
+  });
+
   test("normalizeAgentPayload defaults + validates channel", () => {
     expect(agentPayload()).toEqual({
       ok: true,
