@@ -381,7 +381,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     });
     await service.dispose();
     service = createService();
-    await awaitPublication(() => ensureRecap(target));
+    expect(await ensureRecap(target)).toMatchObject({ state: "current" });
     expectProgress("current", 3);
   });
 
@@ -734,13 +734,15 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   it("keeps a replacement owner's pending status when the old service disposes", async () => {
     await messages(1);
     const preparation = createDeferred<typeof prepared>();
+    releasePending.push(() => preparation.resolve(prepared));
     prepare.mockImplementation(() => preparation.promise);
     await ensureRecap(target);
     await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
     const oldService = service;
-    service = createService(async () => prepared);
+    service = createService(() => preparation.promise);
     const entry = await readSessionEntryReadOnlyInWorker(scope);
-    const published = awaitPublication(() => service.ensure(target, entry));
+    const published = publication();
+    await service.ensure(target, entry);
     const oldDisposal = oldService.dispose();
     expect(view()?.state).toBe("updating");
     preparation.resolve(prepared);
