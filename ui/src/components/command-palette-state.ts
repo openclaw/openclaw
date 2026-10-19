@@ -311,13 +311,11 @@ export class CommandPaletteState {
   }
 
   readonly togglePalette = () => {
-    if (this.open) {
-      if (!this.draft.submitting) {
-        this.closePalette();
-      }
-      return;
+    if (!this.open) {
+      this.openPalette();
+    } else if (!this.draft.submitting) {
+      this.closePalette();
     }
-    this.openPalette();
   };
 
   private closePalette() {
@@ -645,6 +643,7 @@ export class CommandPaletteState {
   readProps() {
     const models = this.settledModels;
     return {
+      ...this.props,
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.draft.message,
@@ -719,8 +718,6 @@ export class CommandPaletteState {
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,
       archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
-      desktopAvailable: this.props.desktopAvailable,
-      custodianAvailable: this.props.custodianAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query: string, event: InputEvent) => {
         this.draft.setMessage(
@@ -734,9 +731,6 @@ export class CommandPaletteState {
         this.activeId = id;
         this.changed();
       },
-      onNavigate: this.props.onNavigate,
-      onSelectSession: this.props.onSelectSession,
-      onSlashCommand: this.props.onSlashCommand,
       pluginIconUrls: this.pluginIconUrls,
       onPluginIconError: (pluginId: string) => this.pluginIcons.handleError(pluginId),
       registerPluginIcon: (readId: () => string) => {
