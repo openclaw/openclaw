@@ -434,7 +434,7 @@ export function focusComposerFromChrome(
   const interactive = event
     .composedPath()
     .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR));
-  if (event.type === "pointerdown") {
+  if (event.type === "pointerdown" || event.type === "mousedown") {
     // Blank padding otherwise moves focus to the page before click restores it,
     // collapsing and reopening the mobile composer during the same gesture.
     if (

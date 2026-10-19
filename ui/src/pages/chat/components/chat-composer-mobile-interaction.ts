@@ -1,14 +1,16 @@
-import { createEffect, createMemo, createSignal, onSettled, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { containsComposed, registryFor } from "../../../components/overlay-registry.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
-import type { ChatComposerProps } from "./chat-composer-types.ts";
+import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 export function createComposerMobileInteraction(
   context: () => ReturnType<typeof createChatComposerContext>,
   props: ChatComposerProps,
+  state: ChatComposerState,
   shell: () => HTMLDivElement | undefined,
+  placeholder: () => HTMLSpanElement | undefined,
 ) {
   const [keyboardNavigation, setKeyboardNavigation] = createSignal(false);
   const editingScope = createMemo(() => context().draftKey);
@@ -20,8 +22,8 @@ export function createComposerMobileInteraction(
     mobileComposer();
     return false;
   });
-  const composerInput = () => context().state.composerInput;
-  const ownedOverlay = (target: Node | null) => {
+  const composerInput = () => state.composerInput;
+  const ownedOverlay = (target: Node | null, ownerRoot = composerInput() ?? undefined) => {
     const doc = shell()?.ownerDocument;
     return doc
       ? registryFor(doc).stack.some((overlay) => {
@@ -29,7 +31,7 @@ export function createComposerMobileInteraction(
             return false;
           }
           for (let owner: typeof overlay | undefined = overlay; owner; owner = owner.parent) {
-            if (containsComposed(composerInput() ?? undefined, owner.trigger ?? null)) {
+            if (containsComposed(ownerRoot, owner.trigger ?? null)) {
               return true;
             }
           }
@@ -40,84 +42,88 @@ export function createComposerMobileInteraction(
 
   let previousInputHeight: number | undefined;
   let inputReveals: Animation[] = [];
-  const changeEditing = (next: boolean) => {
-    if (next !== editing()) {
-      previousInputHeight = context().state.composerInput?.getBoundingClientRect().height;
+  const changeEditing = (next: boolean, previous = editing()) => {
+    if (next !== previous) {
+      previousInputHeight = state.composerInput?.getBoundingClientRect().height;
       inputReveals.forEach((animation) => animation.cancel());
       inputReveals = [];
     }
     setEditing(next);
   };
   const mobileEditing = createMemo(() => mobileComposer() && editing());
-  createEffect(mobileEditing, (next, previous) =>
-    untrack(() => {
-      props.onComposerEditingChange?.(next);
-      const textarea = context().state.composerTextarea;
-      if (textarea && (props.mobileComposer || previous === true)) {
-        adjustTextareaHeight(textarea);
-      }
-      const from = previousInputHeight;
-      previousInputHeight = undefined;
-      if (
-        from !== undefined &&
-        props.mobileComposer &&
-        !props.mobileKeyboardVisible &&
-        !keyboardNavigation()
-      ) {
-        queueMicrotask(() => {
-          const input = context().state.composerInput;
-          if (
-            !input?.isConnected ||
-            input.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches
-          ) {
-            return;
-          }
-          const to = input.getBoundingClientRect().height;
-          inputReveals = [
-            input.animate(
-              [
-                { height: `${from}px`, minHeight: "0px", overflow: "clip" },
-                { height: `${to}px`, minHeight: "0px", overflow: "clip" },
-              ],
-              { duration: 180, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
-            ),
-          ];
-          // The compact hint and editor have different text origins. Reveal the
-          // hint after the surface settles instead of carrying it through that jump.
-          const placeholder = input.querySelector<HTMLElement>(".agent-chat__composer-placeholder");
-          if (placeholder) {
-            inputReveals.push(
-              placeholder.animate([{ opacity: 0 }, { opacity: 1 }], {
-                delay: 180,
-                duration: 80,
-                fill: "backwards",
-                easing: "ease-out",
-              }),
-            );
-          }
-        });
-      }
+  const editingTransition = createMemo(
+    () => ({
+      editing: mobileEditing(),
+      mobile: mobileComposer(),
+      keyboardVisible: props.mobileKeyboardVisible,
+      keyboardNavigation: keyboardNavigation(),
+      onChange: props.onComposerEditingChange,
     }),
+    // Prepare current facts without republishing editing on unrelated prop updates.
+    { equals: (previous, next) => previous.editing === next.editing },
   );
-  createEffect(
-    () => props.mobileKeyboardVisible,
-    (visible, previous) => {
-      if (previous === true && visible === false) {
-        untrack(() => {
-          if (!ownedOverlay(null)) {
-            changeEditing(false);
-          }
-        });
-      }
-    },
+  createEffect(editingTransition, (next, previous) => {
+    next.onChange?.(next.editing);
+    const textarea = state.composerTextarea;
+    if (textarea && (next.mobile || previous?.editing === true)) {
+      adjustTextareaHeight(textarea);
+    }
+    const from = previousInputHeight;
+    previousInputHeight = undefined;
+    if (from !== undefined && next.mobile && !next.keyboardVisible && !next.keyboardNavigation) {
+      queueMicrotask(() => {
+        const input = state.composerInput;
+        if (
+          !input?.isConnected ||
+          input.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ) {
+          return;
+        }
+        const to = input.getBoundingClientRect().height;
+        inputReveals = [
+          input.animate(
+            [
+              { height: `${from}px`, minHeight: "0px", overflow: "clip" },
+              { height: `${to}px`, minHeight: "0px", overflow: "clip" },
+            ],
+            { duration: 180, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+          ),
+        ];
+        // The compact hint and editor have different text origins. Reveal the
+        // hint after the surface settles instead of carrying it through that jump.
+        const hint = placeholder();
+        if (hint) {
+          inputReveals.push(
+            hint.animate([{ opacity: 0 }, { opacity: 1 }], {
+              delay: 180,
+              duration: 80,
+              fill: "backwards",
+              easing: "ease-out",
+            }),
+          );
+        }
+      });
+    }
+  });
+  const keyboardTransition = createMemo(
+    () => ({ visible: props.mobileKeyboardVisible, editing: editing() }),
+    { equals: (previous, next) => previous.visible === next.visible },
   );
+  createEffect(keyboardTransition, (next, previous) => {
+    if (previous?.visible === true && next.visible === false && !ownedOverlay(null)) {
+      changeEditing(false, next.editing);
+    }
+  });
   onSettled(() => {
     const doc = shell()?.ownerDocument;
     if (!doc) {
       return undefined;
     }
-    const inside = (target: Node | null) =>
+    const insideEditor = (target: Node | null) =>
       containsComposed(composerInput() ?? undefined, target) || ownedOverlay(target);
+    // Floating cards share the gesture surface without starting editor interaction.
+    const insideComposer = (target: Node | null) =>
+      containsComposed(shell(), target) || ownedOverlay(target, shell());
     const editable = (target: Node | null) =>
       target instanceof Element &&
       target.matches(
@@ -140,13 +146,13 @@ export function createComposerMobileInteraction(
           if (
             event.button === 0 &&
             pointerOrigin instanceof Node &&
-            pointerOrigin === context().state.composerTextarea &&
+            pointerOrigin === state.composerTextarea &&
             doc.activeElement === pointerOrigin &&
             editable(pointerOrigin)
           ) {
             changeEditing(true);
           }
-          if (pointerOrigin instanceof Node && !inside(pointerOrigin)) {
+          if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {
             changeEditing(false);
           }
         },
@@ -160,7 +166,7 @@ export function createComposerMobileInteraction(
           // belongs to the editor, never to the action now occupying its position.
           if (
             props.mobileComposer &&
-            pointerOrigin === context().state.composerTextarea &&
+            pointerOrigin === state.composerTextarea &&
             event.composedPath()[0] !== pointerOrigin &&
             event.detail > 0
           ) {
@@ -191,11 +197,11 @@ export function createComposerMobileInteraction(
             return;
           }
           setKeyboardNavigation(pointerOrigin === undefined);
-          if (inside(target)) {
+          if (insideEditor(target)) {
             if (editable(target)) {
               changeEditing(true);
             }
-          } else {
+          } else if (!insideComposer(target)) {
             changeEditing(false);
           }
         },
@@ -212,16 +218,16 @@ export function createComposerMobileInteraction(
           if (!next || next === doc.body || next === doc.documentElement) {
             return;
           }
-          if (next instanceof Node && inside(next)) {
+          if (next instanceof Node && insideComposer(next)) {
             return;
           }
           queueMicrotask(() => {
             if (
               !disposed &&
               props.mobileComposer &&
-              !inside(doc.activeElement) &&
+              !insideComposer(doc.activeElement) &&
               !ownedOverlay(null) &&
-              !(pointerOrigin instanceof Node && inside(pointerOrigin))
+              !(pointerOrigin instanceof Node && insideComposer(pointerOrigin))
             ) {
               changeEditing(false);
             }
@@ -230,7 +236,7 @@ export function createComposerMobileInteraction(
         true,
       ),
     ];
-    if (props.mobileComposer && inside(doc.activeElement) && editable(doc.activeElement)) {
+    if (props.mobileComposer && insideEditor(doc.activeElement) && editable(doc.activeElement)) {
       changeEditing(true);
     }
     return () => {
