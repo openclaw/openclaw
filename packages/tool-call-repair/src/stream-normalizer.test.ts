@@ -27,6 +27,13 @@ import {
 } from "./stream-normalizer.test-support.js";
 
 type Events = Record<string, unknown>[];
+const finish = (reason: string, ...texts: string[]) => done(reason, textContent(...texts), reason);
+const leading = '[tool:read]\n{"path":"a"}\n';
+const streamOptions = {
+  matcher,
+  createPromotedToolCallEvents: () => [],
+  normalizeTerminalMessage: () => undefined,
+};
 const normalizeProtected = (source: readonly unknown[]) =>
   normalize(source, { protectFences: true });
 const oversized = "x".repeat(256_001);
@@ -183,7 +190,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
       ],
     ],
   ])("scrubs %s", async (_name, blocks) => {
-    const events = await normalize([done("length", textContent(...blocks), "length")]);
+    const events = await normalize([finish("length", ...blocks)]);
     expect(events.at(-1)?.message).toMatchObject({ content: [] });
     expectHidden(events, "[read]");
   });
@@ -217,7 +224,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   it("preserves a follow-on named JSON call invalidated by visible tail text", async () => {
     const visible = '[read]\n{"path":"/tmp"} visible';
     const raw = `${overCapXml}\n${visible}`;
-    const events = await normalize([done("length", textContent(raw), "length")]);
+    const events = await normalize([finish("length", raw)]);
     expect(events.at(-1)?.message).toMatchObject({ content: textContent(visible) });
   });
 
@@ -293,7 +300,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
       textEvent('"}'),
       ...whitespaceChunks.map((delta) => textEvent(delta)),
       textEvent(tail),
-      done("length", textContent(raw), "length"),
+      finish("length", raw),
     ]);
     expectVisible(events, ["Visible"], "[read]", "done");
   });
@@ -350,7 +357,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
       { type: "text_delta", delta: first },
       textEvent(second),
       textEnd(raw, 0, assistant(textContent(raw))),
-      done("length", textContent(raw), "length"),
+      finish("length", raw),
     ]);
     expect(eventTypes(events)).toEqual(["text_delta", "text_delta", "text_delta", "done"]);
     expectVisible(events, ["ONE\n", "TWO\n", "ONE\n"], undefined, "done");
@@ -449,9 +456,7 @@ function protectedDeltas(
   resolveProtectedRanges = resolveTestFenceRanges,
 ) {
   return collect(events, {
-    matcher,
-    createPromotedToolCallEvents: () => [],
-    normalizeTerminalMessage: () => undefined,
+    ...streamOptions,
     protectedRangesFenceCompatible: true,
     resolveProtectedRanges,
   });
@@ -526,9 +531,9 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
     const first = "```toml\n[read.section]\n";
     const events = await normalizeProtected([
       textEvent(first),
-      done("stop", textContent(first), "stop"),
+      finish("stop", first),
       textEvent(literalCall),
-      done("stop", textContent(literalCall), "stop"),
+      finish("stop", literalCall),
     ]);
     expect(textDeltas(events)).toEqual([first]);
   });
@@ -579,9 +584,8 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
         : [{ start, end: close === -1 ? text.length : close + "<<END>>".length }];
     };
     const text = `<<PROTECT>>\n${literalCall}<<END>>\n`;
-    const events = await collect([textEvent(text), done("stop", textContent(text), "stop")], {
-      matcher,
-      createPromotedToolCallEvents: () => [],
+    const events = await collect([textEvent(text), finish("stop", text)], {
+      ...streamOptions,
       resolveProtectedRanges: resolveMarkedRanges,
       normalizeTerminalMessage: ({ message }) => {
         const scrubbed = scrubMessage({
@@ -597,7 +601,6 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
 });
 
 describe("normalizePlainTextToolCallStreamEvents scrub reuse", () => {
-  const toolCall = '[tool:read]\n{"path":"a"}\n';
   const scrub = (raw: string) =>
     scrubMessage({
       forceKnownCandidates: true,
@@ -615,7 +618,7 @@ describe("normalizePlainTextToolCallStreamEvents scrub reuse", () => {
 
   it("reuses settled scans across a streamed reply with a leaked call (#174345)", async () => {
     const fenced = fencedSections(40);
-    const source = chunked(toolCall + fenced, 4);
+    const source = chunked(leading + fenced, 4);
     const resolveRanges = vi.fn(resolveTestFenceRanges);
     const events = await protectedDeltas(source, resolveRanges);
     expect(textDeltas(events).join("")).toBe(fenced);
@@ -627,7 +630,7 @@ describe("normalizePlainTextToolCallStreamEvents scrub reuse", () => {
         continue;
       }
       visible += delta;
-      expect(event.partial).toEqual(scrub(toolCall + visible));
+      expect(event.partial).toEqual(scrub(leading + visible));
     }
   });
 
@@ -648,7 +651,6 @@ describe("normalizePlainTextToolCallStreamEvents scrub reuse", () => {
 });
 
 describe("normalizePlainTextToolCallStreamEvents calls after visible text", () => {
-  const leading = '[tool:read]\n{"path":"a"}\n';
   const trailing = '[tool:read]\n{"path":"b"}\n';
 
   it.each<[string, string[], string]>([
@@ -662,10 +664,7 @@ describe("normalizePlainTextToolCallStreamEvents calls after visible text", () =
     ["literal fenced call", [leading + fencedExample], fencedExample],
   ])("keeps streamed and terminal prose consistent: %s", async (_name, chunks, visible) => {
     const text = chunks.join("");
-    const events = await normalizeProtected([
-      ...streamDeltas(...chunks),
-      done("stop", textContent(text), "stop"),
-    ]);
+    const events = await normalizeProtected([...streamDeltas(...chunks), finish("stop", text)]);
     expect(textDeltas(events).join("")).toBe(visible);
     expectTerminal(events, "done", textContent(visible));
   });
@@ -688,11 +687,7 @@ describe("normalizePlainTextToolCallStreamEvents calls after visible text", () =
       yield textEvent(oversized);
       yield textEvent('"}\nAfter.');
     }
-    for await (const event of normalizeStream(source(), {
-      matcher,
-      createPromotedToolCallEvents: () => [],
-      normalizeTerminalMessage: () => undefined,
-    })) {
+    for await (const event of normalizeStream(source(), streamOptions)) {
       if (
         event &&
         typeof event === "object" &&
