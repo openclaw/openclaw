@@ -1,39 +1,35 @@
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { a2aChannelPlugin } from "./channel.js";
 import { a2aPluginConfigSchema } from "./config-schema.js";
 import type { A2aCoreConfig } from "./types.js";
 
-/** Outbound A2A bodies are serialized JSON strings; assert that before parsing. */
-function parseA2aOutboundBody(body: BodyInit | null | undefined): Record<string, unknown> {
-  if (typeof body !== "string") {
-    throw new Error(`expected a serialized A2A request body, got ${typeof body}`);
-  }
-  return JSON.parse(body) as Record<string, unknown>;
-}
+afterEach(() => vi.restoreAllMocks());
 
 function createA2aSendConfig(): A2aCoreConfig {
-  return {
-    channels: {
-      a2a: {
-        peers: {
-          hermes: {
-            token: "test-inbound-token",
-            url: "https://peer.example.test/a2a/v1",
-            outboundToken: "test-outbound-token",
-          },
-        },
-      },
-    },
-  };
+  return { channels: { a2a: { peers: { hermes: peer } } } };
 }
 
-// Cold (discovery-time) validation uses the zod-derived generated bundled
-// channel metadata, which the generator builds from this same config-schema
-// module — the manifest carries no schema copy to drift (see #131292).
+const peer = {
+  token: "test-inbound-token",
+  url: "https://peer.example.test/a2a/v1",
+  outboundToken: "test-outbound-token",
+};
+
+function requireSender() {
+  const adapter = a2aChannelPlugin.message;
+  const send = adapter?.send?.text;
+  if (!adapter || !send) {
+    throw new Error("expected A2A channel message adapter with text sender");
+  }
+  expect(adapter.send?.media).toBeUndefined();
+  expect(adapter.durableFinal?.capabilities).toEqual({ text: true });
+  return send;
+}
+
+// Discovery and runtime validation share this schema (#131292).
 function assertConfigAcceptance(value: unknown, expected: boolean, label: string): void {
   const runtime = a2aPluginConfigSchema.runtime;
   if (!runtime) {
@@ -57,13 +53,7 @@ describe("A2A channel configuration", () => {
         replyTimeoutMs: 120_000,
         rateLimitPerMinute: 30,
         exposeAgents: ["assistant"],
-        peers: {
-          "hermes.bot-1": {
-            token: "test-inbound-token",
-            url: "https://peer.example.test/a2a/v1",
-            outboundToken: "test-outbound-token",
-          },
-        },
+        peers: { "hermes.bot-1": peer },
       },
       true,
       "complete channel config",
@@ -136,7 +126,7 @@ describe("A2A channel message adapter", () => {
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(new Response('{"jsonrpc":"2.0","result":{}}'));
-      const cfg = createA2aSendConfig();
+      const sendParams = { cfg: createA2aSendConfig(), to: "hermes", text: "hello" };
       let current = true;
       const assertDirectAdapterHandoff = vi.fn(() => {
         if (!current) {
@@ -144,129 +134,93 @@ describe("A2A channel message adapter", () => {
         }
       });
 
-      try {
-        const send =
-          surface === "preferred"
-            ? a2aChannelPlugin.message?.send?.text?.({
-                cfg,
-                accountId: "default",
-                to: "hermes",
-                text: "hello",
-                assertDirectAdapterHandoff,
-              })
-            : a2aChannelPlugin.outbound?.sendText?.({
-                cfg,
-                to: "hermes",
-                text: "hello",
-                assertDirectAdapterHandoff,
-              });
-        if (!send) {
-          throw new Error(`expected ${surface} A2A text sender`);
-        }
-        await lookupStarted.promise;
-        current = false;
-        lookupFinished.resolve([{ address: "93.184.216.34", family: 4 }]);
-
-        await expect(send).rejects.toThrow("source authority revoked");
-        expect(lookupFn).toHaveBeenCalledOnce();
-        expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
-        expect(fetchSpy).not.toHaveBeenCalled();
-      } finally {
-        vi.restoreAllMocks();
+      const sender =
+        surface === "preferred"
+          ? a2aChannelPlugin.message?.send?.text
+          : a2aChannelPlugin.outbound?.sendText;
+      if (!sender) {
+        throw new Error(`expected ${surface} A2A text sender`);
       }
+      const send = sender({ ...sendParams, accountId: "default", assertDirectAdapterHandoff });
+      await lookupStarted.promise;
+      current = false;
+      lookupFinished.resolve([{ address: "93.184.216.34", family: 4 }]);
+
+      await expect(send).rejects.toThrow("source authority revoked");
+      expect(lookupFn).toHaveBeenCalledOnce();
+      expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
+      expect(fetchSpy).not.toHaveBeenCalled();
     },
   );
 
   it("keeps authority current through preferred and legacy registered sends", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: "response-id",
-            result: { task: { id: "task-42" } },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Response.json({ jsonrpc: "2.0", id: "response-id", result: { task: { id: "task-42" } } }),
+      );
 
-    try {
-      const cfg = createA2aSendConfig();
-      const adapter = a2aChannelPlugin.message;
-      const sendText = adapter?.send?.text;
-      if (!adapter || !sendText) {
-        throw new Error("expected A2A channel message adapter with text sender");
-      }
-      expect(adapter.send?.media).toBeUndefined();
-      const assertDirectAdapterHandoff = vi.fn();
+    const cfg = createA2aSendConfig();
+    const sendText = requireSender();
+    const assertDirectAdapterHandoff = vi.fn();
 
-      await verifyChannelMessageAdapterCapabilityProofs({
-        adapterName: "a2aChannelMessageAdapter",
-        adapter,
-        proofs: {
-          text: async () => {
-            const result = await sendText({
-              cfg,
-              accountId: "default",
-              to: "a2a:hermes",
-              text: "hello",
-              assertDirectAdapterHandoff,
-            });
-            expect(fetchSpy).toHaveBeenCalledOnce();
-            const [url, request] = fetchSpy.mock.calls[0] ?? [];
-            expect(url).toBe("https://peer.example.test/a2a/v1");
-            expect(request).toMatchObject({
-              headers: {
-                "content-type": "application/json",
-                authorization: "Bearer test-outbound-token",
-              },
-              method: "POST",
-              // The SSRF guard inspects redirects itself instead of delegating to fetch.
-              redirect: "manual",
-              signal: expect.any(AbortSignal),
-            });
-            expect(parseA2aOutboundBody(request?.body)).toEqual({
-              jsonrpc: "2.0",
-              id: expect.any(String),
-              method: "SendMessage",
-              params: {
-                message: {
-                  messageId: expect.any(String),
-                  role: "ROLE_USER",
-                  contextId: "ctx-oc-hermes",
-                  parts: [{ text: "hello" }],
-                },
-                configuration: { returnImmediately: true },
-              },
-            });
-            expect(result.messageId).toBe("task-42");
-            expect(result.receipt.parts[0]).toMatchObject({
-              kind: "text",
-              platformMessageId: "task-42",
-            });
-            expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
-          },
+    const result = await sendText({
+      cfg,
+      accountId: "default",
+      to: "a2a:hermes",
+      text: "hello",
+      assertDirectAdapterHandoff,
+    });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const [url, request] = fetchSpy.mock.calls[0] ?? [];
+    expect(url).toBe("https://peer.example.test/a2a/v1");
+    expect(request).toMatchObject({
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer test-outbound-token",
+      },
+      method: "POST",
+      // The SSRF guard inspects redirects itself instead of delegating to fetch.
+      redirect: "manual",
+      signal: expect.any(AbortSignal),
+    });
+    expect(typeof request?.body).toBe("string");
+    expect(JSON.parse(String(request?.body))).toEqual({
+      jsonrpc: "2.0",
+      id: expect.any(String),
+      method: "SendMessage",
+      params: {
+        message: {
+          messageId: expect.any(String),
+          role: "ROLE_USER",
+          contextId: "ctx-oc-hermes",
+          parts: [{ text: "hello" }],
         },
-      });
+        configuration: { returnImmediately: true },
+      },
+    });
+    expect(result.messageId).toBe("task-42");
+    expect(result.receipt.parts[0]).toMatchObject({
+      kind: "text",
+      platformMessageId: "task-42",
+    });
+    expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
 
-      const legacySendText = a2aChannelPlugin.outbound?.sendText;
-      if (!legacySendText) {
-        throw new Error("expected A2A legacy outbound text sender");
-      }
-      const assertLegacyHandoff = vi.fn();
-      fetchSpy.mockClear();
-      await expect(
-        legacySendText({
-          cfg,
-          to: "hermes",
-          text: "legacy hello",
-          assertDirectAdapterHandoff: assertLegacyHandoff,
-        }),
-      ).resolves.toMatchObject({ channel: "a2a", messageId: "task-42" });
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(assertLegacyHandoff).toHaveBeenCalledOnce();
-    } finally {
-      fetchSpy.mockRestore();
+    const legacySendText = a2aChannelPlugin.outbound?.sendText;
+    if (!legacySendText) {
+      throw new Error("expected A2A legacy outbound text sender");
     }
+    const assertLegacyHandoff = vi.fn();
+    fetchSpy.mockClear();
+    await expect(
+      legacySendText({
+        cfg,
+        to: "hermes",
+        text: "legacy hello",
+        assertDirectAdapterHandoff: assertLegacyHandoff,
+      }),
+    ).resolves.toMatchObject({ channel: "a2a", messageId: "task-42" });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(assertLegacyHandoff).toHaveBeenCalledOnce();
   });
 });
