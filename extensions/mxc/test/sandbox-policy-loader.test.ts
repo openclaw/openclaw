@@ -46,11 +46,9 @@ function expectPolicyFileFailure(policyPath: string, detail: string): void {
   throw new Error("Expected policy loader failure.");
 }
 
-describe("loadSandboxBaselinePolicy defaults and timeout", () => {
-  test.each([0, null])("rejects invalid timeout %s at policy admission", (timeoutSeconds) => {
-    const policyPath = writePolicy({ process: { timeoutSeconds } });
-    expect(() => loadPolicy(policyPath)).toThrow(/timeoutSeconds/u);
-  });
+test.each([0, null])("rejects invalid timeout %s at policy admission", (timeoutSeconds) => {
+  const policyPath = writePolicy({ process: { timeoutSeconds } });
+  expect(() => loadPolicy(policyPath)).toThrow(/timeoutSeconds/u);
 });
 
 describeOnWindows("loadSandboxBaselinePolicy", () => {
@@ -116,32 +114,16 @@ describeOnWindows("loadSandboxBaselinePolicy", () => {
 
     expect(() => loadPolicy(policyPath)).toThrow(/restrictToProjectDir/u);
   });
-});
 
-describeOnWindows("loadSandboxBaselinePolicy validation", () => {
-  test("fails closed for blank read-only paths", () => {
+  test.each([
+    ["blank read-only", "additionalReadonlyPaths", "   ", "must not be blank"],
+    ["relative read-write", "additionalReadwritePaths", "relative\\path", "absolute Windows path"],
+    ["nonexistent read-only", "additionalReadonlyPaths", null, "does not exist on the host"],
+  ] as const)("fails closed for %s paths", (_name, field, value, detail) => {
     const policyPath = writePolicy({
-      filesystem: { additionalReadonlyPaths: ["   "] },
+      filesystem: { [field]: [value ?? join(makeTestDir(), "missing-readonly")] },
     });
-
-    expectPolicyFileFailure(policyPath, "must not be blank");
-  });
-
-  test("fails closed for relative read-write paths", () => {
-    const policyPath = writePolicy({
-      filesystem: { additionalReadwritePaths: ["relative\\path"] },
-    });
-
-    expectPolicyFileFailure(policyPath, "absolute Windows path");
-  });
-
-  test("fails closed for nonexistent read-only paths", () => {
-    const dir = makeTestDir();
-    const policyPath = writePolicy({
-      filesystem: { additionalReadonlyPaths: [join(dir, "missing-readonly")] },
-    });
-
-    expectPolicyFileFailure(policyPath, "does not exist on the host");
+    expectPolicyFileFailure(policyPath, detail);
   });
 
   test("fails closed with path-inclusive errors for malformed existing files", () => {
