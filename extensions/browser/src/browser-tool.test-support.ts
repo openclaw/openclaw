@@ -2,8 +2,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { BrowserActionPathResult } from "./browser/client-actions-types.js";
 
-const { mockResult, defaultBrowserConfig, runningBrowser, downloadResult } = vi.hoisted(() => ({
+const { mockResult, defaultBrowserConfig, downloadResult, observation } = vi.hoisted(() => ({
   mockResult: <T>(factory: () => T) => vi.fn(async (..._args: unknown[]) => factory()),
+  observation: <T>(payload: T) => ({ ok: true, targetId: "t1", ...payload }),
   defaultBrowserConfig: () => ({
     enabled: true,
     controlPort: 18791,
@@ -11,19 +12,11 @@ const { mockResult, defaultBrowserConfig, runningBrowser, downloadResult } = vi.
     defaultProfile: "openclaw",
     actionTimeoutMs: 60_000,
   }),
-  runningBrowser: () => ({
-    running: true,
-    pid: 1,
-    cdpPort: 18792,
-    cdpUrl: "http://127.0.0.1:18792",
-  }),
   downloadResult: (filename: string) => ({
     ok: true,
     targetId: "tab-1",
     download: {
       path: `/tmp/openclaw/downloads/${filename}`,
-      suggestedFilename: filename,
-      url: `https://example.com/${filename}`,
     },
   }),
 }));
@@ -44,37 +37,17 @@ function routeBrowserClientMocks(
 
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: mockResult(() => ({})),
-  browserDoctor: mockResult(() => ({
-    ok: true,
-    profile: "openclaw",
-    transport: "cdp",
-    checks: [],
-    status: {
-      enabled: true,
-      ...runningBrowser(),
-    },
-  })),
+  browserDoctor: mockResult(() => ({ ok: true })),
   browserFocusTab: mockResult(() => ({})),
-  browserImportProfile: mockResult(() => ({
-    ok: true,
-    systemProfile: "Default",
-    into: "imported",
-    browser: "chrome",
-    cookies: { total: 1, imported: 1, failed: 0, skipped: 0 },
-    domains: [".example.com"],
-  })),
+  browserImportProfile: mockResult(() => ({ ok: true })),
   browserOpenTab: mockResult(() => ({})),
   browserProfiles: mockResult<Array<Record<string, unknown>>>(() => []),
   browserSystemProfiles: mockResult<Array<Record<string, unknown>>>(() => []),
-  browserSnapshot: mockResult<Record<string, unknown>>(() => ({
-    ok: true,
-    format: "ai",
-    targetId: "t1",
-    url: "https://example.com",
-    snapshot: "ok",
-  })),
+  browserSnapshot: mockResult<Record<string, unknown>>(() =>
+    observation({ format: "ai", url: "https://example.com", snapshot: "ok" }),
+  ),
   browserStart: mockResult(() => ({})),
-  browserStatus: mockResult(() => ({ ok: true, ...runningBrowser() })),
+  browserStatus: mockResult(() => ({ ok: true, running: true })),
   browserStop: mockResult(() => ({})),
   browserTabs: mockResult<{ running: true; tabs: Array<Record<string, unknown>> }>(() => ({
     running: true,
@@ -90,27 +63,16 @@ const browserActionsMocks = vi.hoisted(() => ({
   browserAct: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserArmDialog: vi.fn(async () => ({ ok: true })),
   browserArmFileChooser: vi.fn(async () => ({ ok: true })),
-  browserConsoleMessages: vi.fn(async () => ({
-    ok: true,
-    targetId: "t1",
-    messages: [{ type: "log", text: "Hello", timestamp: new Date().toISOString() }],
-  })),
-  browserRequests: mockResult<Record<string, unknown>>(() => ({
-    ok: true,
-    targetId: "t1",
-    requests: [],
-  })),
-  browserErrors: mockResult<Record<string, unknown>>(() => ({
-    ok: true,
-    targetId: "t1",
-    errors: [],
-  })),
-  browserPageText: mockResult<Record<string, unknown>>(() => ({
-    ok: true,
-    targetId: "t1",
-    text: "Page prose",
-    truncated: false,
-  })),
+  browserConsoleMessages: vi.fn(async () =>
+    observation({
+      messages: new Array<{ type: string; text: string; timestamp: string }>(),
+    }),
+  ),
+  browserRequests: mockResult<Record<string, unknown>>(() => observation({ requests: [] })),
+  browserErrors: mockResult<Record<string, unknown>>(() => observation({ errors: [] })),
+  browserPageText: mockResult<Record<string, unknown>>(() =>
+    observation({ text: "Page prose", truncated: false }),
+  ),
   browserEmulateSetting: vi.fn(async (..._args: unknown[]) => ({ ok: true, targetId: "t1" })),
   browserNavigate: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserDownload: vi.fn(async () => downloadResult("report.pdf")),
@@ -185,25 +147,15 @@ const configMocks = vi.hoisted(() => ({
     }
   >(() => ({ browser: {} })),
 }));
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    readRuntimeConfig: configMocks.loadConfig,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: configMocks.loadConfig,
+}));
 
 const pathValidationMocks = vi.hoisted(() => ({
-  resolveExistingUploadPaths: vi.fn<
-    (args: {
-      requestedPaths: string[];
-    }) => Promise<{ ok: true; paths: string[] } | { ok: false; error: string }>
-  >(async ({ requestedPaths }) => ({
-    ok: true as const,
-    paths: requestedPaths,
-  })),
+  resolveExistingUploadPaths: vi.fn<typeof import("./browser/paths.js").resolveExistingUploadPaths>(
+    async ({ requestedPaths }) => ({ ok: true, paths: requestedPaths }),
+  ),
 }));
 
 const sessionTabRegistryMocks = vi.hoisted(() => ({
@@ -222,8 +174,6 @@ const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile:
     vi.fn<typeof import("openclaw/plugin-sdk/channel-actions").imageResultFromFile>(),
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
-  normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
-  saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/openclaw-media/resized.jpg" })),
   stageBrowserScreenshotForSharing: vi.fn(async () => "/tmp/openclaw-media/outbound/share.png"),
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
@@ -240,10 +190,6 @@ vi.mock("openclaw/plugin-sdk/channel-actions", async (importOriginal) => ({
 vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>()),
   describeImageFile: toolCommonMocks.describeImageFile,
-}));
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
-  saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
 }));
 
 vi.mock("./browser/client-fetch.js", async (importOriginal) => ({
@@ -287,10 +233,6 @@ export function resetBrowserToolMocks() {
     text: undefined,
     decision: { outcome: "skipped" },
   });
-  toolCommonMocks.normalizeBrowserScreenshot.mockImplementation(async (buffer: Buffer) => ({
-    buffer,
-  }));
-  toolCommonMocks.saveMediaBuffer.mockResolvedValue({ path: "/tmp/openclaw-media/resized.jpg" });
   toolCommonMocks.stageBrowserScreenshotForSharing.mockResolvedValue(
     "/tmp/openclaw-media/outbound/share.png",
   );
