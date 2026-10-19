@@ -10,7 +10,7 @@ import {
   bindAuthProfileFileObservationReaders,
   readAuthProfileDatabaseIdentity,
   refreshAuthProfileFileState,
-  registerAuthProfileFileChangeListener,
+  authProfileFileChanges,
 } from "../agents/auth-profiles/file-state.js";
 import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -69,7 +69,10 @@ it.skipIf(skipBroker)(
     let pendingRefresh: Promise<void> | undefined;
     const observed: unknown[] = [];
     let refresh = () => read(source, "canonical");
-    const unsubscribe = registerAuthProfileFileChangeListener(async ({ directory }) => {
+    const publishFileChange = authProfileFileChanges.onChange;
+    authProfileFileChanges.onChange = async (change) => {
+      await publishFileChange?.(change);
+      const { directory } = change;
       if (directory !== path.dirname(source)) {
         return;
       }
@@ -77,7 +80,7 @@ it.skipIf(skipBroker)(
       observed.push(rows.store);
       // Credential publication can replace the observation's refresh callback.
       refresh = () => read(source, "canonical");
-    });
+    };
     try {
       await broker.ready();
       const brokerSpawn = vi.spyOn(broker, "spawn");
@@ -120,7 +123,7 @@ it.skipIf(skipBroker)(
     } finally {
       publication?.dispose();
       await Promise.allSettled(pendingRefresh ? [pendingRefresh] : []);
-      unsubscribe();
+      authProfileFileChanges.onChange = publishFileChange;
       await closeOpenClawStateDatabaseAsync();
       await scope.close();
       await restartedScope.close();

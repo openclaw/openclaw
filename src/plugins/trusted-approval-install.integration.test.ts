@@ -24,19 +24,6 @@ const tempDirs = createTempDirTracker();
 const pluginId = "approval-effect-probe";
 const toolName = "approval_effect_probe";
 
-function nextApprovalRequest(broker: EmbeddedPluginApprovalBroker) {
-  let unsubscribe = () => {};
-  const promise = new Promise<PluginApprovalRequest>((resolve) => {
-    unsubscribe = broker.subscribe((event) => {
-      if (event.event === "plugin.approval.requested") {
-        unsubscribe();
-        resolve(event.payload);
-      }
-    });
-  });
-  return { promise, dispose: () => unsubscribe() };
-}
-
 function resetRuntime() {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
@@ -162,7 +149,14 @@ async function exerciseProbe(params: {
     "installed probe tool",
   );
   const wrapped = wrapToolWithBeforeToolCallHook(tool, { config, workspaceDir: params.root });
-  const broker = new EmbeddedPluginApprovalBroker();
+  const firstRequestEvent = Promise.withResolvers<PluginApprovalRequest>();
+  const secondRequestEvent = Promise.withResolvers<PluginApprovalRequest>();
+  let onRequest = firstRequestEvent.resolve;
+  const broker = new EmbeddedPluginApprovalBroker((event) => {
+    if (event.event === "plugin.approval.requested") {
+      onRequest(event.payload);
+    }
+  });
   setEmbeddedMode(true);
   setEmbeddedPluginApprovalBroker(broker);
   const readTrace = () => readToolTestEvents<{ stage: string; value: string }>(trace);
@@ -174,7 +168,6 @@ async function exerciseProbe(params: {
       trace: stages.map((stage) => ({ stage, value: "original" })),
     });
   };
-  const firstRequestEvent = nextApprovalRequest(broker);
   const pending = wrapped
     .execute(params.label, { value: "original" })
     .then(
@@ -185,17 +178,14 @@ async function exerciseProbe(params: {
       settled = true;
       return result;
     });
-  let secondRequestEvent: ReturnType<typeof nextApprovalRequest> | undefined;
   try {
     const first = await firstRequestEvent.promise;
     expect(first.request.title).toBe("Original write");
     expectPending(["trusted"]);
-    if (params.secondDecision) {
-      secondRequestEvent = nextApprovalRequest(broker);
-    }
+    onRequest = secondRequestEvent.resolve;
     expect(broker.resolve(first.id, "allow-once")).toBe(true);
     if (params.secondDecision) {
-      const second = await expectDefined(secondRequestEvent, "replacement approval event").promise;
+      const second = await secondRequestEvent.promise;
       expect(second.id).not.toBe(first.id);
       expect(second.request.title).toBe("Replacement write");
       expectPending(["trusted", "ordinary"]);
@@ -226,8 +216,6 @@ async function exerciseProbe(params: {
       }
     }
   } finally {
-    firstRequestEvent.dispose();
-    secondRequestEvent?.dispose();
     broker.stop();
     await pending;
     setEmbeddedPluginApprovalBroker(null);
