@@ -52,7 +52,7 @@ export async function readKnownGitHubPublicationPullRequestUrls(
     },
     { current: true },
   );
-  if (!result?.ok || result.type !== "githubPublication.knownPullRequestUrls") {
+  if (!result) {
     throw new Error("GitHub publication receipt history is unavailable.");
   }
   return result.urls;
@@ -66,7 +66,7 @@ export async function readGitHubPublicationRequestInWorker(
     { type: "githubPublication.request", requestId },
     { current: true },
   );
-  if (!result?.ok || result.type !== "githubPublication.request") {
+  if (!result) {
     throw new Error("GitHub publication receipt is unavailable.");
   }
   return result.row;

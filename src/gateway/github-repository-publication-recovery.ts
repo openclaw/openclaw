@@ -346,7 +346,7 @@ async function readKnownRepositoryGitHubPublicationPullRequestUrls(
     },
     { current: true },
   );
-  if (!result?.ok || result.type !== "githubRepository.knownPullRequestUrls") {
+  if (!result) {
     throw new Error("GitHub repository publication receipt history is unavailable.");
   }
   return result.urls;

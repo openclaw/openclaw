@@ -105,7 +105,7 @@ export async function createWorkerEnvironmentStore(
       { type: "workerEnvironments.snapshot", ids },
     );
     assertActive();
-    if (!reply || !reply.ok || reply.type !== "workerEnvironments.snapshot") {
+    if (!reply) {
       throw new Error("Worker environment inventory could not be read");
     }
     return reply.facts;
