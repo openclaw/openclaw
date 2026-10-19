@@ -5,8 +5,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
-import "./desktop-panel.ts";
 import {
+  createConnectionHandle,
   createPanel,
   mountPanel,
   unmountPanel,
@@ -59,7 +59,7 @@ function createMirrorFixture() {
   return { ...fixture, drawImage, requestWindow };
 }
 
-async function setup(mode: "embedded" | "dock" | "document" = "embedded", connected = true) {
+async function setup(docked = false) {
   const environment = { id: "gateway", type: "local", status: "available", desktop: true };
   const request = vi.fn(async (method: string) => {
     if (method === "environments.status") {
@@ -75,31 +75,20 @@ async function setup(mode: "embedded" | "dock" | "document" = "embedded", connec
   const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
     callbacks = options;
     options.target.append(document.createElement("canvas"));
-    if (connected) {
-      options.onConnect?.();
-    }
-    return {
-      disconnect,
-      disableInput: vi.fn(),
-      setPresented: vi.fn(() => true),
-      sendBackspace: vi.fn(),
-      sendKeyboardEvent: vi.fn(),
-      sendText: vi.fn(),
-      setSizingMode: vi.fn(),
-    };
+    options.onConnect?.();
+    return createConnectionHandle({ disconnect });
   });
   const panel = createPanel();
   updatePanel(panel, {
     client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
     available: true,
-    embedded: mode === "embedded",
+    embedded: !docked,
     presented: true,
-    documentMode: mode === "document",
     requestedSource: "gateway",
     desktopClientFactory: () => ({ connect }),
   });
   await mountPanel(panel);
-  if (mode === "dock") {
+  if (docked) {
     panel.handleToggleRequest(
       new CustomEvent("openclaw:desktop-toggle", {
         detail: { open: true, environmentId: "gateway" },
@@ -131,34 +120,31 @@ describe("Desktop Picture-in-Picture ownership", () => {
     ).not.toThrow();
   });
 
-  it.each(["dock"] as const)(
-    "mirrors %s without reconnecting or changing control; browser close preserves the viewer",
-    async (mode) => {
-      const { popup, tick, frames, drawImage, requestWindow } = createMirrorFixture();
-      const { panel, request, connect, disconnect } = await setup(mode);
-      const source = panel.querySelector("canvas")!;
-      button(panel).click();
-      // Native request occurs synchronously, while the click still has user activation.
-      expect(requestWindow).toHaveBeenCalledOnce();
-      await panel.updateComplete;
-      await waitForSolid(() => expect(button(panel).getAttribute("aria-pressed")).toBe("true"));
-      tick(0);
-      tick(40);
-      expect(drawImage).toHaveBeenCalledTimes(2);
-      expect(drawImage).toHaveBeenLastCalledWith(source, 0, 0, 300, 150);
-      expect(source.isConnected).toBe(true);
-      expect(popup.document.querySelector("canvas")?.getAttribute("role")).toBe("img");
-      expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
-      expect(connect).toHaveBeenCalledOnce();
-      expect(disconnect).not.toHaveBeenCalled();
-      popup.dispatchEvent(new Event("pagehide"));
-      await panel.updateComplete;
-      expect(button(panel).getAttribute("aria-pressed")).toBe("false");
-      expect(frames.size).toBe(0);
-      expect(popup.document.querySelector("canvas")).toBeNull();
-      expect(disconnect).not.toHaveBeenCalled();
-    },
-  );
+  it("mirrors dock without reconnecting or changing control; browser close preserves the viewer", async () => {
+    const { popup, tick, frames, drawImage, requestWindow } = createMirrorFixture();
+    const { panel, request, connect, disconnect } = await setup(true);
+    const source = panel.querySelector("canvas")!;
+    button(panel).click();
+    // Native request occurs synchronously, while the click still has user activation.
+    expect(requestWindow).toHaveBeenCalledOnce();
+    await panel.updateComplete;
+    await waitForSolid(() => expect(button(panel).getAttribute("aria-pressed")).toBe("true"));
+    tick(0);
+    tick(40);
+    expect(drawImage).toHaveBeenCalledTimes(2);
+    expect(drawImage).toHaveBeenLastCalledWith(source, 0, 0, 300, 150);
+    expect(source.isConnected).toBe(true);
+    expect(popup.document.querySelector("canvas")?.getAttribute("role")).toBe("img");
+    expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
+    expect(connect).toHaveBeenCalledOnce();
+    expect(disconnect).not.toHaveBeenCalled();
+    popup.dispatchEvent(new Event("pagehide"));
+    await panel.updateComplete;
+    expect(button(panel).getAttribute("aria-pressed")).toBe("false");
+    expect(frames.size).toBe(0);
+    expect(popup.document.querySelector("canvas")).toBeNull();
+    expect(disconnect).not.toHaveBeenCalled();
+  });
 
   it("mirrors the published opener palette only while PiP is open", async () => {
     const { popup } = createMirrorFixture();
