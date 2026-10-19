@@ -180,6 +180,7 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
 });
 
 it("round-trips fresh bindings and preserves every scoped and generic list shape", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(100);
   const a = binding("z-generic", "a", true);
   const b = binding("a-adapter", "a");
   b.conversation.parentConversationId = "parent";
