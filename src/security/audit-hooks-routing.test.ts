@@ -1,4 +1,3 @@
-// Covers hook routing security audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectHooksHardeningFindings } from "./audit-extra.sync.js";
@@ -129,11 +128,12 @@ describe("security audit hooks ingress findings", () => {
       },
     );
 
-    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
-
     const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
-    expect(finding?.title).toContain("Gateway password");
-    expect(finding?.detail).toContain("gateway.auth password");
+    expect(finding).toMatchObject({
+      severity: "critical",
+      title: expect.stringContaining("Gateway password"),
+      detail: expect.stringContaining("gateway.auth password"),
+    });
   });
 
   it("keeps persisted SecretRef reuse findings when audit password override differs", async () => {
@@ -150,8 +150,10 @@ describe("security audit hooks ingress findings", () => {
     );
 
     const finding = getFinding(report.findings, "hooks.token_reuse_gateway_token");
-    expect(finding?.severity).toBe("critical");
-    expect(finding?.remediation).toContain("openclaw doctor --fix");
+    expect(finding).toMatchObject({
+      severity: "critical",
+      remediation: expect.stringContaining("openclaw doctor --fix"),
+    });
   });
 
   it("flags hooks token reuse of SecretRef-backed trusted-proxy password fallback", async () => {

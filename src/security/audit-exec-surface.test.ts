@@ -1,4 +1,3 @@
-// Covers exec-surface security audit findings.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +6,11 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { captureEnv } from "../test-utils/env.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
+
+const fsToolsDisabled = () => ({
+  allow: ["read", "exec", "process"],
+  deny: ["write", "edit", "apply_patch"],
+});
 
 function hasFinding(
   checkId:
@@ -68,7 +72,10 @@ describe("security audit exec surface findings", () => {
     ).toBe(true);
   });
 
-  it("honors global strictInlineEval for a named default agent approval scope", async () => {
+  it.each([
+    ["global default", {}, false],
+    ["agent override", { tools: { exec: { strictInlineEval: false } } }, true],
+  ] as const)("honors strictInlineEval from %s", async (_name, ops, warns) => {
     saveExecApprovals({
       version: 1,
       agents: { ops: { allowlist: [{ pattern: "/usr/bin/python3" }] } },
@@ -79,33 +86,11 @@ describe("security audit exec surface findings", () => {
         "tools.exec.allowlist_interpreter_without_strict_inline_eval",
         "warn",
         await collectSecurityAuditFindings({
-          agents: { entries: { ops: {} } },
+          agents: { entries: { ops } },
           tools: { exec: { strictInlineEval: true } },
         }),
       ),
-    ).toBe(false);
-  });
-
-  it("honors a named default agent strictInlineEval override", async () => {
-    saveExecApprovals({
-      version: 1,
-      agents: { ops: { allowlist: [{ pattern: "/usr/bin/python3" }] } },
-    });
-
-    expect(
-      hasFinding(
-        "tools.exec.allowlist_interpreter_without_strict_inline_eval",
-        "warn",
-        await collectSecurityAuditFindings({
-          agents: {
-            entries: {
-              ops: { tools: { exec: { strictInlineEval: false } } },
-            },
-          },
-          tools: { exec: { strictInlineEval: true } },
-        }),
-      ),
-    ).toBe(true);
+    ).toBe(warns);
   });
 
   it("flags open channel access combined with exec-enabled scopes", async () => {
@@ -130,17 +115,9 @@ describe("security audit exec surface findings", () => {
   });
 
   it("reports canonical agent paths for filesystem policy drift", async () => {
+    const tools = fsToolsDisabled();
     const findings = await collectSecurityAuditFindings({
-      agents: {
-        entries: {
-          ops: {
-            tools: {
-              allow: ["read", "exec", "process"],
-              deny: ["write", "edit", "apply_patch"],
-            },
-          },
-        },
-      },
+      agents: { entries: { ops: { tools } } },
     });
     expect(findings).toContainEqual(
       expect.objectContaining({
@@ -155,10 +132,7 @@ describe("security audit exec surface findings", () => {
       agents: {
         defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
       },
-      tools: {
-        allow: ["read", "exec", "process"],
-        deny: ["write", "edit", "apply_patch"],
-      },
+      tools: fsToolsDisabled(),
     });
 
     expect(hasFinding("tools.exec.fs_tools_disabled_but_exec_enabled", "warn", findings)).toBe(

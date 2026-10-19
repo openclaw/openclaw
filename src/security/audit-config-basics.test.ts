@@ -1,4 +1,3 @@
-// Covers baseline config security audit findings.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -68,8 +67,10 @@ describe("security audit config basics", () => {
     });
 
     const finding = findings.find((entry) => entry.checkId === "tools.profile_minimal_overridden");
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("agents.entries.owner=full");
+    expect(finding).toMatchObject({
+      severity: "warn",
+      detail: expect.stringContaining("agents.entries.owner=full"),
+    });
   });
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
@@ -88,16 +89,7 @@ describe("security audit config basics", () => {
 
   it("flags per-agent skill allowlists combined with host exec and a global mcporter registry", async () => {
     const { stateDir, registry } = await registryFixture();
-    await fs.writeFile(
-      registry,
-      JSON.stringify({
-        mcpServers: {
-          "hugegraph-asset": { baseUrl: "http://asset.example.test/mcp" },
-          "whois-mcp": { baseUrl: "http://whois.example.test/mcp" },
-        },
-      }),
-      "utf8",
-    );
+    await fs.writeFile(registry, JSON.stringify({ mcpServers: { "whois-mcp": {} } }), "utf8");
 
     const report = await audit(mcporterConfig(), stateDir);
 
@@ -164,39 +156,27 @@ describe("security audit config basics", () => {
   });
 
   it("keeps unrelated dangerous flags active when one dangerous flag is suppressed", async () => {
+    const checkId = "config.insecure_or_dangerous_flags";
+    const gmailFlag = "hooks.gmail.allowUnsafeExternalContent=true";
+    const dangerousDetail = (detail: string) =>
+      expect.objectContaining({
+        checkId,
+        detail: expect.stringContaining(detail),
+      });
+    const suppression = { checkId, detailIncludes: gmailFlag, reason: "test suppression" };
     const report = await audit({
       agents: { entries: { main: {} } },
       hooks: { gmail: { allowUnsafeExternalContent: true } },
       tools: { exec: { applyPatch: { workspaceOnly: false } } },
-      security: {
-        audit: {
-          suppressions: [
-            {
-              checkId: "config.insecure_or_dangerous_flags",
-              detailIncludes: "hooks.gmail.allowUnsafeExternalContent=true",
-              reason: "accepted local-only browser auth testing",
-            },
-          ],
-        },
-      },
+      security: { audit: { suppressions: [suppression] } },
     });
 
-    expect(report.suppressedFindings).toEqual([
-      expect.objectContaining({
-        checkId: "config.insecure_or_dangerous_flags",
-        detail: expect.stringContaining("hooks.gmail.allowUnsafeExternalContent=true"),
-      }),
-    ]);
-    expect(report.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "config.insecure_or_dangerous_flags",
-          detail: expect.stringContaining("tools.exec.applyPatch.workspaceOnly=false"),
-        }),
-        expect.objectContaining({
-          checkId: "security.audit.suppressions.active",
-        }),
-      ]),
+    expect(report.suppressedFindings).toEqual([dangerousDetail(gmailFlag)]);
+    expect(report.findings).toContainEqual(
+      dangerousDetail("tools.exec.applyPatch.workspaceOnly=false"),
+    );
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({ checkId: "security.audit.suppressions.active" }),
     );
   });
 });

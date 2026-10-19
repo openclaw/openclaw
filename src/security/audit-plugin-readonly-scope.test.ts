@@ -1,4 +1,3 @@
-// Verifies plugin readonly-scope audit findings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -101,33 +100,24 @@ describe("security audit read-only plugin scope", () => {
     resolveConfiguredChannelPluginIdsMock.mockReturnValue([]);
   });
 
-  it("keeps configured channel owner collectors when the provided channel plugin list omits them", async () => {
-    const sourceConfig = createSourceConfig();
-    configureChannelOwner(sourceConfig);
-    await runSecurityAuditCore(createAuditOptions(sourceConfig, []));
-    const resolveConfiguredChannelPluginIdsParams =
-      resolveConfiguredChannelPluginIdsMock.mock.calls[0][0];
-    expect(resolveConfiguredChannelPluginIdsParams.config).toBe(sourceConfig);
-    expect(resolveConfiguredChannelPluginIdsParams.activationSourceConfig).toBe(sourceConfig);
-    expect(resolveConfiguredChannelPluginIdsParams.env).toStrictEqual({});
+  it.each([false, true])(
+    "deduplicates only channel owners audited by channel security: %s",
+    async (audited) => {
+      const sourceConfig = createSourceConfig();
+      configureChannelOwner(sourceConfig);
+      const plugins = audited ? ([{ id: "external-channel-plugin" }] as never) : [];
+      await runSecurityAuditCore(createAuditOptions(sourceConfig, plugins));
+      const resolveConfiguredChannelPluginIdsParams =
+        resolveConfiguredChannelPluginIdsMock.mock.calls[0][0];
+      expect(resolveConfiguredChannelPluginIdsParams.config).toBe(sourceConfig);
+      expect(resolveConfiguredChannelPluginIdsParams.activationSourceConfig).toBe(sourceConfig);
+      expect(resolveConfiguredChannelPluginIdsParams.env).toStrictEqual({});
 
-    expect(loadPluginMetadataRegistrySnapshotMock.mock.calls[0][0].onlyPluginIds).toStrictEqual([
-      "external-channel-plugin",
-      "audit-plugin",
-    ]);
-  });
-
-  it("removes configured channel owner collectors only when channel security will audit them", async () => {
-    const sourceConfig = createSourceConfig();
-    configureChannelOwner(sourceConfig);
-    await runSecurityAuditCore(
-      createAuditOptions(sourceConfig, [{ id: "external-channel-plugin" }] as never),
-    );
-
-    expect(loadPluginMetadataRegistrySnapshotMock.mock.calls[0][0].onlyPluginIds).toStrictEqual([
-      "audit-plugin",
-    ]);
-  });
+      expect(loadPluginMetadataRegistrySnapshotMock.mock.calls[0][0].onlyPluginIds).toStrictEqual(
+        audited ? ["audit-plugin"] : ["external-channel-plugin", "audit-plugin"],
+      );
+    },
+  );
 
   it("skips plugin runtime and collector discovery when collector loading is disabled", async () => {
     const sourceConfig = createSourceConfig(["audit-plugin"]);

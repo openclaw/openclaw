@@ -1,8 +1,9 @@
-// Covers gateway exposure audit classification.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
+
+const audit = (cfg: OpenClawConfig) => collectGatewayConfigFindings(cfg, cfg, {});
 
 function hasFinding(
   checkId: string,
@@ -21,7 +22,7 @@ function dangerousFlags(findings: ReturnType<typeof collectGatewayConfigFindings
 describe("security audit gateway exposure findings", () => {
   it("warns when the MCP Apps bridge is enabled", () => {
     const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
-    expect(collectGatewayConfigFindings(cfg, cfg, {})).toContainEqual(
+    expect(audit(cfg)).toContainEqual(
       expect.objectContaining({ checkId: "mcp.apps.enabled", severity: "warn" }),
     );
   });
@@ -34,7 +35,7 @@ describe("security audit gateway exposure findings", () => {
       },
       tools: { exec: { applyPatch: { workspaceOnly: false } } },
     };
-    const dangerousFindings = dangerousFlags(collectGatewayConfigFindings(cfg, cfg, {}));
+    const dangerousFindings = dangerousFlags(audit(cfg));
     expect(dangerousFindings.every((finding) => finding.severity === "warn")).toBe(true);
     for (const snippet of [
       "hooks.gmail.allowUnsafeExternalContent=true",
@@ -75,7 +76,7 @@ describe("security audit gateway exposure findings", () => {
       expectedNoFinding: "gateway.control_ui.allowed_origins_required",
     },
   ])("$name", ({ cfg, expectedFinding, expectedNoFinding }) => {
-    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+    const findings = audit(cfg);
     expect(findings).toContainEqual(expect.objectContaining(expectedFinding));
     if (expectedNoFinding) {
       expect(findings.map((findingLocal) => findingLocal.checkId)).not.toContain(expectedNoFinding);
@@ -91,7 +92,7 @@ describe("security audit gateway exposure findings", () => {
       },
     };
 
-    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+    const findings = audit(cfg);
     expect(hasFinding("gateway.control_ui.host_header_origin_fallback", "critical", findings)).toBe(
       true,
     );
@@ -138,13 +139,9 @@ describe("security audit gateway exposure findings", () => {
           auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
         },
       };
-      expect(
-        hasFinding(
-          "gateway.real_ip_fallback_enabled",
-          expectedSeverity,
-          collectGatewayConfigFindings(cfg, cfg, {}),
-        ),
-      ).toBe(true);
+      expect(hasFinding("gateway.real_ip_fallback_enabled", expectedSeverity, audit(cfg))).toBe(
+        true,
+      );
     },
   );
 
@@ -156,16 +153,10 @@ describe("security audit gateway exposure findings", () => {
       gateway: { bind, auth: { mode: "token", token: "very-long-token-1234567890" } },
       discovery: { mdns: { mode: "full" } },
     };
-    expect(
-      hasFinding(
-        "discovery.mdns_full_mode",
-        expectedSeverity,
-        collectGatewayConfigFindings(cfg, cfg, {}),
-      ),
-    ).toBe(true);
+    expect(hasFinding("discovery.mdns_full_mode", expectedSeverity, audit(cfg))).toBe(true);
   });
 
-  it.each(["lan"] as const)("evaluates trusted-proxy auth guardrails on %s", (bind) => {
+  it("evaluates trusted-proxy auth guardrails on lan", () => {
     const proxy = { userHeader: "x-forwarded-user" };
     const allowed = { ...proxy, allowUsers: ["nick@example.com"] };
     const cases: Array<[string, "warn" | "critical", GatewayTrustedProxyConfig, string[]?]> = [
@@ -188,12 +179,12 @@ describe("security audit gateway exposure findings", () => {
     for (const [suffix, severity, trustedProxy, proxies] of cases) {
       const cfg: OpenClawConfig = {
         gateway: {
-          bind,
+          bind: "lan",
           trustedProxies: proxies ?? ["10.0.0.1"],
           auth: { mode: "trusted-proxy", trustedProxy },
         },
       };
-      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      const findings = audit(cfg);
       expect(hasFinding(`gateway.trusted_proxy_${suffix}`, severity, findings), suffix).toBe(true);
       const checkIds = findings.map((finding) => finding.checkId);
       expect(checkIds, suffix).toContain("gateway.trusted_proxy_auth");

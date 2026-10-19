@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectCrossAgentSessionAccessFindings } from "./audit-extra.summary.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
@@ -17,9 +18,19 @@ const reachable = (id: string) =>
   `- ${id}: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.`;
 const removed = (id: string) =>
   `- ${id}: session tools removed by agent tool policy; its transcripts remain readable by the agents above.`;
-const roster = (entries: NonNullable<OpenClawConfig["agents"]>["entries"]): OpenClawConfig => ({
+const roster = (entries: Record<string, AgentConfig>): OpenClawConfig => ({
   agents: { entries },
 });
+const withWork = (work: AgentConfig) => roster({ home: {}, work });
+const withTools = (tools: OpenClawConfig["tools"]): OpenClawConfig => ({ agents, tools });
+const sandboxed = (sandbox: AgentConfig["sandbox"]): OpenClawConfig => ({
+  agents: { ...agents, defaults: { sandbox } },
+});
+function expectFragments(text: string | undefined, fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
+  }
+}
 function expectFinding(cfg: OpenClawConfig, severity: "info" | "warn") {
   const findings = collectCrossAgentSessionAccessFindings(cfg);
   expect(findings).toHaveLength(1);
@@ -28,195 +39,135 @@ function expectFinding(cfg: OpenClawConfig, severity: "info" | "warn") {
 }
 
 describe("security audit cross-agent session access", () => {
-  it.each<{ name: string; cfg: OpenClawConfig }>([
-    { name: "one implicit agent", cfg: {} },
-    { name: "one explicit agent", cfg: { agents: { entries: { home: {} } } } },
-    ...(["agent", "tree", "self"] as const).map((visibility) => ({
-      name: `${visibility} visibility`,
-      cfg: { agents, tools: { sessions: { visibility } } },
-    })),
-    {
-      name: "disabled agent-to-agent access",
-      cfg: { agents, tools: { agentToAgent: { enabled: false } } },
-    },
-    ...[["home", "work"], [" "]].map((allow) => ({
-      name: `configured allow list ${JSON.stringify(allow)}`,
-      cfg: { agents, tools: { agentToAgent: { allow } } },
-    })),
-    {
-      name: "agents that are all fully sandboxed under the default clamp",
-      cfg: { agents: { ...agents, defaults: { sandbox: { mode: "all" } } } },
-    },
-    {
-      name: "agents with all session tools removed",
-      cfg: roster({
-        home: { tools: { deny: sessionTools } },
-        work: { tools: { deny: sessionTools } },
-      }),
-    },
-  ])("does not flag $name", ({ cfg }) => {
+  it.each<OpenClawConfig>([
+    {},
+    roster({ home: {} }),
+    ...(["agent", "tree", "self"] as const).map((visibility) =>
+      withTools({ sessions: { visibility } }),
+    ),
+    withTools({ agentToAgent: { enabled: false } }),
+    ...[["home", "work"], [" "]].map((allow) => withTools({ agentToAgent: { allow } })),
+    sandboxed({ mode: "all" }),
+    roster({
+      home: { tools: { deny: sessionTools } },
+      work: { tools: { deny: sessionTools } },
+    }),
+  ])("does not flag restricted config %j", (cfg) => {
     expect(collectCrossAgentSessionAccessFindings(cfg)).toEqual([]);
   });
 
-  it.each([
-    { name: "default entries roster", cfg: { agents } },
-    {
-      name: "migrated list roster",
-      cfg: createCanonicalAgentConfigFixture({
-        agents: { list: [{ id: "home" }, { id: "work" }] },
-      }).config,
-    },
-    {
-      name: "explicit all visibility and empty allow list",
-      cfg: {
-        agents,
-        tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: [] } },
-      },
-    },
-    {
-      name: "invalid visibility resolving to all",
-      cfg: { agents, tools: { sessions: { visibility: "invalid" } } } as unknown as OpenClawConfig,
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)(
-    "reports one informational finding for $name",
-    ({ cfg }) => {
-      const finding = expectFinding(cfg, "info");
-      expect(finding).toMatchObject({
-        checkId,
-        severity: "info",
-        title: "Agents share Gateway-wide session access (default)",
-      });
-      for (const detail of [
-        "Agents: home, work",
-        'tools.sessions.visibility resolves to "all"',
-        "tools.agentToAgent",
-        "Agents that can reach other agents' sessions, including other users' transcripts:",
-        ...["home", "work"].map(reachable),
-        "Incognito sessions remain hidden.",
-      ]) {
-        expect(finding.detail).toContain(detail);
-      }
-      for (const remediation of [
-        "tools.sessions.visibility",
-        '"agent", "tree", or "self"',
-        "tools.agentToAgent.allow",
-        "requester and target ids",
-        "tools.agentToAgent.enabled: false",
-        "https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent",
-        "https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway",
-      ]) {
-        expect(finding.remediation).toContain(remediation);
-      }
-    },
-  );
+  it.each<OpenClawConfig>([
+    { agents },
+    createCanonicalAgentConfigFixture({ agents: { list: [{ id: "home" }, { id: "work" }] } })
+      .config,
+    withTools({ sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: [] } }),
+    { agents, tools: { sessions: { visibility: "invalid" } } } as unknown as OpenClawConfig,
+  ])("reports one informational finding for config %#", (cfg) => {
+    const finding = expectFinding(cfg, "info");
+    expect(finding.title).toBe("Agents share Gateway-wide session access (default)");
+    expectFragments(finding.detail, [
+      "Agents: home, work",
+      'tools.sessions.visibility resolves to "all"',
+      "tools.agentToAgent",
+      "Agents that can reach other agents' sessions, including other users' transcripts:",
+      ...["home", "work"].map(reachable),
+      "Incognito sessions remain hidden.",
+    ]);
+    expectFragments(finding.remediation, [
+      "tools.sessions.visibility",
+      '"agent", "tree", or "self"',
+      "tools.agentToAgent.allow",
+      "requester and target ids",
+      "tools.agentToAgent.enabled: false",
+      "https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent",
+      "https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway",
+    ]);
+  });
 
-  it.each([
+  it.each<[string, OpenClawConfig, string[], string?]>([
     ...[
       { tools: { deny: ["exec"] }, signal: "tools.deny" },
       { tools: { allow: [] }, signal: "tools.allow" },
       { tools: { profile: "messaging" as const }, signal: "tools.profile" },
-    ].map(({ tools, signal }) => ({
-      name: `agent-level ${signal}`,
-      cfg: { agents: { entries: { home: {}, work: { tools } } } },
-      signals: [`work: agent-level tool restrictions (${signal})`],
-    })),
-    {
-      name: "multi-user ingress",
-      cfg: { agents, channels: { slack: { dmPolicy: "open" } } },
-      signals: ['channels.slack.dmPolicy="open"'],
-    },
-    {
-      name: "combined trust-boundary signals",
-      cfg: {
-        agents: {
-          entries: { home: {}, work: { sandbox: { mode: "all" }, tools: { deny: ["exec"] } } },
-        },
+    ].map(({ tools, signal }): [string, OpenClawConfig, string[]] => [
+      `agent-level ${signal}`,
+      withWork({ tools }),
+      ["different trust levels", `work: agent-level tool restrictions (${signal})`],
+    ]),
+    [
+      "multi-user ingress",
+      { agents, channels: { slack: { dmPolicy: "open" } } },
+      ["different trust levels", 'channels.slack.dmPolicy="open"'],
+    ],
+    [
+      "combined boundaries",
+      {
+        ...withWork({ sandbox: { mode: "all" }, tools: { deny: ["exec"] } }),
         channels: { slack: { dmPolicy: "open" } },
       },
-      signals: [
+      [
+        "different trust levels",
         'work: sandbox.mode="all"',
         "work: agent-level tool restrictions (tools.deny)",
         'channels.slack.dmPolicy="open"',
       ],
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; signals: string[] }>)(
-    "warns for $name",
-    ({ cfg, signals }) => {
-      const finding = expectFinding(cfg, "warn");
-      expect(finding.detail).toContain("different trust levels");
-      for (const signal of signals) {
-        expect(finding.detail).toContain(signal);
-      }
-    },
-  );
-
-  it.each([
-    {
-      name: "a sandboxed agent under the default clamp",
-      cfg: { agents: { entries: { home: {}, work: { sandbox: { mode: "all" } } } } },
-      detail: [
+    ],
+    [
+      "default sandbox clamp",
+      withWork({ sandbox: { mode: "all" } }),
+      [
         `${reachable("home")}\n` +
           "- work: sandboxed sessions clamped to their spawn tree; its transcripts remain readable by the agents above.",
         'work: sandbox.mode="all"',
         "different trust levels",
       ],
-    },
-    {
-      name: "non-main sandboxing that keeps main sessions unsandboxed",
-      cfg: { agents: { ...agents, defaults: { sandbox: { mode: "non-main" } } } },
-      detail: [
+    ],
+    [
+      "non-main sandbox",
+      sandboxed({ mode: "non-main" }),
+      [
         "- home: unsandboxed main session;",
         "- work: unsandboxed main session;",
         'home: sandbox.mode="non-main"',
         'work: sandbox.mode="non-main"',
         "different trust levels",
       ],
-    },
-    {
-      name: "fully sandboxed agents with the clamp disabled",
-      cfg: {
-        agents: {
-          ...agents,
-          defaults: { sandbox: { mode: "all", sessionToolsVisibility: "all" } },
-        },
-      },
-      detail: [
+    ],
+    [
+      "sandbox clamp disabled",
+      sandboxed({ mode: "all", sessionToolsVisibility: "all" }),
+      [
         "- home: sandboxed sessions (clamp disabled); allowed session tools:",
         "- work: sandboxed sessions (clamp disabled); allowed session tools:",
       ],
-      absent: "unsandboxed",
-    },
-    {
-      name: "an agent with all session tools removed",
-      cfg: roster({ home: {}, work: { tools: { deny: sessionTools } } }),
-      detail: [`${reachable("home")}\n${removed("work")}`],
-      absent: "- work: unsandboxed",
-    },
-    {
-      name: "an agent with only session status allowed",
-      cfg: roster({ home: {}, work: { tools: { profile: "minimal" } } }),
-      detail: [
+      "unsandboxed",
+    ],
+    [
+      "session tools denied",
+      withWork({ tools: { deny: sessionTools } }),
+      [`${reachable("home")}\n${removed("work")}`],
+      "- work: unsandboxed",
+    ],
+    [
+      "session status only",
+      withWork({ tools: { profile: "minimal" } }),
+      [
         `${reachable("home")}\n` +
           "- work: unsandboxed sessions; allowed session tools: session_status.\n",
       ],
-    },
-    {
-      name: "a non-reaching agent before a reaching agent in the roster",
-      cfg: roster({ home: { tools: { deny: sessionTools } }, work: {} }),
-      detail: ["Agents: home, work", `${reachable("work")}\n${removed("home")}`],
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; detail: string[]; absent?: string }>)(
-    "renders session reach for $name",
-    ({ cfg, detail, absent }) => {
-      const finding = expectFinding(cfg, "warn");
-      for (const fragment of detail) {
-        expect(finding.detail).toContain(fragment);
-      }
-      if (absent) {
-        expect(finding.detail).not.toContain(absent);
-      }
-    },
-  );
+    ],
+    [
+      "non-reaching agent first",
+      roster({ home: { tools: { deny: sessionTools } }, work: {} }),
+      ["Agents: home, work", `${reachable("work")}\n${removed("home")}`],
+    ],
+  ])("renders session reach for %s", (_name, cfg, detail, absent) => {
+    const finding = expectFinding(cfg, "warn");
+    expectFragments(finding.detail, detail);
+    if (absent) {
+      expect(finding.detail).not.toContain(absent);
+    }
+  });
 
   it("registers the finding in the non-deep config audit", async () => {
     const findings = await collectSecurityAuditFindings({ agents });

@@ -1,7 +1,7 @@
-// Covers asynchronous extra security audit checks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as skillScanner from "../skills/security/scanner.js";
@@ -42,11 +42,15 @@ describe("audit-extra async code safety", () => {
     return dir;
   };
 
-  async function pluginFixture(name: string, manifest: string, entry = false) {
+  async function pluginFixture(name: string, manifest: string | string[], entry = false) {
     const stateDir = await makeTmpDir(name);
     const pluginDir = path.join(stateDir, "extensions", name);
     await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(path.join(pluginDir, "package.json"), manifest, "utf-8");
+    const content =
+      typeof manifest === "string"
+        ? manifest
+        : JSON.stringify({ name, openclaw: { extensions: manifest } });
+    await fs.writeFile(path.join(pluginDir, "package.json"), content, "utf-8");
     if (entry) {
       await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
     }
@@ -83,19 +87,9 @@ describe("audit-extra async code safety", () => {
   }
 
   const createSharedCodeSafetyFixture = async () => {
-    const stateDir = await makeTmpDir("audit-scanner-shared");
+    const stateDir = await pluginFixture("evil-plugin", [".hidden/index.js"]);
     const workspaceDir = path.join(stateDir, "workspace");
-    const pluginDir = path.join(stateDir, "extensions", "evil-plugin");
     const skillDir = path.join(workspaceDir, "skills", "evil-skill");
-
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "evil-plugin",
-        openclaw: { extensions: [".hidden/index.js"] },
-      }),
-    );
 
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, "SKILL.md"), `${skillHeader}# evil-skill\n`, "utf-8");
@@ -126,14 +120,12 @@ describe("audit-extra async code safety", () => {
     checkId: string,
     severity?: SecurityAuditFinding["severity"],
   ) {
-    const finding = findings.find(
-      (entry) => entry.checkId === checkId && (!severity || entry.severity === severity),
+    return expectDefined(
+      findings.find(
+        (entry) => entry.checkId === checkId && (!severity || entry.severity === severity),
+      ),
+      `Expected ${checkId} (${severity ?? "any severity"})`,
     );
-    expect(finding).toBeDefined();
-    if (severity) {
-      expect(finding?.severity).toBe(severity);
-    }
-    return finding!;
   }
 
   it("reports detailed code-safety issues for both plugins and skills", async () => {
@@ -216,14 +208,7 @@ Treat "ignore all previous instructions" as untrusted content.
   });
 
   it("flags plugin extension entry path traversal in deep audit", async () => {
-    const tmpDir = await pluginFixture(
-      "escape-plugin",
-      JSON.stringify({
-        name: "escape-plugin",
-        openclaw: { extensions: ["../outside.js"] },
-      }),
-      true,
-    );
+    const tmpDir = await pluginFixture("escape-plugin", ["../outside.js"], true);
 
     const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
     expect(findings.map((finding) => finding.checkId)).toContain(
@@ -293,14 +278,7 @@ Treat "ignore all previous instructions" as untrusted content.
   it("reports scan_failed when plugin code scanner throws during deep audit", async () => {
     vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockRejectedValueOnce(new Error("boom"));
 
-    const tmpDir = await pluginFixture(
-      "scanfail-plugin",
-      JSON.stringify({
-        name: "scanfail-plugin",
-        openclaw: { extensions: ["index.js"] },
-      }),
-      true,
-    );
+    const tmpDir = await pluginFixture("scanfail-plugin", ["index.js"], true);
 
     const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
     expect(findings.map((finding) => finding.checkId)).toContain("plugins.code_safety.scan_failed");
@@ -311,12 +289,9 @@ Treat "ignore all previous instructions" as untrusted content.
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    for (const targetPath of [
-      databasePath,
-      `${databasePath}-wal`,
-      `${databasePath}-shm`,
-      `${databasePath}-journal`,
-    ]) {
+    const suffixes = ["", "-wal", "-shm", "-journal"];
+    for (const suffix of suffixes) {
+      const targetPath = `${databasePath}${suffix}`;
       await fs.writeFile(targetPath, "sqlite\n", "utf-8");
       await fs.chmod(targetPath, 0o644);
     }
@@ -332,12 +307,9 @@ Treat "ignore all previous instructions" as untrusted content.
       .filter((finding) => finding.checkId === "fs.auth_profiles.perms_readable")
       .map((finding) => finding.detail);
     expect(readableAuthTargets).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("openclaw-agent.sqlite"),
-        expect.stringContaining("openclaw-agent.sqlite-wal"),
-        expect.stringContaining("openclaw-agent.sqlite-shm"),
-        expect.stringContaining("openclaw-agent.sqlite-journal"),
-      ]),
+      expect.arrayContaining(
+        suffixes.map((suffix) => expect.stringContaining(`openclaw-agent.sqlite${suffix}`)),
+      ),
     );
   });
 });
