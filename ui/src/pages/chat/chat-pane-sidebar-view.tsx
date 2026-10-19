@@ -1,5 +1,5 @@
 import { dynamic } from "@solidjs/web";
-import { For, Show, createEffect, onCleanup, onSettled } from "solid-js";
+import { For, Show, createSignal, onCleanup, onSettled } from "solid-js";
 import { shellViewport } from "../../app/shell-viewport.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
@@ -8,6 +8,7 @@ import "../../styles/chat/mobile-host.css";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type { ChatMobileHost } from "./chat-mobile-host.ts";
@@ -185,15 +186,6 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       clearResize();
     };
   });
-  createEffect(
-    () => props.mobileHost?.setDetailsMount,
-    (attach) => {
-      if (attach) {
-        attach(detailsMount);
-        releaseDetailsMount = attach;
-      }
-    },
-  );
   onSettled(() => {
     // One capture pair covers native nested scrollers without reactive work per frame.
     const scrolling = new Set<HTMLElement>();
@@ -561,6 +553,15 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
             </Show>
           </header>
         </Show>
+        <Show when={props.mobileHost?.setDetailsMount} keyed>
+          {(attach) => {
+            onSettled(() => {
+              attach(detailsMount);
+              releaseDetailsMount = attach;
+            });
+            return undefined;
+          }}
+        </Show>
         <div
           class="chat-mobile-host__details"
           ref={(element) => (detailsMount = element)}
@@ -579,24 +580,20 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         >
           {(page) => {
             const Page = dynamic(() => page().render ?? (() => page().content));
-            let scrollport: HTMLDivElement | undefined;
-            createEffect(
-              () => page().key,
-              () => {
-                if (scrollport) {
-                  scrollport.scrollTop = 0;
-                }
+            const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+            createScrollPosition(() => ({
+              restore: {
+                identity: [page().key, scrollport()],
+                target: scrollport(),
+                top: 0,
               },
-            );
+            }));
             return (
               <ContentPresentation value={mobileVisible}>
                 <div
                   class="chat-mobile-host__page"
                   data-mobile-page={page().key}
-                  ref={[
-                    (element) => (scrollport = element),
-                    elementRef(props.mobileScrollFades?.register),
-                  ]}
+                  ref={[setScrollport, elementRef(props.mobileScrollFades?.register)]}
                 >
                   <Page />
                 </div>
