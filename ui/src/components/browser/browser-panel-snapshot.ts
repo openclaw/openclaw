@@ -14,8 +14,8 @@ import type {
   BrowserPanelOperations,
   BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
-import type { BrowserPanelStateWriter } from "./browser-panel-owner.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
 

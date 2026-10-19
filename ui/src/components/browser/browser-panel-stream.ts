@@ -5,7 +5,7 @@ import type {
   BrowserPanelHost,
   BrowserPanelOperations,
 } from "./browser-panel-operation-ownership.ts";
-import type { BrowserPanelStateWriter } from "./browser-panel-owner.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
 import {
   BrowserScreencastClient,

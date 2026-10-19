@@ -12,8 +12,8 @@ import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client
 import type { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { createBrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
 import type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
-import type { BrowserPanelStateWriter } from "./browser-panel-owner.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import {
   browserPanelNormalizedPoint,
   browserPanelRemotePoint,
