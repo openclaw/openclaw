@@ -147,6 +147,7 @@ function ConfigBody(props: {
           pluginsHref={pathForRoute("plugins", context().basePath)}
           memoryImportHref={pathForRoute("memory-import", context().basePath)}
           routeData={props.routeData}
+          admittedRoute={props.state.admittedRoute}
           buildEditor={() =>
             editor("memory", t("tabs.memory"), memorySettingsSchema(config().schema))
           }

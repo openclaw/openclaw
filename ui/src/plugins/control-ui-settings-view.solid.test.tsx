@@ -102,10 +102,12 @@ function fixture(
     <ControlUiSettingsPresentation
       application={application}
       placement={{ section: "memory", panel: "overview" }}
-      readSnapshot={() => snapshot}
-      subscribe={(notify) => {
-        listeners.add(notify);
-        return () => listeners.delete(notify);
+      source={{
+        read: () => snapshot,
+        subscribe(notify) {
+          listeners.add(notify);
+          return () => listeners.delete(notify);
+        },
       }}
       navigate={navigate}
       refreshAgents={vi.fn()}

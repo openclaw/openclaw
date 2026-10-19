@@ -112,10 +112,12 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
       <ControlUiSettingsPresentation
         application={application}
         placement={{ section: "memory", panel: "overview" }}
-        readSnapshot={() => snapshot}
-        subscribe={(listener) => {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
+        source={{
+          read: () => snapshot,
+          subscribe(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
         }}
         navigate={() => {}}
         refreshAgents={() => {}}

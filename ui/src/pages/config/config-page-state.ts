@@ -70,8 +70,12 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { canonicalMemoryRouteLocation } from "./memory-schema.ts";
-import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
+import { admitMemoryRoute } from "./memory-route-admission.ts";
+import {
+  configTargetIdFromHash,
+  type ConfigRouteData,
+  type ConfigRouteSource,
+} from "./route-data.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
@@ -113,6 +117,14 @@ export function createConfigPage(
   }>({ formModes: {}, selections: {} });
   let pageId: ConfigPageId = "advanced";
   let routeData: ConfigRouteData | null = null;
+  const routeListeners = new Set<() => void>();
+  const admittedRoute: ConfigRouteSource = {
+    read: () => routeData,
+    subscribe(listener) {
+      routeListeners.add(listener);
+      return () => routeListeners.delete(listener);
+    },
+  };
   let connected = false;
   let settings = loadSettings();
   let hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -183,31 +195,9 @@ export function createConfigPage(
     abortRequests();
     pageId = nextPageId;
     routeData = nextRouteData;
-    if (pageId !== "memory") {
-      normalizedMemoryLocation = "";
-    } else if (routeData) {
-      const routeAgentId = new URLSearchParams(routeData.search).get("agent")?.trim();
-      const intent = routeData.agentSelectionIntent;
-      const agentSelection = context.settingsAgentSelection;
-      if (
-        routeAgentId &&
-        intent?.owner === agentSelection &&
-        intent.revision === agentSelection.intentRevision
-      ) {
-        agentSelection.set(routeAgentId);
-      }
-      const canonical = canonicalMemoryRouteLocation(routeData, context.basePath);
-      if (!canonical) {
-        normalizedMemoryLocation = "";
-      } else {
-        const source = `${routeData.pathname}${routeData.search}${routeData.hash}`;
-        // Retained Settings data can repeat while the canonical replacement loads.
-        if (normalizedMemoryLocation !== source) {
-          normalizedMemoryLocation = source;
-          context.replace("memory", canonical);
-        }
-      }
-    }
+    admitMemoryRoute(context, pageId, routeData, normalizedMemoryLocation, (location) => {
+      normalizedMemoryLocation = location;
+    });
     const selection = routeData
       ? normalizeConfigSelection(pageId, routeData.section, null)
       : configSelectionFromSearch(pageId, globalThis.location?.search ?? "");
@@ -222,6 +212,9 @@ export function createConfigPage(
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     synchronize();
     invalidate();
+    for (const notify of routeListeners) {
+      notify();
+    }
   }
 
   const hiddenSessionCatalogsChanged = () => {
@@ -1056,6 +1049,7 @@ export function createConfigPage(
     };
   });
   return {
+    admittedRoute,
     application() {
       revision();
       return context;

@@ -13,6 +13,7 @@ import {
   addonStatus,
   addonSwitch,
   createMemoryPage as buildPage,
+  memoryRoute,
   memoryTabRoute,
   selectEngine,
   toggleAddon,
@@ -383,16 +384,52 @@ it("mounts the presentation for the Settings agent and keeps it through a same-c
   expect(settingsViews.at(-1)).toBe(current);
   const epoch = current.snapshot.connectionEpoch;
   setPhase("disconnected");
-  flush();
   expect(current.snapshot.connected).toBe(false);
   setPhase("connected");
-  await waitForSolid(() => expect(current.snapshot.connected).toBe(true));
+  expect(current.snapshot.connected).toBe(true);
   expect(current.snapshot.connectionEpoch).toBeGreaterThan(epoch);
   expect(current.context.signal.aborted).toBe(false);
   expect(settingsViews.at(-1)).toBe(current);
   page.replaceClient();
   expect(current.context.signal.aborted).toBe(true);
   await waitForSolid(() => expect(settingsViews.at(-1)).not.toBe(current));
+});
+
+it("updates a mounted Settings view when its delayed catalog arrives without another owner event", async () => {
+  const catalog = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { settingsViews } = createPage({
+    routeData: memoryTabRoute("overview"),
+    listCatalog: () => catalog.promise,
+  });
+  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+  const view = settingsViews.at(-1)!;
+  expect(view.snapshot.engine.availability).toBe("loading");
+  catalog.resolve({ plugins: [] });
+  await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
+  expect(settingsViews.at(-1)).toBe(view);
+  expect(view.context.signal.aborted).toBe(false);
+});
+
+it("retires Settings callbacks when Config admits a route-only change", async () => {
+  const reply = deferred<unknown>();
+  const { element, settingsViews } = createPage({
+    routeData: memoryTabRoute("overview"),
+    settingsRequest: () => reply.promise,
+  });
+  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+  const old = settingsViews.at(-1)!.context;
+  const pending = old.request("settings.test");
+  element.routeData = memoryRoute("/settings/memory?view=details");
+  // Raw route input is not admitted until Config's existing route effect applies it.
+  expect(old.signal.aborted).toBe(false);
+  flush();
+  expect(old.signal.aborted).toBe(true);
+  expect(() => old.navigate("settings")).toThrow();
+  reply.resolve("obsolete");
+  await expect(pending).rejects.toThrow();
+  await waitForSolid(() =>
+    expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("?view=details"),
+  );
 });
 
 it("passes a replaced pinned engine to a new presentation", async () => {
