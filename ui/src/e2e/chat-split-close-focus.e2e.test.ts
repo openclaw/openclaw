@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -151,7 +149,6 @@ suite.define(() => {
         const close = layout.getByRole("menuitem", { name: "Close pane", exact: true });
         await close.focus();
         expect(await close.evaluate((element) => element === document.activeElement)).toBe(true);
-        await page.screenshot({ path: path.join(suite.artifactDir, "before-close.png") });
         await page.keyboard.press("Enter");
         // Closed logical pane retires; another pane may retain B as an inert cache entry.
         await expect
@@ -164,63 +161,29 @@ suite.define(() => {
         await expect
           .poll(() => page.url())
           .toContain(`/${composerVisible ? "chat" : "dashboard"}/main/close-${surviving}`);
-        const focus = () =>
-          page.evaluate(() => ({
-            tag: document.activeElement?.tagName,
-            className: document.activeElement?.className,
-            label: document.activeElement?.getAttribute("aria-label"),
-            inChat: Boolean(
-              document.activeElement?.closest(
-                'openclaw-chat-page openclaw-chat-pane.chat-pane-cache__pane--active[aria-hidden="false"]:not([inert])',
-              ),
+        const focusInChat = await page.evaluate(() =>
+          Boolean(
+            document.activeElement?.closest(
+              'openclaw-chat-page openclaw-chat-pane.chat-pane-cache__pane--active[aria-hidden="false"]:not([inert])',
             ),
-            focusedPane: (() => {
-              const pane = document.activeElement?.closest("openclaw-chat-pane");
-              return pane
-                ? {
-                    active: pane.classList.contains("chat-pane-cache__pane--active"),
-                    presented: pane.getAttribute("aria-hidden") === "false",
-                    inert: pane.hasAttribute("inert"),
-                  }
-                : null;
-            })(),
-            inHome: Boolean(document.activeElement?.closest("openclaw-assistant-panel")),
-          }));
-        const afterClose = await focus();
+          ),
+        );
         const accessibilityAfterClose = await page.locator(":focus").ariaSnapshot();
         const draftAfterClose = await composerA.inputValue();
-        await page.screenshot({ path: path.join(suite.artifactDir, "after-close.png") });
         if (editable && composerVisible) {
           await page.keyboard.type(" continuation");
         }
-        const afterTyping = await focus();
-        const observations = {
-          afterClose,
-          accessibilityAfterClose,
-          afterTyping,
-          draftAfterClose,
-          finalDraftA: await composerA.inputValue(),
-          finalHomeDraft: editable ? await homeComposer.inputValue() : null,
-          url: page.url(),
-          errors,
-          methods: (await gateway.getRequests()).map(({ method }) => method),
-        };
-        await writeFile(
-          path.join(suite.artifactDir, "observations.json"),
-          JSON.stringify(observations, null, 2),
-        );
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "after-keyboard-continuation.png"),
-        });
         expect.soft(draftAfterClose).toBe(editable && composerVisible ? "Draft A" : "");
         expect
-          .soft(observations.finalDraftA)
+          .soft(await composerA.inputValue())
           .toBe(editable && composerVisible ? "Draft A continuation" : "");
-        expect.soft(observations.finalHomeDraft).toBe(editable ? "Home draft" : null);
-        expect.soft(observations.methods.filter((method) => method === "chat.send")).toEqual([]);
+        expect
+          .soft(editable ? await homeComposer.inputValue() : null)
+          .toBe(editable ? "Home draft" : null);
+        expect.soft(await gateway.getRequests("chat.send")).toEqual([]);
         expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
         expect.soft(errors).toEqual([]);
-        expect.soft(afterClose.inChat).toBe(true);
+        expect.soft(focusInChat).toBe(true);
         expect
           .soft(accessibilityAfterClose.split("\n")[0])
           .toBe(`- group "Research ${surviving}":`);

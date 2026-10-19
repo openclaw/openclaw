@@ -1,8 +1,6 @@
-import path from "node:path";
 import type { Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -23,14 +21,16 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:side-panel-clearance";
-const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
-let proofDir: string | undefined;
-beforeEach(() => {
-  proofDir = proofDirParent
-    ? createControlUiE2eArtifactDir("chat-side-panel-clearance", proofDirParent)
-    : undefined;
-});
 const limitedScopes = ["operator.read", "operator.write"];
+const files = [
+  {
+    name: "chat-pane-render.ts",
+    path: "ui/src/pages/chat/chat-pane-render.ts",
+    kind: "modified",
+    size: 18_432,
+  },
+  { name: "sidebar.css", path: "ui/src/styles/chat/sidebar.css", kind: "read", size: 24_820 },
+];
 const historyMessages = [
   {
     id: "side-panel-clearance-user",
@@ -63,31 +63,15 @@ function scenario(
       "sessions.files.list": {
         browser: {
           path: "ui/src/pages/chat",
-          entries: [
-            {
-              kind: "file",
-              name: "chat-pane-render.ts",
-              path: "ui/src/pages/chat/chat-pane-render.ts",
-            },
-            { kind: "file", name: "sidebar.css", path: "ui/src/styles/chat/sidebar.css" },
-          ],
+          entries: files.map(({ name, path }) => ({ kind: "file", name, path })),
         },
-        files: [
-          {
-            kind: "modified",
-            missing: false,
-            name: "chat-pane-render.ts",
-            path: "/workspace/openclaw/ui/src/pages/chat/chat-pane-render.ts",
-            size: 18_432,
-          },
-          {
-            kind: "read",
-            missing: false,
-            name: "sidebar.css",
-            path: "/workspace/openclaw/ui/src/styles/chat/sidebar.css",
-            size: 24_820,
-          },
-        ],
+        files: files.map(({ name, path, kind, size }) => ({
+          name,
+          kind,
+          size,
+          missing: false,
+          path: `/workspace/openclaw/${path}`,
+        })),
         root: "/workspace/openclaw",
         sessionKey,
       },
@@ -118,13 +102,10 @@ async function seedSettings(page: Page, themeMode: "light" | "dark") {
   );
 }
 
-async function openExpandedFilesPanel(page: Page, beforeExpandProof?: string): Promise<void> {
+async function openExpandedFilesPanel(page: Page): Promise<void> {
   await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
   await page.locator(".chat-group").first().waitFor();
   await activateChatHeaderPanelAction(page, "Show session files");
-  if (beforeExpandProof) {
-    await capturePanel(page, beforeExpandProof);
-  }
   await focusChatSidePanel(page);
 }
 
@@ -192,13 +173,6 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
   }
 }
 
-async function capturePanel(page: Page, name: string): Promise<void> {
-  if (!proofDir) {
-    return;
-  }
-  await page.screenshot({ fullPage: true, path: path.join(proofDir, `${name}.png`) });
-}
-
 suite.define(() => {
   it.each([844, 640])(
     "keeps the mobile empty panel picker below the composer at height %s",
@@ -238,12 +212,10 @@ suite.define(() => {
             await textarea.blur();
           }
           await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });
-          await capturePanel(page, "mobile-composer-spacing");
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           const picker = page.locator(".side-panel-empty--selector");
           await picker.waitFor();
           await waitForShellLayout(page);
-          await capturePanel(page, "mobile-empty-panel");
           const geometry = await picker.evaluate((element) => {
             const bounds = element.getBoundingClientRect();
             const body = element.closest(".side-panel__empty-body")!.getBoundingClientRect();
@@ -280,7 +252,6 @@ suite.define(() => {
             });
             expect(contained).toBe(true);
           }
-          await capturePanel(page, "mobile-empty-panel-scrolled");
           await choices.filter({ hasText: "Files" }).click();
           await page.locator('.side-panel__panel[data-panel-slot="workspace"]:visible').waitFor();
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
@@ -417,7 +388,6 @@ suite.define(() => {
         };
         const expandedCenter = await rowCenter();
         expect(expandedCenter).toBeGreaterThan(24);
-        await capturePanel(page, "page-toolbar-expanded");
 
         await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
@@ -436,64 +406,46 @@ suite.define(() => {
         for (let index = 0; index < controlBoxes.length; index += 1) {
           await controls.nth(index).click({ trial: true });
         }
-        await capturePanel(page, "page-toolbar-collapsed");
       },
     );
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    home?: boolean;
+    deviceLess?: boolean;
+    direction?: string;
+    expectedControl: string;
+    navCollapsed?: boolean;
+    operatorScopes?: string[];
+  }>([
     {
-      beforeExpandProof: "right-docked",
-      home: false,
-      deviceLess: false,
-      direction: "ltr",
       expectedControl: ".sidebar-brand__search",
       name: "expanded navigation",
-      navCollapsed: false,
-      operatorScopes: undefined,
-      proof: "expanded-nav",
-      themeMode: "dark" as const,
     },
     {
-      beforeExpandProof: undefined,
-      home: false,
-      deviceLess: false,
-      direction: "ltr",
       expectedControl: ".sidebar-brand__search",
       name: "collapsed navigation",
       navCollapsed: true,
-      operatorScopes: undefined,
-      proof: "collapsed-nav",
-      themeMode: "dark" as const,
     },
     {
-      beforeExpandProof: undefined,
       home: true,
-      deviceLess: false,
-      direction: "ltr",
       expectedControl: ".sidebar-rail__bottom .sidebar-footer-bar__home",
       name: "collapsed navigation with Home and attention",
       navCollapsed: true,
-      operatorScopes: undefined,
-      proof: "collapsed-nav-home-attention",
-      themeMode: "dark" as const,
     },
     {
-      beforeExpandProof: undefined,
-      home: false,
       deviceLess: true,
       direction: "rtl",
       expectedControl: ".sidebar-rail__bottom .sidebar-issues-button",
       name: "collapsed RTL limited-access status and attention",
       navCollapsed: true,
       operatorScopes: limitedScopes,
-      proof: "collapsed-rtl-limited-attention",
-      themeMode: "dark" as const,
     },
   ])("keeps focused main controls clear of shell chrome for $name", async (testCase) => {
     await suite.withPage(
       {
-        colorScheme: testCase.themeMode,
+        colorScheme: "dark",
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1600 },
@@ -502,7 +454,7 @@ suite.define(() => {
         if (testCase.deviceLess) {
           await failNextDeviceIdentityMint(page);
         }
-        await seedSettings(page, testCase.themeMode);
+        await seedSettings(page, "dark");
         await installMockGateway(
           page,
           scenario({
@@ -510,10 +462,10 @@ suite.define(() => {
             operatorScopes: testCase.operatorScopes,
           }),
         );
-        await openExpandedFilesPanel(page, testCase.beforeExpandProof);
+        await openExpandedFilesPanel(page);
         await page.evaluate((direction) => {
           document.documentElement.dir = direction;
-        }, testCase.direction);
+        }, testCase.direction ?? "ltr");
         if (testCase.navCollapsed) {
           await page.locator('[data-navigation-view][aria-pressed="true"]').click();
           await expect
@@ -524,7 +476,6 @@ suite.define(() => {
         await page.locator(testCase.expectedControl).waitFor();
         await waitForShellLayout(page);
         await expectPanelHeaderControlsClearShellChrome(page);
-        await capturePanel(page, testCase.proof);
       },
     );
   });

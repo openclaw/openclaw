@@ -83,6 +83,26 @@ async function waitForMenuFocusHandoff(page: Page, menu: Locator, view: string) 
   );
 }
 
+function activation(selected: SkillsLibraryReadResult[]) {
+  return {
+    sessionKey,
+    sessionActivation: "next-turn",
+    selections: selected.map(({ entry: { skillId, name, revision, ownerProfileId } }) => ({
+      skillId,
+      name,
+      revision,
+      ownerProfileId,
+    })),
+  };
+}
+
+async function focusFirstAction(page: Page, action: Locator) {
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(() => action.evaluate((node) => node.matches(":focus"))).toBe(true);
+  await page.keyboard.press("Enter");
+}
+
 suite.define(() => {
   it("keeps Alice's private pin while Bob browses with operator access", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
@@ -136,25 +156,25 @@ suite.define(() => {
       await composer.fill("");
 
       let menu = await openSkills(page);
+      const item = (name: string | RegExp, exact = true) =>
+        menu.getByRole("menuitem", { name, exact });
+      const selected = (skillId: string) =>
+        menu.locator(`.oc-menu-item[data-value="library-selected:${skillId}"]`);
       expect((await gateway.waitForRequest("skills.library.list")).params).toEqual({ sessionKey });
-      const aliceItem = menu.locator(
-        `.oc-menu-item[data-value="library-selected:${alice.entry.skillId}"]`,
-      );
+      const aliceItem = selected(alice.entry.skillId);
       await aliceItem.waitFor();
       expect(await aliceItem.textContent()).toContain("release-notes · Alice");
-      await menu
-        .getByRole("menuitem", { name: "Attach release-notes · Bob", exact: false })
-        .waitFor();
+      await item("Attach release-notes · Bob", false).waitFor();
       const attachables = menu.locator('.oc-menu-item[data-value^="library-attach:"]');
       const menuPanel = menu.locator(".oc-menu");
       // Visible content can still share the dropdown's opening scale animation.
       await waitForControlUiProofSurface(menuPanel, [aliceItem, attachables.first()]);
       const rows = await attachables.evaluateAll((items) =>
-        items.map((item) => {
-          const note = item.querySelector<HTMLElement>(".agent-chat__capability-menu-note")!;
-          const label = item.querySelector<HTMLElement>(".agent-chat__capability-menu-label")!;
+        items.map((element) => {
+          const note = element.querySelector<HTMLElement>(".agent-chat__capability-menu-note")!;
+          const label = element.querySelector<HTMLElement>(".agent-chat__capability-menu-label")!;
           return {
-            row: item.getBoundingClientRect().toJSON(),
+            row: element.getBoundingClientRect().toJSON(),
             label: label.getBoundingClientRect().toJSON(),
             note: note.getBoundingClientRect().toJSON(),
             lineHeight: Number.parseFloat(getComputedStyle(note).lineHeight),
@@ -169,25 +189,15 @@ suite.define(() => {
       }
       expect(rows[0].label.bottom).toBeLessThanOrEqual(rows[1].label.top);
       expect(await attachables.first().textContent()).toContain(bobEntry.description);
-      expect(
-        await attachables
-          .first()
-          .locator(".agent-chat__capability-menu-note")
-          .getAttribute("title"),
-      ).toBe(bobEntry.description);
+      const note = attachables.first().locator(".agent-chat__capability-menu-note");
+      expect(await note.getAttribute("title")).toBe(bobEntry.description);
       const listWidth = await menuPanel.evaluate((node) => node.getBoundingClientRect().width);
       // Native menu navigation keeps the active item aligned with browser focus.
-      await page.keyboard.press("Home");
-      await page.keyboard.press("ArrowDown");
-      await expect.poll(() => aliceItem.evaluate((node) => node.matches(":focus"))).toBe(true);
-      await page.keyboard.press("Enter");
-      const readAction = menu.getByRole("menuitem", {
-        name: "Read selected revision",
-        exact: true,
-      });
+      await focusFirstAction(page, aliceItem);
+      const readAction = item("Read selected revision");
       await waitForMenuFocusHandoff(page, menu, `library:${alice.entry.skillId}`);
       await readAction.waitFor({ state: "visible" });
-      const back = menu.getByRole("menuitem", { name: "Back", exact: true });
+      const back = item("Back");
       await page.keyboard.press("Home");
       await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
       await page.keyboard.press("Enter");
@@ -195,10 +205,7 @@ suite.define(() => {
       await waitForMenuFocusHandoff(page, menu, "skills");
       await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
       expect(await gateway.getRequests("skills.library.activate")).toHaveLength(0);
-      await page.keyboard.press("Home");
-      await page.keyboard.press("ArrowDown");
-      await expect.poll(() => aliceItem.evaluate((node) => node.matches(":focus"))).toBe(true);
-      await page.keyboard.press("Enter");
+      await focusFirstAction(page, aliceItem);
       await waitForMenuFocusHandoff(page, menu, `library:${alice.entry.skillId}`);
       await readAction.waitFor({ state: "visible" });
       expect(await menu.getByText("release-notes · Alice", { exact: true }).count()).toBe(1);
@@ -227,10 +234,7 @@ suite.define(() => {
         expect(bounds).not.toBeNull();
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
       }
-      await page.keyboard.press("Home");
-      await page.keyboard.press("ArrowDown");
-      await expect.poll(() => readAction.evaluate((node) => node.matches(":focus"))).toBe(true);
-      await page.keyboard.press("Enter");
+      await focusFirstAction(page, readAction);
       await page.getByLabel("SKILL.md", { exact: true }).waitFor();
       expect((await gateway.waitForRequest("skills.library.read")).params).toEqual({
         sessionKey,
@@ -246,21 +250,19 @@ suite.define(() => {
       await page.getByRole("button", { name: "Close", exact: true }).click();
 
       menu = await openSkills(page);
-      await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
-      await menu.getByRole("menuitem", { name: /^Connectors/u }).click();
-      await menu.getByRole("menuitem", { name: "Add MCP server…", exact: true }).waitFor();
+      await item("Back").click();
+      await item(/^Connectors/u, false).click();
+      await item("Add MCP server…").waitFor();
       expect(await menu.getByText("Selected for this session", { exact: true }).count()).toBe(0);
       expect(await menu.getByText("Add from your libraries", { exact: true }).count()).toBe(0);
       expect(await menu.locator('.oc-menu-item[data-value^="library-"]').count()).toBe(0);
-      await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+      await item("Back").click();
       menu = await openSkills(page);
       await gateway.setMethodResponse("skills.library.list", projection([]));
       const metadataBeforeActivation = (await gateway.getRequests("chat.metadata")).length;
       await gateway.deferNext("chat.metadata");
-      await menu
-        .locator(`.oc-menu-item[data-value="library-selected:${alice.entry.skillId}"]`)
-        .click();
-      await menu.getByRole("menuitem", { name: "Detach", exact: true }).click();
+      await selected(alice.entry.skillId).click();
+      await item("Detach").click();
       expect((await gateway.waitForRequest("skills.library.activate")).params).toEqual({
         action: "detach",
         sessionKey,
@@ -279,22 +281,9 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 2);
       await page.screenshot({ path: `${suite.artifactDir}/metadata-refresh-complete.png` });
 
-      await gateway.setMethodResponse("skills.library.activate", {
-        sessionKey,
-        sessionActivation: "next-turn",
-        selections: [
-          {
-            skillId: bob.entry.skillId,
-            name: bob.entry.name,
-            revision: bob.entry.revision,
-            ownerProfileId: bob.entry.ownerProfileId,
-          },
-        ],
-      });
+      await gateway.setMethodResponse("skills.library.activate", activation([bob]));
       await gateway.setMethodResponse("skills.library.list", projection([bob]));
-      await menu
-        .getByRole("menuitem", { name: "Attach release-notes · Bob", exact: false })
-        .click();
+      await item("Attach release-notes · Bob", false).click();
       await expect
         .poll(async () => (await gateway.getRequests("skills.library.activate")).length)
         .toBe(2);
@@ -304,26 +293,13 @@ suite.define(() => {
         skillId: bob.entry.skillId,
         revision: bob.entry.revision,
       });
-      const bobItem = menu.locator(
-        `.oc-menu-item[data-value="library-selected:${bob.entry.skillId}"]`,
-      );
+      const bobItem = selected(bob.entry.skillId);
       await bobItem.waitFor();
       const newer = { ...bob, entry: { ...bob.entry, revision: "2".repeat(64) } };
-      await gateway.setMethodResponse("skills.library.activate", {
-        sessionKey,
-        sessionActivation: "next-turn",
-        selections: [
-          {
-            skillId: bob.entry.skillId,
-            name: bob.entry.name,
-            revision: newer.entry.revision,
-            ownerProfileId: bob.entry.ownerProfileId,
-          },
-        ],
-      });
+      await gateway.setMethodResponse("skills.library.activate", activation([newer]));
       await gateway.setMethodResponse("skills.library.list", projection([newer]));
       await bobItem.click();
-      await menu.getByRole("menuitem", { name: "Refresh revision", exact: true }).click();
+      await item("Refresh revision").click();
       await expect
         .poll(async () => (await gateway.getRequests("skills.library.activate")).length)
         .toBe(3);

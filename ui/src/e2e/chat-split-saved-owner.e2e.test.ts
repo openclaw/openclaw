@@ -1,5 +1,5 @@
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
@@ -24,6 +24,16 @@ const savedLayout: ChatSplitLayout = {
     { id: "right", paneWeights: [1], panes: [{ id: "confirmed", sessionKey: homeKey }] },
   ],
 };
+
+async function expectUnbound(cell: Locator) {
+  expect(await cell.locator("openclaw-chat-pane").count()).toBe(0);
+  expect(await cell.textContent()).toContain("Choose a conversation");
+}
+
+const paneKeys = (panes: Locator) =>
+  panes.evaluateAll((elements) =>
+    elements.map((pane) => (pane as HTMLElement & { sessionKey: string }).sessionKey),
+  );
 
 suite.define(() => {
   it("keeps a known global Home and its draft when opening split view", async () => {
@@ -69,11 +79,7 @@ suite.define(() => {
       expect(await page.locator("[data-unbound-pane-id]").count()).toBe(0);
       await expect.poll(() => composer.first().inputValue()).toBe("Keep this Research draft");
       expect(
-        await page
-          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
-          .evaluateAll((panes) =>
-            panes.map((pane) => (pane as HTMLElement & { sessionKey: string }).sessionKey),
-          ),
+        await paneKeys(page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible")),
       ).toEqual(["agent:research:main", "agent:research:main"]);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
@@ -141,14 +147,7 @@ suite.define(() => {
           .locator(".agent-chat__composer-combobox textarea")
           .last()
           .waitFor({ state: "visible" });
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "restored.png"),
-            animations: "disabled",
-          });
-        }
-        expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
-        expect(await cells.first().textContent()).toContain("Choose a conversation");
+        await expectUnbound(cells.first());
         if (sessionScope === "global") {
           await expect
             .poll(() =>
@@ -175,14 +174,7 @@ suite.define(() => {
         expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
         await openHomeFullPage(page);
         await expect
-          .poll(() =>
-            cells
-              .first()
-              .locator("openclaw-chat-pane")
-              .evaluateAll((panes) =>
-                panes.map((pane) => (pane as HTMLElement & { sessionKey: string }).sessionKey),
-              ),
-          )
+          .poll(() => paneKeys(cells.first().locator("openclaw-chat-pane")))
           .toEqual([homeKey]);
         await waitForCommittedChatRoute(page);
         await expect.poll(() => page.url()).toBe(currentUrl);
@@ -200,22 +192,13 @@ suite.define(() => {
         });
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(errors).toEqual([]);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "recovered.png"),
-            animations: "disabled",
-          });
-        }
         await navigateToControlUiSession(page, "agent:research:global");
         await waitForCommittedChatRoute(page);
         await expect
           .poll(() =>
-            cells
-              .first()
-              .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
-              .evaluate((pane) => (pane as HTMLElement & { sessionKey: string }).sessionKey),
+            paneKeys(cells.first().locator("openclaw-chat-pane.chat-pane-cache__pane--visible")),
           )
-          .toBe("agent:research:global");
+          .toEqual(["agent:research:global"]);
         expect(new URL(page.url()).pathname).toBe("/chat/research/~key/global");
 
         // A close must not silently reopen the bound conversation in the surviving unknown pane.
@@ -230,8 +213,7 @@ suite.define(() => {
         await waitForCommittedChatRoute(page);
         await selectChatLayoutAction(cells.last(), "Close pane");
         await expect.poll(() => cells.count()).toBe(1);
-        expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
-        expect(await cells.first().textContent()).toContain("Choose a conversation");
+        await expectUnbound(cells.first());
         await expect
           .poll(() =>
             page.evaluate(() => document.activeElement?.getAttribute("data-unbound-pane-id")),
@@ -240,8 +222,7 @@ suite.define(() => {
         await page.reload();
         await waitForCommittedChatRoute(page);
         expect(await cells.count()).toBe(1);
-        expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
-        expect(await cells.first().textContent()).toContain("Choose a conversation");
+        await expectUnbound(cells.first());
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-agent-card__main").click();
         await sidebar.locator('.sidebar-agent-menu [data-value="command:capabilities"]').click();
