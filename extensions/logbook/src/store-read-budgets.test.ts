@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LogbookOperations } from "./store-contract.js";
+import type { LogbookFrameInput, LogbookOperations } from "./store-contract.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 
 const reads = vi.hoisted(() => ({
@@ -123,6 +123,13 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const day = "2026-07-03";
+const fullDay = { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER };
+const cardContent = {
+  summary: "Summary",
+  detail: "Detailed activity",
+  category: "coding",
+  distractions: [],
+};
 
 it("reuses live schema admission on reopen and validates a replacement physical database", async () => {
   const dataDir = tempDirs.make("logbook-schema-admission-");
@@ -166,8 +173,8 @@ function openBackend() {
 describe("Logbook native statement and read budgets", () => {
   it("polls only pending batches in timestamp/id order without sorting historical rows", () => {
     const { backend, databasePath } = openBackend();
-    const writer = new DatabaseSync(databasePath);
-    try {
+    {
+      using writer = new DatabaseSync(databasePath);
       writer.exec(`
         WITH RECURSIVE history(id) AS (
           VALUES (1) UNION ALL SELECT id + 1 FROM history WHERE id < 1000
@@ -179,8 +186,6 @@ describe("Logbook native statement and read budgets", () => {
                (1002, '${day}', 2000, 3000, 'pending', 0, 0),
                (1003, '${day}', 2000, 3000, 'pending', 0, 0);
       `);
-    } finally {
-      writer.close();
     }
     for (const id of [1002, 1003, 1001]) {
       expect(backend.execute({ type: "nextPendingBatch", input: undefined })).toMatchObject({
@@ -210,29 +215,38 @@ describe("Logbook native statement and read budgets", () => {
       width: 640,
       height: 480,
       byteSize: 10,
-      contentHash: "first",
       idle: false,
     };
-    expect(backend.execute({ type: "insertFrame", input: firstFrame })).toBe(1);
+    const warmupFrame = { ...firstFrame, path: "warmup.jpg" };
+    const secondFrame = {
+      capturedAtMs: 2,
+      day,
+      path: "second.jpg",
+      screenIndex: 1,
+      width: undefined,
+      height: undefined,
+      byteSize: 20,
+      idle: true,
+    };
+    const insert = (frame: Omit<LogbookFrameInput, "contentHash">, contentHash: string) =>
+      backend.execute({ type: "insertFrame", input: { ...frame, contentHash } });
+    const standup = (text: string, targetDay = day) =>
+      backend.execute({ type: "saveStandup", input: { day: targetDay, text } });
+    expect(insert(firstFrame, "first")).toBe(1);
     expect(
       backend.execute({
         type: "createBatch",
         input: { day, startMs: 1, endMs: 2, frameIds: [1] },
       }),
     ).toBe(1);
-    backend.execute({ type: "saveStandup", input: { day, text: "Initial standup" } });
+    standup("Initial standup");
     backend.execute({
       type: "setBatchStatus",
       input: { batchId: 1, status: "error", error: "First failure", model: "synthetic/first" },
     });
     // The native cache retains a query on its second execution.
-    expect(
-      backend.execute({
-        type: "insertFrame",
-        input: { ...firstFrame, path: "warmup.jpg", contentHash: "warmup" },
-      }),
-    ).toBe(2);
-    backend.execute({ type: "saveStandup", input: { day, text: "Warmup standup" } });
+    expect(insert(warmupFrame, "warmup")).toBe(2);
+    standup("Warmup standup");
     backend.execute({
       type: "setBatchStatus",
       input: { batchId: 1, status: "running", error: "Warmup status" },
@@ -240,22 +254,9 @@ describe("Logbook native statement and read budgets", () => {
     const warmed = new Map(preparations);
     expect([...warmed.values()]).toEqual([2, 2, 2]);
 
-    expect(
-      backend.execute({
-        type: "insertFrame",
-        input: {
-          capturedAtMs: 2,
-          day,
-          path: "second.jpg",
-          screenIndex: 1,
-          byteSize: 20,
-          contentHash: "second",
-          idle: true,
-        },
-      }),
-    ).toBe(3);
-    backend.execute({ type: "saveStandup", input: { day, text: "Revised standup 🦞" } });
-    backend.execute({ type: "saveStandup", input: { day: "2026-07-04", text: "Another day" } });
+    expect(insert(secondFrame, "second")).toBe(3);
+    standup("Revised standup 🦞");
+    standup("Another day", "2026-07-04");
     backend.execute({ type: "setBatchStatus", input: { batchId: 1, status: "pending" } });
     expect(backend.execute({ type: "latestBatch", input: undefined })).toMatchObject({
       status: "pending",
@@ -268,26 +269,8 @@ describe("Logbook native statement and read budgets", () => {
     });
 
     expect(preparations).toEqual(warmed);
-    expect(backend.execute({ type: "frameById", input: { id: 1 } })).toMatchObject({
-      path: "first.jpg",
-      width: 640,
-      height: 480,
-      screenIndex: 0,
-      byteSize: 10,
-      idle: false,
-    });
-    expect(backend.execute({ type: "frameById", input: { id: 2 } })).toMatchObject({
-      path: "warmup.jpg",
-      width: 640,
-      height: 480,
-    });
-    expect(backend.execute({ type: "frameById", input: { id: 3 } })).toMatchObject({
-      path: "second.jpg",
-      width: undefined,
-      height: undefined,
-      screenIndex: 1,
-      byteSize: 20,
-      idle: true,
+    [firstFrame, warmupFrame, secondFrame].forEach((frame, index) => {
+      expect(backend.execute({ type: "frameById", input: { id: index + 1 } })).toMatchObject(frame);
     });
     expect(backend.execute({ type: "lastFrame", input: undefined })).toEqual({
       capturedAtMs: 2,
@@ -313,29 +296,22 @@ describe("Logbook native statement and read budgets", () => {
       startMs: index * 60_000,
       endMs: (index + 1) * 60_000,
       title: `Card ${index} 🦞`,
-      summary: "Summary",
-      detail: "Detailed activity",
-      category: "coding",
-      distractions: [],
+      ...cardContent,
     }));
     backend.execute({
       type: "replaceCardsInWindow",
-      input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, drafts },
+      input: { ...fullDay, drafts },
     });
-    reads.cardQueries = 0;
-    reads.cardRows = 0;
+    Object.assign(reads, { cardQueries: 0, cardRows: 0 });
     expect(backend.execute({ type: "timelineForDay", input: { day } })).toMatchObject({
       cards: drafts.map((draft) => expect.objectContaining(draft)),
       stats: { trackedMs: 8 * 60_000 },
     });
-    expect(reads.cardQueries).toBe(1);
-    expect(reads.cardRows).toBe(8);
+    expect(reads).toMatchObject({ cardQueries: 1, cardRows: 8 });
 
-    reads.cardQueries = 0;
-    reads.cardRows = 0;
+    Object.assign(reads, { cardQueries: 0, cardRows: 0 });
     expect(backend.execute({ type: "countCardsForDay", input: { day } })).toBe(8);
-    expect(reads.cardQueries).toBe(1);
-    expect(reads.cardRows).toBe(0);
+    expect(reads).toMatchObject({ cardQueries: 1, cardRows: 0 });
   });
 
   it("reads at most 200 observations with stable timestamp ties", () => {
@@ -346,7 +322,7 @@ describe("Logbook native statement and read budgets", () => {
     }
     const batchId = backend.execute({
       type: "createBatch",
-      input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, frameIds: [frameId] },
+      input: { ...fullDay, frameIds: [frameId] },
     });
     if (typeof batchId !== "number") {
       throw new Error("Expected a batch id from the native backend");
@@ -361,7 +337,7 @@ describe("Logbook native statement and read budgets", () => {
     expect(
       backend.execute({
         type: "observationsInRange",
-        input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, tailLimit: 200 },
+        input: { ...fullDay, tailLimit: 200 },
       }),
     ).toEqual(
       segments
@@ -370,16 +346,15 @@ describe("Logbook native statement and read budgets", () => {
     );
     expect(reads.observationRows).toBe(200);
   });
-  const keyframeDrafts = [0, 40_000].map((startMs) => ({
-    day,
-    startMs,
-    endMs: startMs + 40_000,
-    title: `Card ${startMs}`,
-    summary: "Summary",
-    detail: "",
-    category: "coding",
-    distractions: [],
-  }));
+  const keyframeDrafts = [0, 40_000].map((startMs) =>
+    Object.assign({}, cardContent, {
+      day,
+      startMs,
+      endMs: startMs + 40_000,
+      title: `Card ${startMs}`,
+      detail: "",
+    }),
+  );
   function insertCandidate(
     backend: SqliteWorkerBackend<LogbookOperations>,
     capturedAtMs: number,

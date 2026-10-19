@@ -43,6 +43,10 @@ async function open(dataDir: string) {
   return store;
 }
 
+function capture(store: LogbookStore, day: string, capturedAtMs: number, buffer: Buffer) {
+  return store.captureFrame({ day, capturedAtMs, screenIndex: 0, buffer });
+}
+
 async function aliasedFrameRead() {
   const directory = tempDirs.make("logbook-frame-read-");
   const dataDir = path.join(directory, "data");
@@ -52,12 +56,7 @@ async function aliasedFrameRead() {
   const reader = await open(aliasDir);
   const day = dayKeyFor(1);
   const bytes = Buffer.from("synthetic frame");
-  const frameId = await owner.captureFrame({
-    capturedAtMs: 1,
-    day,
-    screenIndex: 0,
-    buffer: bytes,
-  });
+  const frameId = await capture(owner, day, 1, bytes);
   const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
@@ -70,18 +69,6 @@ async function aliasedFrameRead() {
 }
 
 describe("Logbook worker and frame I/O ownership", () => {
-  it("bootstraps and reopens durable state without opening SQLite in the application thread", async () => {
-    const directory = tempDirs.make("logbook-worker-bootstrap-");
-    const store = await open(directory);
-    await store.saveStandup("2026-07-03", "Persisted through the worker");
-    await store.close();
-    const reopened = await open(directory);
-    expect(await reopened.getStandup("2026-07-03")).toMatchObject({
-      text: "Persisted through the worker",
-    });
-    expect(openNodeSqliteDatabase).not.toHaveBeenCalled();
-  });
-
   it.each(["frame", "batch"] as const)(
     "drains an admitted %s read before pruning through a directory alias or closing its client",
     async (kind) => {
@@ -89,21 +76,16 @@ describe("Logbook worker and frame I/O ownership", () => {
       const batchId = await owner.createBatch({ day, startMs: 1, endMs: 2, frameIds: [frameId] });
       const reading = kind === "frame" ? reader.framePayload(frameId) : reader.batchImages(batchId);
       await entered.promise;
-      let pruned = false;
-      let closed = false;
-      const pruning = owner.pruneFrames(2).then((count) => {
-        pruned = true;
-        return count;
-      });
-      const closing = reader.close().then(() => {
-        closed = true;
-      });
+      const pruned = vi.fn((count: number) => count);
+      const closed = vi.fn();
+      const pruning = owner.pruneFrames(2).then(pruned);
+      const closing = reader.close().then(closed);
       try {
         // Two real worker replies put any incorrectly dispatched prune ahead of the metadata read.
         await owner.countCardsForDay(day);
         expect(await owner.frameById(frameId)).not.toBeNull();
-        expect(pruned).toBe(false);
-        expect(closed).toBe(false);
+        expect(pruned).not.toHaveBeenCalled();
+        expect(closed).not.toHaveBeenCalled();
         release.resolve();
         if (kind === "frame") {
           expect(await reading).toMatchObject({ frameId, base64: bytes.toString("base64") });
@@ -130,35 +112,28 @@ describe("Logbook worker and frame I/O ownership", () => {
     const reads = Array.from({ length: 128 }, () => reader.framePayload(frameId));
     const accepted = Promise.allSettled(reads);
     await entered.promise;
-    let overflowResult:
-      | { status: "fulfilled" }
-      | { status: "rejected"; reason: unknown }
-      | undefined;
+    const overflowResult = vi.fn();
     const overflow = reader.framePayload(frameId).then(
-      () => {
-        overflowResult = { status: "fulfilled" };
-      },
-      (reason: unknown) => {
-        overflowResult = { status: "rejected", reason };
-      },
+      () => overflowResult({ status: "fulfilled" }),
+      (reason: unknown) => overflowResult({ status: "rejected", reason }),
     );
-    let closed = false;
-    const closing = reader.close().then(() => {
-      closed = true;
-    });
+    const closed = vi.fn();
+    const closing = reader.close().then(closed);
     try {
       await owner.countCardsForDay(day);
-      expect(overflowResult).toMatchObject({ status: "rejected", reason: { code: "overloaded" } });
-      expect(closed).toBe(false);
+      expect(overflowResult).toHaveBeenCalledExactlyOnceWith({
+        status: "rejected",
+        reason: expect.objectContaining({ code: "overloaded" }),
+      });
+      expect(closed).not.toHaveBeenCalled();
       release.resolve();
       const outcomes = await accepted;
-      expect(outcomes.find((result) => result.status === "rejected")).toBeUndefined();
-      expect(
-        outcomes.every(
-          (result) =>
-            result.status === "fulfilled" && result.value?.base64 === bytes.toString("base64"),
-        ),
-      ).toBe(true);
+      expect(outcomes).toEqual(
+        Array.from({ length: 128 }, () => ({
+          status: "fulfilled",
+          value: expect.objectContaining({ base64: bytes.toString("base64") }),
+        })),
+      );
       await closing;
       expect(await owner.framePayload(frameId)).toMatchObject({ base64: bytes.toString("base64") });
     } finally {
@@ -174,23 +149,11 @@ describe("Logbook worker and frame I/O ownership", () => {
     const bytes = Buffer.alloc(8 * 1024 * 1024, 0x61);
     const frameIds: number[] = [];
     for (let index = 0; index < 9; index += 1) {
-      const file = store.frameFilePath(day, index + 1);
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, bytes);
-      frameIds.push(
-        await store.insertFrame({
-          capturedAtMs: index + 1,
-          day,
-          path: file,
-          screenIndex: 0,
-          byteSize: bytes.byteLength,
-          contentHash: `synthetic-${index}`,
-          idle: false,
-        }),
-      );
+      frameIds.push(await capture(store, day, index + 1, bytes));
     }
     const batchId = await store.createBatch({ day, startMs: 1, endMs: 10, frameIds });
     const images = await store.batchImages(batchId);
+    expect(openNodeSqliteDatabase).not.toHaveBeenCalled();
     expect(images).toHaveLength(9);
     expect(images.reduce((total, image) => total + image.buffer.byteLength, 0)).toBe(
       72 * 1024 * 1024,

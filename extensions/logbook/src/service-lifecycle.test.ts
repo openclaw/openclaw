@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -19,7 +18,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
-import { resolveLogbookConfig } from "./config.js";
+import { resolveLogbookConfig, type LogbookConfig } from "./config.js";
 import { dayKeyFor } from "./day.js";
 import { LogbookService } from "./service.js";
 import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
@@ -32,6 +31,34 @@ const snapshot = { payload: { base64: Buffer.from("synthetic image").toString("b
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function makeService(
+  dataDir: string,
+  config: Partial<LogbookConfig> = {},
+  deps: Partial<ConstructorParameters<typeof LogbookService>[1]> = {},
+) {
+  return new LogbookService(resolveLogbookConfig({ captureEnabled: false, ...config }), {
+    dataDir,
+    workerModuleUrl,
+    runtime: createPluginRuntimeMock(),
+    fullConfig: {},
+    logger: quietLogger,
+    scheduler: createTestPluginServiceScheduler(),
+    ...deps,
+  });
+}
+
+function block<Args extends unknown[], Result>(
+  run: (...args: Args) => Promise<Result>,
+  entered: ReturnType<typeof createDeferred<void>>,
+  release: ReturnType<typeof createDeferred<void>>,
+) {
+  return async (...args: Args) => {
+    entered.resolve();
+    await release.promise;
+    return await run(...args);
+  };
+}
 
 function completion(
   text: string,
@@ -47,6 +74,23 @@ function completion(
   };
 }
 
+function observationText(end: string) {
+  return JSON.stringify([{ start: "10:00:00", end, description: "Synthetic activity" }]);
+}
+
+function cardText(endTime: string, title: string, summary: string) {
+  return JSON.stringify([{ startTime: "10:00:00", endTime, title, summary, category: "coding" }]);
+}
+
+async function openStore(dataDir: string) {
+  const store = await LogbookStore.open(dataDir, workerModuleUrl);
+  return Object.assign(store, { [Symbol.asyncDispose]: () => store.close() });
+}
+
+function capture(store: LogbookStore, day: string, capturedAtMs: number, text: string) {
+  return store.captureFrame({ day, capturedAtMs, screenIndex: 0, buffer: Buffer.from(text) });
+}
+
 describe("Logbook service disposal", () => {
   it.each([
     { prune: true, pending: false },
@@ -60,9 +104,7 @@ describe("Logbook service disposal", () => {
       const endMs = startMs + 10 * 60_000;
       const runtime = createPluginRuntimeMock();
       runtime.mediaUnderstanding.extractStructuredWithModel = vi.fn(async () => ({
-        text: JSON.stringify([
-          { start: "10:00:00", end: "10:10:00", description: "Synthetic activity" },
-        ]),
+        text: observationText("10:10:00"),
       }));
       const synthesized = createDeferred<void>();
       let pruning: Promise<PromiseSettledResult<number>> = Promise.resolve({
@@ -83,32 +125,14 @@ describe("Logbook service disposal", () => {
         }
         synthesized.resolve();
         return completion(
-          JSON.stringify([
-            {
-              startTime: "10:00:00",
-              endTime: "10:10:00",
-              title: "Retained synthesis",
-              summary: "Published through retention",
-              category: "coding",
-            },
-          ]),
+          cardText("10:10:00", "Retained synthesis", "Published through retention"),
         );
       });
       const logger = { ...quietLogger, warn: vi.fn(), error: vi.fn() };
-      const service = new LogbookService(
-        resolveLogbookConfig({
-          captureEnabled: false,
-          visionModel: "codex/gpt-5.6-sol",
-          analysisIntervalMinutes: 10,
-        }),
-        {
-          dataDir,
-          workerModuleUrl,
-          runtime,
-          fullConfig: {},
-          logger,
-          scheduler: createTestPluginServiceScheduler(),
-        },
+      const service = makeService(
+        dataDir,
+        { visionModel: "codex/gpt-5.6-sol", analysisIntervalMinutes: 10 },
+        { runtime, logger },
       );
       const peer = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
@@ -118,12 +142,7 @@ describe("Logbook service disposal", () => {
         const frameIds: number[] = [];
         for (const capturedAtMs of frameTimes) {
           frameIds.push(
-            await peer.captureFrame({
-              day,
-              capturedAtMs,
-              screenIndex: 0,
-              buffer: Buffer.from(`synthetic keyframe ${capturedAtMs}`),
-            }),
+            await capture(peer, day, capturedAtMs, `synthetic keyframe ${capturedAtMs}`),
           );
         }
         const frameId = frameIds[pending ? 5 : 0];
@@ -171,15 +190,11 @@ describe("Logbook service disposal", () => {
           keyframeId: prune ? undefined : frameId,
         });
         await peer.close();
-        const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
-        try {
-          expect(await reopened.cardsForDay(day)).toEqual(cards);
-          expect(await reopened.latestBatch()).toEqual(batch);
-          expect((await reopened.batchImages(batch.id)).map(({ frame }) => frame)).toEqual(frames);
-          expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
-        } finally {
-          await reopened.close();
-        }
+        await using reopened = await openStore(dataDir);
+        expect(await reopened.cardsForDay(day)).toEqual(cards);
+        expect(await reopened.latestBatch()).toEqual(batch);
+        expect((await reopened.batchImages(batch.id)).map(({ frame }) => frame)).toEqual(frames);
+        expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
       } finally {
         await pruning;
         await service.stop();
@@ -195,25 +210,12 @@ describe("Logbook service disposal", () => {
     const releaseOpen = createDeferred<void>();
     const closing = createDeferred<void>();
     const releaseClose = createDeferred<void>();
-    vi.spyOn(LogbookStore, "open").mockImplementationOnce(async () => {
-      opened.resolve();
-      await releaseOpen.promise;
-      return store;
-    });
+    vi.spyOn(LogbookStore, "open").mockImplementationOnce(
+      block(async () => store, opened, releaseOpen),
+    );
     const closeStore = store.close.bind(store);
-    vi.spyOn(store, "close").mockImplementationOnce(async () => {
-      closing.resolve();
-      await releaseClose.promise;
-      await closeStore();
-    });
-    const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false }), {
-      dataDir,
-      workerModuleUrl,
-      runtime: createPluginRuntimeMock(),
-      fullConfig: {},
-      logger: quietLogger,
-      scheduler: createTestPluginServiceScheduler(),
-    });
+    vi.spyOn(store, "close").mockImplementationOnce(block(closeStore, closing, releaseClose));
+    const service = makeService(dataDir);
     const starting = service.start();
     await opened.promise;
     const completed = vi.fn();
@@ -236,14 +238,7 @@ describe("Logbook service disposal", () => {
     vi.spyOn(LogbookStore.prototype, "resetRunningBatches").mockRejectedValueOnce(
       new Error("storage unavailable"),
     );
-    const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false }), {
-      dataDir,
-      workerModuleUrl,
-      scheduler: createTestPluginServiceScheduler(),
-      runtime: createPluginRuntimeMock(),
-      fullConfig: {},
-      logger: quietLogger,
-    });
+    const service = makeService(dataDir);
     try {
       await expect(service.start()).rejects.toThrow("storage unavailable");
       await expect(service.status()).rejects.toThrow("not running");
@@ -255,17 +250,7 @@ describe("Logbook service disposal", () => {
 
   it("owns delayed manual analysis preparation through rejection and stop", async () => {
     const dataDir = tempDirs.make("logbook-analysis-admission-");
-    const service = new LogbookService(
-      resolveLogbookConfig({ captureEnabled: false, visionModel: "synthetic/vision" }),
-      {
-        dataDir,
-        workerModuleUrl,
-        scheduler: createTestPluginServiceScheduler(),
-        runtime: createPluginRuntimeMock(),
-        fullConfig: {},
-        logger: quietLogger,
-      },
-    );
+    const service = makeService(dataDir, { visionModel: "synthetic/vision" });
     await service.start();
     const entered = createDeferred<void>();
     const reset = createDeferred<number>();
@@ -304,7 +289,7 @@ describe("Logbook service disposal", () => {
     "ask-read",
     "frame-read",
   ])("drains %s before closing SQLite", async (kind) => {
-    const dataDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-service-drain-")));
+    const dataDir = realpathSync(tempDirs.make("logbook-service-drain-"));
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const runtime = createPluginRuntimeMock();
@@ -326,117 +311,62 @@ describe("Logbook service disposal", () => {
       if (kind === "vision-error") {
         throw new Error("synthetic vision failure");
       }
-      return {
-        text: JSON.stringify([
-          { start: "10:00:00", end: "10:01:00", description: "Synthetic activity" },
-        ]),
-      };
+      return { text: observationText("10:01:00") };
     });
     runtime.llm.complete = vi.fn(async () => {
       if (kind.startsWith("standup")) {
         return completion("Synthetic standup");
       }
-      return completion(
-        JSON.stringify([
-          {
-            startTime: "10:00:00",
-            endTime: "10:01:00",
-            title: "Synthetic activity",
-            summary: "Completed before shutdown",
-            category: "coding",
-          },
-        ]),
-      );
+      return completion(cardText("10:01:00", "Synthetic activity", "Completed before shutdown"));
     });
     if (kind.startsWith("vision")) {
-      const seed = await LogbookStore.open(dataDir, workerModuleUrl);
-      try {
-        for (let index = 0; index < 2; index++) {
-          const time = startMs + index * 120_000;
-          const framePath = seed.frameFilePath(day, time);
-          mkdirSync(path.dirname(framePath), { recursive: true });
-          writeFileSync(framePath, "synthetic image");
-          const frameId = await seed.insertFrame({
-            capturedAtMs: time,
-            day,
-            path: framePath,
-            screenIndex: 0,
-            byteSize: 15,
-            contentHash: `synthetic-${index}`,
-            idle: false,
-          });
-          await seed.createBatch({
-            day,
-            startMs: time,
-            endMs: time + 60_000,
-            frameIds: [frameId],
-          });
-        }
-      } finally {
-        await seed.close();
+      await using seed = await openStore(dataDir);
+      for (let index = 0; index < 2; index++) {
+        const time = startMs + index * 120_000;
+        const frameId = await capture(seed, day, time, `synthetic image ${index}`);
+        await seed.createBatch({ day, startMs: time, endMs: time + 60_000, frameIds: [frameId] });
       }
     }
     const activeStore = await LogbookStore.open(dataDir, workerModuleUrl);
     vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(activeStore);
     if (kind === "frame-read") {
-      await activeStore.captureFrame({
-        capturedAtMs: Date.now(),
-        day,
-        screenIndex: 0,
-        buffer: Buffer.from("synthetic frame payload"),
-      });
+      await capture(activeStore, day, Date.now(), "synthetic frame payload");
       const framePayload = activeStore.framePayload.bind(activeStore);
-      vi.spyOn(activeStore, "framePayload").mockImplementation(async (id) => {
-        entered.resolve();
-        await release.promise;
-        return await framePayload(id);
-      });
+      vi.spyOn(activeStore, "framePayload").mockImplementation(
+        block(framePayload, entered, release),
+      );
     }
     if (kind === "capture-write") {
       const captureFrame = activeStore.captureFrame.bind(activeStore);
-      vi.spyOn(activeStore, "captureFrame").mockImplementation(async (frame) => {
-        entered.resolve();
-        await release.promise;
-        return await captureFrame(frame);
-      });
+      vi.spyOn(activeStore, "captureFrame").mockImplementation(
+        block(captureFrame, entered, release),
+      );
     }
     if (kind === "standup-write") {
       const saveStandup = activeStore.saveStandup.bind(activeStore);
-      vi.spyOn(activeStore, "saveStandup").mockImplementation(async (...args) => {
-        entered.resolve();
-        await release.promise;
-        return await saveStandup(...args);
-      });
+      vi.spyOn(activeStore, "saveStandup").mockImplementation(block(saveStandup, entered, release));
     }
     if (kind === "status-read") {
       const latestBatch = activeStore.latestBatch.bind(activeStore);
-      vi.spyOn(activeStore, "latestBatch").mockImplementation(async () => {
-        entered.resolve();
-        await release.promise;
-        return await latestBatch();
-      });
+      vi.spyOn(activeStore, "latestBatch").mockImplementation(block(latestBatch, entered, release));
     }
     if (kind === "ask-read") {
       const observationsInRange = activeStore.observationsInRange.bind(activeStore);
-      vi.spyOn(activeStore, "observationsInRange").mockImplementation(async (...args) => {
-        entered.resolve();
-        await release.promise;
-        return await observationsInRange(...args);
-      });
+      vi.spyOn(activeStore, "observationsInRange").mockImplementation(
+        block(observationsInRange, entered, release),
+      );
     }
     const clock = createGatewaySchedulerClock();
-    const service = new LogbookService(
-      resolveLogbookConfig({
+    const service = makeService(
+      dataDir,
+      {
         captureEnabled: true,
         captureIntervalSeconds: kind.startsWith("capture") ? 5 : 600,
         visionModel: "synthetic/vision",
-      }),
+      },
       {
         runtime,
-        fullConfig: {},
         logger,
-        dataDir,
-        workerModuleUrl,
         scheduler: createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)),
       },
     );
@@ -473,45 +403,36 @@ describe("Logbook service disposal", () => {
       await settled;
       expect(clock.armedAtMs).toBeNull();
       expect(logger.error).not.toHaveBeenCalled();
-      const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
-      try {
-        if (kind.startsWith("capture")) {
-          expect(await reopened.countUnbatchedActiveFrames()).toBe(1);
-          expect(runtime.nodes.invoke).toHaveBeenCalledTimes(1);
-        } else if (kind.startsWith("standup")) {
-          expect(result).toEqual({ day, text: "Synthetic standup", updatedMs: expect.any(Number) });
-          expect(await reopened.getStandup(day)).toEqual(result);
-        } else if (kind.endsWith("-read")) {
-          expect(await reopened.latestBatch()).toBeNull();
-        } else {
-          const db = new DatabaseSync(path.join(dataDir, "logbook.sqlite"), { readOnly: true });
-          try {
-            expect(db.prepare("SELECT status, error FROM batches ORDER BY id").all()).toEqual([
-              {
-                status: kind === "vision-success" ? "done" : "error",
-                error: kind === "vision-success" ? null : "synthetic vision failure",
-              },
-              { status: "pending", error: null },
-            ]);
-            expect(runtime.mediaUnderstanding.extractStructuredWithModel).toHaveBeenCalledTimes(1);
-          } finally {
-            db.close();
-          }
-        }
-      } finally {
-        await reopened.close();
+      await using reopened = await openStore(dataDir);
+      if (kind.startsWith("capture")) {
+        expect(await reopened.countUnbatchedActiveFrames()).toBe(1);
+        expect(runtime.nodes.invoke).toHaveBeenCalledTimes(1);
+      } else if (kind.startsWith("standup")) {
+        expect(result).toEqual({ day, text: "Synthetic standup", updatedMs: expect.any(Number) });
+        expect(await reopened.getStandup(day)).toEqual(result);
+      } else if (kind.endsWith("-read")) {
+        expect(await reopened.latestBatch()).toBeNull();
+      } else {
+        using db = new DatabaseSync(path.join(dataDir, "logbook.sqlite"), { readOnly: true });
+        expect(db.prepare("SELECT status, error FROM batches ORDER BY id").all()).toEqual([
+          {
+            status: kind === "vision-success" ? "done" : "error",
+            error: kind === "vision-success" ? null : "synthetic vision failure",
+          },
+          { status: "pending", error: null },
+        ]);
+        expect(runtime.mediaUnderstanding.extractStructuredWithModel).toHaveBeenCalledTimes(1);
       }
     } finally {
       release.resolve();
       await active.catch(() => {});
       await settled;
       await service.stop();
-      rmSync(dataDir, { recursive: true, force: true });
     }
   });
 
   it("drains an admitted standup through the registered service stop", async () => {
-    const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-runtime-drain-")));
+    const stateDir = realpathSync(tempDirs.make("logbook-runtime-drain-"));
     const captured = createCapturedPluginRegistration({ id: "logbook" });
     captured.api.pluginConfig = { captureEnabled: false };
     const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
@@ -551,18 +472,13 @@ describe("Logbook service disposal", () => {
       release.resolve();
       expect((await standup)?.[0]).toBe(true);
       await stopping;
-      const reopened = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);
-      try {
-        expect((await reopened.getStandup(dayKeyFor(Date.now())))?.text).toBe("Accepted standup");
-      } finally {
-        await reopened.close();
-      }
+      await using reopened = await openStore(path.join(stateDir, "logbook"));
+      expect((await reopened.getStandup(dayKeyFor(Date.now())))?.text).toBe("Accepted standup");
     } finally {
       release.resolve();
       context.scheduler.beginClose();
       await service.stop?.(context);
       await context.scheduler.stop();
-      rmSync(stateDir, { recursive: true, force: true });
     }
   });
 });
