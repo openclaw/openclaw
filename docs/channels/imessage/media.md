@@ -16,6 +16,7 @@ How attachments move in and out, how outbound text is chunked, and which deliver
   <Accordion title="Attachments and media">
     - inbound attachment ingestion is **off by default** — set `channels.imessage.includeAttachments: true` to forward photos, voice memos, video, and other attachments to the agent. With it disabled, attachment-only iMessages are dropped before reaching the agent and may produce no `Inbound message` log line at all.
     - remote inbound attachment paths can be fetched via SCP when `remoteHost` is set
+    - local CAF voice notes are converted to WAV before transcription; install `ffmpeg` on the Gateway host (for example, `brew install ffmpeg` on macOS). The original and converted audio must fit the attachment limit. Failed conversion marks the attachment unavailable instead of forwarding unsupported or truncated audio.
     - outbound files are staged into an owner-only temporary path on the configured or auto-detected Messages Mac, passed to `imsg` by that remote path, and cleaned up best-effort after success, failure, or timeout; cleanup failure emits a warning and can leave owner-only residue
     - attachment paths must match allowed roots:
       - `channels.imessage.attachmentRoots` (local)
