@@ -6,7 +6,6 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { registerModelsAccountsCli } from "./models-accounts-cli.js";
-import type { GlobalOnlyModelCommandName } from "./models-cli.runtime.js";
 import { isModelsStatusJsonOutput } from "./models-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
@@ -159,7 +158,7 @@ function runAuthModelCommand<T extends object>(
 /** Run a command that edits global defaults, rejecting the inherited `models --agent`. */
 async function withGlobalModelsRuntime(
   command: Command,
-  commandName: GlobalOnlyModelCommandName,
+  commandName: Parameters<ModelsCliRuntime["rejectAgentScopedModelCommand"]>[1],
   action: (runtime: ModelsCliRuntime) => Promise<void>,
 ): Promise<void> {
   return withModelsRuntime(async (runtime) => {
