@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaBusStateSnapshot as Snapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { Bootstrap, EvidenceEnvelope, RunnerSelection } from "./ui-types.js";
 
@@ -24,6 +24,7 @@ const scenarios: Bootstrap["scenarios"] = (
   successCriteria: ["pass"],
   execution: { kind },
 }));
+const model = "openai/gpt-5.6-luna";
 
 export function createBootstrap(
   selection: RunnerSelection,
@@ -72,15 +73,7 @@ export function createBootstrap(
         { id: "all", evidenceMode: "full", channelDriver: "live", categoryIds: [] },
       ],
       status: "ready",
-      real: [
-        {
-          input: "text",
-          key: "openai/gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          preferred: true,
-          provider: "openai",
-        },
-      ],
+      real: [{ key: model, name: model, input: "text", preferred: true, provider: "openai" }],
     },
     scenarios,
   };
@@ -88,13 +81,7 @@ export function createBootstrap(
 
 export async function mountRunner(
   selection: RunnerSelection,
-  snapshot: QaBusStateSnapshot = {
-    conversations: [],
-    cursor: 0,
-    events: [],
-    messages: [],
-    threads: [],
-  },
+  snapshot: Snapshot = { conversations: [], cursor: 0, events: [], messages: [], threads: [] },
   evidence: EvidenceEnvelope["evidence"] = null,
   controlUiUrl: string | null = null,
 ) {

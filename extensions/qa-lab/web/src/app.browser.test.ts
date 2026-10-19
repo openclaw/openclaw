@@ -163,24 +163,20 @@ describe("QA Lab runner browser interactions", () => {
         scrollLeft: { configurable: true, get: () => scrollLeft, set: setScrollLeft },
       });
       nav.scrollTop = 17;
-      main.scrollLeft = 11;
-      main.scrollTop = 23;
-      root.scrollLeft = 7;
-      root.scrollTop = 13;
+      Object.assign(main, { scrollLeft: 11, scrollTop: 23 });
+      Object.assign(root, { scrollLeft: 7, scrollTop: 13 });
 
       tab.focus();
 
       expect(document.activeElement).toBe(tab);
-      expect(nav.scrollLeft).toBe(expected);
+      expect(nav).toMatchObject({ scrollLeft: expected, scrollTop: 17 });
       if (expected === initialScroll) {
         expect(setScrollLeft).not.toHaveBeenCalled();
       } else {
         expect(setScrollLeft).toHaveBeenCalledExactlyOnceWith(expected);
       }
-      expect(nav.scrollTop).toBe(17);
-      expect([main.scrollLeft, main.scrollTop, root.scrollLeft, root.scrollTop]).toEqual([
-        11, 23, 7, 13,
-      ]);
+      expect(main).toMatchObject({ scrollLeft: 11, scrollTop: 23 });
+      expect(root).toMatchObject({ scrollLeft: 7, scrollTop: 13 });
       expect(root.querySelector<HTMLElement>(".tab-btn.active")?.dataset.tab).toBe("report");
       expect(root.querySelector('[data-tab="capture"]')).toBe(tab);
       tab.click();

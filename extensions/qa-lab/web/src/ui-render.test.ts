@@ -276,20 +276,19 @@ describe("QA Lab UI evidence render", () => {
         conversation,
         direction: kind === "group" ? "inbound" : "outbound",
       } as const;
+      const composer = evidenceState().composer;
+      if (kind === "group") {
+        Object.assign(composer, {
+          conversationId: "shared",
+          conversationKind: kind,
+          senderId: "alice",
+          senderName: "Alice",
+        });
+      }
       const html = renderState({
         activeTab: "chat",
         selectedConversationKey,
-        ...(kind === "group"
-          ? {
-              composer: {
-                conversationId: "shared",
-                conversationKind: kind,
-                senderId: "alice",
-                senderName: "Alice",
-                text: "",
-              },
-            }
-          : {}),
+        composer,
         snapshot: {
           conversations: [
             { accountId: "account-a", id: "shared", kind },
@@ -584,28 +583,17 @@ describe("QA Lab UI evidence render", () => {
       '{"message":"visible context","message":"duplicate context","completion_tokens":100,"cookies":["session=abc"],"apiToken":"secret-token","tokenValue":"token-value-secret","authTokens":["auth-token-secret"],"tokens":{"refresh":"refresh-token-secret"},"AWS_SECRET_ACCESS_KEY":"aws-secret","secretAccessKey":"access-secret","x-goog-api-key":"goog-secret","nested":{"password":"secret-password"}}';
     const html = renderQaLabUi(capturePayloadState(payload, "raw"));
 
-    expectMarkup(
-      html,
-      [
-        "visible context",
-        "duplicate context",
-        "completion_tokens",
-        "100",
-        "apiToken",
-        "nested",
-        "[redacted]",
-      ],
-      [
-        "session=abc",
-        "secret-token",
-        "token-value-secret",
-        "auth-token-secret",
-        "refresh-token-secret",
-        "aws-secret",
-        "access-secret",
-        "goog-secret",
-        "secret-password",
-      ],
+    expectMarkup(html, [
+      "visible context",
+      "duplicate context",
+      "completion_tokens",
+      "100",
+      "apiToken",
+      "nested",
+      "[redacted]",
+    ]);
+    expect(html).not.toMatch(
+      /session=abc|secret-token|token-value-secret|auth-token-secret|refresh-token-secret|aws-secret|access-secret|goog-secret|secret-password/,
     );
   });
 
