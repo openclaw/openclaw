@@ -4,6 +4,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   captureUiProofEnabled,
@@ -81,10 +82,7 @@ async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = fal
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
   if (width < 560) {
-    await page
-      .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-      .first()
-      .click();
+    await navigationDrawerToggle(page).click();
   }
   const link = page.locator(
     '.sidebar-recent-session[data-session-key="' + key + '"] .sidebar-recent-session__link',

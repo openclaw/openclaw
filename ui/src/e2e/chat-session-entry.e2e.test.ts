@@ -9,6 +9,7 @@ import {
   createControlUiMockSameOriginGatewayScript,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -223,10 +224,7 @@ suite.define(() => {
           if (entry === "sidebar") {
             await page.getByText(chooseSession).waitFor();
             if (width === 390) {
-              await page
-                .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-                .first()
-                .click();
+              await navigationDrawerToggle(page).click();
             }
             const link = page.locator(
               `[data-session-key="${target}"] a.sidebar-recent-session__link`,

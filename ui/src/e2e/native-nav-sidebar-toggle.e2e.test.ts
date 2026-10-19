@@ -4,6 +4,7 @@ import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -449,7 +450,7 @@ suite.define(() => {
     });
     const navigation = page.locator(".shell-nav");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
-    const trigger = page.locator(".chat-pane__nav-toggle").first();
+    const trigger = navigationDrawerToggle(page);
     const readFocusLocation = () =>
       page.evaluate(() => {
         // Native dialog tab order may hand focus to browser chrome, but not the inert page.
@@ -592,7 +593,7 @@ suite.define(() => {
       });
       const drawer = page.locator(".shell-nav.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
-      await page.locator(".chat-pane__nav-toggle").first().click();
+      await navigationDrawerToggle(page).click();
       await visible(dialog);
 
       const catalog = drawer.locator('[data-session-section="catalog:codex"]');

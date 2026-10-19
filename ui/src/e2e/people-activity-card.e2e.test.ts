@@ -6,6 +6,7 @@ import {
   reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -73,9 +74,7 @@ async function openPeople(
   const gateway = await installMockGateway(page, options);
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
   if (touch) {
-    const toggle = page
-      .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-      .first();
+    const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
   const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });

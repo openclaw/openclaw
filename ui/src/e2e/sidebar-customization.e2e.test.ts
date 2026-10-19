@@ -7,6 +7,7 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -49,10 +50,6 @@ async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
 }
 
-function visibleDrawerButton(page: Page) {
-  return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
-}
-
 suite.define(() => {
   it.each(
     [1440, 390].flatMap((width) => [
@@ -85,7 +82,7 @@ suite.define(() => {
             await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
           }
           if (width < 900) {
-            await visibleDrawerButton(page).click();
+            await navigationDrawerToggle(page).click();
           }
           const sidebar = page.locator("openclaw-app-sidebar");
           const row = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="' + entry + '"]');
@@ -519,7 +516,7 @@ suite.define(() => {
       await expectShellFlag("nav-collapsed");
 
       await page.setViewportSize({ height: 900, width: 900 });
-      const drawerButton = visibleDrawerButton(page);
+      const drawerButton = navigationDrawerToggle(page);
       await expectVisible(drawerButton);
       await drawerButton.click();
       await expectShellFlag("nav-drawer-open");

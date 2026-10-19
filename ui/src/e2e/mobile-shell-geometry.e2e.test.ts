@@ -7,6 +7,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   closeChatDetails,
   openChatDetails,
@@ -474,10 +475,7 @@ suite.define(() => {
           await expect(page.locator(".chat-controls__model-menu")).toBeVisible();
           await readSurface(".chat-controls__model-menu", "model-menu");
           await page.keyboard.press("Escape");
-          await page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first()
-            .click();
+          await navigationDrawerToggle(page).click();
           await expect(page.locator(".shell--nav-drawer-open")).toBeVisible();
           await readSurface(".shell-nav", "drawer");
           await page.getByRole("button", { name: "Filter & sort", exact: true }).click();

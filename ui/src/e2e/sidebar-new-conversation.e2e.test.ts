@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Persistent New conversation" });
@@ -115,10 +116,7 @@ suite.define(() => {
         await expect
           .poll(() => nav.evaluate((element) => element.getBoundingClientRect().right))
           .toBeLessThanOrEqual(0);
-        await page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first()
-          .click();
+        await navigationDrawerToggle(page).click();
         await page.locator(".shell--nav-drawer-open").waitFor();
         await create.waitFor();
         if (dir) {

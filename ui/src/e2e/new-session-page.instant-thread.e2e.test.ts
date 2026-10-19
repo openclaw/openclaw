@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -83,15 +84,15 @@ suite.define(() => {
           expect(await page.locator(".chat-queue__text").allTextContents()).toEqual(followers);
           expect(await page.locator(".chat-pane__incognito").count()).toBe(incognito ? 1 : 0);
           if (!incognito) {
-            await page.locator(".chat-pane__nav-toggle").click();
+            await navigationDrawerToggle(page).click();
             // The sliding drawer can hover a tooltip under the stationary pointer.
             await page.mouse.move(0, 0);
             await expect
-              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .poll(() => navigationDrawerToggle(page).getAttribute("aria-expanded"))
               .toBe("true");
             await page.keyboard.press("Escape");
             await expect
-              .poll(() => page.locator(".chat-pane__nav-toggle").getAttribute("aria-expanded"))
+              .poll(() => navigationDrawerToggle(page).getAttribute("aria-expanded"))
               .toBe("false");
           }
           expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
