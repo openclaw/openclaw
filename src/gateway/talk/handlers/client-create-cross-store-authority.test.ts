@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../../state/openclaw-agent-db.js";
 import * as voiceSources from "../../../talk/client-voice-session-source.js";
+import * as voiceKernel from "../../../talk/client-voice-session-write.kernel.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
@@ -52,6 +53,9 @@ describe("cross-store voice creation authority", () => {
     ["membership", "after", "native"],
     ["session", "after", "native"],
     ["unchanged", "after", "native"],
+    ["membership", "after", "wrapper"],
+    ["session", "after", "wrapper"],
+    ["unchanged", "after", "wrapper"],
   ] as const)("checks %s authority %s %s admission", async (revocation, timing, writer) => {
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true },
@@ -149,12 +153,14 @@ describe("cross-store voice creation authority", () => {
                 }
               : {}),
           };
-          authority.bind(options);
+          if (writer !== "wrapper") {
+            authority.bind(options);
+          }
           const admission = await authorizeBrowserCreate(options, true);
           expect(admission.error).toBeNull();
           authorization = admission.authorization!;
           let sourceSqlCalls = 0;
-          if (writer === "native") {
+          if (writer !== "worker") {
             const validate = sourcePredicates.readSessionSourceValidation;
             vi.spyOn(sourcePredicates, "readSessionSourceValidation").mockImplementation(
               (...args) => {
@@ -174,9 +180,28 @@ describe("cross-store voice creation authority", () => {
               if (creating && timing === "before") {
                 revoke();
               }
+              if (creating && writer === "wrapper") {
+                expect(args[1].some((source) => source.hasOpaqueCheck)).toBe(true);
+                expect(
+                  args[1].some((source) => source.nativeSource || source.opaqueCommitGuard),
+                ).toBe(false);
+              }
               return prepareSources(...args);
             },
           );
+          if (writer === "wrapper") {
+            const mutate = voiceKernel.mutateVoiceSessionInDatabase;
+            vi.spyOn(voiceKernel, "mutateVoiceSessionInDatabase").mockImplementation((...args) => {
+              const result = mutate(...args);
+              if (creating) {
+                nativeGuardReached = true;
+                if (revocation !== "unchanged") {
+                  revoke();
+                }
+              }
+              return result;
+            });
+          }
           const create = voiceSessions.createOrResumeClientVoiceSession;
           vi.spyOn(voiceSessions, "createOrResumeClientVoiceSession").mockImplementation(
             async (...args) => {
@@ -202,11 +227,18 @@ describe("cross-store voice creation authority", () => {
                   revoke();
                 }
                 admit(request, grant);
+                if (
+                  creating &&
+                  writer === "wrapper" &&
+                  request.stage === "commit" &&
+                  revocation !== "unchanged"
+                ) {
+                  revoke();
+                }
               }, attachment),
           );
           await createTalkClient(admission.handler);
           expect(revoked).toBe(revocation !== "unchanged");
-          expect(nativeGuardReached).toBe(writer === "native");
           const committed =
             revocation === "unchanged" || (timing === "after" && writer === "worker");
           expect({
@@ -218,6 +250,7 @@ describe("cross-store voice creation authority", () => {
             recorded: committed,
             ok: revocation === "unchanged",
           });
+          expect(nativeGuardReached).toBe(writer !== "worker");
           expect(fixture.cancelBrowserSession).toHaveBeenCalledTimes(
             revocation === "unchanged" ? 0 : 1,
           );
