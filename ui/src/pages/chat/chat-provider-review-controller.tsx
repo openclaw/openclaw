@@ -322,12 +322,14 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
   return (
     <Show when={view().dialog} keyed>
       {(binding) => {
+        let closeButton!: HTMLButtonElement;
         const review = binding.review;
         const canContinue =
           review.canContinue &&
           Boolean(review.explanation?.trim() && review.continuationMessage?.trim());
         return (
           <openclaw-modal-dialog
+            prop:initialFocus={() => closeButton}
             label={t("chat.providerReview.review")}
             onModal-cancel={() => props.owner.close()}
           >
@@ -376,7 +378,15 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                 ) : null}
               </div>
               <openclaw-modal-actions class="exec-approval-actions">
-                <button type="button" class="btn" autofocus onClick={() => props.owner.close()}>
+                <button
+                  ref={(element) => {
+                    closeButton = element;
+                  }}
+                  type="button"
+                  class="btn"
+                  autofocus
+                  onClick={() => props.owner.close()}
+                >
                   {t("common.close")}
                 </button>
                 {view().submitted ? (

@@ -18,6 +18,7 @@ export type ModalDialogProperties = {
   manual: boolean;
   label: string;
   description: string;
+  initialFocus?: () => HTMLElement | null;
   onOpenChange: ((open: boolean) => void) | undefined;
 };
 
@@ -35,6 +36,7 @@ type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   manual?: boolean;
   description?: string;
   "prop:onOpenChange"?: ModalDialogProperties["onOpenChange"];
+  "prop:initialFocus"?: ModalDialogProperties["initialFocus"];
   "onModal-cancel"?: (event: Event) => void;
 };
 
@@ -127,7 +129,7 @@ type ModalPolicy = {
   disconnect(): void;
 };
 
-function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperties): ModalPolicy {
+function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
   let dialog!: HTMLDialogElement;
   let mounted = false;
   let disposed = false;
@@ -154,7 +156,10 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       return;
     }
     const active = activeElement(host);
-    const autofocus = dialog.querySelector<HTMLElement>("[autofocus]");
+    const initialFocus = host.initialFocus;
+    const autofocus = initialFocus
+      ? initialFocus()
+      : dialog.querySelector<HTMLElement>("[autofocus]");
     if (
       active &&
       active !== dialog &&
@@ -307,7 +312,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     // Host writes reenter request(); commit the publication before that callback.
     host.open = open;
     if (changed) {
-      props.onOpenChange?.(open);
+      host.onOpenChange?.(open);
     }
   };
 
@@ -486,7 +491,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
 export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogMethods>(
   "openclaw-modal-dialog",
   (props, host) => {
-    const policy = createModalPolicy(host, props);
+    const policy = createModalPolicy(host);
     return createComponent(ModalDialogContent, {
       bindDialog: policy.bindDialog,
       bindOverlayContainer: policy.bindOverlayContainer,
@@ -507,6 +512,7 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
       manual: { default: false, type: Boolean, reflect: true },
       label: { default: "", type: String },
       description: { default: "", type: String },
+      initialFocus: { default: undefined, attribute: false },
       onOpenChange: { default: undefined, attribute: false },
     },
     propertyChanged(host, key) {
