@@ -101,6 +101,25 @@ describe("memory read result slicing", () => {
     });
   });
 
+  it("offers the next line after truncating an oversized first line", () => {
+    expect(
+      buildMemoryReadResult({
+        content: "abcdefgh\nnext\n",
+        maxChars: 4,
+        relPath: "memory/test.md",
+        suggestReadFallback: true,
+      }),
+    ).toEqual({
+      status: "ok",
+      text: "abcd\n\n[More content available. Use from=2 to continue. If you need the full raw line, use read on the source file.]",
+      path: "memory/test.md",
+      from: 1,
+      lines: 1,
+      truncated: true,
+      nextFrom: 2,
+    });
+  });
+
   it("does not split surrogate pairs when truncating a single line", () => {
     expect(
       buildMemoryReadResultFromSlice({
