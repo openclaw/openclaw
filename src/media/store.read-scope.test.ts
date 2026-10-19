@@ -20,6 +20,8 @@ import { unlinkIfExists } from "./temp-files.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
+const pdf = "application/pdf";
+const inboundPdfArgs = [pdf, "inbound", undefined, undefined, undefined] as const;
 const execFileAsync = promisify(execFile);
 
 afterEach(() => {
@@ -35,20 +37,21 @@ function withRead<T>(run: () => Promise<T>) {
   return withChannelReadAuthority(() => {}, run);
 }
 
-function revocableRead() {
+function revocableRead(message = "Session media authority changed") {
   let active = true;
-  const revoked = new Error("Session media authority changed");
+  const revoked = new Error(message);
+  const assertCurrent = () => {
+    if (!active) {
+      throw revoked;
+    }
+  };
   return {
     revoked,
+    assertCurrent,
     revoke: () => {
       active = false;
     },
-    run: <T>(operation: () => Promise<T>) =>
-      withChannelReadAuthority(() => {
-        if (!active) {
-          throw revoked;
-        }
-      }, operation),
+    run: <T>(operation: () => Promise<T>) => withChannelReadAuthority(assertCurrent, operation),
   };
 }
 
@@ -81,39 +84,26 @@ describe("read-owned media publication", () => {
     "composes a client commit guard with read authority after %s bytes are written",
     async (kind) => {
       await withMediaState("inbound", async (_state, mediaDir, realMediaDir) => {
-        let allowed = true;
         let wrote = false;
-        const closed = new Error("client upload policy changed");
-        const assertCommitAllowed = () => {
-          if (!allowed) {
-            throw closed;
-          }
-        };
+        const client = revocableRead("client upload policy changed");
         observeOpen((handle, filePath, flags) => {
           if (path.dirname(filePath) === realMediaDir && flags === "wx") {
             const write = handle.writeFile.bind(handle);
             vi.spyOn(handle, "writeFile").mockImplementation(async (...writeArgs) => {
               await write(...writeArgs);
               wrote = true;
-              allowed = false;
+              client.revoke();
             });
           }
         });
-        const options = [
-          "application/pdf",
-          "inbound",
-          undefined,
-          undefined,
-          undefined,
-          { assertCommitAllowed },
-        ] as const;
+        const options = { assertCommitAllowed: client.assertCurrent };
         await expect(
           withRead(() =>
             kind === "buffer"
-              ? saveMediaBuffer(bytes, ...options)
-              : saveMediaStream(mediaBytes(), ...options),
+              ? saveMediaBuffer(bytes, ...inboundPdfArgs, options)
+              : saveMediaStream(mediaBytes(), ...inboundPdfArgs, options),
           ),
-        ).rejects.toBe(closed);
+        ).rejects.toBe(client.revoked);
         expect(wrote).toBe(true);
         expect(await fs.readdir(mediaDir)).toEqual([]);
       });
@@ -161,9 +151,7 @@ describe("read-owned media publication", () => {
           } else if (filePath === realMediaDir) {
             vi.spyOn(handle, "sync").mockImplementation(async () => {
               expect(syncEvents).toEqual(["file"]);
-              const published = await fs.readdir(mediaDir);
-              expect(published).toHaveLength(1);
-              expect(published[0]).toMatch(/\.pdf$/);
+              expect(await fs.readdir(mediaDir)).toEqual([expect.stringMatching(/\.pdf$/)]);
               if (failDirectorySync) {
                 syncEvents.push("directory");
                 throw Object.assign(new Error("synthetic directory sync failure"), { code: "EIO" });
@@ -175,7 +163,7 @@ describe("read-owned media publication", () => {
         });
         const saved = await withRead(() =>
           kind === "buffer"
-            ? saveMediaBuffer(bytes, "application/pdf", "outbound")
+            ? saveMediaBuffer(bytes, pdf, "outbound")
             : saveMediaSource(source, undefined, "outbound"),
         );
         expect(syncEvents).toEqual(["file", "directory"]);
@@ -206,9 +194,7 @@ describe("read-owned media publication", () => {
             });
           }
         });
-        const operation = authority.run(() =>
-          saveMediaBuffer(bytes, "application/pdf", "outbound"),
-        );
+        const operation = authority.run(() => saveMediaBuffer(bytes, pdf, "outbound"));
         const rejected = expect(operation).rejects.toBe(authority.revoked);
         try {
           await syncing.promise;
@@ -284,7 +270,7 @@ describe("read-owned media publication", () => {
             vi.spyOn(handle, "chmod").mockRejectedValue(chmodError);
           }
         });
-        const operation = withRead(() => saveMediaStream(mediaBytes(), "application/pdf"));
+        const operation = withRead(() => saveMediaStream(mediaBytes(), pdf));
         if (mode === 0o600) {
           await expect(operation).rejects.toBe(chmodError);
           await expect(fs.readdir(mediaDir)).resolves.toEqual([]);
@@ -368,7 +354,7 @@ describe("read-owned media publication", () => {
           }
         })();
 
-        await expect(withRead(() => saveMediaStream(stream, "application/pdf"))).rejects.toThrow(
+        await expect(withRead(() => saveMediaStream(stream, pdf))).rejects.toThrow(
           /created file|hardlink|path/i,
         );
         expect(stagedPath).toBeDefined();
@@ -383,7 +369,7 @@ describe("read-owned media publication", () => {
   it("preserves replacements across repeated disposal in the same read", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       await withRead(async () => {
-        const saved = await saveMediaStream(mediaBytes(), "application/pdf");
+        const saved = await saveMediaStream(mediaBytes(), pdf);
         const displaced = state.statePath("displaced.pdf");
         await fs.rename(saved.path, displaced);
         await fs.writeFile(saved.path, "replacement");
@@ -416,7 +402,7 @@ describe("read-owned media publication", () => {
       await fs.symlink(replacement, alias, process.platform === "win32" ? "junction" : "dir");
     })();
 
-    await expect(withRead(() => saveMediaStream(stream, "application/pdf"))).rejects.toSatisfy(
+    await expect(withRead(() => saveMediaStream(stream, pdf))).rejects.toSatisfy(
       (error: unknown) => error instanceof FsSafeError && error.code === "path-mismatch",
     );
     await expect(fs.readdir(originalMedia)).resolves.toEqual([]);
@@ -447,7 +433,7 @@ describe("read-owned media publication", () => {
                 request.abort(timedOut);
               },
             }),
-            { headers: { "content-type": "application/pdf" } },
+            { headers: { "content-type": pdf } },
           );
           await expect(
             saveRemoteMedia({
