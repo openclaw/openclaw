@@ -26,13 +26,12 @@ const facts: AppleFmFacts = {
   modelName: "AFM 3 Core Advanced",
   contextWindow: 8_192,
 };
+const bundled = {
+  rootDir: "/bundle/dist/extensions/apple-fm",
+  source: "/bundle/dist/apple-fm-entry-HASH.mjs",
+};
 
-function registeredProvider(
-  location: { rootDir?: string; source: string } = {
-    rootDir: "/test/plugins/apple-fm",
-    source: "/test/dist/apple-fm-entry.mjs",
-  },
-) {
+function registeredProvider(location: { rootDir?: string; source: string } = bundled) {
   const registration = capturePluginRegistration({
     ...plugin,
     source: location.source,
@@ -49,7 +48,9 @@ function registeredProvider(
   return { provider, method, guided, setup, validate };
 }
 
-function authContext(config: OpenClawConfig = {}): ProviderAuthContext {
+function setupContext(
+  config: OpenClawConfig = {},
+): ProviderAuthContext & ProviderAuthMethodNonInteractiveContext {
   return {
     config,
     env: {},
@@ -58,16 +59,9 @@ function authContext(config: OpenClawConfig = {}): ProviderAuthContext {
     isRemote: false,
     openUrl: vi.fn(),
     oauth: { createVpsAwareHandlers: vi.fn() },
-  };
-}
-
-function nonInteractiveContext(config: OpenClawConfig): ProviderAuthMethodNonInteractiveContext {
-  return {
-    config,
     baseConfig: config,
     authChoice: "apple-fm",
     opts: {},
-    runtime: createNonExitingRuntimeEnv(),
     resolveApiKey: vi.fn(async () => null),
     toApiKeyCredential: vi.fn(() => null),
   };
@@ -87,7 +81,7 @@ describe("Apple Foundation Models setup", () => {
     const { method } = registeredProvider({ source: "/checkout/extensions/apple-fm/index.ts" });
     expect(native.createAppleFmNative).not.toHaveBeenCalled();
     await method.appGuidedSetup?.detect({ config: {}, env: {} });
-    await method.run(authContext());
+    await method.run(setupContext());
     const expectedRoot = "/checkout/extensions/apple-fm";
     expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(expectedRoot);
     expect(native.probe).toHaveBeenCalledOnce();
@@ -95,26 +89,19 @@ describe("Apple Foundation Models setup", () => {
   });
 
   it("serves configured native facts and local auth only on Mac hosts", async () => {
-    native.prepare.mockResolvedValue({
-      ...facts,
-      modelName: "Future model",
-      contextWindow: 16_384,
-    });
-    const root = "/bundle/dist/extensions/apple-fm";
-    const { provider, method } = registeredProvider({
-      rootDir: root,
-      source: "/bundle/dist/apple-fm-entry-HASH.mjs",
-    });
-    const result = await method.run(authContext());
-    expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(root);
+    const measured = { modelName: "Future model", contextWindow: 16_384 };
+    native.prepare.mockResolvedValue({ ...facts, ...measured });
+    const { provider, method } = registeredProvider();
+    const result = await method.run(setupContext());
+    expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(bundled.rootDir);
     const config = applyProviderAuthConfigPatch({}, result.configPatch, result);
     const configured = config.models?.providers?.["apple-fm"];
 
     expect(result).toMatchObject({ profiles: [], defaultModel: "apple-fm/system" });
     expect(configured?.models[0]).toMatchObject({
       id: "system",
-      name: "Future model",
-      contextWindow: 16_384,
+      name: measured.modelName,
+      contextWindow: measured.contextWindow,
       maxTokens: 1_024,
       compat: { supportsTools: true, supportsJsonSchemaResponseFormat: true },
     });
@@ -140,7 +127,7 @@ describe("Apple Foundation Models setup", () => {
 
   it("prepares only the selected model and rechecks its eligibility before activation", async () => {
     const { guided } = registeredProvider();
-    const context = { config: {}, env: {}, signal: new AbortController().signal };
+    const context = { ...setupContext(), signal: new AbortController().signal };
     const selected = { ...context, modelRef: "apple-fm/system" };
     expect(await guided.detect(context)).toMatchObject({ modelRef: "apple-fm/system" });
     expect(await guided.detectAvailability?.(context)).toBe(true);
@@ -161,7 +148,7 @@ describe("Apple Foundation Models setup", () => {
     async (overrides) => {
       native.probe.mockResolvedValue({ ...facts, ...overrides });
       const { guided } = registeredProvider();
-      const context = { config: {}, env: {} };
+      const context = setupContext();
       expect(Boolean(await guided.detect(context))).toBe(false);
       expect(await guided.detectAvailability?.(context)).toBe(false);
       expect(native.prepare).not.toHaveBeenCalled();
@@ -169,38 +156,32 @@ describe("Apple Foundation Models setup", () => {
   );
 
   it("preserves other providers, auth, model restrictions, and fallbacks during noninteractive setup", async () => {
+    const model = { primary: "existing/model", fallbacks: ["backup/model"] };
+    const models = { "existing/model": { alias: "Existing" } };
+    const existing = { baseUrl: "https://example.com", models: [] };
     const config: OpenClawConfig = {
       auth: { profiles: { "existing:default": { provider: "existing", mode: "api_key" } } },
-      agents: {
-        defaults: {
-          model: { primary: "existing/model", fallbacks: ["backup/model"] },
-          models: { "existing/model": { alias: "Existing" } },
-        },
-      },
-      models: {
-        mode: "replace",
-        providers: { existing: { baseUrl: "https://example.com", models: [] } },
-      },
+      agents: { defaults: { model, models } },
+      models: { mode: "replace", providers: { existing } },
     };
     const before = structuredClone(config);
     const { setup } = registeredProvider();
-    const updated = await setup(nonInteractiveContext(config));
+    const updated = await setup(setupContext(config));
     expect(config).toEqual(before);
     expect(updated?.auth).toEqual(before.auth);
     expect(updated?.models?.mode).toBe("replace");
-    expect(updated?.models?.providers?.existing).toEqual(before.models?.providers?.existing);
-    expect(updated?.agents?.defaults?.model).toEqual(before.agents?.defaults?.model);
-    expect(updated?.agents?.defaults?.utilityModel).toBe("apple-fm/system");
-    expect(updated?.agents?.defaults?.models).toEqual({
-      ...before.agents?.defaults?.models,
-      "apple-fm/system": { agentRuntime: { id: "openclaw" } },
+    expect(updated?.models?.providers?.existing).toEqual(existing);
+    expect(updated?.agents?.defaults).toEqual({
+      model,
+      utilityModel: "apple-fm/system",
+      models: { ...models, "apple-fm/system": { agentRuntime: { id: "openclaw" } } },
     });
   });
 
   it("rejects unsupported hosts before a noninteractive reset can proceed", async () => {
     native.probe.mockResolvedValue(null);
     const { validate } = registeredProvider();
-    const context = nonInteractiveContext({});
+    const context = setupContext();
     expect(await validate(context)).toBe(false);
     expect(context.runtime.error).toHaveBeenCalledWith(expect.stringContaining("macOS 27"));
     expect(native.prepare).not.toHaveBeenCalled();
