@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   runOpenClawAgentWriteTransaction,
@@ -16,8 +17,10 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { retainConversationBindingFacts } from "./conversation-binding-facts.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { captureConversationBindingFacts } from "./conversation-registry.js";
+import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -572,3 +575,45 @@ it.each([
     }
   },
 );
+
+it("matches an absent conversation capture key to the writer receipt canonicalPath", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-canonical-capture-") };
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:canonical-capture",
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+  const { conversationRef } = buildConversationIdentity({
+    ...conversationAddress,
+    deliveryTarget: conversationAddress.peerId,
+  })!;
+  const capturePath = path.relative(process.cwd(), scope.storePath);
+  const captureKey = resolveDatabasePathKey(capturePath);
+  expect(capturePath).not.toBe(captureKey);
+  expect(fs.existsSync(scope.storePath)).toBe(false);
+  const binding = retainConversationBindingFacts([conversationRef], capturePath);
+  binding.acknowledge({ catalogues: [], associations: [], windows: [], nodes: [] });
+  const receiptPaths: string[] = [];
+  const unsubscribe = conversationPublication.subscribe((receipt) => {
+    receiptPaths.push(receipt.source.canonicalPath);
+  });
+  try {
+    expect(binding.currentSessionKey(conversationRef)).toBeNull();
+    await replaceSessionEntry(scope, conversationEntry("canonical-capture", 10));
+    expect(receiptPaths).toContain(captureKey);
+    const sql = observeMainThreadSql();
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      expect(binding.currentSessionKey(conversationRef)).toBe(scope.sessionKey);
+      sql.expectIdle();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      requests.mockRestore();
+      sql.restore();
+    }
+  } finally {
+    unsubscribe();
+    binding.release();
+  }
+});

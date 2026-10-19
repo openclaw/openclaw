@@ -1,4 +1,5 @@
 import type { SqliteCommittedFact } from "../../infra/sqlite-commit-receipt.js";
+import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import type { ConversationBindingSnapshot } from "./conversation-binding-facts.types.js";
 import {
   conversationPublication,
@@ -55,6 +56,7 @@ export function retainConversationBindingFacts(
   conversationRefs: readonly string[],
   databasePath: string,
 ) {
+  const databasePathKey = resolveDatabasePathKey(databasePath);
   const refs = new Set(conversationRefs);
   let facts = new Map<string, ConversationFact>();
   let source: ConversationBindingSnapshot["source"];
@@ -66,7 +68,7 @@ export function retainConversationBindingFacts(
   const sameSource = (receipt: Pick<ConversationPublication, "source">) =>
     source
       ? receipt.source.identity === source.identity
-      : receipt.source.canonicalPath === databasePath;
+      : receipt.source.canonicalPath === databasePathKey;
   const relevant = (receipt: ConversationPublication) =>
     [...receipt.facts].some(
       ([key, fact]) =>
@@ -99,7 +101,7 @@ export function retainConversationBindingFacts(
       if (
         (source
           ? change.databaseIdentity === source.identity
-          : change.databasePath === databasePath) &&
+          : change.databasePath === databasePathKey) &&
         (change.receipts === undefined || change.receipts.some(relevant))
       ) {
         pending.add(change.operation);
