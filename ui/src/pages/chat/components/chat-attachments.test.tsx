@@ -544,7 +544,9 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   vi.stubGlobal("FileReader", StubFileReader as unknown as typeof FileReader);
   StubFileReader.failNames = new Set();
   StubFileReader.heldNames = new Set();
-  onTestFinished(() => vi.unstubAllGlobals());
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   const pasted: ChatAttachment = {
     id: "pasted",
     mimeType: "text/plain",
