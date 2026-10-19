@@ -7,6 +7,7 @@ import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
 import {
@@ -17,7 +18,7 @@ import {
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
-import { ChatVoiceStatus, MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
+import { MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
 
 export type ChatRunControlsProps = Omit<
   ComposerVoiceButtonProps,
@@ -403,8 +404,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
 
 function primaryPointerDownRef(read: () => ((event: PointerEvent) => void) | undefined) {
   // Preserve input focus before native tooltip listeners run at the target.
-  return (button: HTMLButtonElement) =>
-    button.addEventListener("pointerdown", (event) => read()?.(event), true);
+  return nativeListener("pointerdown", (event) => read()?.(event), true);
 }
 
 export function ComposerDictationSendAction(props: {
@@ -445,44 +445,6 @@ export function ComposerDictationSendAction(props: {
       </openclaw-tooltip>
     </Show>
   );
-}
-
-export function ComposerDictationStatus(props: {
-  readDictation: () => ComposerDictationOwner | undefined;
-}) {
-  const content = createMemo(() => {
-    const dictation = props.readDictation();
-    if (!dictation?.active) {
-      return null;
-    }
-    if (dictation.connecting) {
-      return (
-        <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
-      );
-    }
-    return (
-      <div class="agent-chat__composer-status-stack">
-        <div
-          class={[
-            "agent-chat__dictation-status",
-            { "agent-chat__dictation-status--finalizing": dictation.finalizing },
-          ]}
-        >
-          <span
-            class={[
-              "agent-chat__dictation-phase",
-              { "agent-chat__dictation-phase--listening": !dictation.finalizing },
-            ]}
-          >
-            {dictation.finalizing
-              ? t("chat.composer.dictationFinalizing")
-              : t("chat.composer.dictationListening")}
-          </span>
-        </div>
-      </div>
-    );
-  });
-  return <>{content()}</>;
 }
 
 export function renderChatAbortActionSolid(

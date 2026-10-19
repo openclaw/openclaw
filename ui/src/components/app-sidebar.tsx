@@ -15,6 +15,7 @@ import { useApplication, useOptionalApplication } from "../lib/reactive/context.
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
@@ -256,6 +257,10 @@ function AppSidebarContent(
       return snapshotProjection.read().saved;
     },
   });
+  const subtitleRefresh = createTimeout(() => {
+    owner.sessionProjection.invalidate();
+    owner.invalidate();
+  });
   createEffect(
     () => {
       prepared();
@@ -275,14 +280,8 @@ function AppSidebarContent(
       // The projection owns the display deadline; this mounted view owns its timer.
       const deadline = owner.sessionProjection.subtitleDeadline;
       if (owner.isConnected && Number.isFinite(deadline)) {
-        const timer = globalThis.setTimeout(
-          () => {
-            owner.sessionProjection.invalidate();
-            owner.invalidate();
-          },
-          Math.max(0, deadline - Date.now()),
-        );
-        return () => globalThis.clearTimeout(timer);
+        subtitleRefresh.schedule(Math.max(0, deadline - Date.now()));
+        return subtitleRefresh.cancel;
       }
       return undefined;
     },

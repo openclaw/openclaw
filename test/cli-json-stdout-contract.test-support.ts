@@ -83,21 +83,6 @@ export function preloadArgs(source: string[]) {
   ];
 }
 
-export function expectCommandGuidance(stderr: string, diagnostic: string, suggestion: string) {
-  expect(stderr).toContain(diagnostic);
-  expect(stderr).toContain(`Did you mean this?\n  ${suggestion}`);
-  expect(stderr.split(diagnostic)).toHaveLength(2);
-  expect(stderr.split(suggestion)).toHaveLength(2);
-  for (const text of [
-    "The CLI command failed.",
-    "Could not start the CLI.",
-    "OPENCLAW_DEBUG",
-    "openclaw doctor",
-  ]) {
-    expect(stderr).not.toContain(text);
-  }
-}
-
 export function runIsolatedCli(
   home: string,
   args: string[],

@@ -92,6 +92,7 @@ export function createPromptAssemblyResult(
       activeProjectKeys: [...(input.attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
       modelProviderId: input.attempt.model.provider,
       modelId: input.attempt.model.id,
+      contextTokenBudget: input.attempt.contextTokenBudget ?? input.attempt.model.contextWindow,
       inputProvenance: input.attempt.inputProvenance,
     },
     effectivePrompt: input.attempt.prompt,

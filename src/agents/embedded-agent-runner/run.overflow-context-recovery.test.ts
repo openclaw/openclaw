@@ -553,6 +553,27 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(input.state.toolResultTruncationAttempted).toBe(false);
   });
 
+  it("attributes oversized fixed context without retrying compaction or suggesting reset", async () => {
+    const input = makeInput({ contextTokenBudget: 32_000 });
+    input.state.compactionRequestBudget = createCompactionRequestBudget({
+      contextWindow: 32_000,
+      reserveTokens: 4_000,
+      systemPrompt: "Plugin instructions. ".repeat(10_000),
+      pendingPrompt: "hello",
+    });
+    const result = await recoverEmbeddedRunOverflow(input);
+    expect(result).toMatchObject({
+      action: "surface",
+      kind: "context_overflow",
+      userText: expect.stringContaining("system prompt, injected context, or tool definitions"),
+    });
+    expect(result).toMatchObject({
+      userText: expect.stringContaining("Reduce plugin-provided system context"),
+    });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized pending input once and answers after its persisted history is compacted", async () => {
     const contextWindow = 40_000;
     const systemPrompt = "Follow the project rules. ".repeat(2_000);

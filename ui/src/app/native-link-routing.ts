@@ -11,6 +11,7 @@ import {
 import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
+import type { ApplicationOverlays } from "./overlays-types.ts";
 
 type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
 
@@ -30,6 +31,25 @@ type NativeLinkRoutingOptions = {
   shouldOpenExternally?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
 };
+
+export function prepareNativeUpdateFallback(
+  overlays: Pick<ApplicationOverlays, "snapshot" | "captureUpdateTarget" | "runUpdate">,
+) {
+  return {
+    isCurrent: overlays.captureUpdateTarget(),
+    run: () => {
+      const snapshot = overlays.snapshot;
+      const campaign = snapshot.updateSchedule?.campaign;
+      const busy =
+        snapshot.updateRunning ||
+        snapshot.updateReconciliationPending ||
+        campaign?.state === "applying";
+      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+        void overlays.runUpdate();
+      }
+    },
+  };
+}
 
 function getNativeLinkPoster(): NativeLinkPoster | undefined {
   // Native hosts install this handler before navigation; its absence preserves browser behavior.

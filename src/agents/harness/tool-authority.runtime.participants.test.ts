@@ -3,6 +3,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createPersonalToolScreenDispatcher } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -28,6 +32,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
+import { resolveMessageActionAgentRuntimeIdentity } from "../tools/gateway.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 import {
   attempt,
@@ -45,7 +50,9 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
-  it("keeps personal-tool captures scoped to their controller when session IDs overlap", async () => {
+  it("keeps execution ownership across message policy sessions and overlapping session IDs", async ({
+    onTestFinished,
+  }) => {
     const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
     const withParticipants = async (
       profileId: string,
@@ -124,6 +131,39 @@ describe("host-prepared embedded tool authority", () => {
     await withParticipants("alice", async (alice) => {
       const first = captureActiveEmbeddedRunPersonalToolParticipants(alice.identity);
       expect(first?.participants?.resolve()?.profileId).toBe("alice");
+      const policySessionKey = "agent:main:telegram:proof:direct:2468";
+      const resolveMessageIdentity = async (sourceReplySessionKey: string) => {
+        const token = mintMessageActionTurnCapability({
+          agentId: "main",
+          runId: alice.runId,
+          sessionKey: policySessionKey,
+          sourceReplySessionKey,
+          sessionId,
+        });
+        onTestFinished(() => {
+          expect(revokeMessageActionTurnCapability(token)).toBe(true);
+        });
+        const identity = await resolveMessageActionAgentRuntimeIdentity({
+          opts: {},
+          target: "local",
+          turnCapability: token,
+          turnCapabilitySessionKey: policySessionKey,
+          runId: alice.runId,
+          sessionId,
+        });
+        if (!identity) {
+          throw new Error("Expected an admitted message-action identity");
+        }
+        return identity;
+      };
+      const messageIdentity = await resolveMessageIdentity(sessionKey);
+      expect(messageIdentity.sessionKey).toBe(policySessionKey);
+      const messageCapture = captureActiveEmbeddedRunPersonalToolParticipants(messageIdentity);
+      expect(messageCapture?.participants?.resolve()?.profileId).toBe("alice");
+      const wrongExecutionIdentity = await resolveMessageIdentity("agent:main:another-run");
+      expect(() =>
+        captureActiveEmbeddedRunPersonalToolParticipants(wrongExecutionIdentity),
+      ).toThrow("Personal-tool turn authority is no longer active");
       await withParticipants("bob", async (bob) => {
         const second = captureActiveEmbeddedRunPersonalToolParticipants(bob.identity);
         expect(second?.participants?.resolve()?.profileId).toBe("bob");
@@ -134,6 +174,9 @@ describe("host-prepared embedded tool authority", () => {
         alice.retire();
 
         expect(() => first?.assertCurrent()).toThrow(
+          "embedded reply authority is no longer active",
+        );
+        expect(() => messageCapture?.assertCurrent()).toThrow(
           "embedded reply authority is no longer active",
         );
         expect(() => second?.assertCurrent()).not.toThrow();

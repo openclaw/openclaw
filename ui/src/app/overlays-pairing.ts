@@ -1,16 +1,36 @@
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import * as runtime from "../lib/device-pair-setup.ts";
+import {
+  closeDevicePairSetup,
+  completeDevicePairSetup,
+  createDevicePairSetupState,
+  markDevicePairSetupDeliveryUncertain,
+  openDevicePairSetup,
+  parseDevicePairSetupCompletion,
+  parseDevicePairSetupDeliveryUncertain,
+  readDevicePairSetupSnapshot,
+  refreshDevicePairSetup,
+  setDevicePairSetupAccess,
+  syncDevicePairSetupCountdown,
+} from "../lib/device-pair-setup.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 
-type DevicePairSetupState = ReturnType<typeof runtime.createDevicePairSetupState>;
+type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
+
+const runtime = {
+  openDevicePairSetup,
+  readDevicePairSetupSnapshot,
+  refreshDevicePairSetup,
+  setDevicePairSetupAccess,
+  syncDevicePairSetupCountdown,
+};
 
 export function createOverlayPairing(params: {
   gateway: ApplicationGateway;
   isDisposed: () => boolean;
   publish: () => void;
 }) {
-  const state = runtime.createDevicePairSetupState({
+  const state = createDevicePairSetupState({
     client: params.gateway.snapshot.client,
     connected: params.gateway.snapshot.phase === "connected",
     onChange: params.publish,
@@ -22,20 +42,20 @@ export function createOverlayPairing(params: {
     pendingCount,
     close(clear = true) {
       pendingCount.invalidate({ clear });
-      runtime.closeDevicePairSetup(state);
+      closeDevicePairSetup(state);
     },
     handleEvent(event: GatewayEventFrame): boolean {
       if (event.event === "device.pair.setup.completed") {
-        const completion = runtime.parseDevicePairSetupCompletion(event.payload);
+        const completion = parseDevicePairSetupCompletion(event.payload);
         if (completion) {
-          runtime.completeDevicePairSetup(state, completion);
+          completeDevicePairSetup(state, completion);
         }
         return true;
       }
       if (event.event === "device.pair.setup.deliveryUncertain") {
-        const outcome = runtime.parseDevicePairSetupDeliveryUncertain(event.payload);
+        const outcome = parseDevicePairSetupDeliveryUncertain(event.payload);
         if (outcome) {
-          runtime.markDevicePairSetupDeliveryUncertain(state, outcome);
+          markDevicePairSetupDeliveryUncertain(state, outcome);
         }
         return true;
       }

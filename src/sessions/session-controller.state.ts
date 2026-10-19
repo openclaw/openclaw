@@ -401,11 +401,15 @@ export function hasOperationBackendRunId(operation: ReplyOperation, runId: strin
   return controllerStorage.backendRunIdsByOperation.get(operation)?.has(runId) === true;
 }
 
-export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
+export function getAttachedBackendAttachment(operation: ReplyOperation) {
   const entry = controllerStorage.controllerEntryByOperation.get(operation);
   return entry?.active === operation && entry.attachment?.operation === operation
     ? entry.attachment.backend
     : undefined;
+}
+
+export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
+  return getAttachedBackendAttachment(operation)?.handle;
 }
 
 // Committed output belongs to the bounded finalization owner. Stale recovery

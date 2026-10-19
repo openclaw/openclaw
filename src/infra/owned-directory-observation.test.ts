@@ -87,6 +87,32 @@ describe("process-owned directory observation", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 
+  it("shares recursive watches while preserving each consumer's recovery interval", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const directory = tempDirs.make("owned-directory-recursive-");
+    const watch = vi.spyOn(nativeWatchFs, "watch");
+    const frequent = vi.fn();
+    const quiet = vi.fn();
+    subscriptions.push(observeOwnedDirectory(directory, frequent, { recursive: true }));
+    subscriptions.push(
+      observeOwnedDirectory(directory, quiet, {
+        recursive: true,
+        reconcileIntervalMs: 30 * 60_000,
+      }),
+    );
+    expect(watch).toHaveBeenCalledOnce();
+    expect(watch.mock.calls[0]![1]).toMatchObject({ recursive: true });
+    vi.advanceTimersByTime(300_000);
+    expect(frequent).toHaveBeenCalledTimes(10);
+    expect(quiet).not.toHaveBeenCalled();
+    watch.mock.calls[0]![2]("change", "nested/resource.txt");
+    expect(quiet).toHaveBeenCalledWith("nested/resource.txt");
+    quiet.mockClear();
+    vi.advanceTimersByTime(25 * 60_000);
+    expect(quiet).toHaveBeenCalledOnce();
+  });
+
   it("repairs failed watches within 30 seconds and resumes healthy recovery", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
@@ -186,12 +212,16 @@ describe("process-owned directory observation", () => {
             ]
           : [],
       );
-    subscriptions.push(observeOwnedDirectory(path.join(agents, "work"), () => {}));
+    const changed = vi.fn();
+    subscriptions.push(
+      observeOwnedDirectory(path.join(agents, "work"), changed, { recursive: true }),
+    );
     const [ancestor] = opened();
     expect(ancestor?.path).toBe(root);
     const close = vi.spyOn(ancestor!.watcher, "close");
     // SQLite sidecars beside a state database appear and vanish on every write.
     ancestor!.onChange("rename", "state.sqlite-journal");
+    expect(changed).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     expect(opened()).toHaveLength(1);
     fs.mkdirSync(agents);

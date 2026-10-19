@@ -15,6 +15,7 @@ import { log } from "./logger.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
+  declarePromptToolPin,
 } from "./prompt-cache-observability.js";
 import { beginOpenAIObservation } from "./prompt-cache-observability.test-support.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
@@ -479,6 +480,21 @@ describe("prompt cache history fingerprints", () => {
       }
       expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
         "changed fields: content[0].text, content[1].text, content[2].text, content[3].text, content[4].text, content[5].text, content[6].text, content[7].text, …",
+      );
+    });
+  });
+
+  it("asserts an undeclared tool block change and admits one declared pin change", () => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const sessionId = scopedKey("tool-pin");
+      beginOpenAIObservation({ sessionId, tools: [{ name: "read" }] });
+      expect(() =>
+        beginOpenAIObservation({ sessionId, tools: [{ name: "read" }, { name: "exec" }] }),
+      ).toThrow("prefix changed within session: tools(");
+      declarePromptToolPin({ sessionId });
+      beginOpenAIObservation({ sessionId, tools: [{ name: "read" }, { name: "gateway" }] });
+      expect(() => beginOpenAIObservation({ sessionId, tools: [{ name: "read" }] })).toThrow(
+        "prefix changed within session: tools(",
       );
     });
   });

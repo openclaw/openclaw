@@ -120,7 +120,7 @@ async function resolveCliMediaPath(params: {
   return wavPath;
 }
 
-type ProviderQuery = Record<string, string | number | boolean>;
+type ProviderQuery = Record<string, string | number | boolean | string[]>;
 
 function resolveProviderQuery(
   params: Pick<Parameters<typeof runProviderEntry>[0], "config" | "entry"> & {

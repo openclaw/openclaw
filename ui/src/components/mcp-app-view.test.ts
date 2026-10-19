@@ -29,53 +29,10 @@ const bridgeMocks = vi.hoisted(() => ({
   transports: [] as Array<Record<string, unknown>>,
   appModes: undefined as string[] | undefined,
 }));
-// This constructor seam is a complete factory, and the unit-mock-registry
-// project prevents its substituted classes from reaching unrelated files.
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
-  class AppBridge {
-    oninitialized?: () => void;
-    messageHandler?: BridgeFixture["bridge"]["messageHandler"];
-    updateModelContextHandler?: BridgeFixture["bridge"]["updateModelContextHandler"];
-    onsizechange?: (params: { height?: number }) => void;
-    getAppCapabilities = () => ({ availableDisplayModes: bridgeMocks.appModes });
-    setHostContext = vi.fn();
-    teardownResource = vi.fn(async () => ({}));
-    sendSandboxResourceReady = vi.fn(async () => undefined);
-    sendToolInput = vi.fn(async () => undefined);
-    sendToolResult = vi.fn(async () => undefined);
-    onrequestteardown?: () => void;
-    constructor(
-      _client: unknown,
-      _hostInfo: unknown,
-      public capabilities: Record<string, unknown>,
-      public options: Record<string, unknown>,
-    ) {
-      bridgeMocks.instances.push(this as unknown as Record<string, unknown>);
-    }
-    set onmessage(handler: NonNullable<AppBridge["messageHandler"]>) {
-      this.messageHandler = handler;
-    }
-    set onupdatemodelcontext(handler: NonNullable<AppBridge["updateModelContextHandler"]>) {
-      this.updateModelContextHandler = handler;
-    }
-    protected replaceRequestHandler() {}
-    emit(type: string) {
-      if (type === "requestteardown") {
-        this.onrequestteardown?.();
-      }
-    }
-    async connect() {
-      this.oninitialized?.();
-    }
-  }
-  class PostMessageTransport {
-    close = vi.fn(async () => undefined);
-    constructor() {
-      bridgeMocks.transports.push(this as unknown as Record<string, unknown>);
-    }
-  }
-  return { ...actual, AppBridge, PostMessageTransport };
+  const { createMcpAppBridgeMocks } = await import("./mcp-app-view-mocks.test-support.ts");
+  return { ...actual, ...createMcpAppBridgeMocks(bridgeMocks) };
 });
 const mountBridge = createMcpBridgeFixture(bridgeMocks);
 type BridgeFixture = Awaited<ReturnType<typeof mountBridge>>;

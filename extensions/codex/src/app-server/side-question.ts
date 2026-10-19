@@ -714,9 +714,9 @@ export async function runCodexAppServerSideQuestion(
               ) {
                 throw new Error("Codex side-question binding changed before fork");
               }
-              const currentRequestOptions = () => ({
+              const currentRequestOptions = (): ReturnType<typeof requestOptions> => ({
                 ...requestOptions(),
-                withCurrent: authority.withCurrent,
+                withCurrent: (write) => nativeExecutionPolicy.admit(write, authority.withCurrent),
                 assertCurrent: assertCurrentBinding,
               });
               if (binding.connectionScope === "supervision") {
@@ -914,7 +914,7 @@ export async function runCodexAppServerSideQuestion(
               timeoutMs: appServer.requestTimeoutMs,
               signal: runAbortController.signal,
               assertCurrent: assertNativeCurrent,
-              withCurrent: authority.withCurrent,
+              withCurrent: (write) => nativeExecutionPolicy.admit(write, authority.withCurrent),
             },
           )
           .catch((error: unknown) => {

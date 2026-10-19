@@ -1721,7 +1721,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/daemon-cli/restart-health-external.test.ts",
   "src/cli/daemon-cli/restart-health-wait.test.ts",
   "src/cli/daemon-cli/restart-health.test.ts",
-  "src/cli/daemon-cli/restart-lock-replacement.test.ts",
   "src/cli/daemon-cli/status.gather.test.ts",
   "src/cli/daemon-cli/status.install-hints.test.ts",
   "src/cli/daemon-cli/update-capability.test.ts",

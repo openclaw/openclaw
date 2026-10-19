@@ -366,6 +366,7 @@ async function runShortTermDreamingPromotion(params: {
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
   let resolveServiceCron: (() => CronServiceLike | null) | null = null;
   let unavailableCronWarningEmitted = false;
+  let missingOwnerWarningEmitted = false;
   let startupDreamingCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   const dreamingTasks = new Set<Promise<unknown>>();
   let runtimeCronReconcileTimer: ReturnType<typeof setInterval> | null = null;
@@ -427,11 +428,18 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     if (cron) {
       unavailableCronWarningEmitted = false;
     }
-    await reconcileShortTermDreamingCronJob({
+    const result = await reconcileShortTermDreamingCronJob({
       cron,
       config,
       logger: api.logger,
     });
+    const missingOwner = result.status === "owner-required";
+    if (missingOwner && !missingOwnerWarningEmitted) {
+      api.logger.warn(
+        "memory-core: managed dreaming cron job was not created because no ambient agent owner is configured. Set agents.defaults.systemAgent.agentId to an existing agent to enable automatic dreaming.",
+      );
+    }
+    missingOwnerWarningEmitted = missingOwner;
   };
 
   const startRuntimeCronReconcileTimer = (): void => {

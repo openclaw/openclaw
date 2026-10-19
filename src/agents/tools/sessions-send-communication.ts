@@ -52,6 +52,45 @@ import {
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
 export class SessionCommunicationDeniedError extends Error {}
 
+/** Read through the selected storage owner, including private in-memory sessions. */
+export async function readSessionCommunicationEndpoint(params: {
+  config: OpenClawConfig;
+  endpoint: Pick<CommunicationEndpoint, "agentId" | "sessionKey" | "storePath">;
+  assertCurrent: () => void;
+}): Promise<CommunicationEndpoint> {
+  const source = captureSessionActorStorageOwner(params.endpoint, {
+    assertCurrent: params.assertCurrent,
+    authorize() {},
+  });
+  if (source) {
+    return {
+      agentId: source.agentId,
+      sessionKey: params.endpoint.sessionKey,
+      storePath: source.path,
+      entry: readCapturedSessionActorEntry(source, params.endpoint.sessionKey),
+    };
+  }
+  const loaded = await resolveGatewaySessionStoreTargetInWorker({
+    cfg: params.config,
+    key: params.endpoint.sessionKey,
+    agentId: params.endpoint.agentId,
+    assertActive: params.assertCurrent,
+    projection: "full",
+  });
+  return {
+    agentId: loaded.agentId,
+    sessionKey: loaded.canonicalKey,
+    storePath: loaded.readSource?.path ?? loaded.storePath,
+    entry: loaded.store[loaded.canonicalKey],
+  };
+}
+
+/** A host-held return route minted only after the original request was accepted. */
+export type SessionSendReplyAdmission = (
+  source: CommunicationEndpoint,
+  target: CommunicationEndpoint,
+) => void;
+
 /** One prepared peer operation; identity bounds never choose its completion route. */
 export async function prepareSessionsSendCommunication(params: {
   config: OpenClawConfig;
@@ -75,6 +114,8 @@ export async function prepareSessionsSendCommunication(params: {
   allowApproval?: boolean;
   assertSourceCurrent?: () => void;
   assertAccessCurrent?: () => void;
+  /** An accepted request's result is not a fresh reverse-direction send. */
+  acceptedReply?: SessionSendReplyAdmission;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   const message = params.message;
@@ -113,6 +154,7 @@ export async function prepareSessionsSendCommunication(params: {
     visibility: resolveEffectiveSessionToolsVisibility({ cfg: policyConfig, sandboxed }),
     a2aPolicy: createAgentToAgentPolicy(policyConfig, { sandboxed }),
   }));
+  let acceptedRunId: string | undefined;
   let closed = false;
   let dirty = false;
   let creatingTarget = false;
@@ -125,12 +167,14 @@ export async function prepareSessionsSendCommunication(params: {
     assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
+    params.acceptedReply?.(params.source, params.target);
     if (currentPolicyConfig() !== currentConfig) {
       throw new Error("Communication policy changed; send the message again for a new decision.");
     }
     // The tool preflight may have captured an older opt-in. Admission owns the
     // current destination policy, including fallbacks and the final commit guard.
     if (
+      !params.acceptedReply &&
       targetsThread &&
       policyConfigs.some(
         (policyConfig) => policyConfig.tools?.sessions?.allowThreadTargets !== true,
@@ -195,33 +239,12 @@ export async function prepareSessionsSendCommunication(params: {
       dirty = true;
     }
   });
-  const read = async (endpoint: CommunicationEndpoint): Promise<CommunicationEndpoint> => {
-    const source = captureSessionActorStorageOwner(endpoint, {
+  const read = (endpoint: CommunicationEndpoint) =>
+    readSessionCommunicationEndpoint({
+      config: currentConfig,
+      endpoint,
       assertCurrent: assertSource,
-      authorize() {},
     });
-    if (source) {
-      return {
-        agentId: source.agentId,
-        sessionKey: endpoint.sessionKey,
-        storePath: source.path,
-        entry: readCapturedSessionActorEntry(source, endpoint.sessionKey),
-      };
-    }
-    const loaded = await resolveGatewaySessionStoreTargetInWorker({
-      cfg: currentConfig,
-      key: endpoint.sessionKey,
-      agentId: endpoint.agentId,
-      assertActive: assertSource,
-      projection: "full",
-    });
-    return {
-      agentId: loaded.agentId,
-      sessionKey: loaded.canonicalKey,
-      storePath: loaded.readSource?.path ?? loaded.storePath,
-      entry: loaded.store[loaded.canonicalKey],
-    };
-  };
   const lineage = async (endpoint: CommunicationEndpoint) => {
     const chain = [endpoint];
     while (chain.at(-1)?.entry?.spawnedBy) {
@@ -310,6 +333,9 @@ export async function prepareSessionsSendCommunication(params: {
     let bindings = endpoints.map(communicationEndpointBinding);
     const assertAccess = async () => {
       assertSource();
+      if (params.acceptedReply) {
+        return;
+      }
       for (const { scope, visibility, a2aPolicy } of accessPolicies) {
         const decision = await resolveSessionToolAccess({
           action: "send",
@@ -370,6 +396,9 @@ export async function prepareSessionsSendCommunication(params: {
       }
     };
     const plan = () => {
+      if (params.acceptedReply) {
+        return { approvals: [] };
+      }
       const approvals = new Map<string, CommunicationApproval>();
       for (const policyConfig of policyConfigs) {
         const result = planSessionCommunication({
@@ -545,8 +574,8 @@ export async function prepareSessionsSendCommunication(params: {
           throw new Error("Approved communication input changed before admission.");
         }
       };
-      const dispatch = () =>
-        params.callGateway<T>(
+      const dispatch = async () => {
+        const result = await params.callGateway<T>(
           bindInProcessSubagentResume(
             {
               ...request,
@@ -564,6 +593,15 @@ export async function prepareSessionsSendCommunication(params: {
             resume,
           ),
         );
+        if (
+          isRecord(result) &&
+          typeof result.runId === "string" &&
+          result.admissionPending !== true
+        ) {
+          acceptedRunId = result.runId;
+        }
+        return result;
+      };
       const sender = source[0]!;
       // Task continuations keep their existing task owner. Ordinary peer input
       // transfers to the Gateway pending-input owner, independent of the sender turn.
@@ -598,6 +636,10 @@ export async function prepareSessionsSendCommunication(params: {
               },
               sandboxed,
               message: dispatchMessage,
+              ...(request.replyExpectation === "optional" &&
+              typeof input.extraSystemPrompt === "string"
+                ? { returnedResult: { extraSystemPrompt: input.extraSystemPrompt } }
+                : {}),
             },
           },
           dispatch,
@@ -612,6 +654,39 @@ export async function prepareSessionsSendCommunication(params: {
       callGateway,
       ownedTask,
       sourceSandboxed: sandboxed,
+      captureReplyAdmission: (runId: string): SessionSendReplyAdmission => {
+        if (acceptedRunId !== runId) {
+          throw new Error("Requested reply has no accepted source request.");
+        }
+        const identity = (endpoint: CommunicationEndpoint) =>
+          JSON.stringify([
+            endpoint.agentId,
+            endpoint.sessionKey,
+            endpoint.storePath,
+            endpoint.entry?.sessionId,
+            endpoint.entry?.lifecycleRevision,
+          ]);
+        const requester = identity(source[0]!);
+        const peer = identity(target[0]!);
+        // This route outlives the sender tool; the continuation separately checks
+        // live operator authority. It grants no unrelated peer send or history access.
+        return (replySource, replyTarget) => {
+          if (
+            identity(replySource) !== peer ||
+            identity(replyTarget) !== requester ||
+            replySource.entry?.archivedAt !== undefined ||
+            replyTarget.entry?.archivedAt !== undefined
+          ) {
+            throw new Error("Requested reply no longer names its accepted session incarnations.");
+          }
+        };
+      },
+      targetSession: target[0]!.entry
+        ? {
+            sessionId: target[0]!.entry.sessionId,
+            lifecycleRevision: target[0]!.entry.lifecycleRevision,
+          }
+        : undefined,
       close,
     };
   } catch (error) {

@@ -101,4 +101,45 @@ export function registerPluginOnlyCallerIdentityCase({
       resolvePluginToolsSpy.mockRestore();
     }
   });
+
+  it("carries this turn's provider-hosted web_search decision into session events", async () => {
+    let observedAllow: readonly string[] | undefined;
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([
+        {
+          name: "file_fetch",
+          label: "File fetch",
+          description: "Fetch a file",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            observedAllow = getGatewayToolCallerIdentity()?.sessionEventToolsAllow;
+            return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+          },
+        },
+      ]);
+    try {
+      const tools = createOpenClawCodingTools({
+        config: testConfig,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        includeCoreTools: false,
+        toolConstructionPlan: pluginOnlyConstructionPlan,
+      });
+      await requireTool(tools, "file_fetch").execute?.("tool-call-1", {});
+      expect(observedAllow).toEqual(["file_fetch", "web_search"]);
+      // A producer whose policy denies web_search passes no hosted search to its events.
+      const denied = createOpenClawCodingTools({
+        config: { ...testConfig, tools: { ...testConfig.tools, deny: ["web_search"] } },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        includeCoreTools: false,
+        toolConstructionPlan: pluginOnlyConstructionPlan,
+      });
+      await requireTool(denied, "file_fetch").execute?.("tool-call-2", {});
+      expect(observedAllow).toEqual(["file_fetch"]);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
 }

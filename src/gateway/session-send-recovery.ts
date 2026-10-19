@@ -296,6 +296,14 @@ async function recoverSessionSendDeliveriesForAgents(
                 inputProvenance: input.message.provenance,
                 access: { sandboxed: delivery.sandboxed },
                 allowApproval: false,
+                // The pending-input owner, not serialized provenance alone,
+                // proves this result was already accepted for this exact row.
+                acceptedReply: delivery.returnedResult
+                  ? () => {
+                      assertCurrent();
+                      retained.assertCurrent();
+                    }
+                  : undefined,
                 assertSourceCurrent: assertCurrent,
                 callGateway,
                 signal,
@@ -357,6 +365,9 @@ async function recoverSessionSendDeliveriesForAgents(
                       delivery.target.lifecycleRevision ?? null,
                     idempotencyKey: delivery.runId,
                     message: delivery.message,
+                    ...(delivery.returnedResult
+                      ? { extraSystemPrompt: delivery.returnedResult.extraSystemPrompt }
+                      : {}),
                     inputProvenance: input.message.provenance,
                     deliver: false,
                     sourceReplyDeliveryMode: "message_tool_only",
@@ -367,6 +378,7 @@ async function recoverSessionSendDeliveriesForAgents(
                   {
                     signal,
                     assertAdmissionCurrent: assertRequesterCurrent,
+                    ...(delivery.returnedResult ? { replyExpectation: "optional" as const } : {}),
                     operatorRunAuthority: operator?.authority,
                     agentToolCaller: requesterOrigin
                       ? {

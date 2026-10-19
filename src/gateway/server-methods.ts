@@ -315,12 +315,22 @@ export async function handleGatewayRequest(
     // Reads still require current authority when their contents are released.
     const preserveMessageWriteOutcome =
       req.method === "send" || (messageActionFacts !== undefined && !messageActionFacts.readOnly);
+    let acceptedAgentRun = false;
     const respondUnobserved: GatewayRequestOptions["respond"] = runtimeAuthority
       ? (ok, ...response) => {
-          if (ok && !preserveMessageWriteOutcome) {
+          if (ok && !preserveMessageWriteOutcome && !acceptedAgentRun) {
             runtimeAuthority.assertCurrent();
           }
           profileRespond(ok, ...response);
+          // Accepted execution owns its final outcome after the submitting turn closes.
+          if (
+            req.method === "agent" &&
+            ok &&
+            isRecord(response[0]) &&
+            response[0].status === "accepted"
+          ) {
+            acceptedAgentRun = true;
+          }
         }
       : profileRespond;
     respondCancelled = respondUnobserved;

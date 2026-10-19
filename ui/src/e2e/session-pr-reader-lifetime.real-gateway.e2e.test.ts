@@ -45,6 +45,7 @@ type Repository = {
   headSha: string;
   number: number;
   additions: number;
+  title?: string;
   checkName?: string;
 };
 type Delivery = { number: number; repo: string; branch: string; additions?: number };
@@ -86,7 +87,7 @@ async function createRepository(
 function pullRequest(repository: Repository) {
   return {
     number: repository.number,
-    title: `Review ${repository.repo}`,
+    title: repository.title ?? `Review ${repository.repo}`,
     html_url: `https://github.com/synthetic/${repository.repo}/pull/${repository.number}`,
     state: "open",
     draft: false,
@@ -528,6 +529,8 @@ suite.define(() => {
               });
             await waitFor(checksEntered);
             holdSnapshot = true;
+            // Change a list-visible metadata field so the shared detail cache admits new facts.
+            replacement.title = "Updated replacement workspace review";
             replacement.additions = 5;
             await subscribe([sessionKey], true);
             await waitFor(snapshotEntered);

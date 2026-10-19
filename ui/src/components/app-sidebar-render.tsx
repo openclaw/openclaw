@@ -305,6 +305,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       transition: host.connectionFlagVisible,
       hover: hovered(),
       focus: focused(),
+      footerControlsOverlap: host.footerControlsOverlap,
     }),
     (request, previous) => {
       if (!request.kind || !(request.transition || request.hover || request.focus)) {
@@ -324,24 +325,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       const anchor = identityAnchor.getBoundingClientRect();
       const { width, height } = flag.getBoundingClientRect();
       // The hidden flag has a box; anchor its resting rect without the slide transform.
-      const surfaces = identityAnchor
-        .closest(".shell")
-        ?.querySelectorAll<HTMLElement>(
-          "main.content :is(.chat-footer .agent-chat__composer-shell, .new-session-page__composer, .creation-composer, .cron-editor-actions)",
-        );
-      const overlaps = Array.from(surfaces ?? []).some((surface) => {
-        if (!surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })) {
-          return false;
-        }
-        const rect = surface.getBoundingClientRect();
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          rect.left < anchor.right + width &&
-          rect.right > anchor.right &&
-          rect.top < anchor.bottom &&
-          rect.bottom > anchor.bottom - height
-        );
+      const overlaps = request.footerControlsOverlap?.({
+        left: anchor.right,
+        right: anchor.right + width,
+        top: anchor.bottom - height,
+        bottom: anchor.bottom,
       });
       setFlagOpen(!overlaps);
     },

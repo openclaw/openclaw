@@ -33,6 +33,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
@@ -106,6 +107,7 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
   const storeScope = "/synthetic/progress-refresh/" + randomUUID();
   const card: ProgressCard = { sessionKey, revision: 7, updatedAt: 1, markdown: "Previous status" };
   const context = {
+    chatRunState: createChatRunState(),
     dedupe: new Map(),
     broadcast: vi.fn(),
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

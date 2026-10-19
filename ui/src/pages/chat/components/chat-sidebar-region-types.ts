@@ -44,6 +44,12 @@ export type SidebarRegionCallbacks = {
 };
 
 export type RegionProps = {
+  elements: {
+    readonly shell: HTMLElement;
+    readonly header: HTMLElement;
+    readonly primary: HTMLElement;
+    readonly outlet: HTMLElement;
+  } | null;
   panelIdPrefix: string;
   conversationTab?: Pick<SidebarPanelDefinition, "label"> & {
     avatar: AgentIdentity;

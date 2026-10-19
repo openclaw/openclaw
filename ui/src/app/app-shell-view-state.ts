@@ -44,6 +44,7 @@ import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
   mobileGatewayStatus: GatewayStatusProps | null;
+  readonly connectionRecovery: boolean;
   routeOutlet?: ControlUiReadinessOutlet;
   terminalPanel?: HTMLElement & { readonly available?: boolean };
   readonly devicePairSetup: DevicePairSetupLoader;
@@ -217,6 +218,7 @@ export function readShellView(host: ShellViewHost) {
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
+    footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
     terminalAvailable,
     catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
@@ -245,6 +247,14 @@ export function readShellView(host: ShellViewHost) {
   const collapsedControls =
     !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout;
   const shellConnectionStatus = !nativeEmbed && !initialConnection ? connectionStatus : null;
+  const gatewayStatus: GatewayStatusProps = {
+    kind: shellConnectionStatus ?? (!nativeEmbed && gatewayConnected ? "connected" : null),
+    lastError: shellConnectionStatus ? gatewaySnapshot.lastError : null,
+    queuedCount: shellConnectionStatus ? sidebarProperties.storedOutboxes?.total : 0,
+    onRetry: callbacks.retryGateway,
+  };
+  const mobileGatewayStatus =
+    mobileNavLayout && !navDrawerOpen && !nativeEmbed ? gatewayStatus : null;
   const floatingUpdateCard = {
     navigationSurfaceHidden,
     mobileNavLayout,
@@ -323,6 +333,9 @@ export function readShellView(host: ShellViewHost) {
     embedNavigation,
     collapsedControls,
     shellConnectionStatus,
+    gatewayStatus,
+    mobileGatewayStatus,
+    connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,
     navigationSnapshot,

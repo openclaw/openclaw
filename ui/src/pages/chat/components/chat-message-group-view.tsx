@@ -55,12 +55,21 @@ function MessageActionsRow(props: {
   options: NativeMessageGroupOptions;
   class?: string;
 }) {
+  let owner: HTMLDivElement | undefined;
   return (
     <div
+      ref={(element) => {
+        owner = element;
+      }}
       class={props.class ?? "chat-group-footer-actions"}
       data-message-actions-for={props.messageKey}
     >
-      <MessageActions details={props.details} options={props.options} />
+      <MessageActions
+        details={props.details}
+        options={props.options}
+        actionOwner={() => owner}
+        messageKey={props.messageKey}
+      />
     </div>
   );
 }
@@ -109,7 +118,6 @@ function PreparedMessage(props: {
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
       entryId: persistedMessageEntryId(props.item.message) ?? undefined,
-      entryRef: props.options.entryRefFor?.(props.item.key),
       duplicateCount: props.item.duplicateCount ?? 1,
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
@@ -247,12 +255,16 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
 }
 
 function UserFooterActions(props: { frame: MessageGroupFrame }) {
+  let owner: HTMLDivElement | undefined;
   const frame = () => props.frame;
   const options = () => frame().options;
   return (
     <Show when={frame().hasUserFooterActions}>
       <div
         class="chat-group-footer-actions"
+        ref={(element) => {
+          owner = element;
+        }}
         data-message-actions-for={frame().footerActionMessageKey}
       >
         <Show when={Boolean(frame().footerActionDetails?.replyTarget && options().onReply)}>
@@ -267,6 +279,8 @@ function UserFooterActions(props: { frame: MessageGroupFrame }) {
         <MessageActions
           details={frame().footerActionDetails}
           options={messageReactionOptions(frame().group, options())}
+          actionOwner={() => owner}
+          messageKey={frame().footerActionMessageKey}
         />
       </div>
     </Show>
@@ -389,6 +403,7 @@ function FramedMessageGroup(props: {
       class={frame().className}
       style={frame().style}
       data-chat-row-key={props.group.key}
+      data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
     >
       <Show when={!frame().inlineUserAvatar}>
@@ -498,7 +513,11 @@ function SessionActivityGroup(props: {
       options={options()}
       renderEntry={(item, index) => {
         const prepared = createMemo(() => prepareGroupMessage(props.group, item(), options()));
+        let actionOwner: HTMLDivElement | undefined;
         return {
+          actionsRef: (element: HTMLDivElement) => {
+            actionOwner = element;
+          },
           content: (
             <PreparedMessage
               group={props.group}
@@ -516,7 +535,14 @@ function SessionActivityGroup(props: {
               }}
             />
           ),
-          actions: <MessageActions details={prepared().actions} options={options()} />,
+          actions: (
+            <MessageActions
+              details={prepared().actions}
+              options={options()}
+              actionOwner={() => actionOwner}
+              messageKey={item().key}
+            />
+          ),
         };
       }}
     />

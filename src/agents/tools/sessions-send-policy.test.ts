@@ -250,6 +250,39 @@ describe("sessions_send directed policy at the tool boundary", () => {
     await state.cleanup();
   });
 
+  it("prefers sessionKey over a redundant label without trimming the message", async () => {
+    const config = configFor({ send: ["worker"] });
+    setRuntimeConfigSnapshot(config);
+    const result = await createSessionsSendTool({
+      config,
+      agentSessionKey: requesterKey,
+      callGateway,
+      idempotencyKey: runId,
+    }).execute("send-policy-key-label", {
+      sessionKey: workerKey,
+      label: "stale-label",
+      message: "    indented body",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({ status: "ok", sessionKey: workerKey });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: workerKey,
+          message: expect.stringMatching(/\n {4}indented body$/u),
+        }),
+      }),
+    );
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ label: "stale-label" }),
+      }),
+    );
+  });
+
   it("sends by session ID under self visibility and returns only that run's reply", async () => {
     const result = await send(configFor({ send: ["worker"], visibility: "self" }), {
       sessionKey: workerSessionId,

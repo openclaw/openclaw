@@ -66,11 +66,11 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     alive = false;
   });
   const store = sessionProgressCardsForGateway(scope.gateway);
-  const progress = projectProgressCard({
+  const progress = projectProgressCard(() => ({
     store,
     target: scope.session,
     options: { admitAutomaticRead: current },
-  });
+  }));
   const refresh = async () => {
     if (!current()) {
       return;
