@@ -288,7 +288,7 @@ function buildGroups(
       color: rgb(58, 145, 91),
       leaves: [
         ...files.map((file) => ({
-          name: formatInjectedWorkspaceFileLabel(file, files),
+          name: formatInjectedWorkspaceFileLabel(file, files, { compact: true }),
           value: file.injectedChars,
         })),
         { name: "Project context frame", value: projectFrameChars },
