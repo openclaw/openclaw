@@ -21,6 +21,27 @@ import {
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const registries: NodeRegistry[] = [];
+const pairingState = { identity: "policy-identity", generation: "policy-generation" };
+const registration = {
+  pairingIdentity: pairingState.identity,
+  pairingGeneration: pairingState.generation,
+};
+const nodeTool = {
+  pluginId: "qa-policy",
+  name: "node_exec",
+  description: "Run on the paired node",
+  command: "system.run",
+};
+const nodeSkill = {
+  name: "node-work",
+  description: "Work on the paired node",
+  content: "---\nname: node-work\ndescription: Work on the paired node\n---\nUse this node.\n",
+};
+function policy(nodes: NonNullable<OpenClawConfig["gateway"]>["nodes"]): OpenClawConfig {
+  return { gateway: { nodes } };
+}
+const denyRun = policy({ commands: { deny: ["system.run"] } });
+const denyComputer = policy({ commands: { deny: ["computer.act"] } });
 
 afterEach(() => {
   for (const registry of registries.splice(0)) {
@@ -39,11 +60,7 @@ function createFixture(
   > = {},
 ) {
   let config = initial;
-  const options = {
-    ...pairingOptions,
-    getConfig: () => config,
-  };
-  const registry = new NodeRegistry(options);
+  const registry = new NodeRegistry({ ...pairingOptions, getConfig: () => config });
   registries.push(registry);
   const socket = { readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
   const client = {
@@ -67,10 +84,7 @@ function createFixture(
       declaredCommands: ["computer.act", "system.run", "screen.snapshot"],
     },
   } as unknown as GatewayWsClient;
-  const node = registry.register(client, {
-    pairingIdentity: "policy-identity",
-    pairingGeneration: "policy-generation",
-  });
+  const node = registry.register(client, { ...registration });
   return {
     registry,
     node,
@@ -100,28 +114,24 @@ function readCommandState(node: NodeSession, config: OpenClawConfig, command: st
 
 describe("connected node runtime policy", () => {
   it.each([
-    { command: "system.run", allow: [], state: "pending-approval" },
-    { command: "screen.snapshot", caps: ["screen"], allow: [], state: "pending-approval" },
-    { command: "computer.act", caps: ["computer"], allow: [], state: "pending-approval" },
-    { command: "camera.list", caps: ["camera"], allow: ["camera.list"], state: "pending-approval" },
-    {
-      command: "location.get",
-      caps: ["location"],
-      allow: ["location.get"],
-      state: "pending-approval",
-    },
-    { command: "talk.ptt.start", allow: [], state: "pending-approval" },
-    { command: "camera.snap", allow: [], state: "unauthorized" },
-    { command: "camera.snap", allow: ["camera.snap"], state: "pending-approval" },
-    {
-      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-      allow: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
-      state: "unauthorized",
-    },
-  ])(
-    "classifies an unapproved $command as $state (allow=$allow)",
-    ({ command, allow, state, caps = [] }) => {
-      const config = { gateway: { nodes: { commands: { allow } } } };
+    ["system.run", [], [], "pending-approval"],
+    ["screen.snapshot", ["screen"], [], "pending-approval"],
+    ["computer.act", ["computer"], [], "pending-approval"],
+    ["camera.list", ["camera"], ["camera.list"], "pending-approval"],
+    ["location.get", ["location"], ["location.get"], "pending-approval"],
+    ["talk.ptt.start", [], [], "pending-approval"],
+    ["camera.snap", [], [], "unauthorized"],
+    ["camera.snap", [], ["camera.snap"], "pending-approval"],
+    [
+      NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      [],
+      [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
+      "unauthorized",
+    ],
+  ] satisfies Array<[string, string[], string[], string]>)(
+    "classifies an unapproved %s (caps=%j, allow=%j) as %s",
+    (command, caps, allow, state) => {
+      const config = policy({ commands: { allow } });
       const { registry, client, socket } = createFixture(config);
       Object.assign(client.connect, {
         caps,
@@ -132,14 +142,12 @@ describe("connected node runtime policy", () => {
         sessionCommandsCeiling: [command],
       });
       const node = registry.register(client, {
-        pairingIdentity: "policy-identity",
-        pairingGeneration: "policy-generation",
+        ...registration,
         approvedSurface: { caps, commands: [] },
       });
 
       expect(readCommandState(node, config, command)).toBe(state);
-      expect(node.commands).toEqual([]);
-      expect(node.caps).toEqual([]);
+      expect(node).toMatchObject({ commands: [], caps: [] });
       expect(socket.close).not.toHaveBeenCalled();
     },
   );
@@ -149,9 +157,7 @@ describe("connected node runtime policy", () => {
     { name: "initially denied approved declaration", caps: [], initiallyDenied: true },
     { name: "Talk capability advertisement", caps: ["talk"], initiallyDenied: true },
   ])("restores approved Talk commands for a $name", ({ caps, initiallyDenied }) => {
-    const denied: OpenClawConfig = {
-      gateway: { nodes: { commands: { deny: TALK_PTT_COMMANDS } } },
-    };
+    const denied = policy({ commands: { deny: TALK_PTT_COMMANDS } });
     const approvedCommands = ["talk.ptt.start", "talk.ptt.stop"];
     const { registry, client, socket, reload } = createFixture(initiallyDenied ? denied : {});
     Object.assign(client.connect, {
@@ -163,8 +169,7 @@ describe("connected node runtime policy", () => {
       sessionCommandsCeiling: TALK_PTT_COMMANDS,
     });
     const node = registry.register(client, {
-      pairingIdentity: "policy-identity",
-      pairingGeneration: "policy-generation",
+      ...registration,
       approvedSurface: { caps, commands: approvedCommands },
     });
     if (!initiallyDenied) {
@@ -175,9 +180,11 @@ describe("connected node runtime policy", () => {
 
     reload({});
 
-    expect(node.commands).toEqual(approvedCommands);
-    expect(node.caps).toEqual(caps);
-    expect(node.pairingGeneration).toBe("policy-generation");
+    expect(node).toMatchObject({
+      commands: approvedCommands,
+      caps,
+      pairingGeneration: "policy-generation",
+    });
     expect(socket.close).not.toHaveBeenCalled();
   });
 
@@ -195,33 +202,15 @@ describe("connected node runtime policy", () => {
       },
     });
     expect(invokeId).not.toBe("");
-    const candidate: OpenClawConfig = {
-      gateway: {
-        nodes: {
-          commands: { deny: ["system.run"] },
-          pluginTools: { enabled: false },
-          allowSkills: false,
-        },
-      },
-    };
+    const candidate = policy({
+      commands: { deny: ["system.run"] },
+      pluginTools: { enabled: false },
+      allowSkills: false,
+    });
     publishConfig(candidate);
     registry.refreshRuntimePolicy();
-    registry.updateNodePluginTools(node.nodeId, node.connId, [
-      {
-        pluginId: "qa-policy",
-        name: "node_exec",
-        description: "Run on the paired node",
-        command: "system.run",
-      },
-    ]);
-    registry.updateNodeSkills(node.nodeId, node.connId, [
-      {
-        name: "node-work",
-        description: "Work on the paired node",
-        content:
-          "---\nname: node-work\ndescription: Work on the paired node\n---\nUse this node.\n",
-      },
-    ]);
+    registry.updateNodePluginTools(node.nodeId, node.connId, [nodeTool]);
+    registry.updateNodeSkills(node.nodeId, node.connId, [nodeSkill]);
 
     expect(node.nodePluginTools.map((tool) => tool.name)).toEqual(["node_exec"]);
     expect(node.nodeSkills.map((skill) => skill.name)).toEqual(["node-work"]);
@@ -265,7 +254,7 @@ describe("connected node runtime policy", () => {
       expect(invokeId).not.toBe("");
       registry.sendInvokeInput(invokeId, { input: "before-revocation" });
 
-      reload({ gateway: { nodes: { commands: { deny: ["system.run"] } } } });
+      reload(denyRun);
 
       expect(() => registry.sendInvokeInput(invokeId, { input: "after-revocation" })).toThrow(
         /not pending|not authorized|unavailable/,
@@ -328,17 +317,15 @@ describe("connected node runtime policy", () => {
       onDispatchReady,
     });
     await entered.promise;
-    reload({ gateway: { nodes: { commands: { deny: ["system.run"] } } } });
-    pairing.resolve({ identity: "policy-identity", generation: "policy-generation" });
+    reload(denyRun);
+    pairing.resolve(pairingState);
 
     expect(await result).toMatchObject({ ok: false, error: { code: "POLICY_CHANGED" } });
     expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
   it("uses the authenticated approval and restores policy-withheld commands within the protocol ceiling", () => {
-    const { registry, client, reload } = createFixture({
-      gateway: { nodes: { commands: { deny: ["computer.act"] } } },
-    });
+    const { registry, client, reload } = createFixture(denyComputer);
     Object.assign(client.connect, {
       caps: [],
       commands: [],
@@ -350,20 +337,17 @@ describe("connected node runtime policy", () => {
       permissions: { accessibility: true },
     });
     const node = registry.register(client, {
-      pairingIdentity: "policy-identity",
-      pairingGeneration: "policy-generation",
+      ...registration,
       approvedSurface: {
         caps: ["computer", "screen"],
         commands: ["computer.act", "screen.snapshot"],
         permissions: { accessibility: false },
       },
     });
-    expect(node.commands).toEqual([]);
-    expect(node.permissions).toEqual({ accessibility: false });
+    expect(node).toMatchObject({ commands: [], permissions: { accessibility: false } });
 
     reload({});
-    expect(node.commands).toEqual(["computer.act"]);
-    expect(node.caps).toEqual(["computer"]);
+    expect(node).toMatchObject({ commands: ["computer.act"], caps: ["computer"] });
     expect(client.connect.permissions).toEqual({ accessibility: false });
   });
 
@@ -371,40 +355,30 @@ describe("connected node runtime policy", () => {
     const { node, client, socket, reload, getConfig } = createFixture();
     expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
     expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
-    reload({ gateway: { nodes: { commands: { deny: ["computer.act"] } } } });
+    reload(denyComputer);
 
-    expect(node.commands).toEqual(["system.run"]);
-    expect(node.caps).toEqual([]);
+    expect(node).toMatchObject({ commands: ["system.run"], caps: [] });
     expect(client.connect.commands).toEqual(["system.run"]);
     expect(readNodeSessionWithheldCommands(node)).toContain("computer.act");
     expect(readCommandState(node, getConfig(), "computer.act")).toBe("unauthorized");
     expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
 
-    reload({ gateway: { nodes: { commands: { allow: ["screen.snapshot"] } } } });
+    reload(policy({ commands: { allow: ["screen.snapshot"] } }));
 
-    expect(node.commands).toEqual(["computer.act", "system.run"]);
-    expect(node.caps).toEqual(["computer"]);
+    expect(node).toMatchObject({ commands: ["computer.act", "system.run"], caps: ["computer"] });
     expect(readNodeSessionWithheldCommands(node)).not.toContain("computer.act");
     expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
     expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
-    expect(node.connId).toBe("policy-conn");
-    expect(node.pairingGeneration).toBe("policy-generation");
+    expect(node).toMatchObject({ connId: "policy-conn", pairingGeneration: "policy-generation" });
     expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("retains tool publication while disabled and restores only currently approved commands", () => {
-    const { registry, node, reload } = createFixture({
-      gateway: { nodes: { pluginTools: { enabled: false } } },
-    });
+    const { registry, node, reload } = createFixture(policy({ pluginTools: { enabled: false } }));
     registry.updateNodePluginTools(node.nodeId, node.connId, [
+      nodeTool,
       {
-        pluginId: "qa-policy",
-        name: "node_exec",
-        description: "Run on the paired node",
-        command: "system.run",
-      },
-      {
-        pluginId: "qa-policy",
+        ...nodeTool,
         name: "node_screen",
         description: "Unapproved screen command",
         command: "screen.snapshot",
@@ -417,7 +391,7 @@ describe("connected node runtime policy", () => {
       "node_exec",
     ]);
 
-    reload({ gateway: { nodes: { commands: { deny: ["system.run"] } } } });
+    reload(denyRun);
     expect(listConnectedNodePluginTools()).toEqual([]);
     reload({});
     expect(node.nodePluginTools.map((tool) => tool.name)).toEqual(["node_exec"]);
@@ -428,17 +402,8 @@ describe("connected node runtime policy", () => {
   });
 
   it("restores the last bounded skill publication and withdraws it when execution is denied", () => {
-    const { registry, node, reload } = createFixture({
-      gateway: { nodes: { allowSkills: false } },
-    });
-    registry.updateNodeSkills(node.nodeId, node.connId, [
-      {
-        name: "node-work",
-        description: "Work on the paired node",
-        content:
-          "---\nname: node-work\ndescription: Work on the paired node\n---\nUse this node.\n",
-      },
-    ]);
+    const { registry, node, reload } = createFixture(policy({ allowSkills: false }));
+    registry.updateNodeSkills(node.nodeId, node.connId, [nodeSkill]);
     expect(node.nodeSkills).toEqual([]);
 
     reload({});
@@ -446,12 +411,12 @@ describe("connected node runtime policy", () => {
       mergeRemoteNodeSkillEntries([], { canExec: true }).map((entry) => entry.skill.name),
     ).toEqual(["node-work"]);
 
-    reload({ gateway: { nodes: { commands: { deny: ["system.run"] } } } });
+    reload(denyRun);
     expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
     reload({});
     expect(node.nodeSkills.map((skill) => skill.name)).toEqual(["node-work"]);
 
-    reload({ gateway: { nodes: { allowSkills: false } } });
+    reload(policy({ allowSkills: false }));
     expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
     registry.updateNodeSkills(node.nodeId, node.connId, []);
     reload({});
