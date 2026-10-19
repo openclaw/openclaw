@@ -3,35 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { Overlay } from "../../components/overlay-lifecycle.ts";
 import * as textareaAnchor from "../../components/textarea-token-anchor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import {
-  createNewSessionComposerTextarea,
-  type NewSessionComposerTextarea,
-} from "../new-session/composer-textarea.ts";
-import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
-import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
-import { NewSessionModelControl } from "../new-session/model-control.ts";
+  renderComposer as renderNewComposer,
+  resetComposerTestFixtures,
+} from "../new-session/composer.test-support.ts";
 import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
-  disposeComposer,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
-const composerTextareas: NewSessionComposerTextarea[] = [];
-const fixtureDisposals: Array<() => void> = [];
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
-  fixtureDisposals.splice(0).forEach((dispose) => dispose());
   if (originalExecCommand) {
     Object.defineProperty(document, "execCommand", originalExecCommand);
   } else {
     Reflect.deleteProperty(document, "execCommand");
   }
-  composerTextareas.splice(0).forEach((composerTextarea) => composerTextarea.disconnect());
+  resetComposerTestFixtures();
   await resetComposerFixture();
 });
 beforeEach(() => {
@@ -60,75 +52,37 @@ beforeEach(() => {
 });
 
 function fixture(kind: "chat" | "new", locked = false, requiresModifier = false) {
-  const container = createComposerContainer();
-  document.body.append(container);
-  let retired = false;
-  let native: ReturnType<typeof mountNewSessionComposer> | undefined;
-  let nativeOptions: NewSessionComposerOptions;
-  fixtureDisposals.push(() => {
-    retired = true;
-    attachmentDraft.reset();
-    if (native) {
-      native.unmount();
-    } else {
-      disposeComposer(container);
-    }
-    container.remove();
-  });
   let draft = "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
-  const composerTextarea = createNewSessionComposerTextarea();
-  const attachmentDraft = new NewSessionAttachmentDraft(
-    () => redraw(),
-    () => {},
-  );
-  const modelControl = new NewSessionModelControl(() => redraw());
-  composerTextareas.push(composerTextarea);
-  const props = createComposerProps({
-    canSend: !locked,
-    getDraft: () => draft,
-    onSend: send,
-    onDraftChange: (next) => {
-      draft = next;
-    },
-  });
-  function redraw() {
-    if (retired) {
-      return;
-    }
-    if (kind === "chat") {
-      renderComposerInto(container, { ...props, draft });
-    } else {
-      nativeOptions = {
-        agentId: "main",
-        context: undefined,
-        draftOwnerKey: "emoji",
-        attachmentDraft,
-        modelControl,
-        isCatalogTarget: true,
-        canSubmit: true,
-        message: draft,
-        requiresModifier,
-        submitting: false,
-        messageLocked: locked,
-        composerTextarea,
-        onChange: redraw,
-        onInput: (next) => {
-          draft = next;
-          redraw();
-        },
-        onSubmit: send,
-        onBackgroundSubmit: backgroundSend,
-      };
-      if (native) {
-        native.rerender();
-      } else {
-        native = mountNewSessionComposer(() => nativeOptions, container);
-      }
-    }
+  const onInput = (next: string) => {
+    draft = next;
+  };
+  let container: HTMLElement;
+  if (kind === "new") {
+    const view = renderNewComposer({
+      draftOwnerKey: "emoji",
+      requiresModifier,
+      messageLocked: locked,
+      onInput,
+      onSubmit: send,
+      onBackgroundSubmit: backgroundSend,
+    });
+    container = view.container;
+    onTestFinished(view.unmount);
+  } else {
+    container = createComposerContainer();
+    renderComposerInto(
+      container,
+      createComposerProps({
+        canSend: !locked,
+        getDraft: () => draft,
+        onSend: send,
+        onDraftChange: onInput,
+      }),
+    );
   }
-  redraw();
+  document.body.append(container);
   const textarea = container.querySelector("textarea")!;
   textarea.focus();
   const input = (value: string, caret = value.length) => {

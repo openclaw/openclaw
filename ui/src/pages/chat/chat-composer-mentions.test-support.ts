@@ -180,6 +180,13 @@ export function composerFixture(
     container,
     request,
     edit,
+    query: <T extends Element = HTMLElement>(selector: string) =>
+      container.querySelector<T>(selector),
+    options: () => container.querySelectorAll('[role="option"]'),
+    search: async (text: string, options?: Parameters<typeof edit>[1]) => {
+      edit(text, options);
+      await vi.advanceTimersByTimeAsync(150);
+    },
     key: pressKey,
     send,
     abort,
