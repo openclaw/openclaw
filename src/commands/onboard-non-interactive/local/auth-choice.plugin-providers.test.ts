@@ -264,7 +264,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         method: { runNonInteractive },
         wizard: { modelTarget: "utility" },
       });
-      const runtime = createRuntime();
       expect(
         await applyNonInteractivePluginProviderChoice({
           nextConfig: baseConfig,
@@ -277,7 +276,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
           toApiKeyCredential: vi.fn(),
         }),
       ).toBeNull();
-      expectRuntimeErrorIncludes(runtime, "explicit primary model");
+      expectRuntimeErrorIncludes("explicit primary model");
       expect(runNonInteractive).not.toHaveBeenCalled();
       expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
       expect(ensureModelSelectionRuntimePlugins).not.toHaveBeenCalled();
@@ -417,7 +416,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it.each([false, true])(
     "keeps media setup global without replacing the text model (explicit fleet: %s)",
     async (explicitFleet) => {
-      const runtime = createRuntime();
       const provider = { id: "pixverse", pluginId: "pixverse", label: "PixVerse" };
       const initialConfig: OpenClawConfig = {
         agents: {
@@ -634,7 +632,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   });
 
   it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
-    const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));
     resolveOwningPluginIdsForProvider.mockReturnValue(["demo-plugin"] as never);
     resolvePluginProvidersCore.mockReturnValue([
@@ -662,7 +659,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   });
 
   it("filters untrusted workspace manifest choices when resolving inferred auth choices", async () => {
-    const runtime = createRuntime();
     resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
 
     await applyChoice({
@@ -727,7 +723,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   });
 
   it("ensures Copilot after a non-interactive GitHub Copilot choice opts into the runtime", async () => {
-    const runtime = createRuntime();
     const selectedConfig = {
       agents: { defaults: { model: { primary: "github-copilot/gpt-5.5" } } },
       models: {
@@ -768,7 +763,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   });
 
   it("does not offer post-install migration when Codex is not required for the selected model", async () => {
-    const runtime = createRuntime();
     const selectedConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     } as OpenClawConfig;

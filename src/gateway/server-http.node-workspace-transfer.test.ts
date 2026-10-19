@@ -109,8 +109,8 @@ describe("node workspace transfer HTTP routing", () => {
       kind: "unauthorized",
     }));
     await withTransferServer({
-      callback,
-      hooks,
+      handleNodeWorkspaceTransferRequest: callback,
+      handleHooksRequest: hooks,
       run: async (origin) => {
         const path = `/__openclaw__/worker-transfer/v1/environments/worker%3Afixture/snapshots/${"a".repeat(64)}/pack`;
         const missing = await fetch(`${origin}${path}`);
