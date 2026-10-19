@@ -216,32 +216,37 @@ export async function completeReplyAgentRun(input: {
       });
       pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
     }
-    // The local source observer confirms the committed answer in chat history.
-    // Its live notification needs no second durable delivery state machine.
+    // The observer or message tool already committed these replies to chat history.
+    // Their live notifications need no second durable delivery state machine.
     const canUseLocalTranscript =
       isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
       : finalPayloads.filter((payload) => {
           const metadata = getReplyPayloadMetadata(payload);
-          const committedLocalText =
+          const committedSourceReply =
+            metadata?.sourceReplyTranscriptMirror?.transcriptOwner === true;
+          const committedLocalContent =
             canUseLocalTranscript &&
-            metadata?.localTranscriptDeliveryConfirmed === true &&
-            !metadata.assistantMediaFailures?.length &&
-            !payload.mediaUrl &&
-            !payload.mediaUrls?.length &&
-            !payload.attachments?.length &&
-            !payload.presentation &&
-            !payload.interactive &&
-            !payload.channelData &&
-            !payload.location &&
-            !payload.btw &&
-            !payload.delivery &&
+            (metadata?.localTranscriptDeliveryConfirmed === true || committedSourceReply) &&
+            !metadata?.assistantMediaFailures?.length &&
+            (committedSourceReply ||
+              (!payload.mediaUrl &&
+                !payload.mediaUrls?.length &&
+                !payload.attachments?.length &&
+                !payload.presentation &&
+                !payload.interactive &&
+                !payload.channelData &&
+                !payload.location &&
+                !payload.btw &&
+                !payload.delivery)) &&
             !payload.spokenText &&
             !payload.ttsSupplement &&
             !metadata?.responsePrefix &&
             !metadata?.responseUsageLine;
-          return !committedLocalText && normalizePendingFinalDeliveryPayloads([payload]).length > 0;
+          return (
+            !committedLocalContent && normalizePendingFinalDeliveryPayloads([payload]).length > 0
+          );
         });
     if (sendableFinalPayloads.length > 0) {
       const commandOwner = getCommandOwnerAuthority(followupRun.run);

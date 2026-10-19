@@ -858,6 +858,9 @@ New input follows the live reply owner's queue policy. Without a live reply, dur
 fences must have terminal evidence before admission can retire them. Successful
 final delivery clears its pending intent and any unclaimed recovery route while
 preserving newer execution or delivery claims.
+Message-tool replies already committed to WebChat history, including their media,
+do not create another pending final delivery during turn completion. New reply
+additions, such as generated speech or usage footers, retain their delivery custody.
 
 Before readiness, startup invokes the shared Doctor transform to normalize older
 persisted `running` or `queued` values to `interrupted` once, except verified legacy
