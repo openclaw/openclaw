@@ -309,6 +309,8 @@ let toolResults = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
+let reasoningResponses = 0;
+let reasoningReplayRequests = 0;
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -407,6 +409,20 @@ const mock = createServer((req, res) => {
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
     if (continuation) {
+      if (retentionScenario || soakScenario) {
+        if (
+          !Array.isArray(input) ||
+          !input.some(
+            (item) =>
+              item?.type === "reasoning" &&
+              typeof item.encrypted_content === "string" &&
+              item.encrypted_content.length === 16 * 1024,
+          )
+        ) {
+          throw new Error("synthetic reasoning signature did not survive the provider request");
+        }
+        reasoningReplayRequests++;
+      }
       if (
         toolOutputs.some(
           (toolResult) =>
@@ -551,7 +567,28 @@ const mock = createServer((req, res) => {
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (
+          (retentionScenario || soakScenario) &&
+          (primary || continuation) &&
+          "response" in event
+        ) {
+          const reasoning = {
+            type: "reasoning",
+            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            status: "completed",
+            summary: [],
+            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+          };
+          const output_index = event.response.output.length;
+          for (const type of ["response.output_item.added", "response.output_item.done"]) {
+            res.write(`data: ${JSON.stringify({ type, output_index, item: reasoning })}\n\n`);
+          }
+          res.write(
+            `data: ${JSON.stringify({ ...event, response: { ...event.response, output: [...event.response.output, reasoning] } })}\n\n`,
+          );
+        } else {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
         }
@@ -1469,6 +1506,8 @@ try {
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
+    reasoningResponses = 0;
+    reasoningReplayRequests = 0;
     recapRequests = 0;
     recapReceipts.length = 0;
     recapPhase = undefined;
@@ -1623,6 +1662,15 @@ try {
         `expected ${runCount} image/tool/recovery cycles: ${JSON.stringify({ toolCalls, toolResults, outputLimitResponses, recoveredResponses, imageRequests })}`,
       );
     }
+    if (
+      (retentionScenario || soakScenario) &&
+      (reasoningResponses !== runCount * (retentionScenario ? 3 : 2) ||
+        reasoningReplayRequests !== runCount * (retentionScenario ? 2 : 1))
+    ) {
+      throw new Error(
+        `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
+      );
+    }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
@@ -1666,6 +1714,7 @@ try {
       activeWorkCounts,
       toolCalls,
       toolResults,
+      ...((retentionScenario || soakScenario) && { reasoningResponses, reasoningReplayRequests }),
       recapRequests,
       ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
