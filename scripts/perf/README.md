@@ -101,6 +101,24 @@ the authorized benchmark host, swapping CPU allocations between pairs.
 
 ## Measure the real list endpoint
 
+For browser-originated model and cron list traffic, point the headless probe at an
+already running isolated Gateway with synthetic state and authentication:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/catalog-polling-measure.ts \
+  --url http://127.0.0.1:40967/ --duration 60 --output /path/to/catalog-traffic.json
+```
+
+The probe creates a fresh browser context and observes real WebSocket frames
+before navigation. It separates cold startup, visible idle, an offline-triggered
+reconnect, Cron navigation and idle, and a retained return to Cron. `--duration`
+is seconds per idle phase. Startup and navigation settle for five seconds after
+UI readiness. If Chromium's offline mode does not close the socket, the report
+marks reconnect unobserved instead of claiming a reconnect measurement. Counts,
+JSON frame bytes and rates per authenticated socket-minute exclude payloads,
+URLs and authentication. Supply any synthetic token through the normal URL
+fragment. The probe builds nothing and neither starts nor stops the Gateway.
+
 Build runtime artifacts on the authorized benchmark host, generate an offline
 fixture, then let the measurement driver own its loopback Gateway:
 
