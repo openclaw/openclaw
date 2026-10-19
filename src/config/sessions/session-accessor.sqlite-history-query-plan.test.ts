@@ -50,6 +50,37 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 
+async function seedHistory(sessionId: string) {
+  const scope = {
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-") },
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+  };
+  await seedTranscript(scope);
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+  return { scope, database };
+}
+
+async function seedTranscript(scope: SessionTranscriptReadScope) {
+  await persistSessionTranscriptTurn(scope, {
+    messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
+    touchSessionEntry: false,
+  });
+}
+
+function expectPage(
+  page: ReturnType<typeof readRecentSessionTranscriptHistoryEvents>,
+  ids: string[],
+  firstSequence: number,
+  totalMessages: number,
+) {
+  expect(page.totalMessages).toBe(totalMessages);
+  expect(page.events.map(({ seq, event }) => [seq, event])).toEqual(
+    ids.map((id, index) => [firstSequence + index, expect.objectContaining({ id })]),
+  );
+}
+
 function readHistoryWithQueryPlans(
   database: OpenClawAgentDatabase,
   scope: SessionTranscriptReadScope,
@@ -97,34 +128,18 @@ function readHistoryWithQueryPlans(
 }
 
 it.each([false, true])("keeps history marker reads selective (analyzed=%s)", async (analyzed) => {
-  const scope = {
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-query-plan-") },
-    sessionId: "history-events-test",
-    sessionKey: "agent:main:history-events-test",
-  };
-  const denseScope = {
+  const { scope, database } = await seedHistory("history-events-test");
+  const sibling = (sessionId: string) => ({
     ...scope,
-    sessionId: "dense-marker-history",
-    sessionKey: "agent:main:dense-marker-history",
-  };
-  const plainScope = {
-    ...scope,
-    sessionId: "plain-message-history",
-    sessionKey: "agent:main:plain-message-history",
-  };
-  const compactionScope = {
-    ...scope,
-    sessionId: "dense-compaction-history",
-    sessionKey: "agent:main:dense-compaction-history",
-  };
-  for (const target of [scope, denseScope, plainScope, compactionScope]) {
-    await persistSessionTranscriptTurn(target, {
-      messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
-      touchSessionEntry: false,
-    });
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+  });
+  const denseScope = sibling("dense-marker-history");
+  const plainScope = sibling("plain-message-history");
+  const compactionScope = sibling("dense-compaction-history");
+  for (const target of [denseScope, plainScope, compactionScope]) {
+    await seedTranscript(target);
   }
-  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   const messageCount = 10_000;
   const markerIds = Array.from({ length: 10 }, (_, index) => `rare-marker-${index}`);
   insertSyntheticHistory(database, scope.sessionId, messageCount);
@@ -150,15 +165,14 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   }
   const { page, drivingSearch } = readHistoryWithQueryPlans(database, scope);
   const firstSequence = messageCount - markerIds.length + 2;
-  expect(page.totalMessages).toBe(messageCount + markerIds.length + 1);
-  expect(page.events.map(({ event }) => event)).toEqual(
+  expectPage(
+    page,
     [
       ...Array.from({ length: 10 }, (_, index) => `synthetic-message-${firstSequence + index}`),
       ...markerIds,
-    ].map((id) => expect.objectContaining({ id })),
-  );
-  expect(page.events.map(({ seq }) => seq)).toEqual(
-    Array.from({ length: 20 }, (_, index) => firstSequence + index),
+    ],
+    firstSequence,
+    messageCount + markerIds.length + 1,
   );
   expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
 
@@ -197,13 +211,7 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
     content: "Current branch marker",
     display: true,
   });
-  expect(branch.page.totalMessages).toBe(22);
-  expect(branch.page.events.map(({ event }) => event)).toEqual(
-    branchIds.map((id) => expect.objectContaining({ id })),
-  );
-  expect(branch.page.events.map(({ seq }) => seq)).toEqual(
-    Array.from({ length: 20 }, (_, index) => index + 3),
-  );
+  expectPage(branch.page, branchIds, 3, 22);
   expect(branch.drivingSearch).toMatch(/^SEARCH active .*\(session_id=\?/u);
   expect(readSessionTranscriptHistoryEventCount(denseScope)).toBe(22);
 
@@ -214,29 +222,13 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
     parentId: "seed",
     summary: "Current branch marker",
   });
-  expect(sparseBranch.page.events.map(({ event }) => event)).toEqual(
-    branchIds.map((id) => expect.objectContaining({ id })),
-  );
-  expect(sparseBranch.page.events.map(({ seq }) => seq)).toEqual(
-    branch.page.events.map(({ seq }) => seq),
-  );
-  expect(sparseBranch.page.totalMessages).toBe(22);
+  expectPage(sparseBranch.page, branchIds, 3, 22);
   expect(sparseBranch.drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
   expect(readSessionTranscriptHistoryEventCount(plainScope)).toBe(22);
 });
 
 it("reads only appended metadata for a warm marker-heavy page and quoted messages", async () => {
-  const scope = {
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-incremental-") },
-    sessionId: "incremental-history",
-    sessionKey: "agent:main:incremental-history",
-  };
-  await persistSessionTranscriptTurn(scope, {
-    messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
-    touchSessionEntry: false,
-  });
-  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+  const { scope, database } = await seedHistory("incremental-history");
   insertSyntheticHistory(database, scope.sessionId, 2_000, true);
   runOpenClawAgentWriteTransaction(
     (writeDatabase) => {
@@ -260,6 +252,14 @@ it("reads only appended metadata for a warm marker-heavy page and quoted message
   const readPage = () =>
     owner.run(target.database, () =>
       reader.readHistoryEventPage({ ...limits, offset: 0, recentAtHead: limits }),
+    );
+  const readMessage = (id: string, currentOnly = false) =>
+    owner.run(target.database, () =>
+      reader.readSessionMessageByIdAsync(
+        target.transcript,
+        id,
+        currentOnly ? { currentOnly, maxBytes: limits.maxBytes } : undefined,
+      ),
     );
   try {
     expect(readPage().totalMessages).toBe(4_001);
@@ -295,25 +295,23 @@ it("reads only appended metadata for a warm marker-heavy page and quoted message
     const counter = trackSqliteStatementExecutions(nativeDb, ["read"], () => "read");
     try {
       const page = readPage();
-      expect(page.totalMessages).toBe(4_002);
-      expect(page.events.map(({ event }) => event)).toEqual(
-        ["synthetic-boundary-4000", "synthetic-message-4001", "new-tail"].map((id) =>
-          expect.objectContaining({ id }),
-        ),
+      expectPage(
+        page,
+        ["synthetic-boundary-4000", "synthetic-message-4001", "new-tail"],
+        4_000,
+        4_002,
       );
-      expect(page.events.map(({ seq }) => seq)).toEqual([4_000, 4_001, 4_002]);
       for (const seq of [3, 1_999, 3_999]) {
-        expect(
-          await owner.run(target.database, () =>
-            reader.readSessionMessageByIdAsync(target.transcript, `synthetic-message-${seq}`),
-          ),
-        ).toMatchObject({ found: true, seq, message: { content: "synthetic" } });
+        expect(await readMessage(`synthetic-message-${seq}`)).toMatchObject({
+          found: true,
+          seq,
+          message: { content: "synthetic" },
+        });
       }
-      expect(
-        await owner.run(target.database, () =>
-          reader.readSessionMessageByIdAsync(target.transcript, "synthetic-boundary-2000"),
-        ),
-      ).toMatchObject({ found: true, seq: 2_000 });
+      expect(await readMessage("synthetic-boundary-2000")).toMatchObject({
+        found: true,
+        seq: 2_000,
+      });
       // Bound transferred rows across both native execution methods, including cached statements.
       expect(counter.rowCounts.read).toBeGreaterThan(3);
       expect(counter.rowCounts.read).toBeLessThan(100);
@@ -339,37 +337,15 @@ it("reads only appended metadata for a warm marker-heavy page and quoted message
       display: true,
     });
     await waitForSessionTranscriptProjection(scope);
-    const branched = readPage();
-    expect(branched.totalMessages).toBe(2);
-    expect(branched.events.map(({ event }) => event)).toEqual(
-      ["seed", "branch"].map((id) => expect.objectContaining({ id })),
-    );
-    expect(branched.events.map(({ seq }) => seq)).toEqual([1, 2]);
-    expect(
-      await owner.run(target.database, () =>
-        reader.readSessionMessageByIdAsync(target.transcript, "synthetic-boundary-2000", {
-          currentOnly: true,
-          maxBytes: limits.maxBytes,
-        }),
-      ),
-    ).toMatchObject({ found: false });
+    expectPage(readPage(), ["seed", "branch"], 1, 2);
+    expect(await readMessage("synthetic-boundary-2000", true)).toMatchObject({ found: false });
   } finally {
     owner.close();
   }
 });
 
 it("looks up nested activity anchors without scanning unrelated transcript identities", async () => {
-  const scope = {
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-anchors-") },
-    sessionId: "history-anchors",
-    sessionKey: "agent:main:history-anchors",
-  };
-  await persistSessionTranscriptTurn(scope, {
-    messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
-    touchSessionEntry: false,
-  });
-  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+  const { scope, database } = await seedHistory("history-anchors");
   insertSyntheticHistory(database, scope.sessionId, 2_000);
   const anchors = ["seed", "seed", "missing"];
   await persistSessionTranscriptTurn(scope, {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
@@ -108,109 +109,97 @@ describe("reset boundary concurrency", () => {
     expect(loadSessionEntry(scope)?.sessionId).toBe("current-reset");
   });
 
-  it.each([
-    {
-      name: "single reset",
-      reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
-        resetSessionEntryLifecycle({
-          buildNextEntry: () => ({ sessionId: "next-single", updatedAt: 20 }),
-          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
-          storePath: scope.storePath,
-          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-        }),
-    },
-    {
-      name: "bulk lifecycle reset",
-      reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
-        applySessionEntryLifecycleMutation({
-          skipMaintenance: true,
-          storePath: scope.storePath,
-          upserts: [
-            {
-              entry: { sessionId: "next-bulk", updatedAt: 20 },
-              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
-              sessionKey: scope.sessionKey,
-            },
-          ],
-        }),
-    },
-  ])("parents the $name boundary without hydrating caller message bodies", async ({ reset }) => {
-    const scope = {
-      sessionId: "current-session",
-      sessionKey: "agent:main:reset-race",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    const body = "retained reset message body ".repeat(8_192);
-    appendTranscriptMessageSync(scope, {
-      eventId: "initial",
-      message: { role: "user", content: body },
-      parentId: null,
-    });
-    transactionInjection.run = () => {
+  it.each(["single reset", "bulk lifecycle reset"])(
+    "parents the %s boundary without hydrating caller message bodies",
+    async (kind) => {
+      const scope = {
+        sessionId: "current-session",
+        sessionKey: "agent:main:reset-race",
+        storePath,
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+      const body = "retained reset message body ".repeat(8_192);
       appendTranscriptMessageSync(scope, {
-        eventId: "concurrent",
-        message: { role: "user", content: "accepted concurrently" },
-        parentId: "initial",
+        eventId: "initial",
+        message: { role: "user", content: body },
+        parentId: null,
       });
-    };
+      const entry = { sessionId: "next-session", updatedAt: 20 };
+      const resetBoundary = {
+        context: "preserve-tail",
+        reason: "reset",
+        cwd: "/tmp/workspace",
+      } as const;
+      transactionInjection.run = () => {
+        appendTranscriptMessageSync(scope, {
+          eventId: "concurrent",
+          message: { role: "user", content: "accepted concurrently" },
+          parentId: "initial",
+        });
+      };
 
-    const iterate = sqliteQueries.iterateSqliteQuerySync;
-    let hydratedBodyRows = 0;
-    const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
-      Row,
-    >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
-      for (const row of iterate<Row>(...args)) {
-        if (
-          row !== null &&
-          typeof row === "object" &&
-          "event_json" in row &&
-          typeof row.event_json === "string" &&
-          row.event_json.includes(body)
-        ) {
-          hydratedBodyRows += 1;
+      const iterate = sqliteQueries.iterateSqliteQuerySync;
+      let hydratedBodyRows = 0;
+      const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
+        Row,
+      >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
+        for (const row of iterate<Row>(...args)) {
+          if (
+            row !== null &&
+            typeof row === "object" &&
+            "event_json" in row &&
+            typeof row.event_json === "string" &&
+            row.event_json.includes(body)
+          ) {
+            hydratedBodyRows += 1;
+          }
+          yield row;
         }
-        yield row;
+      });
+      try {
+        if (kind === "single reset") {
+          await resetSessionEntryLifecycle({
+            buildNextEntry: () => entry,
+            resetBoundary,
+            storePath,
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          });
+        } else {
+          await applySessionEntryLifecycleMutation({
+            skipMaintenance: true,
+            storePath,
+            upserts: [{ entry, resetBoundary, sessionKey: scope.sessionKey }],
+          });
+        }
+      } finally {
+        reads.mockRestore();
       }
-    });
-    try {
-      await reset(scope);
-    } finally {
-      reads.mockRestore();
-    }
 
-    const raw = await loadTranscriptEvents(scope);
-    expect(raw).toContainEqual(
-      expect.objectContaining({
-        id: "initial",
-        message: expect.objectContaining({ role: "user", content: body }),
-      }),
-    );
-    expect(hydratedBodyRows).toBe(0);
-    const boundary = raw.find(
-      (event) =>
-        event !== null &&
-        typeof event === "object" &&
-        !Array.isArray(event) &&
-        (event as { type?: unknown }).type === "reset",
-    );
-    expect(boundary).toMatchObject({ parentId: "concurrent" });
-    await waitForSessionTranscriptProjection(scope);
-    expect(
-      readRecentSessionTranscriptActiveEvents(scope, 10).map(
-        (event) => (event as { id?: unknown }).id,
-      ),
-    ).toContain("concurrent");
+      const raw = await loadTranscriptEvents(scope);
+      expect(raw).toContainEqual(
+        expect.objectContaining({
+          id: "initial",
+          message: expect.objectContaining({ role: "user", content: body }),
+        }),
+      );
+      expect(hydratedBodyRows).toBe(0);
+      const boundary = raw.find((event) => isRecord(event) && event.type === "reset");
+      expect(boundary).toMatchObject({ parentId: "concurrent" });
+      const expectConcurrent = async () => {
+        await waitForSessionTranscriptProjection(scope);
+        expect(
+          readRecentSessionTranscriptActiveEvents(scope, 10).map(
+            (event) => (event as { id?: unknown }).id,
+          ),
+        ).toContain("concurrent");
+      };
+      await expectConcurrent();
 
-    await agentDatabase.closeOpenClawAgentDatabasesAsync();
-    agentDatabase.closeOpenClawAgentDatabasesForTest();
-    await waitForSessionTranscriptProjection(scope);
-    expect(
-      readRecentSessionTranscriptActiveEvents(scope, 10).map(
-        (event) => (event as { id?: unknown }).id,
-      ),
-    ).toContain("concurrent");
-  });
+      await agentDatabase.closeOpenClawAgentDatabasesAsync();
+      agentDatabase.closeOpenClawAgentDatabasesForTest();
+      await expectConcurrent();
+    },
+  );
 
   it("preserves navigation nulls and raw parser semantics in reset reads", async () => {
     const sessionId = "reset-projection";
