@@ -69,7 +69,7 @@ afterEach(async () => {
 function createPool(
   options: Pick<
     WorkerTaskPoolOptions<string>,
-    "maxWorkers" | "maxPendingTasks" | "maxPendingBytes" | "sharedCompute"
+    "maxWorkers" | "maxPendingTasks" | "maxPendingBytes" | "sharedCompute" | "onRotationComplete"
   > & {
     requiresReady?: false;
     computeCapacity?: WorkerComputeCapacity;
@@ -115,6 +115,7 @@ function createPool(
     {
       workerUrl: new URL("file:///synthetic-worker.mjs"),
       maxWorkers: options.maxWorkers ?? 1,
+      onRotationComplete: options.onRotationComplete,
       maxPendingTasks: options.maxPendingTasks,
       maxPendingBytes: options.maxPendingBytes,
       sharedCompute: options.sharedCompute,
@@ -135,6 +136,60 @@ function createPool(
     },
   };
 }
+
+it("publishes retired resources before dispatching queued successor input", async () => {
+  let nativeReader = false;
+  const { pool, workers } = createPool({
+    onRotationComplete: () => {
+      nativeReader = false;
+    },
+  });
+  const first = pool.run(() => {
+    nativeReader = true;
+    return "first";
+  }, {});
+  workers[0]!.ready();
+  workers[0]!.reply();
+  await first;
+  const rotating = pool.rotate();
+  let previousReader: boolean | undefined;
+  const successor = pool.run(() => {
+    previousReader = nativeReader;
+    nativeReader = true;
+    return "successor";
+  }, {});
+  await rotating;
+  const worker = workers.at(-1)!;
+  worker.ready();
+  worker.reply();
+  await expect(successor).resolves.toBe("successor");
+  expect(workers[0]!.threadId).toBe(-1);
+  expect(previousReader).toBe(false);
+  expect(nativeReader).toBe(true);
+});
+
+it("holds queued input after resource publication fails until rotation is retried", async () => {
+  const failure = new Error("resource publication failed");
+  const released = vi.fn().mockImplementationOnce(() => {
+    throw failure;
+  });
+  const { pool, workers } = createPool({ onRotationComplete: released });
+  const first = pool.run("first", {});
+  workers[0]!.ready();
+  workers[0]!.reply();
+  await first;
+  const rotating = pool.rotate();
+  const prepared = vi.fn(() => "successor");
+  const successor = pool.run(prepared, {});
+  await expect(rotating).rejects.toBe(failure);
+  expect(workers[0]!.threadId).toBe(-1);
+  expect(prepared).not.toHaveBeenCalled();
+  await pool.rotate();
+  workers.at(-1)!.ready();
+  workers.at(-1)!.reply();
+  await expect(successor).resolves.toBe("successor");
+  expect(released).toHaveBeenCalledTimes(2);
+});
 
 it.each(["error", "exit", "constructor"] as const)(
   "rejects one bootstrap cohort after %s and retries only after rotation",

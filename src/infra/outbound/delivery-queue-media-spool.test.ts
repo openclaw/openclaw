@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -47,6 +48,7 @@ const { loadDeliveryQueueEntry, seedDeliveryQueueEntry } =
   await import("../delivery-queue-sqlite.test-support.js");
 const {
   createDeliveryQueueMediaRetention,
+  DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -213,6 +215,47 @@ it("expires abandoned stages and rejects a producer that resumes too late", asyn
     "media stage expired before enqueue",
   );
   expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+});
+
+it("skips quiet inventories but expires a new stage even when its producer never wrote a file", async () => {
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  try {
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
+    expect(requests).not.toHaveBeenCalled();
+
+    const artifact = path.join(spoolRoot, ARTIFACT_A);
+    const mediaStageId = await createDeliveryQueueMediaRetention(
+      [artifact],
+      "outbound-media-stage",
+      stateDir,
+    );
+    requests.mockClear();
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
+    expect(requests).not.toHaveBeenCalled();
+    expect(existsSync(spoolRoot)).toBe(false);
+
+    await pruneOrphanedDeliveryQueueMedia({ stateDir, nowMs: Date.now() + 2 * DAY_MS });
+    expect(
+      loadDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, mediaStageId, stateDir),
+    ).toBeNull();
+    await expect(enqueue([{ mediaUrl: artifact }], mediaStageId)).rejects.toThrow(
+      "media stage expired before enqueue",
+    );
+  } finally {
+    requests.mockRestore();
+  }
+});
+
+it("does not collect a new retained file after an empty inventory receipt", async () => {
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+  const retained = await seedArtifact(ARTIFACT_A);
+  const orphan = await seedArtifact(ARTIFACT_B);
+  await enqueue([{ mediaUrl: retained }]);
+
+  await pruneOrphanedDeliveryQueueMedia({ stateDir });
+
+  expectArtifacts([retained], [orphan]);
 });
 it("releases versioned artifacts without touching paths outside the spool", async () => {
   const generationFinal = await seedArtifact(`g1-${ARTIFACT_A}`, 0);

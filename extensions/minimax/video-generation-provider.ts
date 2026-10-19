@@ -89,7 +89,9 @@ function resolveDurationSeconds(params: {
   if (rounded === undefined) {
     return undefined;
   }
-  const allowed = MINIMAX_MODEL_ALLOWED_DURATIONS[params.model];
+  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_DURATIONS, params.model)
+    ? MINIMAX_MODEL_ALLOWED_DURATIONS[params.model]
+    : undefined;
   if (!allowed || allowed.length === 0) {
     return rounded;
   }
@@ -106,7 +108,9 @@ function resolveResolution(params: {
   if (!requested) {
     return undefined;
   }
-  const allowed = MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model];
+  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_RESOLUTIONS, params.model)
+    ? MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model]
+    : undefined;
   if (!allowed || allowed.length === 0 || allowed.includes(requested)) {
     return requested;
   }
