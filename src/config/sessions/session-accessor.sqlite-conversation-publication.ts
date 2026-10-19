@@ -44,7 +44,6 @@ type ConversationFactChange =
 const listeners = resolveGlobalSingleton(Symbol.for("openclaw.conversationPublication"), () => ({
   installingFacts: 0,
   facts: new Set<(receipt: ConversationFactChange) => void>(),
-  observers: new Set<(receipt: ConversationPublication) => void>(),
 }));
 
 function installFacts(receipt: ConversationFactChange) {
@@ -71,19 +70,16 @@ function publicationState(receipt: ConversationPublication) {
       };
       installFacts(installed);
     },
-    notify: () => notifyListeners(listeners.observers, installed),
+    notify() {},
   };
 }
 
 /** Native/catalogue operation facts; session-worker link sets and raw writers remain incomplete. */
 export const conversationPublication = {
   stageRows: stageConversationRows,
-  /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
+  /** Install/invalidate prepared facts only. */
   subscribeFacts(listener: (receipt: ConversationFactChange) => void) {
     return registerListener(listeners.facts, listener);
-  },
-  subscribe(listener: (receipt: ConversationPublication) => void) {
-    return registerListener(listeners.observers, listener);
   },
 };
 
