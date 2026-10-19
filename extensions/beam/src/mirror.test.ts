@@ -2,11 +2,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beamTestLogger,
   beamTestMirrorConfig,
@@ -34,12 +33,43 @@ vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) =>
 });
 
 type SentRequest = { url: string; auth?: string; payload: BeamUpload };
+let sent: SentRequest[];
+let warnings: string[];
+const logger = { warn: (message: string) => warnings.push(message), info: () => {} };
+beforeEach(() => {
+  sent = [];
+  warnings = [];
+});
 
-function captureFetch(
-  sent: SentRequest[],
-  status = 200,
-  onCancel?: () => void | Promise<void>,
-): typeof fetch {
+function mirrorOptions(
+  catalog: Parameters<typeof createBeamTestCatalog>[0] = {},
+  overrides: Partial<Parameters<typeof createBeamTestRunner>[0]> = {},
+  cancel?: () => void | Promise<void>,
+) {
+  const testCatalog = createBeamTestCatalog(catalog);
+  return {
+    fetchFn: captureFetch(cancel),
+    logger,
+    listCatalogs: () => [testCatalog],
+    ...overrides,
+  };
+}
+const testRunner = (...args: Parameters<typeof mirrorOptions>) =>
+  createBeamTestRunner(mirrorOptions(...args));
+const scheduledRunner = (...args: Parameters<typeof mirrorOptions>) =>
+  createScheduledBeamTestRunner(mirrorOptions(...args));
+
+function pausedCall() {
+  const started = createDeferred<void>();
+  const release = createDeferred<void>();
+  const call = vi.fn(async () => {
+    started.resolve();
+    await release.promise;
+  });
+  return { started: started.promise, release: release.resolve, call };
+}
+
+function captureFetch(onCancel?: () => void | Promise<void>): typeof fetch {
   return vi.fn(async (url: unknown, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     sent.push({
@@ -47,13 +77,13 @@ function captureFetch(
       ...(headers.Authorization ? { auth: headers.Authorization } : {}),
       payload: JSON.parse(init?.body as string) as BeamUpload,
     });
-    const body = onCancel
-      ? new ReadableStream<Uint8Array>({
-          cancel: onCancel,
-        })
-      : "{}";
-    return new Response(body, { status });
+    const body = onCancel ? new ReadableStream<Uint8Array>({ cancel: onCancel }) : "{}";
+    return new Response(body, { status: 200 });
   }) as unknown as typeof fetch;
+}
+
+function loopbackRunner(endpoint: string) {
+  return createBeamTestRunner({ endpoint, logger, listCatalogs: () => [createBeamTestCatalog()] });
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
@@ -157,10 +187,7 @@ describe("createBeamMirrorRunner", () => {
             res.end();
           },
           async (receiverOrigin) => {
-            const runner = createBeamTestRunner({
-              endpoint: `${receiverOrigin}/beam`,
-              listCatalogs: () => [createBeamTestCatalog()],
-            });
+            const runner = loopbackRunner(`${receiverOrigin}/beam`);
             await runner.tick();
             expect(receiverBodies).toHaveLength(1);
             expect(receiverBodies[0]).toContain("Fix the flow.");
@@ -172,7 +199,6 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("blocks a redirect without retrying the configured endpoint or logging its location", async () => {
-    const warnings: string[] = [];
     const receiverBodies: string[] = [];
     const redirectedBodies: string[] = [];
     await withMirrorServer(
@@ -187,11 +213,7 @@ describe("createBeamMirrorRunner", () => {
         res.end();
       },
       async (origin) => {
-        const runner = createBeamTestRunner({
-          endpoint: `${origin}/beam`,
-          logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
-        });
+        const runner = loopbackRunner(`${origin}/beam`);
         await runner.tick();
         await runner.tick();
         expect(receiverBodies).toHaveLength(1);
@@ -205,7 +227,6 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("logs a terminal redirect block after a recent transient warning", async () => {
-    const warnings: string[] = [];
     let requestCount = 0;
     await withMirrorServer(
       (_req, res) => {
@@ -214,11 +235,7 @@ describe("createBeamMirrorRunner", () => {
         res.end();
       },
       async (origin) => {
-        const runner = createBeamTestRunner({
-          endpoint: `${origin}/beam`,
-          logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
-        });
+        const runner = loopbackRunner(`${origin}/beam`);
         await runner.tick();
         await runner.tick();
         await runner.tick();
@@ -286,23 +303,23 @@ describe("createBeamMirrorRunner", () => {
 
   it("uploads the newest chronological suffix of a large transcript once", async () => {
     const count = 50;
-    const sent: SentRequest[] = [];
     const reads: string[] = [];
     const cancel = vi.fn();
     const chronological = Array.from({ length: count }, (_, index) => ({
       type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
       text: `Message ${index}: ${"text ".repeat(300)}end`,
     }));
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
-      items: chronological.toReversed(),
-      onRead: (threadId) => reads.push(threadId),
-    });
-    const runner = createBeamTestRunner({
-      runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })),
-      fetchFn: captureFetch(sent, 200, cancel),
-      listCatalogs: () => [catalog],
-    });
+    const runner = testRunner(
+      {
+        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
+        items: chronological.toReversed(),
+        onRead: (threadId) => reads.push(threadId),
+      },
+      {
+        runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })),
+      },
+      cancel,
+    );
     await runner.tick();
     await runner.tick();
     expect(sent).toHaveLength(1);
@@ -324,8 +341,7 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("includes the latest source model without changing the sanitized message payload", async () => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({
+    const runner = testRunner({
       sessions: [
         {
           threadId: "t-model",
@@ -339,10 +355,6 @@ describe("createBeamMirrorRunner", () => {
         { type: "agentMessage", text: "Earlier", model: "gpt-5.6-terra" },
         { type: "userMessage", text: "Continue this" },
       ],
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
     });
 
     await runner.tick();
@@ -358,46 +370,30 @@ describe("createBeamMirrorRunner", () => {
     ]);
   });
 
-  it.each([
-    {
-      reason: "the source already truncated a message",
-      item: { type: "userMessage", text: "Partial message", truncated: true },
-      expectedText: "Partial message",
-    },
-  ] satisfies Array<{
-    reason: string;
-    item: SessionCatalogTranscriptItem;
-    expectedText: string;
-  }>)("marks the upload truncated when $reason", async ({ item, expectedText }) => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({ items: [item] });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
+  it("marks the upload truncated when the source already truncated a message", async () => {
+    const runner = testRunner({
+      items: [{ type: "userMessage", text: "Partial message", truncated: true }],
     });
     await runner.tick();
     expect(sent).toHaveLength(1);
     expect(sent[0]?.payload).toMatchObject({
       truncated: true,
-      items: [{ type: "userMessage", text: expectedText }],
+      items: [{ type: "userMessage", text: "Partial message" }],
     });
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
   });
 
   it("keeps successful uploads successful when response cancellation rejects", async () => {
-    const sent: SentRequest[] = [];
-    const warnings: string[] = [];
     const cancel = vi.fn(async () => {
       throw new Error("cancel failed");
     });
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }],
-    });
-    const runner = createBeamTestRunner({
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
-      fetchFn: captureFetch(sent, 200, cancel),
-      listCatalogs: () => [catalog],
-    });
+    const runner = testRunner(
+      {
+        sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }],
+      },
+      {},
+      cancel,
+    );
 
     await runner.tick();
     await runner.tick();
@@ -409,85 +405,58 @@ describe("createBeamMirrorRunner", () => {
 
   it("stops before a paused transcript read settles without resuming mirror work", async () => {
     vi.useFakeTimers();
-    const readStarted = createDeferred<void>();
-    const releaseRead = createDeferred<void>();
     const list = vi.fn();
-    const read = vi.fn(async () => {
-      readStarted.resolve();
-      await releaseRead.promise;
-    });
-    const sent: SentRequest[] = [];
-    const warnings: string[] = [];
-    const runner = createScheduledBeamTestRunner({
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [
-        createBeamTestCatalog({
-          sessions: [
-            { threadId: "t1", recencyAt: beamTestNow },
-            { threadId: "t2", recencyAt: beamTestNow },
-          ],
-          onList: list,
-          onRead: read,
-        }),
+    const read = pausedCall();
+    const runner = scheduledRunner({
+      sessions: [
+        { threadId: "t1", recencyAt: beamTestNow },
+        { threadId: "t2", recencyAt: beamTestNow },
       ],
+      onList: list,
+      onRead: read.call,
     });
 
     try {
       const tick = runner.tick();
-      await readStarted.promise;
+      await read.started;
       const firstStop = runner.stop();
       expect(runner.stop()).toBe(firstStop);
       await Promise.all([firstStop, tick]);
 
-      releaseRead.resolve();
-      await read.mock.results[0]?.value;
+      read.release();
+      await read.call.mock.results[0]?.value;
 
-      expect(read).toHaveBeenCalledOnce();
+      expect(read.call).toHaveBeenCalledOnce();
       expect(sent).toEqual([]);
       expect(warnings).toEqual([]);
       await runner.tick();
       expect(list).toHaveBeenCalledOnce();
     } finally {
-      releaseRead.resolve();
+      read.release();
       await runner.stop();
     }
   });
 
   it("keeps one catalog and upload path active across missed scheduler periods", async () => {
     vi.useFakeTimers();
-    const listStarted = createDeferred<void>();
-    const releaseList = createDeferred<void>();
-    const list = vi.fn(async () => {
-      listStarted.resolve();
-      await releaseList.promise;
-    });
+    const list = pausedCall();
     const read = vi.fn();
-    const sent: SentRequest[] = [];
-    const runner = createScheduledBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [
-        createBeamTestCatalog({
-          onList: list,
-          onRead: read,
-        }),
-      ],
-    });
+    const runner = scheduledRunner({ onList: list.call, onRead: read });
 
     try {
       const first = runner.tick();
-      await listStarted.promise;
+      await list.started;
       await first;
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(list).toHaveBeenCalledOnce();
+      expect(list.call).toHaveBeenCalledOnce();
 
-      releaseList.resolve();
+      list.release();
       await runner.settled;
 
       expect(read).toHaveBeenCalledOnce();
       expect(sent).toHaveLength(1);
     } finally {
-      releaseList.resolve();
+      list.release();
       await runner.stop();
     }
   });
@@ -495,14 +464,8 @@ describe("createBeamMirrorRunner", () => {
   it("waits for guarded response cleanup after lifecycle abort without warning", async () => {
     vi.useFakeTimers();
     const fetchStarted = createDeferred<void>();
-    const cleanupStarted = createDeferred<void>();
-    const releaseCleanup = createDeferred<void>();
     const cancel = vi.fn();
-    const release = vi.fn(async () => {
-      cleanupStarted.resolve();
-      await releaseCleanup.promise;
-    });
-    const warnings: string[] = [];
+    const cleanup = pausedCall();
     let signal: AbortSignal | undefined;
     const guardedFetch = vi
       .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
@@ -519,11 +482,11 @@ describe("createBeamMirrorRunner", () => {
         return {
           response: new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
           finalUrl: options.url,
-          release,
+          release: cleanup.call,
         };
       });
     const runner = createScheduledBeamTestRunner({
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      logger,
       listCatalogs: () => [createBeamTestCatalog()],
     });
 
@@ -538,18 +501,18 @@ describe("createBeamMirrorRunner", () => {
         stopSettled = true;
       });
       expect(signal?.aborted).toBe(true);
-      await cleanupStarted.promise;
+      await cleanup.started;
       await Promise.resolve();
       expect(stopSettled).toBe(false);
 
-      releaseCleanup.resolve();
+      cleanup.release();
       await Promise.all([tick, stop]);
 
       expect(cancel).toHaveBeenCalledOnce();
-      expect(release).toHaveBeenCalledOnce();
+      expect(cleanup.call).toHaveBeenCalledOnce();
       expect(warnings).toEqual([]);
     } finally {
-      releaseCleanup.resolve();
+      cleanup.release();
       guardedFetch.mockRestore();
       await runner.stop();
     }
@@ -565,7 +528,6 @@ describe("createBeamMirrorRunner", () => {
         req.socket.once("close", requestClosed.resolve);
       },
       async (origin) => {
-        const warnings: string[] = [];
         let signal: AbortSignal | undefined;
         const fetchFn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
           signal = init?.signal ?? undefined;
@@ -573,7 +535,7 @@ describe("createBeamMirrorRunner", () => {
         }) as unknown as typeof fetch;
         const runner = createScheduledBeamTestRunner({
           endpoint: `${origin}/beam`,
-          logger: { warn: (message) => warnings.push(message), info: () => {} },
+          logger,
           fetchFn,
           listCatalogs: () => [createBeamTestCatalog()],
         });
@@ -597,7 +559,6 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
-    const sent: SentRequest[] = [];
     const idle = createBeamTestCatalog({
       sessions: [{ threadId: "old", recencyAt: beamTestNow - 24 * 60 * 60_000 }],
     });
@@ -614,25 +575,27 @@ describe("createBeamMirrorRunner", () => {
       id: "pi",
       sessions: [{ threadId: "p1", recencyAt: beamTestNow }],
     });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [idle, nodeHost, beamCatalog, unlisted],
-    });
+    const runner = testRunner(
+      {},
+      {
+        listCatalogs: () => [idle, nodeHost, beamCatalog, unlisted],
+      },
+    );
     await runner.tick();
     expect(sent).toHaveLength(0);
   });
 
   it("warns once when profile isolation disables process-HOME fallback", async () => {
-    const warnings: string[] = [];
-    const catalog = createBeamTestCatalog({
-      sessions: [],
-      processHomeFallbackAllowed: false,
-    });
-    const runner = createBeamTestRunner({
-      runtime: createBeamTestRuntime(beamTestMirrorConfig({ catalogs: ["claude"] })),
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
-      listCatalogs: () => [catalog],
-    });
+    const runner = testRunner(
+      {
+        sessions: [],
+        processHomeFallbackAllowed: false,
+      },
+      {
+        runtime: createBeamTestRuntime(beamTestMirrorConfig({ catalogs: ["claude"] })),
+        fetchFn: undefined,
+      },
+    );
 
     await runner.tick();
     await runner.tick();
@@ -643,18 +606,17 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("sends one completed upload for an observed idle session on a partial host page", async () => {
-    const sent: SentRequest[] = [];
     const recency = beamTestNow - 60_000;
-    const catalog = createBeamTestCatalog({
-      hostCursor: "older-sessions",
-      sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: recency }],
-    });
     let clock = beamTestNow;
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      now: () => clock,
-      listCatalogs: () => [catalog],
-    });
+    const runner = testRunner(
+      {
+        hostCursor: "older-sessions",
+        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: recency }],
+      },
+      {
+        now: () => clock,
+      },
+    );
     await runner.tick();
     expect(sent).toHaveLength(1);
     expect(sent[0]?.payload.completed).toBe(false);
@@ -668,16 +630,16 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("skips ticks when a configured token cannot be resolved", async () => {
-    const sent: SentRequest[] = [];
-    const runner = createBeamTestRunner({
-      runtime: createBeamTestRuntime(
-        beamTestMirrorConfig({
-          token: { source: "env", provider: "default", id: "BEAM_MISSING_TOKEN" },
-        }),
-      ),
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [createBeamTestCatalog()],
-    });
+    const runner = testRunner(
+      {},
+      {
+        runtime: createBeamTestRuntime(
+          beamTestMirrorConfig({
+            token: { source: "env", provider: "default", id: "BEAM_MISSING_TOKEN" },
+          }),
+        ),
+      },
+    );
     await runner.tick();
     expect(sent).toHaveLength(0);
   });
@@ -692,16 +654,11 @@ describe("createBeamMirrorService", () => {
       logger: beamTestLogger,
       scheduler: createTestPluginServiceScheduler(),
     };
-    const listingStarted = createDeferred<void>();
-    const releaseListing = createDeferred<void>();
-    const list = vi.fn(async () => {
-      listingStarted.resolve();
-      await releaseListing.promise;
-    });
+    const list = pausedCall();
     const read = vi.fn();
     const catalog = createBeamTestCatalog({
       sessions: [{ threadId: "t1", recencyAt: Date.now() }],
-      onList: list,
+      onList: list.call,
       onRead: read,
     });
     const listCatalogs = vi
@@ -719,19 +676,19 @@ describe("createBeamMirrorService", () => {
     try {
       await service.start(context);
       await vi.advanceTimersByTimeAsync(0);
-      await listingStarted.promise;
+      await list.started;
 
       await context.scheduler.stop();
       expect(read).not.toHaveBeenCalled();
       expect(upload).not.toHaveBeenCalled();
 
-      releaseListing.resolve();
-      await list.mock.results[0]?.value;
+      list.release();
+      await list.call.mock.results[0]?.value;
 
       expect(read).not.toHaveBeenCalled();
       expect(upload).not.toHaveBeenCalled();
     } finally {
-      releaseListing.resolve();
+      list.release();
       upload.mockRestore();
       listCatalogs.mockRestore();
       await context.scheduler.stop();

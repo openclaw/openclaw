@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker, withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   beamTestNow,
   createBeamTestCatalog,
@@ -24,15 +24,20 @@ import {
 
 type SentRequest = { payload: BeamUpload; status: number };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let sent: SentRequest[];
+let clock: number;
+let activeSessions: BeamTestSession[];
+const sessions = (ids: string[], recencyAt: number) =>
+  ids.map((threadId) => ({ threadId, recencyAt }));
+beforeEach(() => {
+  sent = [];
+  clock = beamTestNow;
+  activeSessions = sessions(["t1"], beamTestNow - 60_000);
+});
 
-function createRetryRunner(params: {
-  sessions: () => BeamTestSession[];
-  sent: SentRequest[];
-  status: (payload: BeamUpload) => number;
-  now: () => number;
-}) {
+function createRetryRunner(statusFor = (payload: BeamUpload) => (payload.completed ? 503 : 200)) {
   const catalog = createBeamTestCatalog({
-    sessions: params.sessions,
+    sessions: () => activeSessions,
     items: (threadId) => [{ type: "agentMessage", text: threadId }],
   });
   const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -40,32 +45,23 @@ function createRetryRunner(params: {
       throw new Error("expected Beam JSON request body");
     }
     const payload = JSON.parse(init.body) as BeamUpload;
-    const status = params.status(payload);
-    params.sent.push({ payload, status });
+    const status = statusFor(payload);
+    sent.push({ payload, status });
     return new Response("{}", { status });
   };
   return createBeamTestRunner({
     endpoint: "http://127.0.0.1:19351/api/v1/beam/sessions",
     fetchFn: fetchFn as typeof fetch,
-    now: params.now,
+    now: () => clock,
     listCatalogs: () => [catalog],
   });
 }
 
 describe("Beam terminal retry policy", () => {
   it("expires failed terminal work with the receiver row", async () => {
-    const sent: SentRequest[] = [];
-    let active = true;
-    let clock = beamTestNow;
-    const runner = createRetryRunner({
-      sessions: () => (active ? [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }] : []),
-      sent,
-      status: (payload) => (payload.completed ? 503 : 200),
-      now: () => clock,
-    });
-
+    const runner = createRetryRunner();
     await runner.tick();
-    active = false;
+    activeSessions = [];
     clock += 4 * 60 * 60_000;
     await runner.tick();
     clock = beamTestNow + BEAM_RETENTION_MS;
@@ -76,21 +72,16 @@ describe("Beam terminal retry policy", () => {
   });
 
   it("rotates failed terminal work behind later sessions", async () => {
-    const sent: SentRequest[] = [];
-    let clock = beamTestNow;
-    let activeThreadIds = Array.from({ length: 32 }, (_, index) => `early-${index}`);
-    const runner = createRetryRunner({
-      sessions: () => activeThreadIds.map((threadId) => ({ threadId, recencyAt: clock - 60_000 })),
-      sent,
-      status: (payload) => (payload.completed ? 503 : 200),
-      now: () => clock,
-    });
-
+    activeSessions = sessions(
+      Array.from({ length: 32 }, (_, index) => `early-${index}`),
+      clock - 60_000,
+    );
+    const runner = createRetryRunner();
     await runner.tick();
-    activeThreadIds = ["late"];
     clock += 60_000;
+    activeSessions = sessions(["late"], clock - 60_000);
     await runner.tick();
-    activeThreadIds = [];
+    activeSessions = [];
     clock += 60_000;
     const beforeLaterRetry = sent.length;
     await runner.tick();
@@ -105,23 +96,15 @@ describe("Beam terminal retry policy", () => {
   });
 
   it("does not retry a failed terminal upload for an active overflow session", async () => {
-    const sent: SentRequest[] = [];
     const overflowThreadId = "active-overflow";
     const overflowBeamId = beamMirrorId("claude", "gateway:local", overflowThreadId);
-    let activeSessions: BeamTestSession[] = [
-      { threadId: overflowThreadId, recencyAt: beamTestNow },
-    ];
+    activeSessions = sessions([overflowThreadId], beamTestNow);
     let overflowTerminalAttempts = 0;
-    const runner = createRetryRunner({
-      sessions: () => activeSessions,
-      sent,
-      status: (payload) => {
-        if (payload.beamId === overflowBeamId && payload.completed) {
-          overflowTerminalAttempts += 1;
-        }
-        return 200;
-      },
-      now: () => beamTestNow,
+    const runner = createRetryRunner((payload) => {
+      if (payload.beamId === overflowBeamId && payload.completed) {
+        overflowTerminalAttempts += 1;
+      }
+      return 200;
     });
 
     await runner.tick();
@@ -146,8 +129,6 @@ describe("Beam terminal retry policy", () => {
   it("keeps receiver-retained retry state with independent clocks", async () => {
     const targetThreadId = "session-273";
     const targetBeamId = beamMirrorId("claude", "gateway:local", targetThreadId);
-    const stateDir = tempDirs.make("beam-capacity-");
-    const stateEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir };
     resetPluginStateStoreForTests();
     const keyedStore = createPluginStateKeyedStoreV2ForTests<BeamStoredSession>(
       "beam-capacity",
@@ -156,7 +137,7 @@ describe("Beam terminal retry policy", () => {
         maxEntries: BEAM_MAX_SESSIONS,
         overflowPolicy: "evict-oldest",
         defaultTtlMs: BEAM_RETENTION_MS,
-        env: stateEnv,
+        env: { OPENCLAW_STATE_DIR: tempDirs.make("beam-capacity-") },
       },
       { assertCurrent() {} },
     );
@@ -207,7 +188,7 @@ describe("Beam terminal retry policy", () => {
           });
         },
         async (baseUrl) => {
-          let activeSessions: BeamTestSession[] = [];
+          activeSessions = [];
           const catalog = createBeamTestCatalog({
             sessions: () => activeSessions,
             items: (threadId) => [{ type: "agentMessage", text: threadId }],
