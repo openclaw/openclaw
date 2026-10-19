@@ -56,220 +56,167 @@ function capturePayload(
 }
 
 describe("wrapFireworksProviderStream", () => {
-  it.each<{
-    name: string;
-    modelId: string;
-    options: SimpleStreamOptions;
-    baseUrl?: string;
-    compat?: Model["compat"];
-    affinity: string | undefined;
-  }>([
-    {
-      name: "session affinity for the default router",
-      modelId: "accounts/fireworks/routers/glm-5p3-fast",
-      options: { sessionId: "synthetic-session", cacheRetention: "long" },
-      affinity: "synthetic-session",
-    },
-    {
-      name: "explicit cache affinity for Kimi",
-      modelId: "accounts/fireworks/routers/kimi-k2.6-synthetic-test",
-      options: { sessionId: "synthetic-session", promptCacheKey: "synthetic-cache-key" },
-      affinity: "synthetic-cache-key",
-    },
-    {
-      name: "disabled cache affinity",
-      modelId: "accounts/fireworks/routers/glm-5p3-fast",
-      options: { sessionId: "synthetic-session", cacheRetention: "none" },
-      affinity: undefined,
-    },
-    {
-      name: "no synthetic affinity without a session",
-      modelId: "accounts/fireworks/routers/glm-5p3-fast",
-      options: {},
-      affinity: undefined,
-    },
-    {
-      name: "explicit capability opt-out",
-      modelId: "accounts/fireworks/routers/glm-5p3-fast",
-      options: { sessionId: "synthetic-session" },
-      compat: { supportsPromptCacheKey: false },
-      affinity: undefined,
-    },
-    {
-      name: "no Fireworks affinity for a custom proxy",
-      modelId: "accounts/fireworks/routers/glm-5p3-fast",
-      baseUrl: "https://proxy.example/v1",
-      options: { sessionId: "synthetic-session" },
-      affinity: undefined,
-    },
-  ])(
-    "sends $name in the provider request",
-    async ({ modelId, baseUrl, compat, options, affinity }) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const originalModel = createModel({ id: modelId, compat, ...(baseUrl ? { baseUrl } : {}) });
-      const model =
-        provider.normalizeResolvedModel?.({
-          provider: originalModel.provider,
-          modelId,
-          model: originalModel,
-        }) ?? originalModel;
-      let serializedPayload = "";
-      const wrapped = wrapModel(model, streamSimple) ?? streamSimple;
-      const result = await (
-        await wrapped(
-          model,
-          {
-            systemPrompt: "Stable synthetic instructions.",
-            messages: [{ role: "user", content: "Synthetic question.", timestamp: 1 }],
-          },
-          {
-            ...options,
-            apiKey: "synthetic-unused-key",
-            onPayload(value) {
-              serializedPayload = JSON.stringify(value);
-              throw new Error("captured before request");
-            },
-          },
-        )
-      ).result();
-      expect(result.errorMessage).toBe("captured before request");
-      const payload: unknown = JSON.parse(serializedPayload);
-      if (affinity === undefined) {
-        expect(payload).not.toHaveProperty("prompt_cache_key");
-      } else {
-        expect(payload).toHaveProperty("prompt_cache_key", affinity);
-      }
-      expect(payload).not.toHaveProperty("prompt_cache_retention");
-      expect(payload).toMatchObject({
-        messages: [
-          { role: "system", content: "Stable synthetic instructions." },
-          { role: "user", content: "Synthetic question." },
-        ],
-      });
-      if (modelId.includes("kimi")) {
-        expect(payload).toHaveProperty("thinking", { type: "disabled" });
-      }
-    },
-  );
-
-  it.each<{
-    name: string;
-    headers: string[];
-    read: number;
-    known: boolean;
-    expected: number;
-    available?: boolean;
-    api?: Model["api"];
-  }>([
-    {
-      name: "header-only hit",
-      headers: ["100", "80"],
-      read: 0,
-      known: false,
-      expected: 80,
-      available: true,
-    },
-    {
-      name: "header-only miss",
-      headers: ["100", "0"],
-      read: 0,
-      known: false,
-      expected: 0,
-      available: true,
-    },
-    {
-      name: "header-only hit through a standalone API alias",
-      headers: ["100", "80"],
-      read: 0,
-      known: false,
-      expected: 80,
-      available: true,
-      api: "provider-stream:synthetic-fireworks",
-    },
-    { name: "explicit body zero", headers: ["100", "80"], read: 0, known: true, expected: 0 },
-    { name: "body hit", headers: ["100", "80"], read: 40, known: true, expected: 40 },
-    { name: "missing headers", headers: [], read: 0, known: false, expected: 0 },
-    { name: "invalid cache count", headers: ["100", "101"], read: 0, known: false, expected: 0 },
-    { name: "mismatched prompt count", headers: ["200", "80"], read: 0, known: false, expected: 0 },
-  ])("accounts for $name without replacing billed cost", async (testCase) => {
-    const model = createModel({
+  it.each<[string, SimpleStreamOptions, Partial<Model>, string?]>([
+    ["default router session affinity", { cacheRetention: "long" }, {}, "synthetic-session"],
+    [
+      "explicit cache affinity for Kimi",
+      { promptCacheKey: "synthetic-cache-key" },
+      { id: "accounts/fireworks/routers/kimi-k2.6-synthetic-test" },
+      "synthetic-cache-key",
+    ],
+    ["disabled cache affinity", { cacheRetention: "none" }, {}],
+    ["no synthetic affinity without a session", { sessionId: undefined }, {}],
+    ["explicit capability opt-out", {}, { compat: { supportsPromptCacheKey: false } }],
+    ["no Fireworks affinity for a custom proxy", {}, { baseUrl: "https://proxy.example/v1" }],
+  ])("sends %s in the provider request", async (_name, options, overrides, affinity) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const originalModel = createModel({
       id: "accounts/fireworks/routers/glm-5p3-fast",
-      ...(testCase.api ? { api: testCase.api } : {}),
-      cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 0 },
+      ...overrides,
     });
-    const message: AssistantMessage = {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      content: [{ type: "text", text: "Synthetic reply." }],
-      stopReason: "stop",
-      timestamp: 1,
-      usage: {
-        input: 100 - testCase.read,
-        output: 10,
-        cacheRead: testCase.read,
-        cacheWrite: 0,
-        cacheTelemetry: { state: testCase.known ? "available" : "unavailable" },
-        totalTokens: 110,
-        cost: {
-          input: ((100 - testCase.read) * 2) / 1e6,
-          output: 40 / 1e6,
-          cacheRead: testCase.read / 1e6,
-          cacheWrite: 0,
-          total: 0.5,
-          totalOrigin: "provider-billed",
-        },
-      },
-    };
-    const baseStreamFn: StreamFn = async (nextModel, _context, options) => {
-      await options?.onResponse?.(
-        {
-          status: 200,
-          headers: testCase.headers.length
-            ? {
-                "fireworks-prompt-tokens": testCase.headers[0]!,
-                "fireworks-cached-prompt-tokens": testCase.headers[1]!,
-              }
-            : {},
-        },
-        nextModel,
-      );
-      const stream = createAssistantMessageEventStream();
-      stream.push({ type: "done", reason: "stop", message });
-      stream.end();
-      return stream;
-    };
-    let responseCalls = 0;
-    const stream = await (wrapModel(model, baseStreamFn, "openai-completions") ?? baseStreamFn)(
+    const modelId = originalModel.id;
+    const model =
+      provider.normalizeResolvedModel?.({
+        provider: originalModel.provider,
+        modelId,
+        model: originalModel,
+      }) ?? originalModel;
+    let serializedPayload = "";
+    const wrapped = wrapModel(model, streamSimple) ?? streamSimple;
+    const stream = await wrapped(
       model,
-      { messages: [] },
       {
-        onResponse: () => {
-          responseCalls++;
+        systemPrompt: "Stable synthetic instructions.",
+        messages: [{ role: "user", content: "Synthetic question.", timestamp: 1 }],
+      },
+      {
+        sessionId: "synthetic-session",
+        ...options,
+        apiKey: "synthetic-unused-key",
+        onPayload(value) {
+          serializedPayload = JSON.stringify(value);
+          throw new Error("captured before request");
         },
       },
     );
-    for await (const event of stream) {
-      if (event.type === "done") {
-        expect(event.message.usage.cacheRead).toBe(testCase.expected);
-      }
+    expect((await stream.result()).errorMessage).toBe("captured before request");
+    const payload: unknown = JSON.parse(serializedPayload);
+    if (affinity === undefined) {
+      expect(payload).not.toHaveProperty("prompt_cache_key");
+    } else {
+      expect(payload).toHaveProperty("prompt_cache_key", affinity);
     }
-    expect((await stream.result()).usage).toMatchObject({
-      input: 100 - testCase.expected,
-      output: 10,
-      cacheRead: testCase.expected,
-      cacheTelemetry: { state: testCase.known || testCase.available ? "available" : "unavailable" },
-      totalTokens: 110,
-      cost: {
-        input: ((100 - testCase.expected) * 2) / 1e6,
-        cacheRead: testCase.expected / 1e6,
-        total: 0.5,
-        totalOrigin: "provider-billed",
-      },
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload).toMatchObject({
+      messages: [
+        { role: "system", content: "Stable synthetic instructions." },
+        { role: "user", content: "Synthetic question." },
+      ],
     });
-    expect(responseCalls).toBe(1);
+    if (modelId.includes("kimi")) {
+      expect(payload).toHaveProperty("thinking", { type: "disabled" });
+    }
   });
+
+  it.each<[string, string[], number, boolean, number, boolean?, Model["api"]?]>([
+    ["header-only hit", ["100", "80"], 0, false, 80, true],
+    ["header-only miss", ["100", "0"], 0, false, 0, true],
+    [
+      "standalone API alias hit",
+      ["100", "80"],
+      0,
+      false,
+      80,
+      true,
+      "provider-stream:synthetic-fireworks",
+    ],
+    ["explicit body zero", ["100", "80"], 0, true, 0],
+    ["body hit", ["100", "80"], 40, true, 40],
+    ["missing headers", [], 0, false, 0],
+    ["invalid cache count", ["100", "101"], 0, false, 0],
+    ["mismatched prompt count", ["200", "80"], 0, false, 0],
+  ])(
+    "accounts for %s without replacing billed cost",
+    async (_name, headers, read, known, expected, available, api) => {
+      const model = createModel({
+        id: "accounts/fireworks/routers/glm-5p3-fast",
+        ...(api ? { api } : {}),
+        cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 0 },
+      });
+      const message: AssistantMessage = {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        content: [{ type: "text", text: "Synthetic reply." }],
+        stopReason: "stop",
+        timestamp: 1,
+        usage: {
+          input: 100 - read,
+          output: 10,
+          cacheRead: read,
+          cacheWrite: 0,
+          cacheTelemetry: { state: known ? "available" : "unavailable" },
+          totalTokens: 110,
+          cost: {
+            input: ((100 - read) * 2) / 1e6,
+            output: 40 / 1e6,
+            cacheRead: read / 1e6,
+            cacheWrite: 0,
+            total: 0.5,
+            totalOrigin: "provider-billed",
+          },
+        },
+      };
+      const baseStreamFn: StreamFn = async (nextModel, _context, options) => {
+        await options?.onResponse?.(
+          {
+            status: 200,
+            headers: headers.length
+              ? {
+                  "fireworks-prompt-tokens": headers[0]!,
+                  "fireworks-cached-prompt-tokens": headers[1]!,
+                }
+              : {},
+          },
+          nextModel,
+        );
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+        return stream;
+      };
+      let responseCalls = 0;
+      const stream = await (wrapModel(model, baseStreamFn, "openai-completions") ?? baseStreamFn)(
+        model,
+        { messages: [] },
+        {
+          onResponse: () => {
+            responseCalls++;
+          },
+        },
+      );
+      for await (const event of stream) {
+        if (event.type === "done") {
+          expect(event.message.usage.cacheRead).toBe(expected);
+        }
+      }
+      expect((await stream.result()).usage).toMatchObject({
+        input: 100 - expected,
+        output: 10,
+        cacheRead: expected,
+        cacheTelemetry: { state: known || available ? "available" : "unavailable" },
+        totalTokens: 110,
+        cost: {
+          input: ((100 - expected) * 2) / 1e6,
+          cacheRead: expected / 1e6,
+          total: 0.5,
+          totalOrigin: "provider-billed",
+        },
+      });
+      expect(responseCalls).toBe(1);
+    },
+  );
 
   it("forces thinking disabled for Fireworks Kimi k2.5 aliases", () => {
     expect(
