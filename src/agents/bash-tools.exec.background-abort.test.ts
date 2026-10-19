@@ -1,9 +1,10 @@
-import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
-import { waitForExecScope } from "./bash-process-registry.js";
+import { getFinishedSession, getSession, waitForExecScope } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -110,6 +111,8 @@ const identity = (runId: string, sessionKey: string, sessionId: string) => ({
   sessionId,
   agentId: "main",
 });
+const makeTool = (owner: Partial<ReturnType<typeof identity>>, scopeKey: string) =>
+  createLazyExecTool({ ...TEST_EXEC_DEFAULTS, ...owner, scopeKey });
 
 async function finishProcesses() {
   for (const finish of supervisorMockState.finish.values()) {
@@ -125,14 +128,43 @@ function runningSession(details: ReturnType<typeof resultDetails>) {
   return details.sessionId;
 }
 
-let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
-let getSession: typeof import("./bash-process-registry.js").getSession;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
-
-beforeAll(async () => {
-  ({ getFinishedSession, getSession } = await import("./bash-process-registry.js"));
-  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
-});
+async function yieldExec(
+  tool: ReturnType<typeof createLazyExecTool>,
+  runId: string,
+  args: Parameters<typeof tool.execute>[1],
+  signal: AbortSignal,
+  codeMode = false,
+  scopeKey?: string,
+) {
+  const spawned = createDeferredCore();
+  supervisorMockState.onSpawn = () => spawned.resolve();
+  const harness = codeMode ? createCodeModeHarness() : undefined;
+  if (harness) {
+    applyCodeModeCatalog({
+      ...harness.ctx,
+      tools: [...harness.tools, tool, createProcessTool({ scopeKey })],
+    });
+  }
+  const pending = harness
+    ? harness.tools[0]!.execute(
+        runId,
+        { code: `return await exec(${JSON.stringify(args)});` },
+        signal,
+      )
+    : tool.execute(runId, args, signal);
+  await Promise.race([
+    spawned.promise,
+    pending.then((result) => {
+      throw new Error(`Exec did not start: ${JSON.stringify(resultDetails(result))}`);
+    }),
+  ]);
+  await vi.advanceTimersByTimeAsync(10);
+  const details = resultDetails(await pending);
+  if (harness) {
+    expect(details.status).toBe("completed");
+  }
+  return runningSession(harness ? resultDetails({ details: details.value }) : details);
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -151,31 +183,21 @@ test.each([false, true])(
   "invocation disposal preserves yielded exec until request Stop (owned=%s)",
   async (owned) => {
     vi.useFakeTimers();
-    const spawned = createDeferredCore();
     const returned = createDeferredCore<string>();
     const finishTurn = createDeferredCore();
-    supervisorMockState.onSpawn = () => spawned.resolve();
     const owner = identity("yielded-stop", "agent:main:yielded-stop", "yielded-session");
     const request = new AbortController();
     const invocation = new AbortController();
     const execute = async () => {
-      const tool = createLazyExecTool({
-        ...TEST_EXEC_DEFAULTS,
-        ...(owned ? owner : {}),
-        scopeKey: owner.sessionKey,
-      });
-      const result = resultDetails(
-        await tool.execute("ordinary-command", { ...command, yieldMs: 10 }, invocation.signal),
-      );
-      returned.resolve(runningSession(result));
+      const tool = makeTool(owned ? owner : {}, owner.sessionKey);
+      const args = { ...command, yieldMs: 10 };
+      returned.resolve(await yieldExec(tool, "ordinary-command", args, invocation.signal));
       await finishTurn.promise;
     };
     const running = owned
       ? withExecRequestTurn({ identity: owner, abortSignal: request.signal }, execute)
       : execute();
     try {
-      await spawned.promise;
-      await vi.advanceTimersByTimeAsync(10);
       const sessionId = await returned.promise;
       invocation.abort();
       expect(supervisorMockState.cancelled).toEqual([]);
@@ -215,46 +237,15 @@ test.each([false, true])(
           identity: owner,
           abortSignal: source.signal,
         },
-        async () => {
-          const spawned = createDeferredCore();
-          supervisorMockState.onSpawn = () => spawned.resolve();
-          const tool = createLazyExecTool({
-            ...TEST_EXEC_DEFAULTS,
-            ...owner,
-            scopeKey: sessionKey,
-          });
-          const args = {
-            ...command,
-            ...(independent ? { background: true } : { yieldMs: 10 }),
-          };
-          const harness = codeMode ? createCodeModeHarness() : undefined;
-          if (harness) {
-            applyCodeModeCatalog({
-              ...harness.ctx,
-              tools: [...harness.tools, tool, createProcessTool({ scopeKey: sessionKey })],
-            });
-          }
-          const pending = harness
-            ? harness.tools[0]!.execute(
-                runId,
-                { code: `return await exec(${JSON.stringify(args)});` },
-                toolLifetime.signal,
-              )
-            : tool.execute(runId, args, toolLifetime.signal);
-          await Promise.race([
-            spawned.promise,
-            pending.then((result) => {
-              throw new Error(`Exec did not start: ${JSON.stringify(resultDetails(result))}`);
-            }),
-          ]);
-          await vi.advanceTimersByTimeAsync(10);
-          const result = await pending;
-          const details = resultDetails(result);
-          if (harness) {
-            expect(details.status).toBe("completed");
-          }
-          return runningSession(harness ? resultDetails({ details: details.value }) : details);
-        },
+        () =>
+          yieldExec(
+            makeTool(owner, sessionKey),
+            runId,
+            { ...command, ...(independent ? { background: true } : { yieldMs: 10 }) },
+            toolLifetime.signal,
+            codeMode,
+            sessionKey,
+          ),
       );
     }
     const ordinary = await launch("original");

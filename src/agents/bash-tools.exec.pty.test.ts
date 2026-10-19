@@ -5,9 +5,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
-afterEach(() => {
-  resetProcessRegistryForTests();
-});
+afterEach(resetProcessRegistryForTests);
 
 function currentEnv(): Record<string, string> {
   return Object.fromEntries(
@@ -41,9 +39,12 @@ function startProcess(
   });
 }
 
-async function startPtySession(command: string) {
+async function startPtySession(
+  source: string,
+  options: Partial<Parameters<typeof runExecProcess>[0]> = {},
+) {
   const processTool = createProcessTool();
-  const run = await startProcess({ command });
+  const run = await startProcess({ command: currentNodeEvalCommand(source), ...options });
   markBackgrounded(run.session);
   return { processTool, sessionId: run.session.id, run };
 }
@@ -57,19 +58,17 @@ async function stopProcess(run: Awaited<ReturnType<typeof runExecProcess>>) {
 
 test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async () => {
   const { processTool, sessionId, run } = await startPtySession(
-    currentNodeEvalCommand(
-      [
-        "process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ''}`);",
-        "const dataEvent=String.fromCharCode(100,97,116,97);",
-        "const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);",
-        "let submissions=0;",
-        "process.stdin.on(dataEvent,d=>{",
-        "process.stdout.write(d);",
-        "for(const byte of d){if(byte===10||byte===13)submissions++;}",
-        "if(submissions>=2){process.stdout.write(submitted);process.exit(0);}",
-        "});",
-      ].join(""),
-    ),
+    [
+      "process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ''}`);",
+      "const dataEvent=String.fromCharCode(100,97,116,97);",
+      "const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);",
+      "let submissions=0;",
+      "process.stdin.on(dataEvent,d=>{",
+      "process.stdout.write(d);",
+      "for(const byte of d){if(byte===10||byte===13)submissions++;}",
+      "if(submissions>=2){process.stdout.write(submitted);process.exit(0);}",
+      "});",
+    ].join(""),
   );
 
   await processTool.execute("toolcall", {
@@ -93,7 +92,7 @@ test.skipIf(process.platform === "win32")(
   "process send-keys delivers Unicode, raw hex, and control bytes through a real PTY",
   async () => {
     const { processTool, sessionId, run } = await startPtySession(
-      currentNodeEvalCommand(`
+      `
         process.stdin.setRawMode(true);
         const received = [];
         process.stdin.on("data", chunk => {
@@ -104,7 +103,7 @@ test.skipIf(process.platform === "win32")(
           }
         });
         console.log("READY");
-      `),
+      `,
     );
     try {
       await expect.poll(() => run.session.aggregated, { timeout: 5_000 }).toContain("READY");
@@ -157,18 +156,16 @@ test("PTY cursor queries and key modes survive output chunk boundaries", async (
     setTimeout(() => process.exit(3), 5000);
   `;
   const warnings: string[] = [];
-  const run = await startProcess({
-    command: currentNodeEvalCommand(script),
+  const { run, processTool, sessionId } = await startPtySession(script, {
     env: { PATH: process.env.PATH ?? "", TERM: "xterm-256color" },
     warnings,
     timeoutSec: 8,
   });
-  markBackgrounded(run.session);
   try {
     await expect.poll(() => run.session.aggregated, { timeout: 5_000 }).toContain("ARROW_READY");
-    await createProcessTool().execute("arrow", {
+    await processTool.execute("arrow", {
       action: "send-keys",
-      sessionId: run.session.id,
+      sessionId,
       keys: ["Up"],
     });
     const outcome = await run.promise;

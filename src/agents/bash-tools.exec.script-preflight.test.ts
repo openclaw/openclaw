@@ -5,22 +5,14 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import type { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
-import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-types.js";
-import type { AgentToolResult } from "./runtime/index.js";
+import type { ExecToolApprovalReview } from "./bash-tools.exec-types.js";
 import { readToolEffectReceipt } from "./tool-effect-receipt.js";
 
 const processGatewayAllowlistMock = vi.hoisted(() =>
-  vi.fn(
-    async (_params?: {
-      onApprovalReview?: (review: ExecToolApprovalReview) => void;
-    }): Promise<{
-      allowWithoutEnforcedCommand: boolean;
-      revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
-      releaseSpawn?: () => void;
-    }> => ({ allowWithoutEnforcedCommand: true }),
-  ),
+  vi.fn<typeof processGatewayAllowlist>(async () => ({ allowWithoutEnforcedCommand: true })),
 );
 vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>()),
@@ -56,6 +48,15 @@ const withScripts = <T>(files: Record<string, string>, run: (workdir: string) =>
   });
 const execScripts = (command: string, files: Record<string, string>) =>
   withScripts(files, (workdir) => runExecPreflight(command, workdir));
+async function expectNotStarted(
+  result: ReturnType<typeof runExecPreflight>,
+  message: string | RegExp,
+) {
+  await expect(result).rejects.toThrow(message);
+  await expect(result).rejects.toSatisfy(
+    (error) => readToolEffectReceipt(error)?.state === "not_started",
+  );
+}
 
 afterEach(() => __setFsSafeTestHooksForTest());
 beforeEach(() => {
@@ -155,12 +156,9 @@ describeNonWin("exec script preflight", () => {
     ["$F", 'result = f"{lambda value: $F}"'],
     ["$E", 'text = "ok\rpayload = $E'],
   ])("blocks Python shell variable %s in %s", async (token, source) => {
-    const result = execScripts("python bad.py", { "bad.py": source });
-    await expect(result).rejects.toThrow(
+    await expectNotStarted(
+      execScripts("python bad.py", { "bad.py": source }),
       `exec preflight: detected likely shell variable injection (${token})`,
-    );
-    await expect(result).rejects.toSatisfy(
-      (error) => readToolEffectReceipt(error)?.state === "not_started",
     );
   });
 
@@ -272,10 +270,9 @@ describeNonWin("exec script preflight", () => {
     'if true; then\npython "bad.py"\nfi',
     `env /bin/bash --rcfile shell.rc --noprofile --norc -O extglob -ceu "python 'bad.py'"`,
   ])("fails closed for %s", async (command) => {
-    const result = runExecPreflight(command);
-    await expect(result).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
-    await expect(result).rejects.toSatisfy(
-      (error) => readToolEffectReceipt(error)?.state === "not_started",
+    await expectNotStarted(
+      runExecPreflight(command),
+      /exec preflight: complex interpreter invocation detected/,
     );
   });
 
