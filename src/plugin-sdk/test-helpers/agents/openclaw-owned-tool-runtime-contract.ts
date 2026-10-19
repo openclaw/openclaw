@@ -1,4 +1,3 @@
-// OpenClaw-owned tool runtime contract helpers mock agent tool runtimes in SDK tests.
 import { vi } from "vitest";
 import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
 import {
@@ -141,10 +140,7 @@ export function textToolResult(
   text: string,
   details: Record<string, unknown> = {},
 ): AgentToolResult<unknown> {
-  return {
-    content: [{ type: "text", text }],
-    details,
-  };
+  return { content: [{ type: "text", text }], details };
 }
 
 export function createTerminalPresentationContractTool(params: {
@@ -246,10 +242,7 @@ export function installOpenClawOwnedToolHooks(params?: {
 }) {
   const beforeToolCall = vi.fn(async () => {
     if (params?.blockReason) {
-      return {
-        block: true,
-        blockReason: params.blockReason,
-      };
+      return { block: true, blockReason: params.blockReason };
     }
     return params?.adjustedParams ? { params: params.adjustedParams } : {};
   });
@@ -263,10 +256,7 @@ export function installOpenClawOwnedToolHooks(params?: {
   return { beforeToolCall, afterToolCall };
 }
 
-/**
- * Installs only the Codex app-server `tool_result` middleware fixture.
- * Pair with `installOpenClawOwnedToolHooks()` when a test asserts before/after hook behavior.
- */
+/** Installs result middleware only; use installOpenClawOwnedToolHooks for before/after hooks. */
 export function installCodexToolResultMiddleware(
   handler: (event: AgentToolResultMiddlewareEvent) => AgentToolResult<unknown>,
 ) {
