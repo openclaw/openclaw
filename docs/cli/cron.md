@@ -158,7 +158,7 @@ Isolated `automations add` jobs default to `--announce` delivery. Use `--no-deli
 Isolated automation chat delivery is shared between the agent and the runner:
 
 - The agent can send directly using the `message` tool when a chat route is available.
-- `announce` sends the final result unless a verified matching send already did so, then adds confirmed delivery to the destination chat's transcript.
+- `announce` sends the final result unless a verified matching send already did so, then adds confirmed delivery to the destination chat's transcript. A progress send (`final: false`) does not count as the final result.
 - `webhook` posts the finished payload to a URL.
 - `none` disables automatic conversation results and external notifications.
 

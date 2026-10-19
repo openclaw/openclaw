@@ -346,6 +346,7 @@ export function extractMessagingToolSend(
               ...(threadId ? { threadId } : {}),
               ...(threadSuppressed ? { threadSuppressed: true } : {}),
             }),
+        ...(args.final === false ? { progress: true as const } : {}),
       }
     : undefined;
 }

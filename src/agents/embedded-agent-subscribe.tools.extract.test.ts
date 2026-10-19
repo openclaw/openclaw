@@ -221,6 +221,20 @@ describe("extractMessagingToolSend", () => {
     expect(nullThread?.threadSuppressed).toBe(true);
     expect(nullThread?.threadImplicit).toBeUndefined();
   });
+
+  it.each([
+    [false, true],
+    [true, undefined],
+    [undefined, undefined],
+  ] as const)("records final: %s sends with progress %s", (final, progress) => {
+    const send = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "telegram",
+      to: "123",
+      final,
+    });
+    expect(send?.progress).toBe(progress);
+  });
 });
 
 describe("extractMessagingToolSendResult thread evidence", () => {

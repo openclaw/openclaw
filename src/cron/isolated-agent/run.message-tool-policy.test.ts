@@ -428,6 +428,14 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       });
     });
 
+    it("still dispatches the final reply after a progress message to the delivery target", async () => {
+      const progress = { ...sentTarget, text: "Checking that next.", progress: true };
+      mockAnnounce();
+      runEmbeddedAgentMock.mockResolvedValue(messageResult([progress]));
+      await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
+      dispatch({ sourceDeliveryOutcome: sourceOutcome([progress], true, false) });
+    });
+
     it("rewrites generic providers only for matching account evidence", async () => {
       mockAnnounce({ accountId: "bot-a" });
       resolveDeliveryTargetMock.mockResolvedValue(resolvedTarget({ accountId: "bot-a" }));

@@ -48,6 +48,7 @@ export function buildMessagingToolSendEvidenceKey(send: MessagingToolSend): stri
       send.threadSuppressed,
       send.text,
       send.mediaUrls,
+      send.progress,
     ]),
   );
 }

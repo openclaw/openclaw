@@ -190,3 +190,36 @@ describe("CLI conversation delivery evidence", () => {
     },
   );
 });
+
+describe("CLI message send evidence", () => {
+  it("keeps a final send that repeats an earlier progress send", () => {
+    const tracking = createCliToolTracking(buildPreparedCliRunContext());
+    const name = "mcp__openclaw__message";
+    for (const final of [false, true]) {
+      const toolCallId = `send-final-${final}`;
+      tracking.handleCliToolUseStart({
+        toolCallId,
+        name,
+        kind: "mcp_tool_use",
+        args: {
+          action: "send",
+          channel: "test-channel",
+          target: "chat123",
+          message: "done",
+          final,
+        },
+      });
+      tracking.handleCliToolResult({
+        toolCallId,
+        name,
+        isError: false,
+        result: { details: { status: "sent" } },
+      });
+    }
+    const result = tracking.withExecutionEvidence({ text: "done" });
+    expect(result.messagingToolSentTargets?.map((send) => send.progress)).toEqual([
+      true,
+      undefined,
+    ]);
+  });
+});

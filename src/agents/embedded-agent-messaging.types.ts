@@ -13,6 +13,8 @@ export type MessagingToolSend = {
   hasRichContent?: true;
   /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
+  /** Sent with `final: false` to any target: an interim update, not the run's answer. */
+  progress?: true;
 };
 
 export type MessagingToolSourceReplyPayload = Pick<
