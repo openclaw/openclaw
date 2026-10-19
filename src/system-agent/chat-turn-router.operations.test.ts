@@ -587,7 +587,10 @@ describe("SystemAgentChatEngine operations", () => {
     });
     operationMocks.runConfigSet.mockImplementation(async () => {
       mocks.readConfigFileSnapshot.mockResolvedValue({
-        ...configSnapshot({ gateway: { port: 18789 } }),
+        ...configSnapshot({
+          ...structuredClone(sharedVerifiedInferenceConfig),
+          gateway: { port: 18789 },
+        }),
         path: "/tmp/fixture-openclaw.json",
         hash: "published",
       });
