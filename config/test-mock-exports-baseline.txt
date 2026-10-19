@@ -1376,7 +1376,6 @@
 ["extensions/whatsapp/src/connection-controller.test.ts","./connection-owner.js","e0f795b84db23cb3dedf2140fd4dfb0673b3045355c21d850c3b0dc54589ed77",1]
 ["extensions/whatsapp/src/connection-controller.test.ts","./runtime.js","de9af17d1f90e2bc50a743a950c6f15f150fdf274f6755328d44fed1811529cd",1]
 ["extensions/whatsapp/src/connection-controller.test.ts","openclaw/plugin-sdk/channel-runtime-context","e73d5c01d58cd8edec121e9248297dd50deb7842746f04e2ac50922d70ea108e",1]
-["extensions/whatsapp/src/directory-config.test.ts","./accounts.js","26adb80c780d3a80a32cb1f54a22da7a5c2480a45a956cbcd430bc90d9789068",1]
 ["extensions/whatsapp/src/directory-config.test.ts","./active-listener.js","877e27ede19ac90a53d5694c0a240808a56484046f9ba49871684015cbad49cb",1]
 ["extensions/whatsapp/src/directory-config.test.ts","./connection-controller-runtime-context.js","d808d192cf9b626ac050e34723ce02e5decf6f435582603a26fc6193f85a6753",1]
 ["extensions/whatsapp/src/directory-config.test.ts","./session.js","dce40d177e855ea7edca1a7a6a579c91fee9ecfb6375737a62c8d1252ea79db4",1]
