@@ -95,12 +95,13 @@ describe("automatic metadata admission", () => {
       vi.fn(async () => ({ models, sessionModelRevision })),
     );
     const { settled } = autoRefresh(client);
-    const publish = (revision: string) =>
+    const publish = (revision: string, catalogChanged = false) =>
       invalidateChatMetadataForSessionEvent(
         client,
         {
           ...scope,
           reason: "patch",
+          ...(catalogChanged ? { catalogChanged: true } : {}),
           session: { key: scope.sessionKey, sessionModelRevision: revision },
         },
         {},
@@ -108,12 +109,12 @@ describe("automatic metadata admission", () => {
     await refresh(client).completed;
     request.mockClear();
     for (let index = 0; index < 50; index++) {
-      publish(sessionModelRevision);
+      publish(sessionModelRevision, index % 2 === 0);
       await vi.advanceTimersByTimeAsync(3_000);
     }
     expect(request).not.toHaveBeenCalled();
     sessionModelRevision = "selection-2";
-    publish(sessionModelRevision);
+    publish(sessionModelRevision, true);
     await settled();
     expect(request.mock.calls.map(([method]) => method)).toEqual(["models.list"]);
     publish(sessionModelRevision);

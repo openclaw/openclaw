@@ -1,4 +1,5 @@
 // Run only against an already running isolated Gateway with synthetic state and authentication.
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -6,6 +7,7 @@ import { parseArgs } from "node:util";
 import { chromium, type WebSocket as PlaywrightWebSocket } from "playwright";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { asOptionalRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { parseAgentSessionKey } from "../../packages/session-url-contract/src/session-key-normalization.ts";
 import type { ControlUiReadiness } from "../../ui/src/app/control-ui-readiness.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpers/playwright-chromium.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
@@ -27,6 +29,9 @@ const { values } = parseArgs({
     "request-stacks": { type: "boolean", default: false },
     "expect-session": { type: "string" },
     "open-details": { type: "boolean", default: false },
+    "activity-session": { type: "string" },
+    "activity-cron": { type: "boolean", default: false },
+    "activity-models": { type: "string", default: "openai/gpt-5.6-sol,openai/gpt-5.6-luna" },
   },
 });
 if (!values.url || !values.output) {
@@ -62,6 +67,14 @@ if (values["load-runs"]) {
 }
 
 async function measureLoads(runs: number) {
+  const activityModels = values["activity-models"].split(",").filter(Boolean);
+  if (values["activity-session"] && (runs !== 1 || activityModels.length === 0)) {
+    throw new Error("Active session measurement requires --load-runs 1 and at least one model");
+  }
+  const cronSession = parseAgentSessionKey(values["activity-session"]);
+  if (values["activity-cron"] && cronSession?.rest !== "main") {
+    throw new Error("--activity-cron requires --activity-session agent:<agent-id>:main");
+  }
   const destination = new URL(values["load-path"], url);
   if (destination.origin !== url.origin) {
     throw new Error("--load-path must remain on the isolated Gateway origin");
@@ -73,8 +86,61 @@ async function measureLoads(runs: number) {
     args: ["--no-sandbox"],
   });
   const results: unknown[] = [];
+  const cleanupErrors: string[] = [];
+  let activityClient: ReturnType<typeof createGatewayWsClient> | undefined;
+  let activityCronJobId: string | undefined;
+  const activityRpc = async (method: string, params: unknown) => {
+    const response = await activityClient!.request(method, params, 60_000);
+    if (!response.ok) {
+      throw new Error(`${method}: ${JSON.stringify(response.error)}`);
+    }
+    return asOptionalRecord(response.payload);
+  };
   let random = integer(values["phase-seed"], "--phase-seed");
   try {
+    if (values["activity-session"]) {
+      const endpoint = new URL(url);
+      endpoint.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      endpoint.hash = "";
+      activityClient = createGatewayWsClient({ url: endpoint.href });
+      await activityClient.waitOpen();
+      const token = new URLSearchParams(url.hash.slice(1)).get("token");
+      await activityRpc("connect", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "1.0.0",
+          platform: process.platform,
+          mode: "backend",
+        },
+        role: "operator",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        caps: [],
+        ...(token ? { auth: { token } } : {}),
+      });
+      await activityRpc("sessions.create", {
+        key: values["activity-session"],
+        visibility: "shared",
+        model: activityModels[0],
+      });
+    }
+    if (activityClient && values["activity-cron"]) {
+      const job = await activityRpc("cron.add", {
+        name: "Synthetic activity cron",
+        enabled: false,
+        schedule: { kind: "every", everyMs: 3_600_000 },
+        sessionTarget: "main",
+        agentId: cronSession!.agentId,
+        sessionKey: values["activity-session"],
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "Synthetic activity measurement" },
+      });
+      if (typeof job?.id !== "string") {
+        throw new Error("cron.add did not return a job ID");
+      }
+      activityCronJobId = job.id;
+    }
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const installProbe = (captureStacks: boolean) => {
       const requests: Array<{
@@ -119,48 +185,73 @@ async function measureLoads(runs: number) {
       WebSocket.prototype.send = function (data) {
         if (!observed.has(this)) {
           observed.add(this);
-          this.addEventListener("message", ({ data: message }) => {
-            if (typeof message !== "string") {
-              return;
-            }
-            const frame = JSON.parse(message);
-            if (frame.type === "event" && frame.event === "models.snapshot") {
-              snapshots.push({
-                atMs: performance.now(),
-                bytes: new TextEncoder().encode(message).length,
-                catalog: { ...catalogStatus(frame.payload?.catalog), scope: frame.payload?.scope },
-              });
-            }
-            if (
-              frame.type === "event" &&
-              ["chat.metadata.changed", "config.changed", "sessions.changed"].includes(frame.event)
-            ) {
-              events.push({
-                atMs: performance.now(),
-                event: frame.event,
-                payload: {
-                  changed: frame.payload?.changed,
-                  revision: frame.payload?.revision,
-                  sessionKey: frame.payload?.sessionKey,
-                  reason: frame.payload?.reason,
-                  agentId: frame.payload?.agentId,
-                  modelCatalogChanged: frame.payload?.modelCatalogChanged,
-                  commandsChanged: frame.payload?.commandsChanged,
-                  authChanged: frame.payload?.authChanged,
-                },
-              });
-            }
-            const request = frame.type === "res" ? pending.get(frame.id) : undefined;
-            if (request) {
-              pending.delete(frame.id);
-              request.responseAtMs = performance.now();
-              request.responseBytes = new TextEncoder().encode(message).length;
-              request.ok = frame.ok === true;
-              if (request.method === "models.list") {
-                request.catalog = catalogStatus(frame.payload);
+          this.addEventListener(
+            "message",
+            ({ data: message }) => {
+              if (typeof message !== "string") {
+                return;
               }
-            }
-          });
+              const frame = JSON.parse(message);
+              if (frame.type === "event" && frame.event === "models.snapshot") {
+                snapshots.push({
+                  atMs: performance.now(),
+                  bytes: new TextEncoder().encode(message).length,
+                  catalog: {
+                    ...catalogStatus(frame.payload?.catalog),
+                    scope: frame.payload?.scope,
+                  },
+                });
+              }
+              if (
+                frame.type === "event" &&
+                [
+                  "chat.metadata.changed",
+                  "config.changed",
+                  "sessions.changed",
+                  "cron",
+                  "chat",
+                  "agent",
+                ].includes(frame.event)
+              ) {
+                events.push({
+                  atMs: performance.now(),
+                  event: frame.event,
+                  payload: {
+                    changed: frame.payload?.changed,
+                    revision: frame.payload?.revision,
+                    sessionKey: frame.payload?.sessionKey,
+                    reason: frame.payload?.reason,
+                    phase: frame.payload?.phase,
+                    dataPhase: frame.payload?.data?.phase,
+                    agentId: frame.payload?.agentId,
+                    modelCatalogChanged: frame.payload?.modelCatalogChanged,
+                    commandsChanged: frame.payload?.commandsChanged,
+                    authChanged: frame.payload?.authChanged,
+                    catalogChanged: frame.payload?.catalogChanged,
+                    sessionModelRevision:
+                      frame.payload?.session?.sessionModelRevision ??
+                      frame.payload?.session?.full?.sessionModelRevision ??
+                      frame.payload?.session?.set?.sessionModelRevision,
+                    action: frame.payload?.action,
+                    state: frame.payload?.state,
+                    stream: frame.payload?.stream,
+                    runId: frame.payload?.runId,
+                  },
+                });
+              }
+              const request = frame.type === "res" ? pending.get(frame.id) : undefined;
+              if (request) {
+                pending.delete(frame.id);
+                request.responseAtMs = performance.now();
+                request.responseBytes = new TextEncoder().encode(message).length;
+                request.ok = frame.ok === true;
+                if (request.method === "models.list") {
+                  request.catalog = catalogStatus(frame.payload);
+                }
+              }
+            },
+            { capture: true },
+          );
         }
         if (typeof data === "string") {
           const frame = JSON.parse(data);
@@ -173,6 +264,7 @@ async function measureLoads(runs: number) {
               params: frame.params,
               requestedAtMs: performance.now(),
               stack: captureStacks ? new Error().stack : undefined,
+              precedingEvent: events.at(-1),
             };
             requests.push(request);
             pending.set(frame.id, request);
@@ -237,7 +329,71 @@ async function measureLoads(runs: number) {
         await details.waitFor();
       }
       const readyAtMs = await page.evaluate(() => performance.now());
-      await page.waitForTimeout(Math.max(0, durationMs - readyAtMs));
+      const activity: Array<{ method: string; atMs: number; elapsedMs: number; result?: unknown }> =
+        [];
+      let activityStartedAtMs: number | undefined;
+      let activityEndedAtMs: number | undefined;
+      if (activityClient) {
+        await page.waitForTimeout(5_000);
+        if (startAt !== undefined) {
+          const activityStartAt = scheduledAt + 30_000;
+          if (Date.now() > activityStartAt) {
+            throw new Error("Browser readiness missed the paired activity schedule");
+          }
+          await page.waitForTimeout(activityStartAt - Date.now());
+        }
+        activityStartedAtMs = await page.evaluate(() => performance.now());
+        const startedAt = Date.now();
+        for (let step = 0; step < Math.floor(durationMs / intervalMs); step += 1) {
+          await page.waitForTimeout(Math.max(0, startedAt + step * intervalMs - Date.now()));
+          const atMs = await page.evaluate(() => performance.now());
+          const started = Date.now();
+          const key = values["activity-session"]!;
+          const kind = step % (activityCronJobId ? 5 : 4);
+          const method = kind === 4 ? "cron.run" : kind === 3 ? "chat.send" : "sessions.patch";
+          const params =
+            kind < 2
+              ? {
+                  key,
+                  model:
+                    activityModels[
+                      Math.floor(step / (activityCronJobId ? 5 : 4)) % activityModels.length
+                    ],
+                  ...(kind === 1 ? { label: `Synthetic active session ${step}` } : {}),
+                }
+              : kind === 2
+                ? {
+                    key,
+                    pinned: Math.floor(step / 4) % 2 === 0,
+                    statusNote: `Synthetic activity ${step}`,
+                    thinkingLevel: "off",
+                  }
+                : kind === 4
+                  ? { id: activityCronJobId, mode: "force" }
+                  : {
+                      sessionKey: key,
+                      message: "Reply with a short synthetic measurement response.",
+                      deliver: false,
+                      idempotencyKey: randomUUID(),
+                    };
+          const result = await activityRpc(method, params);
+          let terminal: Record<string, unknown> | undefined;
+          if (method === "chat.send") {
+            if (typeof result?.runId !== "string") {
+              throw new Error("chat.send did not return a run ID");
+            }
+            terminal = await activityRpc("agent.wait", { runId: result.runId, timeoutMs: 30_000 });
+            if (terminal?.status !== "ok") {
+              throw new Error(`Synthetic turn did not complete: ${JSON.stringify(terminal)}`);
+            }
+          }
+          activity.push({ method, atMs, elapsedMs: Date.now() - started, result: terminal });
+        }
+        await page.waitForTimeout(Math.max(0, startedAt + durationMs - Date.now()));
+        activityEndedAtMs = await page.evaluate(() => performance.now());
+      } else {
+        await page.waitForTimeout(Math.max(0, durationMs - readyAtMs));
+      }
       const result = await page.evaluate(() => {
         const probe = Reflect.get(window, "__catalogLoad");
         return {
@@ -261,6 +417,18 @@ async function measureLoads(runs: number) {
         actualWallStartAtMs,
         readyAtMs,
         errors: errors.splice(0),
+        activity,
+        activityStartedAtMs,
+        activityEndedAtMs,
+        activityBlockingMs: result.tasks
+          .filter(
+            (task: { startTime: number }) =>
+              activityStartedAtMs !== undefined && task.startTime >= activityStartedAtMs,
+          )
+          .reduce(
+            (sum: number, task: { duration: number }) => sum + Math.max(0, task.duration - 50),
+            0,
+          ),
         ...result,
       });
       if (values.screenshot && run === runs - 1) {
@@ -268,13 +436,26 @@ async function measureLoads(runs: number) {
       }
     }
   } finally {
-    await browser.close();
+    if (activityClient && activityCronJobId) {
+      try {
+        await activityRpc("cron.remove", { id: activityCronJobId });
+      } catch (error) {
+        cleanupErrors.push(`cron.remove: ${String(error)}`);
+      }
+    }
+    activityClient?.close();
+    try {
+      await browser.close();
+    } catch (error) {
+      cleanupErrors.push(`browser.close: ${String(error)}`);
+    }
     const report = {
       measurement:
         "Real isolated Gateway browser loads. Native long-task blocking is sum(max(duration - 50 ms, 0)); request stack capture adds diagnostic overhead. First context is cold, subsequent documents retain browser cache and storage. Matching seeds randomize reload phase equally across paired sides. Synthetic request parameters and stacks are retained; auth and response payloads are not.",
       durationMs,
       requestStacks: values["request-stacks"],
       path: values["load-path"],
+      cleanupErrors,
       results,
     };
     await mkdir(path.dirname(path.resolve(values.output!)), { recursive: true });
