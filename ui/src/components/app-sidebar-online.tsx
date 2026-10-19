@@ -160,8 +160,9 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                     running: String(workload()!.running),
                   })
                 : t("presence.sessions.unavailable");
-            const activity = () =>
-              personActivityLink(user().identity?.id, routing(), presenceViewerLabel(user()));
+            const activity = createMemo(() =>
+              personActivityLink(user().identity?.id, routing(), presenceViewerLabel(user())),
+            );
             let row: HTMLElement;
 
             return (
