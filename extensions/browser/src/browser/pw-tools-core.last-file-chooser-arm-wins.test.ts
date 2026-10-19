@@ -20,7 +20,7 @@ import {
 
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.downloads.js");
-const interactions = await import("./pw-tools-core.interactions.js");
+const interactions = await import("./pw-tools-core.interactions.actions.js");
 const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
 const target = { cdpUrl: "http://127.0.0.1:18792" };
 const session = getPwToolsCoreSessionMocks();

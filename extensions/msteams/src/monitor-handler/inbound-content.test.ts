@@ -1,19 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../attachments.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../attachments.js")>()),
+vi.mock("../attachments/download.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../attachments/download.js")>()),
   downloadMSTeamsAttachments: vi.fn(async () => []),
+}));
+vi.mock("../attachments/graph.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../attachments/graph.js")>()),
   downloadMSTeamsGraphMedia: vi.fn(async () => ({ media: [] })),
+}));
+vi.mock("../attachments/bot-framework.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../attachments/bot-framework.js")>()),
   downloadMSTeamsBotFrameworkAttachments: vi.fn(async () => ({ media: [], attachmentCount: 0 })),
 }));
 
-import {
-  downloadMSTeamsAttachments,
-  downloadMSTeamsBotFrameworkAttachments,
-  downloadMSTeamsGraphMedia,
-  type MSTeamsAttachmentLike,
-  type MSTeamsInboundMedia,
-} from "../attachments.js";
+import { downloadMSTeamsBotFrameworkAttachments } from "../attachments/bot-framework.js";
+import { downloadMSTeamsAttachments } from "../attachments/download.js";
+import { downloadMSTeamsGraphMedia } from "../attachments/graph.js";
+import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "../attachments/types.js";
 import { prepareMSTeamsInboundContent } from "./inbound-content.js";
 
 const markedHtml = {

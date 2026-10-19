@@ -17,7 +17,7 @@ vi.mock("./paths.js", () => ({ resolveStrictExistingUploadPaths }));
 vi.mock("node:fs/promises", () => ({ default: { readFile, stat } }));
 vi.mock("openclaw/plugin-sdk/media-mime", () => ({ detectMime }));
 const { setFileChooserFilesViaPlaywright, setInputFilesViaPlaywright } =
-  await import("./pw-tools-core.interactions.js");
+  await import("./pw-tools-core.interactions.content.js");
 const session = getPwToolsCoreSessionMocks();
 const canonical = "/private/tmp/openclaw/uploads/ok.txt";
 const paths = ["/tmp/openclaw/uploads/ok.txt"];
