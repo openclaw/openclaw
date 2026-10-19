@@ -38,32 +38,18 @@ function fullDiagnostics(ctx: ToolHandlerContext) {
   ctx.params.onToolResult = vi.fn();
   ctx.shouldEmitToolResult = () => true;
   ctx.shouldEmitToolOutput = () => true;
-  const onAgentToolResult = vi.fn();
-  ctx.params.onAgentToolResult = onAgentToolResult;
-  return onAgentToolResult;
+  return (ctx.params.onAgentToolResult = vi.fn());
 }
 const phases = (events: CapturedAgentEvent[], stream: string) =>
   streamEvents(events, stream).map((event) => event.data?.phase);
+type ToolRef = { toolName: string; toolCallId: string };
+type ToolEvent<T extends AgentEvent["type"]> = Omit<Extract<AgentEvent, { type: T }>, "type">;
+type Handler<T, R = void> = (ctx: ToolHandlerContext, event: T) => R;
 type ToolChannelProgressFixtures = {
   createTestContext: () => { ctx: ToolHandlerContext };
-  startTool: (
-    ctx: ToolHandlerContext,
-    event: Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">,
-  ) => void | Promise<void>;
-  updateTool: (
-    ctx: ToolHandlerContext,
-    event: {
-      toolName: string;
-      toolCallId: string;
-      args?: unknown;
-      partialResult?: unknown;
-      hideFromChannelProgress?: boolean;
-    },
-  ) => void;
-  endTool: (
-    ctx: ToolHandlerContext,
-    event: Omit<Extract<AgentEvent, { type: "tool_execution_end" }>, "type">,
-  ) => ReturnType<typeof handleToolExecutionEnd>;
+  startTool: Handler<ToolEvent<"tool_execution_start">, void | Promise<void>>;
+  updateTool: Handler<ToolRef & Partial<ToolEvent<"tool_execution_update">>>;
+  endTool: Handler<ToolEvent<"tool_execution_end">, ReturnType<typeof handleToolExecutionEnd>>;
 };
 
 export function registerToolChannelProgressTests({
@@ -75,16 +61,36 @@ export function registerToolChannelProgressTests({
   function contextWithEvents() {
     const { ctx } = createTestContext();
     const events: CapturedAgentEvent[] = [];
-    ctx.params.onAgentEvent = (event) => {
-      events.push(event);
-    };
+    ctx.params.onAgentEvent = (event) => void events.push(event);
     return { ctx, events };
+  }
+  async function runTool(
+    ctx: ToolHandlerContext,
+    toolRef: ToolRef & { startName?: string },
+    args: unknown,
+    run: () => unknown,
+    hidden?: "start" | "update" | "end",
+    updates = true,
+  ) {
+    const event = (phase: string) => ({
+      ...toolRef,
+      toolName: (phase === "start" && toolRef.startName) || toolRef.toolName,
+      hideFromChannelProgress: hidden === phase,
+    });
+    await startTool(ctx, { ...event("start"), args });
+    const result = await run();
+    if (updates) {
+      updateTool(ctx, { ...event("update"), partialResult: result });
+    }
+    await endTool(ctx, { ...event("end"), result, isError: false });
+    return result;
   }
   describe("process poll channel progress", () => {
     it("uses executed arguments after a poll to kill hook rewrite", async () => {
       for (const explicitHide of [false, true]) {
         const { ctx, events } = contextWithEvents();
         const toolCallId = `rewrite-${explicitHide}`;
+        const adjustedKey = buildAdjustedParamsKey({ runId: ctx.params.runId, toolCallId });
         const toolRef = { toolName: "process", toolCallId };
         const args = { action: "poll", sessionId: "fixture" };
         const executedArgs = { ...args, action: "kill" };
@@ -104,11 +110,7 @@ export function registerToolChannelProgressTests({
         initializeGlobalHookRunner(registry);
         const execute = vi.fn(async (_toolCallId: string, _args: unknown) => {
           updateTool(ctx, { ...toolRef, partialResult: result });
-          expect(
-            adjustedParamsByToolCallId.get(
-              buildAdjustedParamsKey({ runId: ctx.params.runId, toolCallId }),
-            ),
-          ).toEqual(executedArgs);
+          expect(adjustedParamsByToolCallId.get(adjustedKey)).toEqual(executedArgs);
           return result;
         });
         const tool = wrapToolWithBeforeToolCallHook(
@@ -127,11 +129,7 @@ export function registerToolChannelProgressTests({
           expect(settled).toHaveLength(4);
           expectProgressVisibility(start, true, explicitHide);
           expectProgressVisibility(settled, explicitHide, explicitHide);
-          expect(
-            adjustedParamsByToolCallId.has(
-              buildAdjustedParamsKey({ runId: ctx.params.runId, toolCallId }),
-            ),
-          ).toBe(false);
+          expect(adjustedParamsByToolCallId.has(adjustedKey)).toBe(false);
         } finally {
           const emptyRegistry = createTestRegistry();
           setActivePluginRegistry(emptyRegistry);
@@ -155,11 +153,10 @@ export function registerToolChannelProgressTests({
           const toolCallId = `poll-${status}`;
           const toolRef = { toolName: "process", toolCallId };
           const args = { action: "poll", sessionId: session.id };
-          await startTool(ctx, { toolName: " Process ", toolCallId, args });
-          const result = await createProcessTool().execute(toolCallId, args);
-          updateTool(ctx, { ...toolRef, partialResult: result });
-          await endTool(ctx, { ...toolRef, result, isError: false });
-          expect(result.details).toMatchObject({ status });
+          const result = await runTool(ctx, { ...toolRef, startName: " Process " }, args, () =>
+            createProcessTool().execute(toolCallId, args),
+          );
+          expect(result).toMatchObject({ details: { status } });
           expect(onAgentToolResult).toHaveBeenCalledWith({
             toolName: "process",
             result,
@@ -220,23 +217,13 @@ export function registerToolChannelProgressTests({
             const toolCallId = `poll-${failure}-${explicitHide}`;
             const toolRef = { toolName: "process", toolCallId };
             const args = { action: "poll", sessionId: session.id };
-            await startTool(ctx, {
-              ...toolRef,
+            await runTool(
+              ctx,
+              toolRef,
               args,
-              hideFromChannelProgress: explicitHide === "start",
-            });
-            const result = await createProcessTool().execute(toolCallId, args);
-            updateTool(ctx, {
-              ...toolRef,
-              partialResult: result,
-              hideFromChannelProgress: explicitHide === "update",
-            });
-            await endTool(ctx, {
-              ...toolRef,
-              result,
-              isError: false,
-              hideFromChannelProgress: explicitHide === "end",
-            });
+              () => createProcessTool().execute(toolCallId, args),
+              explicitHide,
+            );
             const completed = completedEvents(events);
             expect(completed).toHaveLength(2);
             expect(allHidden(completed)).toBe(explicitHide !== undefined);
@@ -277,10 +264,7 @@ export function registerToolChannelProgressTests({
       const toolCallId = "yield-private-context";
       const toolRef = { toolName: tool.name, toolCallId };
 
-      await startTool(ctx, { ...toolRef, args });
-      const result = await tool.execute(toolCallId, args);
-      updateTool(ctx, { ...toolRef, partialResult: result });
-      await endTool(ctx, { ...toolRef, result, isError: false });
+      const result = await runTool(ctx, toolRef, args, () => tool.execute(toolCallId, args));
 
       expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment, undefined);
       expect(events).toHaveLength(6);
@@ -312,9 +296,7 @@ export function registerToolChannelProgressTests({
       });
       const toolCallId = "yield-rejected";
       const toolRef = { toolName: tool.name, toolCallId };
-      await startTool(ctx, { ...toolRef, args: {}, hideFromChannelProgress: true });
-      const result = await tool.execute(toolCallId, {});
-      await endTool(ctx, { ...toolRef, result, isError: false });
+      await runTool(ctx, toolRef, {}, () => tool.execute(toolCallId, {}), "start", false);
       const completed = completedEvents(events);
       expect(completed).toHaveLength(2);
       expect(allHidden(completed)).toBe(true);
