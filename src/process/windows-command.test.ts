@@ -7,23 +7,29 @@ import { runCommandWithTimeout } from "./exec.js";
 import { spawnTerminalPty } from "./terminal-pty.js";
 import { resolveSafeChildProcessInvocation, resolveWindowsCommandShim } from "./windows-command.js";
 
-async function withWindowsFiles(files: string[], run: (directory: string) => void) {
-  await withTempDir("openclaw-windows-command-", async (directory) => {
-    for (const file of files) {
-      const filename = path.join(directory, file);
-      await mkdir(path.dirname(filename), { recursive: true });
-      await writeFile(filename, "");
-    }
-    withMockedWindowsPlatform(() => run(directory));
-  });
-}
+const windowsIt = it.extend<{ cwd: string }>({
+  cwd: async ({ task: _task }, use) =>
+    withTempDir("openclaw-windows-command-", async (cwd) => {
+      const files = ["bin/tool.exe", "cwd/tool.exe", "tool.exe", "runner", "pnpm.exe", "pnpm.cmd"];
+      await Promise.all(["bin", "cwd"].map((dir) => mkdir(path.join(cwd, dir))));
+      await Promise.all(files.map((file) => writeFile(path.join(cwd, file), "")));
+      await withMockedWindowsPlatform(() => use(cwd));
+    }),
+});
 
 function resolveCommand(argv: string[], env: NodeJS.ProcessEnv, cwd?: string) {
   return resolveSafeChildProcessInvocation({ argv, env, cwd });
 }
 
-async function writeArgvFixture(cwd: string, file: string, script: string) {
+async function writeArgvFixture(
+  cwd: string,
+  file: string,
+  script = "process.stdout.write(JSON.stringify(process.argv.slice(2)))",
+) {
   await writeFile(path.join(cwd, "argv.cjs"), script);
+  if (file === "node.exe") {
+    return process.execPath;
+  }
   const command = path.join(cwd, file);
   await writeFile(command, `@"${process.execPath}" "%~dp0argv.cjs" %*\r\n`);
   return command;
@@ -31,67 +37,47 @@ async function writeArgvFixture(cwd: string, file: string, script: string) {
 
 describe("Windows command helpers", () => {
   it("leaves Linux commands unchanged", () => {
+    const platform = "linux";
+    const cmdCommands = ["pnpm"];
+    expect(resolveWindowsCommandShim({ command: "pnpm", platform, cmdCommands })).toBe("pnpm");
+  });
+
+  type Dir = string | undefined;
+  type Resolution = [string, string, string, Dir, Dir, string | RegExp];
+  const resolutions: Resolution[] = [
+    ["relative suffix probing", "./bin/tool", ".EXE", undefined, ".", "bin/tool.exe"],
+    ["PATH beats child cwd", "tool.exe", ".EXE", "bin", "cwd", "bin/tool.exe"],
+    ["extensionless PATH file", "runner", ".EXE;.CMD;", ".", undefined, /spawn runner ENOENT/],
+    ["no implicit cwd search", "tool.exe", ".EXE", "", ".", /ENOENT/],
+  ];
+  for (const [name, command, PATHEXT, searchDir, childDir, expected] of resolutions) {
+    windowsIt(name, ({ cwd }) => {
+      const env: NodeJS.ProcessEnv = { PATHEXT };
+      if (searchDir !== undefined) {
+        env.PATH = searchDir ? path.join(cwd, searchDir) : "";
+      }
+      const childCwd = childDir === undefined ? undefined : path.join(cwd, childDir);
+      const run = () => resolveCommand([command], env, childCwd);
+      if (expected instanceof RegExp) {
+        expect(run).toThrow(expected);
+      } else {
+        expect(run().command).toBe(path.join(cwd, expected));
+      }
+    });
+  }
+
+  windowsIt("explicit paths ignore PATHEXT", ({ cwd }) => {
+    const exe = path.join(cwd, "tool.exe");
+    expect(resolveCommand([exe], { PATH: "", PATHEXT: ".CMD;.BAT" }, cwd).command).toBe(exe);
+  });
+
+  windowsIt("honors PATHEXT precedence before package-manager shim fallback", ({ cwd }) => {
     expect(
-      resolveWindowsCommandShim({
-        command: "pnpm",
-        platform: "linux",
-        cmdCommands: ["corepack", "pnpm", "npm"],
-      }),
-    ).toBe("pnpm");
-  });
-
-  it("resolves relative executables against the child cwd", async () => {
-    await withWindowsFiles(["bin/tool.exe"], (cwd) => {
-      expect(resolveCommand(["./bin/tool"], { PATHEXT: ".EXE" }, cwd).command).toBe(
-        path.join(cwd, "bin", "tool.exe"),
-      );
-    });
-  });
-
-  it("resolves bare executables from PATH without allowing child-cwd shadowing", async () => {
-    await withWindowsFiles(["cwd/tool.exe", "bin/tool.exe"], (base) => {
-      const binDir = path.join(base, "bin");
-      expect(
-        resolveCommand(["tool.exe"], { PATH: binDir, PATHEXT: ".EXE" }, path.join(base, "cwd"))
-          .command,
-      ).toBe(path.join(binDir, "tool.exe"));
-    });
-  });
-
-  it("reports an unresolved command for a bare file with trailing-empty PATHEXT", async () => {
-    await withWindowsFiles(["runner"], (binDir) => {
-      expect(() => resolveCommand(["runner"], { PATH: binDir, PATHEXT: ".EXE;.CMD;" })).toThrow(
-        /spawn runner ENOENT/,
-      );
-    });
-  });
-
-  it("requires an explicit relative path for executables in the child cwd", async () => {
-    await withWindowsFiles(["tool.exe"], (cwd) => {
-      expect(() => resolveCommand(["tool.exe"], { PATH: "", PATHEXT: ".EXE" }, cwd)).toThrow(
-        /ENOENT/,
-      );
-    });
-  });
-
-  it("accepts explicit executable paths independently of PATHEXT", async () => {
-    await withWindowsFiles(["tool.exe"], (cwd) => {
-      const executable = path.join(cwd, "tool.exe");
-      expect(resolveCommand([executable], { PATH: "", PATHEXT: ".CMD;.BAT" }, cwd).command).toBe(
-        executable,
-      );
-    });
-  });
-
-  it("honors PATHEXT precedence before package-manager shim fallback", async () => {
-    await withWindowsFiles(["pnpm.exe", "pnpm.cmd"], (binDir) => {
-      expect(
-        resolveCommand(["pnpm", "--version"], { PATH: binDir, PATHEXT: ".EXE;.CMD" }),
-      ).toMatchObject({
-        args: ["--version"],
-        command: path.join(binDir, "pnpm.exe"),
-        usesWindowsExitCodeShim: false,
-      });
+      resolveCommand(["pnpm", "--version"], { PATH: cwd, PATHEXT: ".EXE;.CMD" }),
+    ).toMatchObject({
+      args: ["--version"],
+      command: path.join(cwd, "pnpm.exe"),
+      usesWindowsExitCodeShim: false,
     });
   });
 });
@@ -120,31 +106,26 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
   it.each([
     ...cases.map((testCase) => ({ ...testCase, file: "argv with ^caret.cmd" })),
     ...["argv.cmd", "argv with spaces.cmd"].map((file) => ({
-      name: "ordinary arguments",
-      args: ["alpha", "omega"],
+      name: cases[0].name,
+      args: cases[0].args,
       file,
     })),
   ])(
     "preserves $name through $file",
-    async ({ args, file }) => {
-      await withTempDir("openclaw-batch-argv-", async (cwd) => {
-        const command = await writeArgvFixture(
-          cwd,
-          file,
-          "process.stdout.write(JSON.stringify(process.argv.slice(2)))",
-        );
+    ({ args, file }) =>
+      withTempDir("openclaw-batch-argv-", async (cwd) => {
+        const command = await writeArgvFixture(cwd, file);
         const result = await runCommandWithTimeout([command, ...args], { cwd, timeoutMs: 5_000 });
         expect(result).toMatchObject({ code: 0, termination: "exit" });
         expect(JSON.parse(result.stdout)).toEqual(args);
-      });
-    },
+      }),
     15_000,
   );
 
   it.each(["argv.cmd", "argv with spaces.cmd", "argv^caret.cmd", "node.exe"])(
     "preserves literal arguments through a real PTY running %s",
-    async (file) => {
-      await withTempDir("openclaw-batch-argv-pty-", async (cwd) => {
+    (file) =>
+      withTempDir("openclaw-batch-argv-pty-", async (cwd) => {
         const args =
           file === "node.exe"
             ? ["alpha", "", "two words", "two\twords", "A&B", "100%", "left|right", "<in", ">out"]
@@ -153,19 +134,14 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
         const output = path.join(cwd, "received.json");
         const source =
           'require("node:fs").writeFileSync(require("node:path").join(__dirname, "received.json"), JSON.stringify(process.argv.slice(2)))';
-        let command = process.execPath;
-        if (file === "node.exe") {
-          await writeFile(script, source);
-        } else {
-          command = await writeArgvFixture(cwd, file, source);
-        }
+        const command = await writeArgvFixture(cwd, file, source);
         const pty = await spawnTerminalPty({
           file: command,
           args: file === "node.exe" ? [script, ...args] : args,
           cwd,
           env: Object.fromEntries(
             Object.entries(process.env).filter(
-              (entry): entry is [string, string] => typeof entry[1] === "string",
+              (e): e is [string, string] => typeof e[1] === "string",
             ),
           ),
           cols: 120,
@@ -183,21 +159,19 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
             pty.kill();
           }
         }
-      });
-    },
+      }),
     15_000,
   );
 
   it.each(["&", "|", "<", ">", "%", "\r", "\n"])(
     "continues to reject unsafe batch argument character %j before launch",
-    async (character) => {
-      await withTempDir("openclaw-batch-argv-reject-", async (cwd) => {
+    (character) =>
+      withTempDir("openclaw-batch-argv-reject-", async (cwd) => {
         const command = path.join(cwd, "argv.cmd");
         await writeFile(command, "@exit /b 99\r\n");
         await expect(
           runCommandWithTimeout([command, `left${character}right`], { cwd, timeoutMs: 5_000 }),
         ).rejects.toThrow("Unsafe Windows cmd.exe argument detected");
-      });
-    },
+      }),
   );
 });
