@@ -1,5 +1,5 @@
 import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createUniqueId, onCleanup, Show } from "solid-js";
+import { createMemo, createUniqueId, onCleanup, onSettled, Show } from "solid-js";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { CardActivity, StepMarker, Steps } from "./session-progress-card-content.tsx";
@@ -406,14 +406,10 @@ function DetailsCard(props: CardProps) {
     );
     animation.onfinish = finishMotion;
   };
-  createEffect(
-    () => props.composerDisclosureContext?.presented,
-    (presented) => {
-      if (presented === false) {
-        finishMotion();
-      }
-    },
-  );
+  function PresentedMotion() {
+    onSettled(() => finishMotion);
+    return null;
+  }
   onCleanup(finishMotion);
   return (
     <details
@@ -426,6 +422,9 @@ function DetailsCard(props: CardProps) {
       data-progress-card-placement="details"
       data-desktop-details={props.desktopDetails ? "" : undefined}
     >
+      <Show when={props.composerDisclosureContext?.presented !== false}>
+        <PresentedMotion />
+      </Show>
       <summary
         ref={disclosure.summary}
         class="task-progress-details__summary"
