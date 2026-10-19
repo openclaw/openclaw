@@ -72,7 +72,6 @@ export type ChatPageHost = ChatHost &
     chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
-    modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
     sessionsResultAgentId: string | null;
     sessionsError: string | null;
@@ -97,8 +96,6 @@ export type ChatPageHost = ChatHost &
     chatLastScrollHeight: number;
     sidebarLayout: SidebarLayout;
     sidebarContent: SidebarSelection | null;
-    sidebarFocusPanelId: string;
-    sidebarFocusVersion: number;
     updateSidebarActivePanel: (panelId: string) => void;
     imageLightbox: ImageLightboxItem | null;
     imageLightboxRequestVersion: number;

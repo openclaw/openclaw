@@ -146,8 +146,6 @@ function createTestPane(
     lastError: null,
     renderLifecycle: { afterCommit: () => () => {} },
     sessionKey,
-    sidebarFocusPanelId: "",
-    sidebarFocusVersion: 0,
     sidebarLayout: { columns: [] },
     sessions,
     sessionsError: null,
@@ -156,10 +154,7 @@ function createTestPane(
   pane.state.updateSidebarLayout = (layout) => {
     pane.state.sidebarLayout = layout;
   };
-  pane.state.updateSidebarActivePanel = (panelId) => {
-    pane.state.sidebarFocusPanelId = panelId;
-    pane.state.sidebarFocusVersion += 1;
-  };
+  pane.state.updateSidebarActivePanel = () => {};
   pane.connectedClient = client;
   pane.connectionGeneration = 1;
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });

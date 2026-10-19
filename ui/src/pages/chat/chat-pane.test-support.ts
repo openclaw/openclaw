@@ -551,7 +551,6 @@ export function createTestChatPane(params: {
       connected: true,
       connectionEpoch: 4,
       hello: sessionMutationGatewayHello(),
-      sidebarFocusPanelId: "",
       sidebarLayout: { columns: [] },
       // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
       handleChatScroll: vi.fn(),
@@ -561,10 +560,7 @@ export function createTestChatPane(params: {
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
   };
-  state.updateSidebarActivePanel = (panelId) => {
-    state.sidebarFocusPanelId = panelId;
-    state.sidebarFocusVersion += 1;
-  };
+  state.updateSidebarActivePanel = () => {};
   pane.state = state;
   pane.chatState.attach(state);
   pane.connectedClient = params.client;

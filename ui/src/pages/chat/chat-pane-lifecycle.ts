@@ -445,7 +445,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         if (state && modelAuthEventInvalidates(event)) {
           state.modelAuthStatusResult = null;
-          state.modelAuthStatusError = null;
           void refreshChatModelAuthStatus(state);
         }
         if (
