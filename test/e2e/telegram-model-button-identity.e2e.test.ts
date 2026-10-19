@@ -37,6 +37,12 @@ type ApiBody = {
 };
 type ApiCall = { method: string; body: ApiBody };
 
+function modelButton(message: Message) {
+  return message.reply_markup.inline_keyboard
+    .flat()
+    .find(({ callback_data: data }) => data.startsWith("mdl_sel") || data.startsWith("mdl1~m:"));
+}
+
 function providerConfig(baseUrl: string, id: string): ModelProviderConfig {
   return {
     baseUrl,
@@ -210,48 +216,20 @@ test("keeps an emitted model button bound to its provider after inventory replac
           const openPicker = async () => {
             const start = messageId;
             command();
-            await expect
-              .poll(
-                () =>
-                  [...messages.values()].some(
-                    (message) =>
-                      message.message_id > start &&
-                      message.reply_markup.inline_keyboard
-                        .flat()
-                        .some(
-                          (button) =>
-                            button.callback_data.startsWith("mdl_sel") ||
-                            button.callback_data.startsWith("mdl1~m:"),
-                        ),
-                  ),
-                WAIT,
-              )
-              .toBe(true);
-            const keyboardMessage = [...messages.values()].find(
-              (message) =>
-                message.message_id > start &&
-                message.reply_markup.inline_keyboard
-                  .flat()
-                  .some(
-                    (button) =>
-                      button.callback_data.startsWith("mdl_sel") ||
-                      button.callback_data.startsWith("mdl1~m:"),
-                  ),
-            );
+            const findKeyboard = () =>
+              [...messages.values()].find(
+                (message) => message.message_id > start && modelButton(message),
+              );
+            await expect.poll(findKeyboard, WAIT).toBeDefined();
+            const keyboardMessage = findKeyboard();
             if (!keyboardMessage) {
               throw new Error("Gateway did not emit a model keyboard");
             }
-            const modelButton = keyboardMessage.reply_markup.inline_keyboard
-              .flat()
-              .find(
-                (button) =>
-                  button.callback_data.startsWith("mdl_sel") ||
-                  button.callback_data.startsWith("mdl1~m:"),
-              );
-            if (!modelButton) {
+            const button = modelButton(keyboardMessage);
+            if (!button) {
               throw new Error("Gateway did not emit a model button");
             }
-            return { message: keyboardMessage, data: modelButton.callback_data };
+            return { message: keyboardMessage, data: button.callback_data };
           };
           await expect
             .poll(() => calls.some((call) => call.method === "getUpdates"), WAIT)

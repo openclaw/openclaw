@@ -35,6 +35,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../src/plugins/runtime.js";
+import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
 import { resolveUserProfileGitHubAttribution } from "../../src/state/user-profile-github-identity.js";
 import { getUserProfileListItem } from "../../src/state/user-profile-list-item.test-support.js";
@@ -49,6 +50,22 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
+function registerVisitorPolicy(
+  authorize: Parameters<OpenClawPluginApi["registerGatewayAccessPolicy"]>[0]["authorize"],
+) {
+  const { config, registry } = createPluginRegistryFixture();
+  registerVirtualTestPlugin({
+    registry,
+    config,
+    id: "visitor-access",
+    name: "Visitor access",
+    register: (api) => api.registerGatewayAccessPolicy({ authorize }),
+  });
+  setActivePluginRegistry(registry.registry);
+}
+
+const guestRoles = { default: "guest", definitions: { guest: guestRole } };
+
 describe("Cloudflare OIDC and Visitor Access admission", () => {
   it("admits an invited email without optional GitHub enrichment while enforcing current access requirements", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -56,32 +73,20 @@ describe("Cloudflare OIDC and Visitor Access admission", () => {
       const grant = visitorGrant("ada@example.test");
       const visitor = visitorFixture({ grants: [grant], emails: [grant.email] });
       await visitor.service.initialize();
-      const { config, registry } = createPluginRegistryFixture();
       let requiresGitHub = false;
-      registerVirtualTestPlugin({
-        registry,
-        config,
-        id: "visitor-access",
-        name: "Visitor access",
-        register(api) {
-          api.registerGatewayAccessPolicy({
-            authorize({ profile, requiredByRole }) {
-              if (!requiredByRole) {
-                return undefined;
-              }
-              if (requiresGitHub && !getUserProfileListItem(profile.profileId).githubIdentity) {
-                throw new Error("Verified GitHub identity required");
-              }
-              return visitor.service.authorize(profile.emails);
-            },
-          });
-        },
+      registerVisitorPolicy(({ profile, requiredByRole }) => {
+        if (!requiredByRole) {
+          return undefined;
+        }
+        if (requiresGitHub && !getUserProfileListItem(profile.profileId).githubIdentity) {
+          throw new Error("Verified GitHub identity required");
+        }
+        return visitor.service.authorize(profile.emails);
       });
-      setActivePluginRegistry(registry.registry);
       const invitedCfg: OpenClawConfig = {
         gateway: {
           ...githubCfg.gateway,
-          roles: { default: "guest", definitions: { guest: guestRole } },
+          roles: guestRoles,
         },
       };
       let claim = "01";
@@ -93,6 +98,10 @@ describe("Cloudflare OIDC and Visitor Access admission", () => {
             : identityResponse({}, 503),
         );
       const request = accessRequest(grant.email, invitedCfg);
+      const expectDenied = () =>
+        expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toBeInstanceOf(
+          GatewayOperatorAccessDeniedError,
+        );
       const catalog = await prepareUserProfileCatalog();
       try {
         const admitted = await resolveAuthenticatedHttpUserProfile(request);
@@ -107,26 +116,18 @@ describe("Cloudflare OIDC and Visitor Access admission", () => {
         expect(transport).toHaveBeenCalledOnce();
 
         requiresGitHub = true;
-        await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toBeInstanceOf(
-          GatewayOperatorAccessDeniedError,
-        );
+        await expectDenied();
         claim = "101";
-        await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toBeInstanceOf(
-          GatewayOperatorAccessDeniedError,
-        );
+        await expectDenied();
         requiresGitHub = false;
         clock.mockReturnValue(NOW + DAY_MS);
-        await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toBeInstanceOf(
-          GatewayOperatorAccessDeniedError,
-        );
+        await expectDenied();
         await visitor.service.invite({ email: grant.email, days: 1 }, visitor.authority);
         expect(
           (await resolveAuthenticatedHttpUserProfile(request)).authenticatedUserProfile?.profileId,
         ).toBe(profileId);
         await visitor.service.revoke({ email: grant.email }, visitor.authority.assertCurrent);
-        await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toBeInstanceOf(
-          GatewayOperatorAccessDeniedError,
-        );
+        await expectDenied();
         expect(getUserProfileListItem(profileId).githubIdentity).toBeNull();
       } finally {
         catalog.release();
@@ -156,28 +157,16 @@ describe("Cloudflare OIDC and Visitor Access admission", () => {
               allowLoopback: true,
             },
           },
-          roles: { default: "guest", definitions: { guest: guestRole } },
+          roles: guestRoles,
         },
       };
       const visitor = visitorFixture({ gatewayConfig: invitedCfg });
       await visitor.service.initialize();
-      const { config, registry } = createPluginRegistryFixture();
-      registerVirtualTestPlugin({
-        registry,
-        config,
-        id: "visitor-access",
-        name: "Visitor access",
-        register(api) {
-          api.registerGatewayAccessPolicy({
-            authorize({ profile, requiredByRole }) {
-              return requiredByRole
-                ? visitor.service.authorize(profile.emails, profile.githubAccountIds)
-                : undefined;
-            },
-          });
-        },
-      });
-      setActivePluginRegistry(registry.registry);
+      registerVisitorPolicy(({ profile, requiredByRole }) =>
+        requiredByRole
+          ? visitor.service.authorize(profile.emails, profile.githubAccountIds)
+          : undefined,
+      );
       let identity = oidcIdentity("42", "custom");
       const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
         const url = new URL(input instanceof Request ? input.url : input);
