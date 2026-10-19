@@ -525,6 +525,7 @@ export function refreshPreparedModelRuntimeSnapshots(
     options.startup && options.catalogMode === "static" && replacement
       ? new PreparedModelRuntimeStartup({
           replacement,
+          background: options.startup === "background",
           owners: () => owners.values(),
           isCurrent: () => pendingModelRuntimeReplacement === replacement && isPublicationCurrent(),
           timeoutMs: modelRuntimeBuildTimeoutMs,
@@ -635,12 +636,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
       throw refreshError;
     });
-  return publicationQueue.complete(
-    publication,
-    isPublicationCurrent,
-    options,
-    options.startup === "background" ? undefined : startup,
-  );
+  return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
 async function drainPendingAuthMutations(

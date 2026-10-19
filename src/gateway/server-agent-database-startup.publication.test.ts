@@ -3,9 +3,12 @@
 import { usePreparedModelRuntimeHarness } from "../agents/prepared-model-runtime.test-harness.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import {
   cancelPreparedModelRuntimeRefresh,
   getPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeSnapshots,
+  registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -166,3 +169,81 @@ it.for(["complete", "shutdown"] as const)(
     });
   },
 );
+
+it("releases the background publication queue after startup grace without publishing retired work", async ({
+  signal,
+}) => {
+  const agentId = "worker";
+  fixture.mocks.configuredAgentIds = [agentId];
+  const initial = { messages: { responsePrefix: "initial" } };
+  const latest = { messages: { responsePrefix: "latest" } };
+  const acquiring = createDeferredCore();
+  const finishRetiredWork = createDeferredCore();
+  let oldSignal: AbortSignal | undefined;
+  let retiredWorkFinished = false;
+  fixture.mocks.prepareStaticCatalog.mockImplementation(async (input) => {
+    const options = input as { config: OpenClawConfig; signal: AbortSignal };
+    if (options.config.messages?.responsePrefix === "initial") {
+      oldSignal = options.signal;
+      acquiring.resolve();
+      // An aborted acquisition can still own finite cleanup before its raw work settles.
+      await finishRetiredWork.promise;
+      retiredWorkFinished = true;
+    }
+    return { entries: [] };
+  });
+  const publications: Array<string | undefined> = [];
+  const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) => {
+    if (phase === "published") {
+      for (const cfg of [initial, latest]) {
+        const snapshot = getPreparedModelRuntimeSnapshot(fixture.agentInput(agentId, cfg));
+        if (snapshot) {
+          publications.push(snapshot.config.messages?.responsePrefix);
+        }
+      }
+    }
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let settled = false;
+  const publication = refreshPreparedModelRuntimeSnapshots(initial, {
+    gatewayLifecycle: true,
+    startup: "background",
+    catalogMode: "static",
+  }).then(
+    () => {
+      settled = true;
+    },
+    (error: unknown) => {
+      settled = true;
+      return error;
+    },
+  );
+  let successor: Promise<void> | undefined;
+  try {
+    await withinTest(acquiring.promise, signal);
+    const prepareSuccessor = vi.fn(() => latest);
+    successor = refreshPreparedModelRuntimeSnapshots(prepareSuccessor, { catalogMode: "static" });
+    void successor.catch(() => {});
+    expect(oldSignal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(prepareSuccessor).toHaveBeenCalledOnce();
+    expect(retiredWorkFinished).toBe(false);
+    expect(settled).toBe(false);
+    expect(getPreparedModelRuntimeSnapshot(fixture.agentInput(agentId, latest))).toBeUndefined();
+    finishRetiredWork.resolve();
+    expect(await withinTest(publication, signal)).toBeInstanceOf(
+      PreparedModelRuntimePublicationSupersededError,
+    );
+    await withinTest(successor, signal);
+    expect(getPreparedModelRuntimeSnapshot(fixture.agentInput(agentId, latest))?.config).toBe(
+      latest,
+    );
+    expect(publications).not.toContain("initial");
+    expect(publications).toContain("latest");
+  } finally {
+    finishRetiredWork.resolve();
+    await Promise.allSettled([publication, successor]);
+    unregister();
+    vi.useRealTimers();
+  }
+});
