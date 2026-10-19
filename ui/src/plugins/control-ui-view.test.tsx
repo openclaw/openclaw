@@ -300,18 +300,42 @@ describe("native UI built-in delegation", () => {
     await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
   });
 
-  it("uses only built-in controls when a replacement composer fails", async () => {
-    const { host } = mountSurface({
-      id: "composer",
-      label: "Custom composer",
+  it("recovers the composer after a failed mount publishes an error", async () => {
+    const healthy: ControlUiReplacement<"composer"> = {
+      id: "healthy",
+      label: "Healthy composer",
       surface: "composer",
-      mount() {
-        throw new Error("Composer failed");
+      mount(container) {
+        container.textContent = "Healthy composer";
       },
+    };
+    const { host, select, reportError, listeners, unmount } = mountSurface(healthy);
+    // Runtime diagnostics publish synchronously from the failing plugin root.
+    reportError.mockImplementation(() => {
+      for (const notify of listeners) {
+        notify();
+      }
     });
-    await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
-    expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
-    expect(host.querySelector(".companion-action")).toBeNull();
+    try {
+      await vi.waitFor(() => expect(host.textContent).toContain("Healthy composer"));
+      select({
+        id: "failing",
+        label: "Failing composer",
+        surface: "composer",
+        mount() {
+          throw new Error("Composer failed");
+        },
+      });
+      await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
+      expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
+      expect(host.querySelector(".companion-action")).toBeNull();
+      select(healthy);
+      await vi.waitFor(() => expect(host.textContent).toContain("Healthy composer"));
+      expect(host.querySelector(".builtin-action")).toBeNull();
+      expect(host.querySelector("[role=alert]")).toBeNull();
+    } finally {
+      unmount();
+    }
   });
 
   it("restores host controls when a replacement stops delegating to the built-in", async () => {

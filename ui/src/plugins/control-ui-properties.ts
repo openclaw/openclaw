@@ -1,4 +1,4 @@
-import { onCleanup, onSettled } from "solid-js";
+import { onCleanup, onSettled, runWithOwner } from "solid-js";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 
 /** Observe native and Solid-owned property writes before their batched DOM commit. */
@@ -15,11 +15,14 @@ export function observeSolidBridgeProperties<P extends object>(
       return;
     }
     queued = true;
-    onSettled(() => {
-      queued = false;
-      if (active) {
-        settled();
-      }
+    // Foreign mount notifications may run under a root this update retires.
+    runWithOwner(null, () => {
+      onSettled(() => {
+        queued = false;
+        if (active) {
+          settled();
+        }
+      });
     });
   };
   const descriptors = keys.map((key) => [key, Object.getOwnPropertyDescriptor(host, key)] as const);
