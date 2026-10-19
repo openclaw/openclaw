@@ -72,3 +72,5 @@ export type {
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export type { ConversationLabelParams } from "../auto-reply/reply/conversation-label-generator.js";
+
+export { resolveSilentReplySettings } from "../config/silent-reply.js";

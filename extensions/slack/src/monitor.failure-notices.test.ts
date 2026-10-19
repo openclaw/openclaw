@@ -50,8 +50,9 @@ function mockReplySequence(...payloads: Array<{ text: string; isError?: boolean 
   });
 }
 
-function configure(requireMention = true): void {
+function configure(requireMention = true, silentPolicy: "allow" | "disallow" = "allow"): void {
   slackTestState.config = {
+    agents: { defaults: { silentReply: { group: silentPolicy } } },
     messages: { groupChat: { visibleReplies: "automatic" } },
     channels: {
       slack: {
@@ -75,7 +76,7 @@ describe("Slack thread failure notices", () => {
     configure();
   });
 
-  it("announces the first failure for participation restored after a restart", async () => {
+  it("keeps restored participation silent during human-directed discussion", async () => {
     const threadTs = "101.100000";
     const openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("slack", options);
@@ -91,17 +92,27 @@ describe("Slack thread failure notices", () => {
     const runtime = getSlackRuntime();
     setSlackRuntime({ ...runtime, state: { ...runtime.state, openKeyedStore } });
     expect(hasSlackThreadParticipation("default", "C1", threadTs)).toBe(false);
-    mockReplySequence({ text: AUTH_FAILURE, isError: true });
+    mockReplySequence(
+      { text: AUTH_FAILURE, isError: true },
+      { text: "Something went wrong", isError: true },
+    );
 
-    await dispatchEvent({ ts: "101.100001", thread_ts: threadTs, parent_user_id: "U1" });
-    await dispatchEvent({ ts: "101.100002", thread_ts: threadTs, parent_user_id: "U1" });
+    await threadReply("101.100001", threadTs, "<@U456> could you check this?");
+    await threadReply("101.100002", threadTs, "<@U789> do you have an update?");
 
     expect(slackTestState.replyMock).toHaveBeenCalledTimes(2);
-    expect(slackTestState.sendMock).toHaveBeenCalledTimes(1);
-    expect(slackTestState.sendMock.mock.calls[0]?.[1]).toBe(AUTH_FAILURE);
+    for (const [index, mentioned] of ["U456", "U789"].entries()) {
+      expect(slackTestState.replyMock.mock.calls[index]?.[0]).toMatchObject({
+        MentionSource: "implicit_thread",
+        ExplicitlyMentionedBot: false,
+        MentionedUserIds: [mentioned],
+        ImplicitMentionKinds: ["bot_thread_participant"],
+      });
+    }
+    expect(slackTestState.sendMock).not.toHaveBeenCalled();
   });
 
-  it("announces the same failure again after a successful reply", async () => {
+  it("delivers useful answers without announcing subsequent unaddressed failures", async () => {
     mockReplySequence(
       { text: "Working normally" },
       { text: AUTH_FAILURE, isError: true },
@@ -114,8 +125,11 @@ describe("Slack thread failure notices", () => {
     await threadReply("103.000002", "103.000000");
     await threadReply("103.000003", "103.000000");
 
-    expect(slackTestState.sendMock).toHaveBeenCalledTimes(4);
-    expect(slackTestState.sendMock.mock.calls[3]?.[1]).toBe(AUTH_FAILURE);
+    expect(slackTestState.replyMock).toHaveBeenCalledTimes(4);
+    expect(slackTestState.sendMock.mock.calls.map((call) => call[1])).toEqual([
+      "Working normally",
+      "Recovered",
+    ]);
   });
 
   it("always explains the current failure when the user explicitly mentions the bot", async () => {
@@ -136,8 +150,8 @@ describe("Slack thread failure notices", () => {
     await dispatchEvent({ ts: "105.030001" });
     await dispatchEvent({ text: "<@bot-user> are you working now?", ts: "105.030002" });
 
-    expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
-    expect(slackTestState.sendMock.mock.calls[1]?.[1]).toBe(AUTH_FAILURE);
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(1);
+    expect(slackTestState.sendMock.mock.calls[0]?.[1]).toBe(AUTH_FAILURE);
   });
 
   it("does not retry a thread failure whose first Slack send is ambiguous", async () => {
@@ -151,13 +165,15 @@ describe("Slack thread failure notices", () => {
     const failure = new Error("Slack delivery unavailable");
     slackTestState.sendMock.mockRejectedValueOnce(failure);
 
-    await expect(threadReply("105.040001", "105.040000")).rejects.toBe(failure);
+    await expect(
+      threadReply("105.040001", "105.040000", "<@bot-user> are you working now?"),
+    ).rejects.toBe(failure);
     await threadReply("105.040002", "105.040000");
 
     expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not suppress warnings for non-terminal tool failures", async () => {
+  it("keeps automatic tool-error warnings silent until directly addressed", async () => {
     const warning = setReplyPayloadMetadata(
       { text: "A tool failed, but the run completed.", isError: true },
       { nonTerminalToolErrorWarning: true },
@@ -167,29 +183,62 @@ describe("Slack thread failure notices", () => {
     await dispatchEvent({ text: "<@bot-user> please help", ts: "105.100000" });
     await threadReply("105.100001", "105.100000");
     await threadReply("105.100002", "105.100000");
+    expect(slackTestState.sendMock.mock.calls.map((call) => call[1])).toEqual(["Working normally"]);
 
-    expect(slackTestState.sendMock).toHaveBeenCalledTimes(3);
+    await threadReply("105.100003", "105.100000", "<@bot-user> what happened?");
+    expect(slackTestState.replyMock).toHaveBeenCalledTimes(4);
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
+    expect(slackTestState.sendMock.mock.calls[1]?.[1]).toBe(warning.text);
   });
 
-  it("keeps failures visible in Slack group direct messages", async () => {
-    slackTestState.config = {
-      messages: { groupChat: { visibleReplies: "automatic" } },
-      channels: {
-        slack: {
-          dm: { enabled: true, groupEnabled: true },
-          dmPolicy: "open",
-          allowFrom: ["U1"],
-          groupPolicy: "open",
-          replyToMode: "off",
+  it.each(["allow", "disallow"] as const)(
+    "honors group DM silence policy %s and answers direct tags",
+    async (silentPolicy) => {
+      slackTestState.config = {
+        agents: { defaults: { silentReply: { group: silentPolicy } } },
+        messages: { groupChat: { visibleReplies: "automatic" } },
+        channels: {
+          slack: {
+            dm: { enabled: true, groupEnabled: true },
+            dmPolicy: "open",
+            allowFrom: ["U1"],
+            groupPolicy: "open",
+            replyToMode: "off",
+          },
         },
-      },
-    };
-    mockReplySequence({ text: AUTH_FAILURE, isError: true });
+      };
+      mockReplySequence({ text: AUTH_FAILURE, isError: true });
 
-    await dispatchEvent({ channel: "G1", channel_type: "mpim", ts: "107.000000" });
-    await dispatchEvent({ channel: "G1", channel_type: "mpim", ts: "107.000001" });
+      await dispatchEvent({ channel: "G1", channel_type: "mpim", ts: "107.000000" });
+      await dispatchEvent({ channel: "G1", channel_type: "mpim", ts: "107.000001" });
 
-    expect(slackTestState.replyMock).toHaveBeenCalledTimes(2);
-    expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
+      expect(slackTestState.replyMock).toHaveBeenCalledTimes(2);
+      expect(slackTestState.sendMock).toHaveBeenCalledTimes(silentPolicy === "allow" ? 0 : 2);
+
+      await dispatchEvent({
+        channel: "G1",
+        channel_type: "mpim",
+        ts: "107.000002",
+        text: "<@bot-user> are you working now?",
+      });
+      expect(slackTestState.sendMock).toHaveBeenCalledTimes(silentPolicy === "allow" ? 1 : 3);
+      expect(slackTestState.sendMock.mock.calls.at(-1)?.[1]).toBe(AUTH_FAILURE);
+    },
+  );
+
+  it("preserves first and changed-error notices when group silence is disallowed", async () => {
+    configure(false, "disallow");
+    mockReplySequence(
+      { text: AUTH_FAILURE, isError: true },
+      { text: AUTH_FAILURE, isError: true },
+      { text: "Something went wrong", isError: true },
+    );
+    await dispatchEvent({ ts: "108.000000" });
+    await dispatchEvent({ ts: "108.000001" });
+    await dispatchEvent({ ts: "108.000002" });
+    expect(slackTestState.sendMock.mock.calls.map((call) => call[1])).toEqual([
+      AUTH_FAILURE,
+      "Something went wrong",
+    ]);
   });
 });

@@ -277,6 +277,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     lastHeartbeatText?: string;
     /** Timestamp (ms) when lastHeartbeatText was delivered. */
     lastHeartbeatSentAt?: number;
+    /** Delivered failure for this lifecycle and route; cleared by a healthy heartbeat. */
+    lastHeartbeatFailureKey?: string;
     /**
      * Base session key for heartbeat-created isolated sessions.
      * When present, `<base>:heartbeat` is a synthetic isolated session rather than

@@ -5,13 +5,19 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../agents/failover/user-copy.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
 import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-delivery.js";
+import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -79,12 +85,14 @@ async function createFixture(
     ...options.session,
   });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+  const nowMs = vi.fn(() => 0);
   replySpy.mockResolvedValue(quietReply());
   return {
     ...sandbox,
     cfg,
     sessionKey,
     sendTelegram,
+    nowMs,
     run: (overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
       runHeartbeatOnce({
         cfg,
@@ -93,7 +101,7 @@ async function createFixture(
           telegram: sendTelegram,
           getReplyFromConfig: replySpy,
           getQueueSize: () => 0,
-          nowMs: () => 0,
+          nowMs,
         },
       }),
     expectSend: (text: string, silent?: boolean) => {
@@ -446,6 +454,162 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       },
       { session: previousHeartbeat },
     );
+  });
+
+  it.each([false, true])(
+    "reports one continuous failure until a healthy completion (isolated=%s)",
+    async (isolatedSession) => {
+      await withHeartbeat(
+        async ({ sessionKey, storePath, replySpy, sendTelegram, run, nowMs }) => {
+          enqueueSystemEvent("exec finished: retryable background check", { sessionKey });
+          const inspectedEvents = peekSystemEventEntries(sessionKey);
+          replySpy.mockImplementation(async (_ctx, options) => {
+            setHeartbeatAgentTurnStatus(options, "failed");
+            return { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true };
+          });
+          const runCheck = () => run({ reason: "exec-event" });
+          expect((await runCheck()).status).toBe("failed");
+          nowMs.mockReturnValue(48 * 60 * 60 * 1_000);
+          expect((await runCheck()).status).toBe("failed");
+          expect(sendTelegram).toHaveBeenCalledTimes(1);
+          expect(getLastHeartbeatEvent()).toMatchObject({ status: "failed", silent: true });
+          expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
+          expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject(previousHeartbeat);
+
+          replySpy.mockImplementationOnce(async (_ctx, options) => {
+            setHeartbeatAgentTurnStatus(options, "cancelled");
+            return quietReply();
+          });
+          expect((await runCheck()).status).toBe("skipped");
+          expect((await runCheck()).status).toBe("failed");
+          expect(sendTelegram).toHaveBeenCalledTimes(1);
+
+          replySpy.mockImplementationOnce(async (_ctx, options) => {
+            setHeartbeatAgentTurnStatus(options, "ok");
+            resolveReplyOperationRunState(options)!.backgroundWorkStarted = true;
+            return quietReply();
+          });
+          expect((await runCheck()).status).toBe("ran");
+          enqueueSystemEvent("exec finished: next background check", { sessionKey });
+          expect((await runCheck()).status).toBe("failed");
+          expect(sendTelegram).toHaveBeenCalledTimes(1);
+
+          replySpy.mockImplementationOnce(async (_ctx, options) => {
+            setHeartbeatAgentTurnStatus(options, "ok");
+            return quietReply();
+          });
+          expect((await runCheck()).status).toBe("ran");
+          expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+          enqueueSystemEvent("exec finished: check after recovery", { sessionKey });
+          expect((await runCheck()).status).toBe("failed");
+          expect(sendTelegram).toHaveBeenCalledTimes(2);
+        },
+        { isolatedSession, session: previousHeartbeat },
+      );
+    },
+  );
+
+  it("keeps changed failures in one episode while answering foreground manual checks", async () => {
+    await withHeartbeat(async ({ sessionKey, storePath, replySpy, sendTelegram, run }) => {
+      let text = "The backend could not complete this background check.";
+      let toolFailure = false;
+      replySpy.mockImplementation(async (_ctx, options) => {
+        setHeartbeatAgentTurnStatus(options, "failed");
+        const payload = { text, isError: true };
+        return toolFailure
+          ? setReplyPayloadMetadata(payload, { heartbeatTerminalToolFailure: { toolName: "exec" } })
+          : payload;
+      });
+      expect(await run()).toMatchObject({ status: "failed", reason: "agent-runner-failure" });
+      const episodeKey = readSessionStoreForTest(storePath)[sessionKey]?.lastHeartbeatFailureKey;
+      expect(episodeKey).toEqual(expect.any(String));
+      text = "The backend now requires authentication.";
+      expect(await run()).toMatchObject({ status: "failed", reason: "agent-runner-failure" });
+      toolFailure = true;
+      expect(await run()).toMatchObject({ status: "failed", reason: "agent-tool-failure" });
+      expect((await run({ source: "manual", intent: "immediate" })).status).toBe("failed");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+
+      expect((await run({ source: "manual", intent: "manual" })).status).toBe("failed");
+      expect(sendTelegram).toHaveBeenCalledTimes(2);
+      expect(readSessionStoreForTest(storePath)[sessionKey]?.lastHeartbeatFailureKey).toBe(
+        episodeKey,
+      );
+      expect((await run()).status).toBe("failed");
+      expect(sendTelegram).toHaveBeenCalledTimes(2);
+      expect((await run({ source: "manual", intent: "manual" })).status).toBe("failed");
+      expect(sendTelegram).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it.each(["changed route", "changed thread", "changed account", "replaced lifecycle"] as const)(
+    "reports a new failure after %s",
+    async (change) => {
+      await withHeartbeat(async ({ cfg, sessionKey, storePath, replySpy, sendTelegram, run }) => {
+        const text = "The backend could not complete this background check.";
+        replySpy.mockImplementation(async (_ctx, options) => {
+          setHeartbeatAgentTurnStatus(options, "failed");
+          return { text, isError: true };
+        });
+        expect((await run()).status).toBe("failed");
+        expect((await run()).status).toBe("failed");
+        expect(sendTelegram).toHaveBeenCalledTimes(1);
+        if (change === "changed route") {
+          cfg.agents!.defaults!.heartbeat!.to = "-1009876543210";
+        } else if (change === "changed account") {
+          cfg.agents!.defaults!.heartbeat!.accountId = "secondary";
+        } else if (change === "changed thread") {
+          cfg.agents!.defaults!.heartbeat!.target = "last";
+          await patchSessionEntryCore(
+            { storePath, sessionKey },
+            () => ({
+              chatType: "group",
+              delivery: normalizeSessionDeliveryState({
+                context: { channel: "telegram", to: TELEGRAM_GROUP, threadId: 42 },
+              }),
+            }),
+            { preserveActivity: true },
+          );
+        } else {
+          await patchSessionEntryCore(
+            { storePath, sessionKey },
+            () => ({ lifecycleRevision: "replacement-lifecycle" }),
+            { preserveActivity: true },
+          );
+        }
+        expect((await run()).status).toBe("failed");
+        expect((await run()).status).toBe("failed");
+        expect(sendTelegram).toHaveBeenCalledTimes(2);
+        expect(sendTelegram.mock.calls[1]?.[0]).toBe(
+          change === "changed route" ? "-1009876543210" : TELEGRAM_GROUP,
+        );
+        if (change === "changed account") {
+          expect(sendTelegram.mock.calls[1]?.[2]).toMatchObject({ accountId: "secondary" });
+        } else if (change === "changed thread") {
+          expect(sendTelegram.mock.calls[1]?.[2]).toMatchObject({ messageThreadId: 42 });
+        }
+      });
+    },
+  );
+
+  it("does not carry a late delivered failure into a replaced lifecycle", async () => {
+    await withHeartbeat(async ({ sessionKey, storePath, replySpy, sendTelegram, run }) => {
+      replySpy.mockImplementation(async (_ctx, options) => {
+        setHeartbeatAgentTurnStatus(options, "failed");
+        return { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true };
+      });
+      sendTelegram.mockImplementationOnce(async () => {
+        await patchSessionEntryCore(
+          { storePath, sessionKey },
+          () => ({ lifecycleRevision: "replacement-during-send" }),
+          { preserveActivity: true },
+        );
+        return { messageId: "m1" };
+      });
+      expect((await run()).status).toBe("failed");
+      expect((await run()).status).toBe("failed");
+      expect(sendTelegram).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("keeps an unmarked failed run private while retaining inspected work", async () => {

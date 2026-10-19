@@ -1,3 +1,4 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -303,6 +304,24 @@ async function prepareHeartbeatDispatchReply(
         : { status: "ran", durationMs: Date.now() - startedAt };
   };
   const stateKey = prepared.outboundPolicySessionKey ?? sessionKey;
+  const stateEntry = prepared.policySessionEntry;
+  if (
+    stateEntry?.lastHeartbeatFailureKey &&
+    execution === "ok" &&
+    outcome.kind !== "failure" &&
+    !runState.backgroundWorkStarted
+  ) {
+    await patchSessionEntryCore(
+      { agentId, storePath, sessionKey: stateKey },
+      (current) =>
+        current.sessionId === stateEntry.sessionId &&
+        current.lifecycleRevision === stateEntry.lifecycleRevision &&
+        current.lastHeartbeatFailureKey === stateEntry.lastHeartbeatFailureKey
+          ? { lastHeartbeatFailureKey: undefined }
+          : null,
+      { preserveActivity: true },
+    );
+  }
   const record = (value: HeartbeatToolResponse) =>
     persistHeartbeatOutcome({
       agentId,
@@ -407,10 +426,23 @@ async function prepareHeartbeatDispatchReply(
     finish({ ...event, silent: true });
     return {};
   }
-  const stateEntry = prepared.policySessionEntry;
   const failed = outcome.kind === "failure";
   const normalized = outcome.normalized;
   const text = normalized.text;
+  // A new heartbeat run is not a new incident. Keep this receipt separate from
+  // successful alert dedupe and bind it to the exact session generation and route.
+  const failureKey = failed
+    ? sha256Hex(
+        JSON.stringify([
+          stateEntry?.sessionId,
+          stateEntry?.lifecycleRevision,
+          channel,
+          delivery.to,
+          delivery.accountId,
+          delivery.threadId,
+        ]),
+      )
+    : undefined;
   const preview = truncateHeartbeatPreview(failed ? text || outcome.previewText : text);
   const event = {
     status: failed ? ("failed" as const) : ("sent" as const),
@@ -421,6 +453,17 @@ async function prepareHeartbeatDispatchReply(
   };
   if (failed) {
     await restoreActivity();
+    // A foreground manual check still deserves its own result; system wake-now
+    // events use immediate intent and remain part of the ongoing outage.
+    if (
+      opts.intent !== "manual" &&
+      failureKey &&
+      stateEntry?.lastHeartbeatFailureKey === failureKey
+    ) {
+      await suppressSelected();
+      finish({ ...event, silent: true }, false);
+      return {};
+    }
   } else {
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (
@@ -513,7 +556,7 @@ async function prepareHeartbeatDispatchReply(
       if (!sent) {
         await unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
       }
-      if (sent && !failed && deliveryText.trim()) {
+      if (sent && (failed || deliveryText.trim())) {
         await patchSessionEntryCore(
           { agentId, storePath, sessionKey: stateKey },
           (current, context) =>
@@ -523,7 +566,9 @@ async function prepareHeartbeatDispatchReply(
                   current.lifecycleRevision === stateEntry?.lifecycleRevision
                 : stateEntry === undefined
             )
-              ? { lastHeartbeatText: text, lastHeartbeatSentAt: startedAt }
+              ? failed
+                ? { lastHeartbeatFailureKey: failureKey }
+                : { lastHeartbeatText: text, lastHeartbeatSentAt: startedAt }
               : null,
           {
             fallbackEntry: mergeSessionEntry(undefined, { updatedAt: startedAt }),
