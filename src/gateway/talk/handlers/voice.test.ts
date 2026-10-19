@@ -20,11 +20,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  RespondFn,
-} from "../../server-methods/types.js";
+import type { GatewayRequestContext } from "../../server-methods/types.js";
 import * as sessionAuthorization from "../../session-sharing-authorization-async.js";
 import { cleanupTalkConnection } from "../session-registry.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
@@ -35,13 +31,13 @@ import {
   registerTalkVoiceSession,
   unregisterTalkVoiceSession,
 } from "../voice-selection.js";
-import { talkVoiceHandlers } from "./voice.js";
+import { expectFailure, expectSuccess, voiceClient, voiceRpc } from "./voice-rpc.test-support.js";
 
 describe("Talk voice RPC ownership", () => {
   let state: OpenClawTestState;
   let context: GatewayRequestContext;
   let sessionTarget: PreparedTalkSessionTarget;
-  let browser: GatewayClient;
+  let browser: ReturnType<typeof voiceClient>;
   let originalId: string;
   let dispatchCurrent: boolean;
   let changeRequested: ReturnType<typeof createDeferred<void>>;
@@ -50,18 +46,9 @@ describe("Talk voice RPC ownership", () => {
   const pending: Promise<void>[] = [];
   const broadcast = vi.fn<GatewayRequestContext["broadcastToConnIds"]>();
 
-  function client(connId: string): GatewayClient {
+  function client(connId: string) {
     connections.add(connId);
-    return {
-      connId,
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
-        role: "operator",
-        scopes: ["operator.admin"],
-      },
-    };
+    return voiceClient(connId);
   }
 
   async function runtimeClient(bindVoice = true) {
@@ -99,36 +86,15 @@ describe("Talk voice RPC ownership", () => {
     };
   }
 
-  function start(method: string, params: Record<string, unknown>, caller = browser) {
-    const handler = talkVoiceHandlers[method];
-    if (!handler) {
-      throw new Error(`Missing Talk voice handler: ${method}`);
-    }
-    const respond = vi.fn<RespondFn>();
-    const completed = Promise.resolve(
-      handler({
-        req: { type: "req", id: `request-${pending.length}`, method, params },
-        params,
-        client: caller,
-        respond,
-        context,
-        isWebchatConnect: () => false,
-        sessionMutationCommitGuard: () => {
-          if (!dispatchCurrent) {
-            throw new Error("Gateway dispatch retired");
-          }
-        },
-      }),
-    );
-    pending.push(completed);
-    return { respond, completed };
-  }
-
-  async function invoke(method: string, params: Record<string, unknown>, caller = browser) {
-    const request = start(method, params, caller);
-    await request.completed;
-    return request.respond;
-  }
+  const { start, invoke } = voiceRpc(pending, () => ({
+    client: browser,
+    context,
+    sessionMutationCommitGuard: () => {
+      if (!dispatchCurrent) {
+        throw new Error("Gateway dispatch retired");
+      }
+    },
+  }));
 
   async function requestedChangeId(completed: Promise<void>) {
     await awaitGateBeforeSettlement(
@@ -156,7 +122,7 @@ describe("Talk voice RPC ownership", () => {
     return payload.changeId;
   }
 
-  async function replace(changeId: string, retireOriginal = true) {
+  function prepareReplacement(changeId: string) {
     const replacement = prepareTalkVoiceReplacement({
       voiceChangeId: changeId,
       connId: browser.connId,
@@ -165,10 +131,13 @@ describe("Talk voice RPC ownership", () => {
     if (!replacement || !browser.connId) {
       throw new Error("Expected an admitted voice replacement");
     }
-    const launch = replacement.launch;
-    if (retireOriginal) {
-      unregisterTalkVoiceSession(originalId, browser.connId, sessionTarget.agentId);
-    }
+    return replacement;
+  }
+
+  async function registerSession(
+    launch: { provider: string; model?: string; voice: string },
+    voiceChangeId?: string,
+  ) {
     const voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: sessionTarget.agentId,
       sessionKey: sessionTarget.sessionKey,
@@ -187,10 +156,18 @@ describe("Talk voice RPC ownership", () => {
         canChange: true,
       },
       launch: { provider: launch.provider, model: launch.model },
-      voiceChangeId: changeId,
-      providerReady: false,
+      voiceChangeId,
+      providerReady: !voiceChangeId,
     });
     return voiceSessionId;
+  }
+
+  async function replace(changeId: string, retireOriginal = true) {
+    const { launch } = prepareReplacement(changeId);
+    if (retireOriginal) {
+      unregisterTalkVoiceSession(originalId, browser.connId, sessionTarget.agentId);
+    }
+    return registerSession(launch, changeId);
   }
 
   beforeEach(async () => {
@@ -219,25 +196,10 @@ describe("Talk voice RPC ownership", () => {
     // Calls retain the supplied alias; the backing runtime uses its canonical key.
     sessionTarget = await prepareTalkSessionTarget(cfg, "main");
     browser = client("voice-browser");
-    originalId = await createOrResumeClientVoiceSession({
-      agentId: sessionTarget.agentId,
-      sessionKey: sessionTarget.sessionKey,
+    originalId = await registerSession({
       provider: "openai",
-      origin: "client",
-    });
-    registerTalkVoiceSession({
-      voiceSessionId: originalId,
-      connId: "voice-browser",
-      sessionTarget,
-      selection: {
-        provider: "openai",
-        model: "gpt-live-1-codex",
-        voice: "cove",
-        voices: ["cove", "ember"],
-        canChange: true,
-      },
-      launch: { provider: "openai", model: "gpt-live-1-codex" },
-      providerReady: true,
+      model: "gpt-live-1-codex",
+      voice: "cove",
     });
   });
 
@@ -259,22 +221,17 @@ describe("Talk voice RPC ownership", () => {
     }
   });
 
-  it.each(["talk.voice.set"])(
-    "rejects another browser's call through %s even for an admin",
-    async (method) => {
-      const respond = await invoke(
-        method,
-        { voiceSessionId: originalId, ...(method === "talk.voice.set" ? { voice: "ember" } : {}) },
+  it("rejects another browser's call even for an admin", async () => {
+    expectFailure(
+      await invoke(
+        "talk.voice.set",
+        { voiceSessionId: originalId, voice: "ember" },
         client("other-browser"),
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("No active voice call") }),
-      );
-      expect(broadcast).not.toHaveBeenCalled();
-    },
-  );
+      ),
+      "No active voice call",
+    );
+    expect(broadcast).not.toHaveBeenCalled();
+  });
 
   it.each(["unbound", "retired", "missing-validator"])(
     "rejects an agent with %s authority before requesting a replacement",
@@ -286,28 +243,16 @@ describe("Talk voice RPC ownership", () => {
         context.validateAgentRuntimeApprovalAuthority = undefined;
       }
       const respond = await invoke("talk.voice.set", { voice: "ember" }, runtime.client);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("no longer owns") }),
-      );
+      expectFailure(respond, "no longer owns");
       expect(broadcast).not.toHaveBeenCalled();
     },
   );
 
   it("keeps the current voice connected and rejects voices outside the call catalog", async () => {
     const unchanged = await invoke("talk.voice.set", { voice: " COVE " });
-    expect(unchanged).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "applied", voiceSessionId: originalId, voice: "cove" }),
-      undefined,
-    );
+    expectSuccess(unchanged, { status: "applied", voiceSessionId: originalId, voice: "cove" });
     const invalid = await invoke("talk.voice.set", { voice: "missing-voice" });
-    expect(invalid).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("not in this call's catalog") }),
-    );
+    expectFailure(invalid, "not in this call's catalog");
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -350,39 +295,27 @@ describe("Talk voice RPC ownership", () => {
 
   it("resolves an agent's exact binding and rejects a forged call target", async () => {
     const runtime = await runtimeClient();
-    expect(await invoke("talk.voice.get", {}, runtime.client)).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ voiceSessionId: originalId, sessionKey: "main", voice: "cove" }),
-      undefined,
-    );
+    expectSuccess(await invoke("talk.voice.get", {}, runtime.client), {
+      voiceSessionId: originalId,
+      sessionKey: "main",
+      voice: "cove",
+    });
     const respond = await invoke(
       "talk.voice.set",
       { voiceSessionId: "another-call", sessionKey: "agent:other:private", voice: "ember" },
       runtime.client,
     );
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("its own call") }),
-    );
+    expectFailure(respond, "its own call");
     expect(broadcast).not.toHaveBeenCalled();
   });
 
-  it.each(["talk.voice.set"])(
-    "rejects %s after the original chat storage moves",
-    async (method) => {
-      context.getRuntimeConfig = () => ({
-        session: { store: state.statePath("moved", "sessions.sqlite") },
-      });
-      const respond = await invoke(method, method.endsWith("set") ? { voice: "cove" } : {});
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("storage target changed") }),
-      );
-      expect(broadcast).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects voice changes after the original chat storage moves", async () => {
+    context.getRuntimeConfig = () => ({
+      session: { store: state.statePath("moved", "sessions.sqlite") },
+    });
+    expectFailure(await invoke("talk.voice.set", { voice: "cove" }), "storage target changed");
+    expect(broadcast).not.toHaveBeenCalled();
+  });
 
   it("cancels replacement startup when the configured chat store moves after dispatch", async () => {
     const changing = start("talk.voice.set", { voice: "ember" });
@@ -390,29 +323,16 @@ describe("Talk voice RPC ownership", () => {
     context.getRuntimeConfig = () => ({
       session: { store: state.statePath("moved", "sessions.sqlite") },
     });
-    expect(() =>
-      prepareTalkVoiceReplacement({
-        voiceChangeId: changeId,
-        connId: browser.connId,
-        sessionKey: sessionTarget.sessionKey,
-      }),
-    ).toThrow("storage target changed");
+    expect(() => prepareReplacement(changeId)).toThrow("storage target changed");
     await changing.completed;
-    expect(changing.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    expectFailure(changing.respond);
   });
 
   it.each(["canonicalKey", "storePath"] as const)(
     "rejects a replacement prepared with a different %s",
     async (field) => {
       const changing = start("talk.voice.set", { voice: "ember" });
-      const replacement = prepareTalkVoiceReplacement({
-        voiceChangeId: await requestedChangeId(changing.completed),
-        connId: browser.connId,
-        sessionKey: sessionTarget.sessionKey,
-      });
-      if (!replacement) {
-        throw new Error("Expected an admitted voice replacement");
-      }
+      const replacement = prepareReplacement(await requestedChangeId(changing.completed));
       expect(() =>
         replacement.assertCurrent({
           ...sessionTarget,
@@ -423,7 +343,7 @@ describe("Talk voice RPC ownership", () => {
         }),
       ).toThrow("original chat");
       await changing.completed;
-      expect(changing.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      expectFailure(changing.respond);
     },
   );
 
@@ -437,7 +357,7 @@ describe("Talk voice RPC ownership", () => {
     const completion = { changeId, voiceSessionId: replacementId, outcome: "ready" };
     for (const caller of [client("other-browser"), runtime.client]) {
       const rejected = await invoke("talk.voice.complete", completion, caller);
-      expect(rejected).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      expectFailure(rejected);
       expect(changing.respond).not.toHaveBeenCalled();
     }
     expect(await invoke("talk.voice.complete", completion)).toHaveBeenCalledWith(
@@ -446,11 +366,11 @@ describe("Talk voice RPC ownership", () => {
       undefined,
     );
     await changing.completed;
-    expect(changing.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "applied", voiceSessionId: replacementId, voice: "ember" }),
-      undefined,
-    );
+    expectSuccess(changing.respond, {
+      status: "applied",
+      voiceSessionId: replacementId,
+      voice: "ember",
+    });
   });
 
   it("keeps the handoff pending until the original call retires", async () => {
@@ -470,18 +390,10 @@ describe("Talk voice RPC ownership", () => {
       voiceSessionId: replacementId,
       voice: "cove",
     });
-    expect(overlapping).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("already in progress") }),
-    );
+    expectFailure(overlapping, "already in progress");
     unregisterTalkVoiceSession(originalId, browser.connId, sessionTarget.agentId);
     await Promise.all([changing.completed, ready.completed]);
-    expect(changing.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ voiceSessionId: replacementId, status: "applied" }),
-      undefined,
-    );
+    expectSuccess(changing.respond, { voiceSessionId: replacementId, status: "applied" });
   });
 
   it.each(["run", "gateway"])(
@@ -496,19 +408,9 @@ describe("Talk voice RPC ownership", () => {
         dispatchCurrent = false;
       }
       const failure = owner === "run" ? "no longer owns" : "Gateway dispatch retired";
-      expect(() =>
-        prepareTalkVoiceReplacement({
-          voiceChangeId: changeId,
-          connId: browser.connId,
-          sessionKey: sessionTarget.sessionKey,
-        }),
-      ).toThrow(failure);
+      expect(() => prepareReplacement(changeId)).toThrow(failure);
       await changing.completed;
-      expect(changing.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining(failure) }),
-      );
+      expectFailure(changing.respond, failure);
       expect(broadcast).toHaveBeenLastCalledWith(
         "talk.voice.change",
         expect.objectContaining({ changeId, phase: "cancelled" }),
@@ -536,14 +438,14 @@ describe("Talk voice RPC ownership", () => {
         cleanupTalkConnection(runtime.connId, context.logGateway);
       }
       await changing.completed;
-      expect(changing.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      expectFailure(changing.respond);
       markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
       const late = await invoke("talk.voice.complete", {
         changeId,
         voiceSessionId: replacementId,
         outcome: "ready",
       });
-      expect(late).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      expectFailure(late);
       expect(changing.respond).toHaveBeenCalledOnce();
     },
   );
