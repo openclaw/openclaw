@@ -34,10 +34,6 @@ function createHarness() {
     runId: "completion-test",
     generation: 1,
     childSessionKey: "agent:main:subagent:completion-test",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "complete the synthetic task",
-    cleanup: "keep",
     createdAt: 0,
     execution: { status: "terminal", endedAt: 1, outcome: { status: "error", error: "failed" } },
     cleanupHandled: true,
@@ -55,7 +51,7 @@ function createHarness() {
   });
   const scheduleSweep = vi.fn();
   const warn = vi.fn();
-  const runtime = createSubagentRegistryCompletionRuntime({
+  const dependencies = {
     runs,
     resumed,
     retryTimers,
@@ -63,7 +59,8 @@ function createHarness() {
     resumeRun,
     scheduleSweep,
     warn,
-  });
+  };
+  const runtime = createSubagentRegistryCompletionRuntime(dependencies);
   const request: SubagentCompletionRequest = {
     runId: entry.runId,
     expectedEntry: entry,
@@ -73,18 +70,19 @@ function createHarness() {
     triggerCleanup: true,
   };
   return {
+    ...dependencies,
     entry,
-    runs,
-    resumed,
-    retryTimers,
     resumeError,
-    completeSubagentRun,
-    resumeRun,
-    scheduleSweep,
-    warn,
     runtime,
     request,
+    complete: (source: string, overrides: Partial<SubagentCompletionRequest> = {}) =>
+      runtime.completeSubagentRunWithRecovery({ ...request, ...overrides }, source),
   };
+}
+
+function expectNoRecovery(h: ReturnType<typeof createHarness>) {
+  expect(h.scheduleSweep).not.toHaveBeenCalled();
+  expect(h.resumeRun).not.toHaveBeenCalled();
 }
 
 async function bindCompletionToLaunch(
@@ -143,10 +141,10 @@ describe("subagent completion rejection ownership", () => {
         h.entry.completion = { required: false, resultText: "result-1", capturedAt: 2 };
       });
       const invoke = await bindCompletionToLaunch(parentKind, launch, () =>
-        h.runtime.completeSubagentRunWithRecovery(
-          { ...h.request, outcome: { status: "ok" }, reason: SUBAGENT_ENDED_REASON_COMPLETE },
-          "subagent-wait",
-        ),
+        h.complete("subagent-wait", {
+          outcome: { status: "ok" },
+          reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        }),
       );
       await launch.drain();
       const completion = invoke().then(
@@ -175,8 +173,7 @@ describe("subagent completion rejection ownership", () => {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         finishCleanup.resolve();
         await Promise.all(tails);
-        expect(h.scheduleSweep).not.toHaveBeenCalled();
-        expect(h.resumeRun).not.toHaveBeenCalled();
+        expectNoRecovery(h);
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       } finally {
         finishCapture.resolve();
@@ -196,7 +193,7 @@ describe("subagent completion rejection ownership", () => {
       const launch = new AsyncWorkScope();
       h.completeSubagentRun.mockResolvedValue(undefined);
       const invoke = await bindCompletionToLaunch("released", launch, () =>
-        h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait"),
+        h.complete("subagent-wait"),
       );
       await launch.drain();
       try {
@@ -288,8 +285,7 @@ describe("subagent completion rejection ownership", () => {
     ).rejects.toBe(error);
     expect(h.completeSubagentRun).toHaveBeenCalledOnce();
     expect(h.retryTimers.size).toBe(0);
-    expect(h.scheduleSweep).not.toHaveBeenCalled();
-    expect(h.resumeRun).not.toHaveBeenCalled();
+    expectNoRecovery(h);
     expect(h.warn).not.toHaveBeenCalled();
   });
 
@@ -313,10 +309,7 @@ describe("subagent completion rejection ownership", () => {
         await release.promise;
         throw new Error("row retired during completion");
       });
-      const completion = h.runtime.completeSubagentRunWithRecovery(
-        { ...h.request, expectedEntry: undefined },
-        "lifecycle-event",
-      );
+      const completion = h.complete("lifecycle-event", { expectedEntry: undefined });
       try {
         await entered.promise;
         if (change === "removal") {
@@ -329,8 +322,7 @@ describe("subagent completion rejection ownership", () => {
         release.resolve();
         await completion;
         expect(h.completeSubagentRun).toHaveBeenCalledTimes(attempt);
-        expect(h.resumeRun).not.toHaveBeenCalled();
-        expect(h.scheduleSweep).not.toHaveBeenCalled();
+        expectNoRecovery(h);
         expect(h.entry.cleanupHandled).toBe(true);
         expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(true);
       } finally {
@@ -381,10 +373,7 @@ describe("subagent completion rejection ownership", () => {
           expect(await request.recoveryCurrent?.prepare()).toBe(true);
           expect(request.recoveryCurrent?.isHostCurrent()).toBe(true);
         });
-      const completion = h.runtime.completeSubagentRunWithRecovery(
-        { ...h.request, settleYielded: true },
-        "sweeper",
-      );
+      const completion = h.complete("sweeper", { settleYielded: true });
       try {
         await entered.promise;
         if (!published) {
@@ -439,7 +428,7 @@ describe("subagent completion rejection ownership", () => {
       if (state === "yielded") {
         h.entry.pauseReason = "sessions_yield";
       }
-      await h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait");
+      await h.complete("subagent-wait");
       expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
       expect(h.resumeRun).not.toHaveBeenCalled();
       expect(h.entry.cleanupHandled).toBe(true);

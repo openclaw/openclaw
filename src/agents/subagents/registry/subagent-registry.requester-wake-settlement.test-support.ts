@@ -43,6 +43,48 @@ export function registerRequesterWakeSettlementBoundaryTests({
   getLifecycleHandler: () => Parameters<typeof onAgentEvent>[0] | undefined;
   useGlobalSessionScope: () => void;
 }): void {
+  async function settleYieldedTurn(
+    requesterTurnRunId: string,
+    callId: string,
+    children: ReturnType<typeof visibleChild>[],
+    payloads?: [],
+  ) {
+    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(callId, {});
+    const { withLocalSessionPlacementTurnSettlement } =
+      await import("../../session-placement-admission.js");
+    await withLocalSessionPlacementTurnSettlement(
+      {
+        sessionId: "sess-main",
+        sessionKey: requesterSessionKey,
+        agentId: "main",
+        runId: requesterTurnRunId,
+      },
+      async () => ({
+        ...(payloads ? { payloads } : {}),
+        acceptedSessionSpawns: children,
+        meta: {
+          durationMs: 1,
+          yielded: true,
+          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+        },
+      }),
+    );
+  }
+  const addRun = (
+    runId: string,
+    childSessionKey: string,
+    overrides: Pick<SubagentRunRecord, "execution" | "createdAt"> & Partial<SubagentRunRecord>,
+  ) =>
+    registry.addSubagentRunForTests({
+      runId,
+      childSessionKey,
+      requesterSessionKey,
+      requesterDisplayKey: "main",
+      requesterAgentId: "main",
+      task: runId,
+      cleanup: "keep",
+      ...overrides,
+    });
   it("delivers a yielded result despite an older failed grandchild awaiting cleanup", async () => {
     const oldTime = Date.now() - 5 * 24 * 60 * 60 * 1000;
     const oldParentKey = "agent:main:subagent:old-parent";
@@ -83,28 +125,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
       expectsCompletionMessage: true,
     };
     await spawnVisibleChild({ ...child, requesterTurnRunId });
-    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
-      "yield-current-result",
-      {},
-    );
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        runId: requesterTurnRunId,
-      },
-      async () => ({
-        acceptedSessionSpawns: [child],
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
-      }),
-    );
+    await settleYieldedTurn(requesterTurnRunId, "yield-current-result", [child]);
     emitCompleted(child.runId, child.childSessionKey, "current counting result");
     await flushOwnedWork();
     await waitForDeliveredCleanup(child.runId);
@@ -121,14 +142,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
   it("delivers after its owned descendant settles despite foreign active work in a global session", async () => {
     vi.setSystemTime(100_000);
     useGlobalSessionScope();
-    await registry.addSubagentRunForTests({
-      runId: "run-main-batch",
-      childSessionKey: "agent:main:subagent:batch",
-      requesterSessionKey,
-      requesterDisplayKey: "main",
-      requesterAgentId: "main",
-      task: "main completed batch",
-      cleanup: "keep",
+    await addRun("run-main-batch", "agent:main:subagent:batch", {
       createdAt: 1_000,
       execution: {
         status: "terminal",
@@ -146,14 +160,8 @@ export function registerRequesterWakeSettlementBoundaryTests({
         rearmGeneration: 1,
       },
     });
-    await registry.addSubagentRunForTests({
-      runId: "run-main-stale",
-      childSessionKey: "agent:main:subagent:stale",
+    await addRun("run-main-stale", "agent:main:subagent:stale", {
       requesterSessionKey: "agent:main:subagent:batch",
-      requesterDisplayKey: "main",
-      requesterAgentId: "main",
-      task: "main stale settle blocker",
-      cleanup: "keep",
       createdAt: 2_000,
       execution: {
         status: "terminal",
@@ -164,14 +172,8 @@ export function registerRequesterWakeSettlementBoundaryTests({
       expectsCompletionMessage: true,
       delivery: { status: "pending" },
     });
-    await registry.addSubagentRunForTests({
-      runId: "run-research-active",
-      childSessionKey: "agent:research:subagent:active",
-      requesterSessionKey,
-      requesterDisplayKey: "main",
+    await addRun("run-research-active", "agent:research:subagent:active", {
       requesterAgentId: "research",
-      task: "unrelated research work",
-      cleanup: "keep",
       createdAt: 3_000,
       execution: { status: "running", startedAt: 3_100 },
     });
@@ -200,10 +202,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
               onPublished?.(entries.map((entry) => subagentRuns.get(entry.runId)!)),
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
-          transitions.push({
-            status: state.status,
-            attemptCount: state.attemptCount,
-          });
+          transitions.push({ status: state.status, attemptCount: state.attemptCount });
         },
         completeBatch: async (entries, _rearmGeneration, outcome) => {
           if (!outcome) {
@@ -265,35 +264,13 @@ export function registerRequesterWakeSettlementBoundaryTests({
   it("wakes a yielded parent once after one running child is stopped", async () => {
     await registry.initSubagentRegistry();
     await registry.activateSubagentRegistry(getGatewayContext);
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
     const requesterTurnRunId = "requester-stopped-pair";
     const stopped = visibleChild("stopped");
     const finished = visibleChild("finished");
     for (const child of [stopped, finished]) {
       await spawnVisibleChild({ ...child, requesterTurnRunId });
     }
-    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
-      "yield-stopped-pair",
-      {},
-    );
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        runId: requesterTurnRunId,
-      },
-      async () => ({
-        payloads: [],
-        acceptedSessionSpawns: [stopped, finished],
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
-      }),
-    );
+    await settleYieldedTurn(requesterTurnRunId, "yield-stopped-pair", [stopped, finished], []);
     const lifecycleHandler = getLifecycleHandler();
     if (!lifecycleHandler) {
       throw new Error("Fixture lifecycle listener was not registered before Stop");
