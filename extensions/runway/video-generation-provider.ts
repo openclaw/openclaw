@@ -251,9 +251,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "Runway API key missing",
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ??
-            DEFAULT_RUNWAY_BASE_URL,
+          baseUrl: req.cfg?.models?.providers?.runway?.baseUrl,
           defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
           defaultHeaders: {
             "X-Runway-Version": RUNWAY_API_VERSION,
