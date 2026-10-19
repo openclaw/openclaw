@@ -1,4 +1,4 @@
-import type { DesktopSizingMode } from "./desktop-client.ts";
+import type { DesktopSizingMode } from "./desktop-panel-state.ts";
 
 /** Connection-local geometry; noVNC still owns canvas scaling and input coordinates. */
 export function createDesktopViewport(host: HTMLElement) {

@@ -2,7 +2,7 @@ import { createSignal, untrack } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { DesktopSizingMode } from "./desktop-client.ts";
+import type { DesktopSizingMode } from "./desktop-panel-state.ts";
 import { DesktopSizing } from "./desktop-panel-view.tsx";
 
 describe.runIf("__vitest_browser__" in globalThis)("pending desktop sizing selection", () => {

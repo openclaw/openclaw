@@ -1,8 +1,7 @@
 import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
 import type { DockLayout } from "../dock-layout.ts";
-import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelControls, DesktopPanelInputs } from "./desktop-panel-inputs.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
+import type { DesktopPanelState, DesktopSizingMode } from "./desktop-panel-state.ts";
 import type { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 import type { DesktopHostSetup } from "./host-desktop-setup.ts";
