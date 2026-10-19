@@ -25,9 +25,9 @@ export type ChatDetailsMobileEntry = {
   metadata?: JSX.Element;
 };
 
-export type ChatDetailsMobileItem<T> = ChatDetailsMobileEntry & { value: T };
+type ChatDetailsMobileItem<T> = ChatDetailsMobileEntry & { value: T };
 
-export type ChatDetailsMobileCollection<T> = {
+type ChatDetailsMobileCollection<T> = {
   /** Native order, including settled items; never a second roster or query. */
   items: readonly ChatDetailsMobileItem<T>[];
   /** Authoritative total, including pages not loaded. Undefined means unknown. */
@@ -37,7 +37,7 @@ export type ChatDetailsMobileCollection<T> = {
   notice?: JSX.Element;
 };
 
-export type ChatDetailsMobileRootDestination =
+type ChatDetailsMobileRootDestination =
   | { kind: "people" }
   | { kind: "context" }
   | { kind: "task-progress" }
@@ -51,7 +51,7 @@ export type ChatDetailsMobileRootDestination =
   | { kind: "outputs" }
   | { kind: "versions" };
 
-export type ChatDetailsMobileRootOrigin = {
+type ChatDetailsMobileRootOrigin = {
   kind: "details-root";
   trigger: HTMLButtonElement;
 };
