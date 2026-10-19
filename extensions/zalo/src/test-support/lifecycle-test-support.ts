@@ -19,41 +19,34 @@ type LifecycleMonitorSetupParams = {
   mediaMaxMb?: number;
 };
 
-function createLifecycleAccountConfig(params: LifecycleMonitorSetupParams) {
+export function createLifecycleMonitorSetup(params: LifecycleMonitorSetupParams) {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
-  return {
+  const accountConfig = {
     webhookUrl: params.webhookUrl ?? "https://example.com/hooks/zalo",
     webhookSecret: params.webhookSecret ?? "supersecret", // pragma: allowlist secret
     dmPolicy: params.dmPolicy,
     ...(allowFrom ? { allowFrom } : {}),
-    // Kept undefined-free so cases can assert on an account config that never
-    // declared the key, which is what the resolver's unset branch expects.
+    // Preserve the resolver's absent-key branch.
     ...(params.mediaMaxMb === undefined ? {} : { mediaMaxMb: params.mediaMaxMb }),
   };
-}
-
-export function createLifecycleMonitorSetup(params: LifecycleMonitorSetupParams) {
   const account: ResolvedZaloAccount = {
     accountId: params.accountId,
     enabled: true,
     token: "zalo-token",
     tokenSource: "config",
-    config: createLifecycleAccountConfig(params),
+    config: accountConfig,
   };
   const config: OpenClawConfig = {
     channels: {
       zalo: {
         enabled: true,
         accounts: {
-          [params.accountId]: { enabled: true, ...createLifecycleAccountConfig(params) },
+          [params.accountId]: { enabled: true, ...accountConfig },
         },
       },
     },
   };
-  return {
-    account,
-    config,
-  };
+  return { account, config };
 }
 
 export function createTextUpdate(params: {
@@ -134,8 +127,7 @@ export function createImageLifecycleCore() {
     buffer: Buffer.from("image-bytes"),
     contentType: "image/jpeg",
   }));
-  // Keep the mock arity aligned with PluginRuntime.saveRemoteMedia so
-  // mockImplementation callbacks that inspect timeout options typecheck.
+  // Preserve the timeout-inspecting mockImplementation signature.
   const saveRemoteMediaMock = vi.fn<Channel["media"]["saveRemoteMedia"]>(async (_params) => ({
     id: "zalo-photo.jpg",
     path: "/tmp/zalo-photo.jpg",
@@ -146,17 +138,12 @@ export function createImageLifecycleCore() {
     path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
   }));
-  const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
-  const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn(async () => undefined);
   const core = createPluginRuntimeMock({
-    logging: {
-      shouldLogVerbose: vi.fn(() => false),
-    },
     channel: {
       pairing: {
-        readAllowFromStore: readAllowFromStoreMock,
-        upsertPairingRequest: upsertPairingRequestMock,
+        readAllowFromStore: vi.fn(async () => []),
+        upsertPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
       },
       session: {
         resolveStorePath: vi.fn(() => "/tmp/zalo-sessions.json"),
@@ -184,7 +171,6 @@ export function createImageLifecycleCore() {
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
-        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
         isControlCommandMessage: vi.fn(() => false),
       },
     },
@@ -196,33 +182,22 @@ export function createImageLifecycleCore() {
     readRemoteMediaBufferMock,
     saveRemoteMediaMock,
     saveMediaBufferMock,
-    readAllowFromStoreMock,
-    upsertPairingRequestMock,
   };
 }
 
 export function expectImageLifecycleDelivery(params: {
   readRemoteMediaBufferMock: ReturnType<typeof vi.fn>;
-  saveRemoteMediaMock?: ReturnType<typeof vi.fn>;
+  saveRemoteMediaMock: ReturnType<typeof vi.fn>;
   saveMediaBufferMock: ReturnType<typeof vi.fn>;
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   recordInboundSessionMock: ReturnType<typeof vi.fn>;
-  photoUrl?: string;
-  senderName?: string;
-  mediaPath?: string;
-  mediaType?: string;
 }) {
-  const photoUrl = params.photoUrl ?? "https://example.com/test-image.jpg";
-  const senderName = params.senderName ?? "Test User";
-  const mediaPath = params.mediaPath ?? "/tmp/zalo-photo.jpg";
-  const mediaType = params.mediaType ?? "image/jpeg";
   const context = expect.objectContaining({
-    SenderName: senderName,
-    media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
+    SenderName: "Test User",
+    media: [expect.objectContaining({ path: "/tmp/zalo-photo.jpg", contentType: "image/jpeg" })],
   });
-  const saveRemoteMediaMock = params.saveRemoteMediaMock ?? params.readRemoteMediaBufferMock;
-  expect(saveRemoteMediaMock).toHaveBeenCalledWith({
-    url: photoUrl,
+  expect(params.saveRemoteMediaMock).toHaveBeenCalledWith({
+    url: "https://example.com/test-image.jpg",
     maxBytes: 5 * 1024 * 1024,
     responseHeaderTimeoutMs: 120_000,
     readIdleTimeoutMs: 30_000,
@@ -276,18 +251,13 @@ async function postWebhookUpdate(params: {
       },
     );
     req.on("error", reject);
-    req.write(body);
-    req.end();
+    req.end(body);
   });
 }
 
-export async function postWebhookReplay(params: {
-  baseUrl: string;
-  path: string;
-  secret: string;
-  payload: Record<string, unknown>;
-  beforeReplay?: () => Promise<void>;
-}) {
+export async function postWebhookReplay(
+  params: Parameters<typeof postWebhookUpdate>[0] & { beforeReplay?: () => Promise<void> },
+) {
   const first = await postWebhookUpdate(params);
   await params.beforeReplay?.();
   const replay = await postWebhookUpdate(params);
