@@ -207,7 +207,7 @@ it.each(["openclaw.mjs", "dist"])(
     const evidence = await producer.run({ runCommand });
 
     expect(runCommand).not.toHaveBeenCalled();
-    expect(evidence.entries[0]?.execution.artifacts).toMatchObject([
+    expect(evidence.entries[0]?.execution?.artifacts).toMatchObject([
       { kind: "log", path: "tui-pty-evidence-producer.log" },
       { kind: "proof-matrix", path: "proof-matrix.json" },
     ]);

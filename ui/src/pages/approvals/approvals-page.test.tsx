@@ -7,9 +7,10 @@ import type {
   ExecApprovalStandingGrant,
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
@@ -66,7 +67,7 @@ function createPage(
   const request = vi.fn((method: string, params?: unknown) =>
     method === "exec.approval.grants.list" ? grants() : history(method, params),
   );
-  const client = { request } as GatewayBrowserClient;
+  const client = createTestGatewayClient(request);
   const initialGateway = createApplicationGateway({
     phase: "connected",
     client,
@@ -92,7 +93,7 @@ function createPage(
         currentGateway = createApplicationGateway(currentGateway.gateway.snapshot);
         provider.setContext({ ...context, gateway: currentGateway.gateway });
       } else if (kind === "client") {
-        updateGateway({ client: { request } as GatewayBrowserClient });
+        updateGateway({ client: createTestGatewayClient(request) });
       } else if (kind === "account") {
         updateGateway({ selfUser: { id: "second" } });
       } else {
@@ -161,7 +162,7 @@ describe("ApprovalsPage", () => {
     await waitForHistory(page, "echo fresh");
 
     updateGateway({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       phase: "reconnecting",
     });
     flush();

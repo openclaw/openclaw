@@ -311,9 +311,9 @@ describe("linux-node commands", () => {
   it("accounts for GeoClue second precision when maxAgeMs is zero", async () => {
     const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (1783944010 seconds since the Epoch)\n`;
     const harness = createHarness({
-      now: new Date("2026-07-13T12:00:10.900Z"),
       runCommand: async () => success(output),
     });
+    vi.setSystemTime(new Date("2026-07-13T12:00:10.900Z"));
 
     await expect(
       harness.command("location.get").handle(JSON.stringify({ maxAgeMs: 0 })),

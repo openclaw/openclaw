@@ -4,6 +4,7 @@ import { reportDocument, reportMember } from "../reports-data.test-support.js";
 import { githubCounts } from "../reports.fixtures.js";
 import type { PeriodListEntry, PersonDay } from "../store.js";
 import type { Period, Person, PersonReport, ReportDocument } from "../types.js";
+import type { PersonWorkSessions } from "../work-sessions.js";
 import {
   renderIndexPage,
   renderPeoplePage,
@@ -357,7 +358,7 @@ it("keeps quiet members' owned-session links inside their filterable section wit
   const report = document();
   report.members.push(makeMember(0, { login: "quiet", display: "Quiet member" }));
   const before = JSON.stringify(report);
-  const sessions = {
+  const sessions: PersonWorkSessions = {
     available: true,
     sessions: [{ key: "agent:main:quiet-work", label: "Quiet member current work" }],
   };

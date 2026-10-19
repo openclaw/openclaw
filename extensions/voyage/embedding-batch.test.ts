@@ -74,21 +74,26 @@ type ReceivedRequest = { url: string; authorization: string | undefined; body?: 
 
 async function serve(replies: Record<string, unknown>) {
   const received: ReceivedRequest[] = [];
-  const server = createServer(async (request, response) => {
-    const body = await text(request);
-    const entry = {
-      url: request.url ?? "",
-      authorization: request.headers.authorization,
-      body:
-        body && request.headers["content-type"]?.includes("application/json")
-          ? JSON.parse(body)
-          : undefined,
-    };
-    received.push(entry);
-    const url = new URL(entry.url, "http://localhost");
-    const result = url.search === `?${tenantQuery}` ? replies[url.pathname] : undefined;
-    response.writeHead(result === undefined ? 404 : 200, { "content-type": "application/json" });
-    response.end(JSON.stringify(result ?? { error: "unexpected embedding endpoint" }));
+  const server = createServer((request, response) => {
+    void text(request)
+      .then((body) => {
+        const entry = {
+          url: request.url ?? "",
+          authorization: request.headers.authorization,
+          body:
+            body && request.headers["content-type"]?.includes("application/json")
+              ? JSON.parse(body)
+              : undefined,
+        };
+        received.push(entry);
+        const url = new URL(entry.url, "http://localhost");
+        const result = url.search === `?${tenantQuery}` ? replies[url.pathname] : undefined;
+        response.writeHead(result === undefined ? 404 : 200, {
+          "content-type": "application/json",
+        });
+        response.end(JSON.stringify(result ?? { error: "unexpected embedding endpoint" }));
+      })
+      .catch(() => response.destroy());
   });
   onTestFinished(
     () =>
