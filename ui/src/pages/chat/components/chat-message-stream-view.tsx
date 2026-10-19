@@ -361,6 +361,8 @@ function WorkGroupSummaryBody(props: {
   summary: ReturnType<typeof prepareWorkGroupSummary>;
   options: WorkGroupSummaryOptions;
 }) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const compact = () => props.options.bubbleMode;
   return (
     <div
@@ -376,11 +378,14 @@ function WorkGroupSummaryBody(props: {
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
         aria-expanded={props.options.expanded ? "true" : "false"}
-        onPointerEnter={syncToolDisclosureOverflow}
-        onFocus={syncToolDisclosureOverflow}
+        onPointerEnter={syncOverflow}
+        onFocus={syncOverflow}
         onClick={() => props.options.onToggle()}
       >
-        <span class="chat-tool-disclosure__content">
+        <span
+          ref={(element) => (disclosureContent = element)}
+          class="chat-tool-disclosure__content"
+        >
           <span class="chat-activity-group__label">{props.summary.label}</span>
         </span>
         <Show when={props.options.expanded && props.summary.total > 0}>
