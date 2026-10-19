@@ -169,29 +169,25 @@ export async function serviceInspectionWarningMessage(
   const owner = await readActiveGatewayLockIdentity({ env, timeoutMs: 1_000 }).catch(
     () => undefined,
   );
-  const facts = owner
-    ? `A Gateway (pid ${owner.pid}, state owner since ${owner.createdAt}) holds the state.`
-    : state?.runtime?.pid
-      ? `The service reported Gateway pid ${state.runtime.pid}.`
-      : "";
-  const definition =
+  const runtime = state?.runtime;
+  const warning = [
+    GATEWAY_SERVICE_INSPECTION_WARNING,
+    owner
+      ? `A Gateway (pid ${owner.pid}, state owner since ${owner.createdAt}) holds the state.`
+      : "",
     state?.installed || state?.command?.sourcePath
       ? "A service definition is present and was left unchanged."
-      : "";
-  const recovery = `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`;
-  const warning = [GATEWAY_SERVICE_INSPECTION_WARNING, facts, definition, recovery]
+      : "",
+    `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`,
+  ]
     .filter(Boolean)
     .join(" ");
-  if (!state) {
-    return warning;
-  }
-  if (state.inspectionReason) {
+  if (state?.inspectionReason) {
     return `${state.runtime?.inspectionFailure?.detail ?? formatServiceInspectionReason(state.inspectionReason)}\n${warning}`;
   }
   if (process.platform === "freebsd") {
     return `${warning} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
-  const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
   if (
     process.platform === "linux" &&

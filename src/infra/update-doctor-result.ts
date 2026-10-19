@@ -158,15 +158,9 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
           if (value.length <= 500) {
             return value;
           }
-          const parts: string[] = [];
-          for (const part of value.split(/(?<=[.!?])\s+|\r?\n/u)) {
-            if ([...parts, part].join(" ").length > 498) {
-              break;
-            }
-            parts.push(part);
-          }
-          return parts.length
-            ? `${parts.join(" ")} …`
+          const prefix = value.slice(0, 498).match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0];
+          return prefix
+            ? `${prefix.trimEnd()} …`
             : "Warning detail omitted because it exceeds the display limit.";
         })
         .filter(Boolean),

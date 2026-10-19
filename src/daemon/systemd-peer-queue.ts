@@ -1,7 +1,7 @@
 /** One sd-bus connection; callers may expire while waiting, disposal still joins native work. */
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { getServiceInspectionClock } from "./service-inspection-budget.js";
-import { ServiceInspectionError } from "./service-inspection-error.js";
+import { SystemdInspectionTimeout } from "./service-inspection-error.js";
 
 export function createSystemdPeerQueue() {
   let tail: Promise<void> = Promise.resolve();
@@ -16,12 +16,7 @@ export function createSystemdPeerQueue() {
         let expired = false;
         const expire = () => {
           expired = true;
-          reject(
-            new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-              kind: "phase",
-              check: "waiting for the systemd connection query queue",
-            }),
-          );
+          reject(new SystemdInspectionTimeout("waiting for the systemd connection query queue"));
         };
         const remaining = deadline - now();
         if (remaining <= 0) {

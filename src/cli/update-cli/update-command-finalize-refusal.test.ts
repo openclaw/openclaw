@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   GatewayServiceStopUnsafeError,
-  ServiceInspectionError,
+  SystemdInspectionTimeout,
 } from "../../daemon/service-inspection-error.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
@@ -154,10 +154,7 @@ vi.mock("../../daemon/service.js", () => ({
   }),
   readGatewayServiceState: async () => {
     if (native.realOwner) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-        kind: "phase",
-        check: "systemctl --user show",
-      });
+      throw new SystemdInspectionTimeout("systemctl --user show");
     }
     return {
       env: { ...process.env },

@@ -37,8 +37,6 @@ export type ServiceInspectionDiagnostic =
   | { kind: "invalid-response" }
   | { kind: "native"; exitCode: number | null; hresult?: number };
 
-type ServiceInspectionPhase = { kind: "phase"; check: string };
-
 export function isServiceInspectionReason(value: string): value is ServiceInspectionReason {
   return Object.hasOwn(SERVICE_INSPECTION_MESSAGES, value);
 }
@@ -54,11 +52,9 @@ export function formatServiceInspectionReason(reason: ServiceInspectionReason): 
 }
 
 function formatServiceInspectionDiagnostic(
-  diagnostic: ServiceInspectionDiagnostic | ServiceInspectionPhase,
+  diagnostic: ServiceInspectionDiagnostic,
 ): string | undefined {
   switch (diagnostic.kind) {
-    case "phase":
-      return `Stalled check: ${diagnostic.check}.`;
     case "timeout":
       return Number.isSafeInteger(diagnostic.timeoutMs) && diagnostic.timeoutMs > 0
         ? `Task Scheduler check timed out after ${diagnostic.timeoutMs} ms.`
@@ -89,10 +85,10 @@ function formatServiceInspectionDiagnostic(
 export class ServiceInspectionError extends Error {
   constructor(
     readonly reason: ServiceInspectionReason | undefined,
-    diagnostic?: ServiceInspectionDiagnostic | ServiceInspectionPhase,
+    diagnostic?: ServiceInspectionDiagnostic,
   ) {
     const detail =
-      diagnostic && (reason === "windows-task-inspection-failed" || diagnostic.kind === "phase")
+      reason === "windows-task-inspection-failed" && diagnostic
         ? formatServiceInspectionDiagnostic(diagnostic)
         : undefined;
     super(
@@ -100,6 +96,13 @@ export class ServiceInspectionError extends Error {
       diagnostic ? { cause: diagnostic } : undefined,
     );
     this.name = "ServiceInspectionError";
+  }
+}
+
+export class SystemdInspectionTimeout extends ServiceInspectionError {
+  constructor(check: string, detail = "") {
+    super("systemd-inspection-deadline-exceeded");
+    this.message = `${detail ? `${detail}\n` : ""}Stalled check: ${check}. ${this.message}`;
   }
 }
 

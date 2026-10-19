@@ -14,6 +14,7 @@ import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import { readGatewayServiceLoadState } from "./service-load-state.js";
 import { withSystemdServiceReadBinding } from "./service-operation-lock.js";
@@ -33,8 +34,8 @@ import { readSystemdServiceExecStart } from "./systemd.js";
 
 class ServiceInspectionDeadlineError extends ServiceInspectionError {
   constructor(check: string) {
-    super(undefined, { kind: "phase", check });
-    this.message = `Service inspection deadline expired. ${this.message}`;
+    super(undefined);
+    this.message = `Service inspection deadline expired. Stalled check: ${check}.`;
   }
 }
 
@@ -122,10 +123,7 @@ export async function readGatewayServiceState(
           (binding) => {
             const remaining = deadline - budget.now();
             if (remaining <= 0) {
-              throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-                kind: "phase",
-                check: "service read binding admission",
-              });
+              throw new SystemdInspectionTimeout("service read binding admission");
             }
             return readGatewayServiceStateWithBinding(
               service,
@@ -250,10 +248,7 @@ async function readGatewayServiceStateWithBinding(
     systemdReadBinding?.verify();
     const remaining = deadline - now();
     if (remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-        kind: "phase",
-        check: "strict service absence",
-      });
+      throw new SystemdInspectionTimeout("strict service absence");
     }
     absent = await service
       .isAbsent({ env, timeoutMs: remaining, strictCommandAbsent: true })
@@ -263,10 +258,7 @@ async function readGatewayServiceStateWithBinding(
       });
     systemdReadBinding?.verify();
     if (now() >= deadline) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-        kind: "phase",
-        check: "strict service absence",
-      });
+      throw new SystemdInspectionTimeout("strict service absence");
     }
   }
   if (absent) {

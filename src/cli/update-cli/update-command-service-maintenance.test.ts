@@ -101,7 +101,6 @@ it("reports observed service facts without inferring a manual launch when inspec
     if (verdict.kind !== "unavailable") {
       throw new Error("Expected unavailable inspection");
     }
-    expect(verdict.message).toContain("pid 4242");
     expect(verdict.message).toContain("service definition is present");
     expect(verdict.message).toContain("Stalled check: effective command LoadUnit.");
     expect(verdict.message).toContain("openclaw gateway stop");

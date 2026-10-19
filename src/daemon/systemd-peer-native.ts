@@ -13,8 +13,8 @@ import {
   runServiceInspectionGuard,
 } from "./service-inspection-budget.js";
 import {
-  ServiceInspectionError,
   ServiceOwnershipRefusalError,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { createSystemdPeerQueue } from "./systemd-peer-queue.js";
@@ -28,10 +28,7 @@ function remaining(deadline: number, now: () => number, check: string): number {
   assertGatewayServiceUpdateCurrent();
   const timeoutMs = deadline - now();
   if (timeoutMs <= 0) {
-    throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-      kind: "phase",
-      check,
-    });
+    throw new SystemdInspectionTimeout(check);
   }
   return timeoutMs;
 }
@@ -107,10 +104,7 @@ function translateFailure(error: unknown, check: string): never {
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   if (error instanceof ProcSafeError && error.code === "timeout") {
-    throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-      kind: "phase",
-      check,
-    });
+    throw new SystemdInspectionTimeout(check);
   }
   throw error;
 }
@@ -227,10 +221,7 @@ async function openSystemdConnection(
       runServiceInspectionGuard(assertCurrent);
       verifyConnection();
       if (mutationDeadline !== undefined && performance.now() >= mutationDeadline) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-          kind: "phase",
-          check: phase,
-        });
+        throw new SystemdInspectionTimeout(phase);
       }
     };
     const [operation, destination, path, iface, member] = args;

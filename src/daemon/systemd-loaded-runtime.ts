@@ -5,8 +5,8 @@ import {
   withServiceInspectionBudget,
 } from "./service-inspection-budget.js";
 import {
-  ServiceInspectionError,
   ServiceOwnershipRefusalError,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import {
   createServiceRuntimeInspectionFailure,
@@ -68,13 +68,11 @@ export async function readLoadedSystemdServiceRuntime(
         args[0] === "call" && args[4] === "LoadUnit"
           ? inspection?.assertCurrent
           : (inspection?.assertReadCurrent ?? inspection?.assertCurrent);
+      const check = `loaded runtime ${args.slice(0, 5).join(" ")}`;
       runServiceInspectionGuard(assertCurrent);
       const remaining = deadline - budget.now();
       if (remaining <= 0) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-          kind: "phase",
-          check: `loaded runtime ${args.slice(0, 5).join(" ")}`,
-        });
+        throw new SystemdInspectionTimeout(check);
       }
       if (remainingQueries <= 0) {
         throw unavailable();
@@ -90,10 +88,7 @@ export async function readLoadedSystemdServiceRuntime(
         }
         runServiceInspectionGuard(assertCurrent);
         if (budget.now() >= deadline) {
-          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-            kind: "phase",
-            check: `loaded runtime ${args.slice(0, 5).join(" ")}`,
-          });
+          throw new SystemdInspectionTimeout(check);
         }
         return values;
       }
@@ -105,10 +100,7 @@ export async function readLoadedSystemdServiceRuntime(
           : await execBusctlUser(env, queryArgs, callTimeout, assertCurrent);
       runServiceInspectionGuard(assertCurrent);
       if (budget.now() >= deadline) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
-          kind: "phase",
-          check: `loaded runtime ${args.slice(0, 5).join(" ")}`,
-        });
+        throw new SystemdInspectionTimeout(check);
       }
       if (result.code !== 0 || result.termination !== "exit") {
         throw systemdInspectionError(result, unavailable().message, scope);
