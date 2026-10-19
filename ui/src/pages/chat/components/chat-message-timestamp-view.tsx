@@ -58,11 +58,11 @@ function prepareTimestamp(timestamp: number) {
 }
 
 function TimestampTime(props: { view: ReturnType<typeof prepareTimestamp> }) {
+  // Usage-only refreshes must leave the native timestamp attributes untouched.
   const dateTime = createMemo(() => props.view.dateTime);
-  const label = createMemo(() => props.view.relativeLabel);
   return (
     <time class="chat-group-timestamp" datetime={dateTime()} aria-live="off">
-      {label()}
+      {props.view.relativeLabel}
     </time>
   );
 }

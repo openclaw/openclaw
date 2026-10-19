@@ -5,8 +5,8 @@ import {
 } from "../infra/gateway-active-work.js";
 import { onGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
+  gatewayWorkMetricsDemand,
   hasGatewayWorkMetricsListeners,
-  onGatewayWorkMetricsDemand,
   publishGatewayWorkMetrics,
 } from "../infra/gateway-work-metrics.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -125,14 +125,14 @@ export function startGatewayWorkMetrics(params: {
     scheduled.unref();
   };
   const unsubscribeWorkChanges = onGatewayWorkMetricsChanged(changed);
-  const unsubscribeDemand = onGatewayWorkMetricsDemand(changed);
+  gatewayWorkMetricsDemand.onChanged = changed;
   changed();
   return {
     stop: async () => {
       stopped = true;
       unsubscribeSessionChanges?.();
       unsubscribeWorkChanges();
-      unsubscribeDemand();
+      gatewayWorkMetricsDemand.onChanged = () => {};
       if (scheduled) {
         clearImmediate(scheduled);
         scheduled = undefined;

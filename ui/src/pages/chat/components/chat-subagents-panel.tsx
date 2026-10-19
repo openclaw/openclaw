@@ -78,9 +78,8 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       row.session.status === "queued" || isUnfinishedSubagent(row.session);
     const running = createMemo(() => data().rows.filter(unfinished));
     const finished = createMemo(() => data().rows.filter((row) => !unfinished(row)));
-    const detailId = createMemo(() =>
-      selected() ? `${props.presentationId}:subagent:${selected()!.key}` : undefined,
-    );
+    const detailId = () =>
+      selected() ? `${props.presentationId}:subagent:${selected()!.key}` : undefined;
     const renderElapsed = (row: SubagentsPanelRow) => {
       const session = row.session;
       const active = isSessionRunStateActive(session);
