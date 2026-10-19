@@ -21,12 +21,20 @@ function installColdLoadProbes(
     ms: number;
     dispatchMs?: number;
     responseAtMs?: number;
+    abandoned?: true;
     params: unknown;
     stack: string | undefined;
   }> = [];
   const pending = new Map<
     string,
-    { method: string; bytes: number; at: number; params: unknown; stack: string | undefined }
+    {
+      socket: WebSocket;
+      method: string;
+      bytes: number;
+      at: number;
+      params: unknown;
+      stack: string | undefined;
+    }
   >();
   let lastActivity = performance.now();
   let queued = 0;
@@ -311,6 +319,27 @@ function installColdLoadProbes(
     construct(target, args) {
       // The mock constructor returns its routed socket rather than its own instance.
       const socket: WebSocket = Reflect.construct(target, args);
+      // A closed transport cannot answer; count its attempts without blocking settlement.
+      socket.addEventListener(
+        "close",
+        () => {
+          for (const [id, request] of pending) {
+            if (request.socket !== socket) continue;
+            pending.delete(id);
+            rpcs.push({
+              method: request.method,
+              params: request.params,
+              stack: request.stack,
+              requestBytes: request.bytes,
+              responseBytes: 0,
+              ms: performance.now() - request.at,
+              abandoned: true,
+            });
+          }
+          lastActivity = performance.now();
+        },
+        { once: true },
+      );
       const send = socket.send.bind(socket);
       const dispatch = socket.dispatchEvent.bind(socket);
       socket.send = (data) => {
@@ -318,6 +347,7 @@ function installColdLoadProbes(
           const frame = JSON.parse(data);
           if (frame.type === "req") {
             pending.set(frame.id, {
+              socket,
               method: frame.method,
               params: frame.params,
               stack: new Error().stack,
