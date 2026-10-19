@@ -30,7 +30,10 @@ import "../../plugins/control-ui-contributions.solid.tsx";
 
 const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
 beforeEach(() => {
-  Object.defineProperty(document, "fonts", { configurable: true, value: new EventTarget() });
+  Object.defineProperty(document, "fonts", {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
+  });
 });
 
 afterEach(async () => {
