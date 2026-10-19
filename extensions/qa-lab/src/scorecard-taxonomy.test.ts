@@ -36,20 +36,16 @@ async function withDecisionFixture(
     const scoresPath = path.join(dir, "scores.yaml");
     fs.writeFileSync(
       taxonomyPath,
-      YAML.stringify({
-        version: 1,
-        title: "Synthetic decision fixture",
-        levels: [{ id: "experimental" }, { id: "stable" }],
-        surfaces: [
-          {
-            id: "tools",
-            name: "Tools",
-            family: "core",
-            level: "experimental",
-            categories: [{ id: "review", name: "Review", category_note: "Fixture" }],
-          },
-        ],
-      }),
+      `version: 1
+title: Synthetic decision fixture
+levels: [{id: experimental}, {id: stable}]
+surfaces:
+  - id: tools
+    name: Tools
+    family: core
+    level: experimental
+    categories: [{id: review, name: Review, category_note: Fixture}]
+`,
     );
     const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
     const bundle = () => ({
@@ -86,7 +82,7 @@ async function withDecisionFixture(
   });
 }
 
-describe("maturity decision context", () => {
+describe("QA maturity taxonomy", () => {
   it("retains every authored decision and non-gating mismatch without changing aggregates", async () => {
     await withDecisionFixture(({ scores, taxonomy, read }) => {
       const identity = qaMaturityTaxonomyIdentity(taxonomy);
@@ -109,25 +105,19 @@ describe("maturity decision context", () => {
     });
   });
 
-  it("keeps score label mismatches outside the decision contract", async () => {
-    await withDecisionFixture(({ scores, read }) => {
-      Object.assign(scores.surfaces[0]!.scores.quality, {
-        label: "Stable",
-        decision: decision(70),
-      });
+  it.each(["score label mismatch", "undeclared level decision"])("rejects %s", async (fault) => {
+    await withDecisionFixture(({ scores, taxonomy, read }) => {
+      if (fault === "score label mismatch") {
+        Object.assign(scores.surfaces[0]!.scores.quality, {
+          label: "Stable",
+          decision: decision(70),
+        });
+      } else {
+        taxonomy.surfaces[0]!.level_decision = decision("undeclared");
+      }
       expect(read).toThrow();
     });
   });
-
-  it("rejects an undeclared level decision", async () => {
-    await withDecisionFixture(({ taxonomy, read }) => {
-      taxonomy.surfaces[0]!.level_decision = decision("undeclared");
-      expect(read).toThrow();
-    });
-  });
-});
-
-describe("QA maturity YAML readers", () => {
   it("preserves root diagnostics and caller-specific labels", async () => {
     await withTempDir("qa-taxonomy-", async (dir) => {
       const taxonomyPath = path.join(dir, "taxonomy.yaml");
@@ -142,9 +132,6 @@ describe("QA maturity YAML readers", () => {
       );
     });
   });
-});
-
-describe("semantic taxonomy identity", () => {
   it("includes explicit proof meaning without assigning requirements to other profiles", () => {
     const taxonomy = readQaMaturityTaxonomySource(
       path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),

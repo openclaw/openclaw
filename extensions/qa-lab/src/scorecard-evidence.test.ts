@@ -16,12 +16,12 @@ import {
 } from "./scorecard-taxonomy.js";
 
 function evidenceEntry(
-  coverage: QaEvidenceSummaryEntry["coverage"],
+  id: string,
   status: QaEvidenceSummaryEntry["result"]["status"] = "pass",
 ): QaEvidenceSummaryEntry {
   return {
     test: { kind: "flow", id: "coverage-fixture", title: "Coverage fixture" },
-    coverage,
+    coverage: [{ id, role: "primary" }],
     refs: [],
     result: { status },
   };
@@ -46,6 +46,12 @@ function capturedPlan(
     expectedCells: [],
     observedCells: [],
   });
+}
+
+function historicalPlan() {
+  const plan = capturedPlan();
+  delete plan.taxonomyIdentity;
+  return plan;
 }
 
 function evidenceSummary(entries: QaEvidenceSummaryEntry[]): QaEvidenceSummaryJson {
@@ -88,25 +94,7 @@ async function buildQaProfileScorecardEvidence(params: {
       evidencePath,
       profile: "release",
       evidenceMode: params.evidenceMode,
-      profilePlan:
-        params.profilePlan ??
-        ({
-          profile: "release",
-          membership: [],
-          selected: [],
-          excluded: [],
-          expectedCells: [],
-          observedCells: [],
-          missingCells: [],
-          counts: {
-            membership: 0,
-            selected: 0,
-            excluded: 0,
-            expectedCells: 0,
-            observedCells: 0,
-            missingCells: 0,
-          },
-        } satisfies QaProfileEvidencePlan),
+      profilePlan: params.profilePlan ?? historicalPlan(),
       filters: {},
       categories: params.categories,
     });
@@ -131,7 +119,7 @@ describe("profile scorecard evidence", () => {
         alternatives: [{ proofClass: "real-plugin/local-protocol" }],
       },
     ]);
-    const evidence = evidenceSummary([evidenceEntry([{ id: "coverage.one", role: "primary" }])]);
+    const evidence = evidenceSummary([evidenceEntry("coverage.one")]);
     const { scorecard, writtenEvidence } = await buildQaProfileScorecardEvidence({
       evidence,
       profilePlan,
@@ -139,7 +127,6 @@ describe("profile scorecard evidence", () => {
     });
     expect(scorecard.coverageIds.fulfilled).toBe(0);
     expect(writtenEvidence.entries).toEqual(evidence.entries);
-    expect(writtenEvidence.entries[0]?.result.status).toBe("pass");
   });
 
   it("scores only the selected attempt while retaining raw slim observations and bindings", async () => {
@@ -159,16 +146,13 @@ describe("profile scorecard evidence", () => {
     const first = invocation.begin(0);
     invocation.complete(first, {
       status: "fail",
-      entries: [
-        evidenceEntry([{ id: "coverage.old", role: "primary" }]),
-        evidenceEntry([{ id: "coverage.failed", role: "primary" }], "fail"),
-      ],
+      entries: [evidenceEntry("coverage.old"), evidenceEntry("coverage.failed", "fail")],
     });
     invocation.select(0, first);
     const retry = invocation.begin(0, first);
     invocation.complete(retry, {
       status: "pass",
-      entries: [evidenceEntry([{ id: "coverage.current", role: "primary" }])],
+      entries: [evidenceEntry("coverage.current")],
     });
     invocation.select(0, retry);
     const evidence = invocation.snapshot({
@@ -195,7 +179,7 @@ describe("profile scorecard evidence", () => {
     const evidenceMode = "slim";
     const profilePlan = capturedPlan();
     const { writtenEvidence, scorecard } = await buildQaProfileScorecardEvidence({
-      evidence: evidenceSummary([evidenceEntry([{ id: "coverage.one", role: "primary" }])]),
+      evidence: evidenceSummary([evidenceEntry("coverage.one")]),
       evidenceMode,
       profilePlan,
       categories: [categoryInventory(["coverage.one"])],

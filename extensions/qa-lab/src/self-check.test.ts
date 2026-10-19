@@ -3,13 +3,22 @@ import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { qaChannelPlugin } from "../../qa-channel/api.js";
+import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import * as transportRegistry from "./qa-transport-registry.js";
 import * as scenarioModule from "./scenario.js";
+import type { QaScenarioStepContext } from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 import type { QaSelfCheckResult } from "./self-check.js";
 import { isQaSelfCheckSuccessful, runQaSelfCheckAgainstState } from "./self-check.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const buses: Awaited<ReturnType<typeof startQaBusServer>>[] = [];
+afterEach(async () => {
+  for (const bus of buses.splice(0)) {
+    await bus.stop();
+  }
+});
 afterEach(() => vi.restoreAllMocks());
 
 function makeSelfCheckResult(
@@ -24,15 +33,12 @@ function makeSelfCheckResult(
   };
 }
 
-describe("isQaSelfCheckSuccessful", () => {
+describe("QA self-check", () => {
   it("requires the scenario and every check to pass", () => {
     expect(isQaSelfCheckSuccessful(makeSelfCheckResult("pass", ["pass"]))).toBe(true);
     expect(isQaSelfCheckSuccessful(makeSelfCheckResult("fail", ["pass"]))).toBe(false);
     expect(isQaSelfCheckSuccessful(makeSelfCheckResult("pass", ["pass", "fail"]))).toBe(false);
   });
-});
-
-describe("runQaSelfCheckAgainstState", () => {
   it("writes unique default reports under the repo root and honors an explicit output path", async () => {
     vi.spyOn(scenarioModule, "runQaScenario").mockResolvedValue({
       name: "Artifact report fixture",
@@ -58,15 +64,14 @@ describe("runQaSelfCheckAgainstState", () => {
       expect(await readFile(result.outputPath, "utf8")).toBe(result.report);
     }
   });
-});
-
-describe("self-check scenario execution", () => {
-  function createSelfCheckHarness(delivery?: {
+  async function createSelfCheckHarness(delivery?: {
     directAccountId?: string;
     directTarget?: string;
     threadedTarget?: string;
   }) {
     const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    buses.push(bus);
     const targets: unknown[] = [];
     const testState = {
       ...state,
@@ -85,42 +90,21 @@ describe("self-check scenario execution", () => {
         return inbound;
       },
     };
-    const performAction = async (action: string, args: Record<string, unknown>) => {
-      if (action === "thread-create") {
-        const thread = state.createThread({
-          conversationId: String(args.channelId),
-          title: String(args.title),
-        });
-        return {
-          details: {
-            target: `channel:${thread.conversationId}`,
-            threadId: thread.id,
-            thread,
-          },
-        };
+    const handleAction = qaChannelPlugin.actions?.handleAction;
+    if (!handleAction) {
+      throw new Error("expected QA channel action handler");
+    }
+    const performAction: NonNullable<QaScenarioStepContext["performAction"]> = (action, args) => {
+      if (action !== "thread-create") {
+        targets.push(args.to);
       }
-      const message = state.readMessage({ messageId: String(args.messageId) });
-      if (args.to !== `channel:${message.conversation.id}` || args.threadId !== message.threadId) {
-        throw new Error("qa-channel message is not in the selected conversation");
-      }
-      targets.push(args.to);
-      const messageId = String(args.messageId);
-      if (action === "react") {
-        return state.reactToMessage({
-          messageId,
-          emoji: String(args.emoji),
-        });
-      }
-      if (action === "edit") {
-        return state.editMessage({
-          messageId,
-          text: String(args.text),
-        });
-      }
-      if (action === "delete") {
-        return state.deleteMessage({ messageId });
-      }
-      throw new Error(`unexpected action: ${action}`);
+      return handleAction({
+        channel: "qa-channel",
+        action,
+        cfg: { channels: { "qa-channel": { baseUrl: bus.baseUrl } } },
+        accountId: "default",
+        params: args,
+      });
     };
 
     return {
@@ -138,7 +122,7 @@ describe("self-check scenario execution", () => {
   it("joins acquired transport cleanup when writing the self-check report fails", async ({
     signal,
   }) => {
-    const { state, performAction } = createSelfCheckHarness();
+    const { state, performAction } = await createSelfCheckHarness();
     const outputPath = tempDirs.make("qa-self-check-write-failure-");
     const cleanupEntered = Promise.withResolvers<void>();
     const releaseCleanup = Promise.withResolvers<void>();
@@ -164,7 +148,6 @@ describe("self-check scenario execution", () => {
     const run = runQaSelfCheckAgainstState({ state, cfg: {}, outputPath }).finally(() => {
       settled = true;
     });
-    void run.catch(() => undefined);
     const failed = run.then(
       () => "resolved",
       (error: unknown) => {
@@ -177,8 +160,7 @@ describe("self-check scenario execution", () => {
         Promise.race([cleanupEntered.promise.then(() => "cleanup"), failed]),
         signal,
       );
-      expect(phase).toBe("cleanup");
-      expect(settled).toBe(false);
+      expect({ phase, settled }).toEqual({ phase: "cleanup", settled: false });
       releaseCleanup.resolve();
       await expect(withinTest(failed, signal)).resolves.toBe("rejected");
     } finally {
@@ -188,7 +170,7 @@ describe("self-check scenario execution", () => {
   });
 
   it("runs every roundtrip and binds lifecycle actions to the seeded message thread", async () => {
-    const { state, targets, run } = createSelfCheckHarness();
+    const { state, targets, run } = await createSelfCheckHarness();
     const result = await run();
 
     expect(result.status).toBe("pass");
@@ -214,32 +196,23 @@ describe("self-check scenario execution", () => {
   it.each([
     { name: "another conversation", directTarget: "dm:mallory" },
     { name: "another account", directAccountId: "foreign", directTarget: "dm:alice" },
-  ])("fails the complete self-check when Alice's reply is sent to $name", async (delivery) => {
-    const { state, targets, run } = createSelfCheckHarness(delivery);
+    { name: "another thread", threadedTarget: "thread:qa-room/unrelated-thread" },
+  ])("stops before lifecycle actions when the reply goes to $name", async (delivery) => {
+    const { state, targets, run } = await createSelfCheckHarness(delivery);
     const result = await run();
-
-    expect(
-      state
-        .searchMessages({ conversationId: "alice", conversationKind: "direct" })
-        .filter((message) => message.direction === "outbound"),
-    ).toHaveLength(0);
     expect(result.status).toBe("fail");
-    expect(result.steps).toEqual([
-      expect.objectContaining({ name: "DM echo roundtrip", status: "fail" }),
-    ]);
-    expect(targets).toHaveLength(0);
-  });
-
-  it("fails threaded delivery at its owner before running lifecycle actions", async () => {
-    const { targets, run } = createSelfCheckHarness({
-      threadedTarget: "thread:qa-room/unrelated-thread",
+    expect(result.steps.at(-1)).toMatchObject({
+      name: delivery.threadedTarget ? "Thread create and threaded echo" : "DM echo roundtrip",
+      status: "fail",
     });
-    const result = await run();
-
-    expect(result.status).toBe("fail");
-    expect(result.steps.at(-1)).toEqual(
-      expect.objectContaining({ name: "Thread create and threaded echo", status: "fail" }),
-    );
+    if (!delivery.threadedTarget) {
+      expect(result.steps).toHaveLength(1);
+      expect(
+        state
+          .searchMessages({ conversationId: "alice", conversationKind: "direct" })
+          .filter((message) => message.direction === "outbound"),
+      ).toHaveLength(0);
+    }
     expect(targets).toHaveLength(0);
   });
 });

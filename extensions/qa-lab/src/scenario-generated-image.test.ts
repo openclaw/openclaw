@@ -61,6 +61,12 @@ async function runImageScenario(
     mimeType: "image/png",
     contentBase64: png.toString("base64"),
   };
+  const deliverImage = () =>
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: delivery.parts.text,
+      attachments: [attachment],
+    });
   let settled = false;
   const sessionKey = "agent:qa:image-generate:test";
   const env = {
@@ -123,11 +129,7 @@ async function runImageScenario(
         if (options.fault === "failed turn") {
           return { status: "error", error: "image generation failed" };
         }
-        state.addOutboundMessage({
-          to: "dm:qa-operator",
-          text: delivery.parts.text,
-          attachments: [attachment],
-        });
+        deliverImage();
         return {
           status: "ok",
           terminalDelivery: { status: "sent", resultCount: 1 },
@@ -138,7 +140,7 @@ async function runImageScenario(
     transport: { buildAgentDelivery: () => ({ channel: "qa-channel", to: "dm:qa-operator" }) },
     mock: null,
   };
-  const result = await runScenarioFlow({
+  return runScenarioFlow({
     scenarioTitle: scenario.title,
     flow: scenario.execution.flow,
     api: {
@@ -162,11 +164,7 @@ async function runImageScenario(
       formatTransportTranscript,
       readSessionTranscriptSummary: async () => {
         if (options.fault === "late duplicate message") {
-          state.addOutboundMessage({
-            to: "dm:qa-operator",
-            text: "A QA lighthouse on the coast.",
-            attachments: [attachment],
-          });
+          deliverImage();
         }
         return {
           successfulToolCallCounts: { image_generate: options.isGenerating ? 2 : 1 },
@@ -176,7 +174,6 @@ async function runImageScenario(
       runScenario: runQaSuiteScenarioSteps,
     },
   });
-  return result;
 }
 
 describe("native image scenario delivery evidence", () => {

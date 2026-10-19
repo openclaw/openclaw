@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { createQaTransportAdapter } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { createQaTransportStateMethods, sendQaTransportNativeCommand } from "./qa-transport.js";
@@ -34,15 +35,6 @@ describe("createQaScenarioRuntimeApi", () => {
     const inboundSpy = vi.spyOn(state, "addInboundMessage");
     const outboundSpy = vi.spyOn(state, "addOutboundMessage");
     const readSpy = vi.spyOn(state, "readMessage");
-    const waitForCondition: QaTransportAdapter["waitForCondition"] = async <T>(
-      check: () => T | Promise<T | null | undefined> | null | undefined,
-    ): Promise<T> => {
-      const value = await check();
-      if (value === null || value === undefined) {
-        throw new Error("waitForCondition test check did not return a value");
-      }
-      return value;
-    };
     const methods = createQaTransportStateMethods({ state, accountId: "qa-channel" });
     const env = {
       lab: { baseUrl: "http://127.0.0.1:1234" },
@@ -50,7 +42,6 @@ describe("createQaScenarioRuntimeApi", () => {
         ...methods,
         sendNativeCommand: (input: Parameters<QaTransportAdapter["sendNativeCommand"]>[0]) =>
           sendQaTransportNativeCommand(methods, input),
-        waitForCondition,
       },
     };
     const deps = {
@@ -70,7 +61,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.lab).toBe(env.lab);
     expect(api.state).toBe(state);
     expect(api.config).toEqual({ expected: "value" });
-    expect(api.waitForCondition).toBe(waitForCondition);
+    expect(api.waitForCondition).toBe(methods.waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
     expect(api.waitForQaChannelReady).toBe(api.waitForTransportReady);
     for (const name of Object.keys(deps) as Array<keyof typeof deps>) {
@@ -122,22 +113,11 @@ describe("createQaScenarioRuntimeApi", () => {
           matches: () => true,
           async create() {
             return {
+              ...createQaChannelTransport(providerState),
               id: "discord",
               label: "Crabline Discord",
               accountId: "sut",
-              requiredPluginIds: [],
-              supportedActions: [],
               sendInbound,
-              createGatewayConfig: () => ({}),
-              async waitReady() {},
-              buildAgentDelivery: ({ target }: { target: string }) => ({
-                channel: "discord",
-                to: target,
-                replyChannel: "discord",
-                replyTo: target,
-              }),
-              async handleAction() {},
-              createReportNotes: () => [],
             };
           },
         },
