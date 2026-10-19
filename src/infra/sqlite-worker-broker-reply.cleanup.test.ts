@@ -4,11 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   failSqliteWorkerSlot,
+  receiveSqliteWorkerReply,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
@@ -147,6 +148,32 @@ afterEach(() => {
 });
 
 describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () => {
+  it.each(["Error", "SqliteWorkerError"])(
+    "classifies only the canonical name and code pair: %s",
+    (name) => {
+      const { job } = jobWithCleanup();
+      const finish = vi.fn();
+      receiveSqliteWorkerReply(
+        { current: job, actors: new Set(), worker: { postMessage: effects.forbidden } },
+        {
+          id: job.request.id,
+          ok: false,
+          error: { name, message: "Backend outcome", code: "outcome-unknown" },
+        },
+        { fail: effects.forbidden, finish, dispatch: vi.fn() },
+      );
+      const failure: unknown = finish.mock.calls[0]?.[1];
+      expect(failure).toMatchObject({ name, code: "outcome-unknown" });
+      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(name === "SqliteWorkerError");
+      assert(failure instanceof Error);
+      expect(
+        hasSqliteWorkerOutcomeUnknown(
+          withSqliteWorkerCleanupFailure(failure, new Error("cleanup")),
+        ),
+      ).toBe(name === "SqliteWorkerError");
+    },
+  );
+
   it.each([true, false])(
     "keeps a lost outcome unknown while reporting confirmed worker exit: %s",
     async (retired) => {
