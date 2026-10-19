@@ -120,28 +120,30 @@ let measured = false;
 let started = 0;
 let sendCpuUs = 0;
 let sendFrames = 0;
-// Instrumentation restores the method and invokes it with the original socket receiver.
+// The proxy preserves both send overloads and forwards the original socket receiver.
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const originalSend = WebSocket.prototype.send;
-WebSocket.prototype.send = function (...args: Parameters<WebSocket["send"]>) {
-  const data = args[0];
-  const encoded = Buffer.isBuffer(data)
-    ? data.toString("utf8")
-    : typeof data === "string"
-      ? data
-      : "";
-  if (!measured || !encoded.includes('"event":"chat.metadata.changed"')) {
-    return originalSend.apply(this, args);
-  }
-  const cpu = process.threadCpuUsage();
-  try {
-    return originalSend.apply(this, args);
-  } finally {
-    const used = process.threadCpuUsage(cpu);
-    sendCpuUs += used.user + used.system;
-    sendFrames++;
-  }
-};
+WebSocket.prototype.send = new Proxy(originalSend, {
+  apply(target, socket, args) {
+    const data = args[0];
+    const encoded = Buffer.isBuffer(data)
+      ? data.toString("utf8")
+      : typeof data === "string"
+        ? data
+        : "";
+    if (!measured || !encoded.includes('"event":"chat.metadata.changed"')) {
+      return Reflect.apply(target, socket, args);
+    }
+    const cpu = process.threadCpuUsage();
+    try {
+      return Reflect.apply(target, socket, args);
+    } finally {
+      const used = process.threadCpuUsage(cpu);
+      sendCpuUs += used.user + used.system;
+      sendFrames++;
+    }
+  },
+});
 async function rpc(peer: (typeof peers)[number], method: string, params: unknown) {
   const response = await peer.request(method, params, 120000);
   assert(response.ok, JSON.stringify(response.error));
