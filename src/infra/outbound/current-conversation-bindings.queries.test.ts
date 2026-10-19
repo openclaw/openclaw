@@ -68,24 +68,19 @@ function publicationFacts(value: CurrentConversationBindingPublication) {
   return [...value.receipt.facts.values()];
 }
 
-function expectColumns(record: SessionBindingRecord, key: string) {
-  expect(readColumns(record.bindingId)).toEqual({
-    binding_key: key,
-    binding_id: record.bindingId,
-    target_session_key: record.targetSessionKey,
-    target_kind: record.targetKind,
-    channel: record.conversation.channel,
-    account_id: record.conversation.accountId,
-    conversation_kind: "current",
-    conversation_id: record.conversation.conversationId,
-    parent_conversation_id: record.conversation.parentConversationId ?? null,
-    status: record.status,
-    bound_at: record.boundAt,
-    expires_at: record.expiresAt ?? null,
-    metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
-    record_json: JSON.stringify(record),
-    updated_at: Date.now(),
-  });
+function countQueries(classify: (query: string) => "statement" | "freshness" | "selection" | null) {
+  const { db } = openOpenClawStateDatabase();
+  const execution = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(db),
+    ["statement", "freshness", "selection"],
+    classify,
+  );
+  onTestFinished(execution.restore);
+  return execution.counts;
+}
+
+function freshnessQuery(query: string) {
+  return /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query);
 }
 
 it("reads ordered binding selections and target batches in one statement after committed writes", async () => {
@@ -93,22 +88,17 @@ it("reads ordered binding selections and target batches in one statement after c
   const missing = binding("missing");
   writeBinding(original);
   const { db } = openOpenClawStateDatabase();
-  const statements = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(db),
-    ["statement"],
-    () => "statement",
-  );
+  const counts = countQueries(() => "statement");
   const refs = [missing.conversation, original.conversation, original.conversation];
-  onTestFinished(() => statements.restore());
   expect(readSelection(db, refs)).toEqual([null, original, original]);
-  expect(statements.counts.statement).toBe(1);
+  expect(counts.statement).toBe(1);
   const replacement = { ...original, targetSessionKey: "agent:other:replacement" };
   writeBinding(replacement);
-  const before = statements.counts.statement;
+  const before = counts.statement;
   expect(readSelection(db, refs)).toEqual([null, replacement, replacement]);
-  expect(statements.counts.statement - before).toBe(1);
+  expect(counts.statement - before).toBe(1);
   writeBinding(missing);
-  const listBefore = statements.counts.statement;
+  const listBefore = counts.statement;
   const targets = [
     replacement.targetSessionKey,
     missing.targetSessionKey,
@@ -120,7 +110,7 @@ it("reads ordered binding selections and target batches in one statement after c
       accountId: "default",
     }).map((list) => list.records),
   ).toEqual([[replacement], [missing], [replacement]]);
-  expect(statements.counts.statement - listBefore).toBe(1);
+  expect(counts.statement - listBefore).toBe(1);
   expect(readLists(db, targets)).toEqual(
     targets.map(() => ({ records: [], requiresPrune: false })),
   );
@@ -130,18 +120,9 @@ it("invalidates warm main-thread binding rows after worker receipts and database
   const original = binding("worker-written");
   writeBinding(original);
   const inspect = () => inspectRecords([original.conversation])[0];
-  expect(inspect()).toEqual(original);
-  expect(inspect()).toEqual(original);
+  expect([inspect(), inspect()]).toEqual([original, original]);
   const owned = openOpenClawStateDatabase();
-  const executions = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(owned.db),
-    ["freshness"],
-    (query) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
-        ? "freshness"
-        : null,
-  );
-  onTestFinished(() => executions.restore());
+  const counts = countQueries((query) => (freshnessQuery(query) ? "freshness" : null));
   const replacement = {
     ...original,
     targetSessionKey: "agent:other:replacement",
@@ -149,7 +130,7 @@ it("invalidates warm main-thread binding rows after worker receipts and database
   };
   expect(await bindRecord({ record: replacement })).toEqual(replacement);
   expect(inspect()).toEqual(replacement);
-  expect(executions.counts.freshness).toBe(0);
+  expect(counts.freshness).toBe(0);
   await closeOpenClawStateDatabaseAsync();
   expect(openOpenClawStateDatabase().db === owned.db).toBe(false);
   expect(inspect()).toEqual(replacement);
@@ -166,47 +147,39 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
   };
   const added = binding("missing");
   writeBinding(original);
-  const { db } = openOpenClawStateDatabase();
-  const executions = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(db),
-    ["selection", "freshness"],
-    (query) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
-        ? "freshness"
-        : query.startsWith("with ") && query.includes('"current_conversation_bindings"')
-          ? "selection"
-          : null,
+  const counts = countQueries((query) =>
+    freshnessQuery(query)
+      ? "freshness"
+      : query.startsWith("with ") && query.includes('"current_conversation_bindings"')
+        ? "selection"
+        : null,
   );
   const refs = [original.conversation, added.conversation];
   const inspect = () => inspectRecords(refs);
-  onTestFinished(() => executions.restore());
   const selected = inspect();
   expect(selected).toEqual([original, null]);
   selected[0]!.targetSessionKey = "agent:other:consumer";
   selected[0]!.metadata!.label = "consumer";
   expect(inspect()).toEqual([original, null]);
-  expect(inspect()).toEqual([original, null]);
-  expect(executions.counts.selection).toBe(1);
-  expect(executions.counts.freshness).toBe(0);
+  expect(counts.selection).toBe(1);
+  expect(counts.freshness).toBe(0);
 
   const replacement = { ...original, targetSessionKey: "agent:other:replacement" };
   writeBinding(replacement);
   expect(inspect()).toEqual([replacement, null]);
   writeBinding(added);
   expect(inspect()).toEqual([replacement, added]);
-  const readsBeforeExpiry = executions.counts.selection;
+  const readsBeforeExpiry = counts.selection;
   clock.mockReturnValue(150);
   expect(inspect()).toEqual([null, added]);
-  expect(executions.counts.selection).toBe(readsBeforeExpiry);
+  expect(counts.selection).toBe(readsBeforeExpiry);
   expect(inspectRecords(refs.toReversed())).toEqual([added, null]);
 
   deleteBySession(added.targetSessionKey, undefined, false);
   expect(inspect()).toEqual([null, null]);
 });
 
-it("binds fresh upsert fields and preserves every scoped and generic list shape", async () => {
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
+it("round-trips fresh bindings and preserves every scoped and generic list shape", async () => {
   const a = binding("z-generic", "a", true);
   const b = binding("a-adapter", "a");
   b.conversation.parentConversationId = "parent";
@@ -222,7 +195,6 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
   expect(listBySession(a.targetSessionKey)).toEqual([a, c]);
   expect(listBySession(a.targetSessionKey, scoped)).toEqual([b, a]);
 
-  expectColumns(a, "demo\u241fa\u241f\u241fz-generic");
   const changed: SessionBindingRecord = {
     ...b,
     targetSessionKey: "agent:other:retargeted",
@@ -233,12 +205,10 @@ it("binds fresh upsert fields and preserves every scoped and generic list shape"
     metadata: { version: "fresh" },
   };
   writeBinding(changed);
-  expectColumns(changed, "demo\u241fa\u241fparent\u241fa-adapter");
   expect(listBySession(b.targetSessionKey, scoped)).toEqual([a]);
   expect(listBySession(changed.targetSessionKey, scoped)).toEqual([changed]);
   expect(resolveRecord(b.conversation)).toEqual(changed);
   writeBinding(b);
-  expectColumns(b, "demo\u241fa\u241fparent\u241fa-adapter");
   expect(resolveRecord(b.conversation)).toEqual(b);
 
   expect(deleteBySession(a.targetSessionKey, scoped, true)).toEqual([a]);

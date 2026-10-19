@@ -1,4 +1,4 @@
-import { aroundEach, expect, it, vi } from "vitest";
+import { aroundEach, assert, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -28,27 +28,11 @@ type CurrentConversationBindingDatabase = Pick<
   "current_conversation_bindings"
 >;
 
-function expectSessionBinding(bound: SessionBindingRecord | null): SessionBindingRecord {
-  if (bound === null) {
-    throw new Error("Expected current-conversation binding");
-  }
-  return bound;
-}
-
-function expectFields(
-  binding: SessionBindingRecord | null | undefined,
-  expected: Partial<SessionBindingRecord>,
+function expectSessionBinding(
+  bound: SessionBindingRecord | null | undefined,
 ): SessionBindingRecord {
-  const record = expectSessionBinding(binding ?? null);
-  expect(record).toEqual(expect.objectContaining(expected));
-  return record;
-}
-
-function expectMetadata(
-  binding: SessionBindingRecord | null | undefined,
-  expected: Record<string, unknown>,
-): void {
-  expect(expectSessionBinding(binding ?? null).metadata).toEqual(expect.objectContaining(expected));
+  assert(bound, "Expected current-conversation binding");
+  return bound;
 }
 
 function persistedFields(record: SessionBindingRecord) {
@@ -106,16 +90,10 @@ function replacePersisted(record: SessionBindingRecord): void {
 }
 
 function readPersisted(conversationId: string): SessionBindingRecord | null {
-  const { db } = openOpenClawStateDatabase();
-  const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-  const row = executeSqliteQuerySync(
-    db,
-    bindingDb
-      .selectFrom("current_conversation_bindings")
-      .select("record_json")
-      .where("binding_key", "=", buildConversationKey(workspaceConversation(conversationId))),
-  ).rows[0];
-  return row ? (JSON.parse(row.record_json) as SessionBindingRecord) : null;
+  const json = openOpenClawStateDatabase()
+    .db.prepare("SELECT record_json FROM current_conversation_bindings WHERE binding_key = ?")
+    .get(buildConversationKey(workspaceConversation(conversationId)))?.record_json;
+  return typeof json === "string" ? (JSON.parse(json) as SessionBindingRecord) : null;
 }
 
 function setBindingRegistry(ids = ["workspace", "forum"], policy?: () => boolean): void {
@@ -161,13 +139,11 @@ async function withRejectedBindingCommit<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-function workspaceConversation(conversationId: string) {
-  return {
-    channel: "workspace",
-    accountId: "default",
-    conversationId,
-  };
-}
+const workspaceConversation = (conversationId: string) => ({
+  channel: "workspace",
+  accountId: "default",
+  conversationId,
+});
 
 function persistedRecord(
   conversation: SessionBindingRecord["conversation"],
@@ -175,7 +151,7 @@ function persistedRecord(
 ): SessionBindingRecord {
   return {
     bindingId: `generic:${buildConversationKey(conversation)}`,
-    targetSessionKey: "agent:codex:acp:workspace-dm",
+    targetSessionKey: "agent:main:bound",
     targetKind: "session",
     conversation,
     status: "active",
@@ -189,16 +165,6 @@ const forumConversation = {
   accountId: "default",
   conversationId: "6098642967",
 };
-function legacyForumRecord(overrides: Partial<SessionBindingRecord> = {}) {
-  return persistedRecord(
-    { ...forumConversation, parentConversationId: "6098642967" },
-    {
-      targetSessionKey: "agent:codex:acp:forum-dm",
-      ...overrides,
-    },
-  );
-}
-
 async function bindWorkspace(
   conversationId: string,
   options: {
@@ -210,16 +176,14 @@ async function bindWorkspace(
   return expectSessionBinding(
     await bindGeneric({
       ...options,
-      targetSessionKey: options.targetSessionKey ?? "agent:codex:acp:workspace-dm",
+      targetSessionKey: options.targetSessionKey ?? "agent:main:bound",
       targetKind: "session",
       conversation: workspaceConversation(conversationId),
     }),
   );
 }
 
-function resolveWorkspace(conversationId: string): SessionBindingRecord | null {
-  return resolveGeneric(workspaceConversation(conversationId));
-}
+const resolveWorkspace = (id: string) => resolveGeneric(workspaceConversation(id));
 
 aroundEach(async (runTest) => {
   await withOpenClawTestState({ label: "current-bindings", layout: "state-only" }, async () => {
@@ -237,16 +201,14 @@ aroundEach(async (runTest) => {
 it("inspects expired ownership without deleting the durable row", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(1_000_000));
-  const binding = await bindWorkspace("user:inspection", { ttlMs: 1_000 });
-  expect(binding).not.toBeNull();
+  await bindWorkspace("user:inspection", { ttlMs: 1_000 });
   vi.setSystemTime(new Date(1_002_000));
   expect(
-    inspectSessionBindingByConversation({
-      channel: "workspace",
-      accountId: "default",
-      conversationId: "user:inspection",
-    }),
-  ).toMatchObject({ status: "available", binding: null });
+    inspectSessionBindingByConversation(workspaceConversation("user:inspection")),
+  ).toMatchObject({
+    status: "available",
+    binding: null,
+  });
   // Rewinding exposes whether inspection pruned the existing SQLite row.
   vi.setSystemTime(new Date(1_000_500));
   expect(resolveWorkspace("user:inspection")).not.toBeNull();
@@ -270,11 +232,11 @@ it("stores Control UI session-key conversations without a channel plugin", async
     metadata: { pluginBindingOwner: "plugin", pluginId: "codex", pluginRoot: "/codex" },
   });
 
-  expectFields(bound, {
+  expect(bound).toMatchObject({
     targetSessionKey: "agent:main:adopted",
-    conversation,
   });
-  expectFields(resolveGeneric(conversation), { targetSessionKey: "agent:main:adopted" });
+  expect(bound?.conversation).toEqual(conversation);
+  expect(resolveGeneric(conversation)).toMatchObject({ targetSessionKey: "agent:main:adopted" });
 });
 
 it.each(["bind", "touch", "expiry cleanup", "unbind"] as const)(
@@ -284,24 +246,25 @@ it.each(["bind", "touch", "expiry cleanup", "unbind"] as const)(
     vi.setSystemTime(new Date(1_000_000));
     const owned = await bindWorkspace("user:owner");
     const previousExternal = await bindWorkspace("user:updated", {
-      targetSessionKey: "agent:codex:acp:old-target",
+      targetSessionKey: "agent:main:old",
       metadata: { version: "before" },
     });
     await bindWorkspace("user:expired", { ttlMs: 1_000 });
 
     const latestExternal: SessionBindingRecord = {
       ...previousExternal,
-      targetSessionKey: "agent:codex:acp:latest-target",
+      targetSessionKey: "agent:main:new",
       metadata: { version: "latest", opaque: { nested: true } },
     };
     replacePersisted(latestExternal);
-    seedPersisted({
+    const inserted: SessionBindingRecord = {
       ...owned,
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:inserted",
-      targetSessionKey: "agent:codex:acp:inserted-target",
+      targetSessionKey: "agent:main:inserted",
       conversation: workspaceConversation("user:inserted"),
       metadata: { opaque: "external owner" },
-    });
+    };
+    seedPersisted(inserted);
 
     switch (mutation) {
       case "bind":
@@ -322,35 +285,23 @@ it.each(["bind", "touch", "expiry cleanup", "unbind"] as const)(
         break;
     }
 
-    expectFields(readPersisted("user:inserted"), {
-      targetSessionKey: "agent:codex:acp:inserted-target",
-    });
-    expectFields(readPersisted("user:updated"), {
-      targetSessionKey: "agent:codex:acp:latest-target",
-    });
-    expectMetadata(readPersisted("user:updated"), {
-      version: "latest",
-      opaque: { nested: true },
-    });
+    expect(readPersisted("user:inserted")).toEqual(inserted);
+    expect(readPersisted("user:updated")).toEqual(latestExternal);
 
     await closeStateDatabaseForTest();
-    expect(resolveWorkspace("user:inserted")?.targetSessionKey).toBe(
-      "agent:codex:acp:inserted-target",
-    );
-    expect(resolveWorkspace("user:updated")?.targetSessionKey).toBe(
-      "agent:codex:acp:latest-target",
-    );
+    expect(resolveWorkspace("user:inserted")).toEqual(inserted);
+    expect(resolveWorkspace("user:updated")).toEqual(latestExternal);
   },
 );
 
 it("touches the latest committed target and complete opaque metadata", async () => {
   const initial = await bindWorkspace("user:owner", {
-    targetSessionKey: "agent:codex:acp:old-target",
+    targetSessionKey: "agent:main:old",
     metadata: { stale: true },
   });
   replacePersisted({
     ...initial,
-    targetSessionKey: "agent:codex:acp:latest-target",
+    targetSessionKey: "agent:main:new",
     metadata: {
       opaque: { nested: ["latest", { preserved: true }] },
       lastActivityAt: 10,
@@ -359,35 +310,35 @@ it("touches the latest committed target and complete opaque metadata", async () 
 
   touchGeneric(initial.bindingId, 20);
 
-  expectFields(readPersisted("user:owner"), {
-    targetSessionKey: "agent:codex:acp:latest-target",
+  expect(readPersisted("user:owner")).toMatchObject({
+    targetSessionKey: "agent:main:new",
+    metadata: expect.objectContaining({
+      opaque: { nested: ["latest", { preserved: true }] },
+      lastActivityAt: 20,
+    }),
   });
-  expectMetadata(readPersisted("user:owner"), {
-    opaque: { nested: ["latest", { preserved: true }] },
-    lastActivityAt: 20,
-  });
-  expect(resolveWorkspace("user:owner")?.targetSessionKey).toBe("agent:codex:acp:latest-target");
+  expect(resolveWorkspace("user:owner")?.targetSessionKey).toBe("agent:main:new");
 });
 
 it.each(["rebind", "delete"] as const)(
   "never restores a stale row when another owner commits a %s during normalization",
   (mutation) => {
-    const initial = persistedRecord(workspaceConversation("user:normalization-race"), {
-      targetSessionKey: " agent:codex:acp:stale-target ",
+    const initial = persistedRecord(workspaceConversation("user:race"), {
+      targetSessionKey: " agent:main:stale ",
       boundAt: 1_000,
       metadata: { version: "stale" },
     });
     seedPersisted(initial);
     const latest: SessionBindingRecord = {
       ...initial,
-      targetSessionKey: "agent:codex:acp:latest-target",
+      targetSessionKey: "agent:main:new",
       metadata: { version: "latest", opaque: { preserved: true } },
     };
     const parseJson = JSON.parse;
     let committed = false;
     const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
       const parsed = parseJson(text, reviver);
-      if (!committed && text.includes("user:normalization-race")) {
+      if (!committed && text.includes("user:race")) {
         committed = true;
         if (mutation === "rebind") {
           replacePersisted(latest);
@@ -407,19 +358,14 @@ it.each(["rebind", "delete"] as const)(
     });
 
     try {
-      const resolved = resolveWorkspace("user:normalization-race");
+      const resolved = resolveWorkspace("user:race");
       if (mutation === "delete") {
         expect(resolved).toBeNull();
-        expect(readPersisted("user:normalization-race")).toBeNull();
+        expect(readPersisted("user:race")).toBeNull();
         return;
       }
-      expectFields(resolved, {
-        targetSessionKey: "agent:codex:acp:latest-target",
-      });
-      expectMetadata(readPersisted("user:normalization-race"), {
-        version: "latest",
-        opaque: { preserved: true },
-      });
+      expect(resolved).toEqual(latest);
+      expect(readPersisted("user:race")).toEqual(latest);
     } finally {
       parseSpy.mockRestore();
     }
@@ -427,92 +373,71 @@ it.each(["rebind", "delete"] as const)(
 );
 
 it("does not hide another owner's committed row after a failed write", async () => {
-  const owned = expectSessionBinding(await bindWorkspace("user:owner"));
-  seedPersisted({
+  const owned = await bindWorkspace("user:owner");
+  const external: SessionBindingRecord = {
     ...owned,
     bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:external",
-    targetSessionKey: "agent:codex:acp:external-target",
+    targetSessionKey: "agent:main:external",
     conversation: workspaceConversation("user:external"),
     metadata: { opaque: { survives: true } },
-  });
+  };
+  seedPersisted(external);
 
   await expect(
     withRejectedBindingCommit(() =>
       bindWorkspace("user:owner", {
-        targetSessionKey: "agent:codex:acp:failed-target",
+        targetSessionKey: "agent:main:failed",
       }),
     ),
   ).rejects.toThrow();
 
-  expect(resolveWorkspace("user:owner")?.targetSessionKey).toBe(owned.targetSessionKey);
-  expect(resolveWorkspace("user:external")?.targetSessionKey).toBe(
-    "agent:codex:acp:external-target",
-  );
-  expectMetadata(readPersisted("user:external"), {
-    opaque: { survives: true },
-  });
+  expect(resolveWorkspace("user:owner")).toEqual(owned);
+  expect(resolveWorkspace("user:external")).toEqual(external);
+  expect(readPersisted("user:external")).toEqual(external);
 });
 
-it("migrates persisted legacy self-parent binding ids on load", async () => {
-  seedPersisted(
-    legacyForumRecord({
-      targetSessionKey: " agent:codex:acp:forum-dm ",
-      metadata: { label: "forum-dm" },
-    }),
-  );
-
-  const resolved = resolveGeneric(forumConversation);
-
-  const resolvedRecord = expectFields(resolved, {
-    bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-    targetSessionKey: "agent:codex:acp:forum-dm",
-  });
-  expect(resolvedRecord.conversation).toEqual(forumConversation);
-  expect(resolved?.conversation.parentConversationId).toBeUndefined();
-
-  const unbound = await unbindGeneric({
-    bindingId: resolved?.bindingId,
-    reason: "test cleanup",
-  });
-  expect(unbound).toHaveLength(1);
-  expectFields(unbound[0], {
-    bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-  });
-
-  expect(resolveGeneric(forumConversation)).toBeNull();
-});
-
-it.each(["touch", "unbind"] as const)(
-  "supports %s by the canonical id returned for an unrepaired legacy self-parent row",
+it.each(["resolve", "touch", "unbind"] as const)(
+  "supports %s using canonical ids from legacy self-parent rows",
   async (operation) => {
-    const legacy = legacyForumRecord({
-      metadata: { opaque: { preserved: true } },
-    });
+    const targetSessionKey = "agent:main:forum";
+    const legacy = persistedRecord(
+      { ...forumConversation, parentConversationId: "6098642967" },
+      {
+        targetSessionKey: operation === "resolve" ? " agent:main:forum " : targetSessionKey,
+        metadata: { label: "forum-dm", opaque: { preserved: true } },
+      },
+    );
     seedPersisted(legacy);
-
-    const listed = expectSessionBinding(listBySession("agent:codex:acp:forum-dm")[0] ?? null);
-    expect(listed.bindingId).toBe("generic:forum\u241fdefault\u241f\u241f6098642967");
-
+    const canonicalId = "generic:forum\u241fdefault\u241f\u241f6098642967";
+    const resolved = expectSessionBinding(
+      operation === "resolve"
+        ? resolveGeneric(forumConversation)
+        : listBySession(targetSessionKey)[0],
+    );
+    expect(resolved).toMatchObject({ bindingId: canonicalId, targetSessionKey });
+    expect(resolved.conversation).toEqual(forumConversation);
     if (operation === "touch") {
-      touchGeneric(listed.bindingId, 9_876);
-      expectMetadata(resolveGeneric(legacy.conversation), {
-        opaque: { preserved: true },
-        lastActivityAt: 9_876,
+      touchGeneric(resolved.bindingId, 9_876);
+      expect(resolveGeneric(legacy.conversation)?.metadata).toEqual(
+        expect.objectContaining({
+          opaque: { preserved: true },
+          lastActivityAt: 9_876,
+        }),
+      );
+    } else {
+      const removed = await unbindGeneric({
+        bindingId: resolved.bindingId,
+        reason: "legacy owner cleanup",
       });
-      return;
+      expect(removed).toHaveLength(1);
+      expect(removed[0]).toMatchObject({ bindingId: canonicalId });
+      expect(resolveGeneric(forumConversation)).toBeNull();
+      expect(listBySession(targetSessionKey)).toEqual([]);
     }
-
-    const removed = await unbindGeneric({
-      bindingId: listed.bindingId,
-      reason: "legacy owner cleanup",
-    });
-    expect(removed).toHaveLength(1);
-    expect(listBySession("agent:codex:acp:forum-dm")).toEqual([]);
   },
 );
-
 it("unbinds durable generic rows without invoking reentrant plugin policy in a write transaction", async () => {
-  const targetSessionKey = "agent:codex:acp:workspace-dm";
+  const targetSessionKey = "agent:main:bound";
   const bound = await bindWorkspace("user:policy-owner");
   const policy = vi.fn(() => {
     runOpenClawStateWriteTransaction(() => undefined);
@@ -545,7 +470,7 @@ it("does not bind generic current conversations when ttl expiry overflows", asyn
 
   await expect(
     bindGeneric({
-      targetSessionKey: "agent:codex:acp:workspace-dm",
+      targetSessionKey: "agent:main:bound",
       targetKind: "session",
       conversation: workspaceConversation("user:U123"),
       ttlMs: 1,
@@ -559,7 +484,7 @@ it.each(["touch", "resolve", "list", "unbind"] as const)(
   async (operation) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1_000_000));
-    const targetSessionKey = "agent:codex:acp:shared";
+    const targetSessionKey = "agent:main:shared";
     const bound = await bindWorkspace("user:U1", {
       targetSessionKey,
       metadata: { label: "workspace-dm" },

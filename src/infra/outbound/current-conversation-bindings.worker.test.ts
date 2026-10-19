@@ -302,46 +302,31 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
   const original = record("cached");
   openOpenClawStateDatabase();
   const run = vi.spyOn(workerStore, "runOpenClawStateWorkerOperation");
+  const cached = async (expected: SessionBindingRecord | null) => {
+    run.mockClear();
+    const resolved = await resolveRecord(original.conversation);
+    expect(resolved).toEqual(expected);
+    expect(run).not.toHaveBeenCalled();
+    return resolved;
+  };
   expect(await resolveRecord(original.conversation)).toBeNull();
-  run.mockClear();
-  expect(await resolveRecord(original.conversation)).toBeNull();
-  expect(run).not.toHaveBeenCalled();
-
+  await cached(null);
   updateRecord(original.conversation, () => original);
-  const resolved = await resolveRecord(original.conversation);
-  expect(resolved).toEqual(original);
-  expect(run).not.toHaveBeenCalled();
+  const resolved = await cached(original);
   resolved!.metadata!.lastActivityAt = 99;
-  run.mockClear();
-  expect(await resolveRecord(original.conversation)).toEqual(original);
-  expect(run).not.toHaveBeenCalled();
-
+  await cached(original);
   const replacement = { ...original, targetSessionKey: "agent:main:replacement" };
   await bindRecord({ record: replacement });
-  run.mockClear();
-  expect(await resolveRecord(original.conversation)).toEqual(replacement);
-  expect(run).not.toHaveBeenCalled();
+  await cached(replacement);
   await touch(original, 100);
-  run.mockClear();
-  expect(await resolveRecord(original.conversation)).toMatchObject({
-    metadata: { lastActivityAt: 100 },
-  });
-  expect(run).not.toHaveBeenCalled();
+  const touched = { ...replacement, metadata: { ...replacement.metadata, lastActivityAt: 100 } };
+  await cached(touched);
   const sibling = record("sibling");
   updateRecord(sibling.conversation, () => sibling);
-  expect(await resolveRecord(original.conversation)).toMatchObject({
-    metadata: { lastActivityAt: 100 },
-  });
-  expect(run).not.toHaveBeenCalled();
-  await removeRecords({
-    conversation: original.conversation,
-    bindingId: original.bindingId,
-  });
-  run.mockClear();
-  expect(await resolveRecord(original.conversation)).toBeNull();
-  expect(run).not.toHaveBeenCalled();
+  await cached(touched);
+  await removeRecords({ conversation: original.conversation, bindingId: original.bindingId });
+  await cached(null);
 });
-
 it("keeps a prepared selection current after a completed no-op worker resolve", async () => {
   openOpenClawStateDatabase();
   const conversation = internalConversation("missing-prepared");
@@ -392,13 +377,19 @@ it("invalidates prepared effect ownership after committed binding replacement an
   expect(() => prepared.inspect()).toThrow("no longer active");
 });
 
-it.each(["transaction", "commit"] as const)(
-  "refuses revoked touch authority at %s and preserves committed bytes",
-  async (stage) => {
-    const current = record("revoked");
-    updateRecord(current.conversation, () => current);
+it.each([
+  { operation: "touch", stage: "transaction" },
+  { operation: "touch", stage: "commit" },
+  { operation: "bind", stage: "transaction" },
+  { operation: "bind", stage: "commit" },
+] as const)(
+  "rolls back $operation when authority expires at $stage",
+  async ({ operation, stage }) => {
+    const service = getSessionBindingService();
+    const conversation = internalConversation("guarded");
+    const original = await bindSession(conversation, "agent:main:original");
     const row = bindingRows();
-    const before = row.get(current.bindingId);
+    const before = row.get(original.bindingId);
     let active = true;
     probe.admission(admission, (request, grant, admit) => {
       if (request.stage === stage) {
@@ -406,21 +397,27 @@ it.each(["transaction", "commit"] as const)(
       }
       admit(request, grant);
     });
+    const message = operation === "touch" ? "Binding owner retired" : "Binding caller retired";
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error(message);
+      }
+    };
     await expect(
-      touchRecord(
-        { conversation: current.conversation, bindingId: current.bindingId, at: 99 },
-        () => {
-          if (!active) {
-            throw new Error("Binding owner retired");
-          }
-        },
-      ),
-    ).rejects.toThrow("Binding owner retired");
+      operation === "touch"
+        ? touchRecord({ conversation, bindingId: original.bindingId, at: 99 }, assertCurrent)
+        : service.bind({
+            conversation,
+            targetSessionKey: "agent:main:replacement",
+            targetKind: "session",
+            assertCurrent,
+          }),
+    ).rejects.toThrow(message);
     expect(active).toBe(false);
-    expect(row.get(current.bindingId)).toEqual(before);
+    expect(row.get(original.bindingId)).toEqual(before);
+    expect(await service.resolveByConversationAsync(conversation)).toEqual(original);
   },
 );
-
 it("keeps account touch bytes identical and rejects a manager shadowed by another adapter", async () => {
   const manager = createManager({
     ...managerOptions(),
@@ -630,35 +627,6 @@ it("binds, refreshes and removes generic and account-owned rows without caller-t
   }
   expect(hostSql.queries).toEqual([]);
 });
-
-it.each(["transaction", "commit"] as const)(
-  "rolls back a binding whose caller authority expires at %s",
-  async (stage) => {
-    const service = getSessionBindingService();
-    const conversation = internalConversation("guarded");
-    const original = await bindSession(conversation, "agent:main:original");
-    let active = true;
-    probe.admission(admission, (request, grant, admit) => {
-      if (request.stage === stage) {
-        active = false;
-      }
-      admit(request, grant);
-    });
-    await expect(
-      service.bind({
-        conversation,
-        targetSessionKey: "agent:main:replacement",
-        targetKind: "session",
-        assertCurrent: () => {
-          if (!active) {
-            throw new Error("Binding caller retired");
-          }
-        },
-      }),
-    ).rejects.toThrow("Binding caller retired");
-    expect(await service.resolveByConversationAsync(conversation)).toEqual(original);
-  },
-);
 
 it.each(["bind", "unbind"] as const)(
   "preserves a replacement row when a prepared %s reaches the worker",
