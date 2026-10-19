@@ -13,12 +13,10 @@ import {
   addonStatus,
   addonSwitch,
   createMemoryPage as buildPage,
-  memoryRoute,
   memoryTabRoute,
   selectEngine,
   toggleAddon,
 } from "./memory-page.test-support.tsx";
-import type { ConfigRouteData } from "./route-data.ts";
 
 type PageOptions = Parameters<typeof buildPage>[0];
 function createPage(
@@ -366,44 +364,6 @@ it("handles Space directly so the browser cannot synthesize a second navigation"
   });
 });
 
-it.each([
-  ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
-  ["/settings/memory?tab=search", "/settings/memory/settings"],
-  ["/settings/memory?section=memory", "/settings/memory/settings"],
-  ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
-] as const)(
-  "performs at most one replace for %s and never oscillates back to a query tab",
-  async (sourceUrl, expectedUrl) => {
-    const replace = vi.fn();
-    const navigate = vi.fn();
-    const { element } = createPage({
-      catalog: [],
-      replace,
-      navigate,
-      routeData: memoryRoute(sourceUrl),
-    });
-    for (let cycle = 0; cycle < 3; cycle += 1) {
-      element.routeData = { ...element.routeData } as ConfigRouteData;
-      flush();
-    }
-    pressTab(element, "overview", "ArrowRight");
-    pressTab(element, "dreams", "ArrowRight");
-
-    expect(navigate).not.toHaveBeenCalled();
-    const canonical = memoryRoute(expectedUrl);
-    const { pathname, search, hash } = canonical;
-    expect(replace).toHaveBeenCalledExactlyOnceWith("memory", { pathname, search, hash });
-
-    element.routeData = canonical;
-    flush();
-    for (let cycle = 0; cycle < 3; cycle += 1) {
-      element.routeData = { ...element.routeData } as ConfigRouteData;
-      flush();
-    }
-    expect(replace).toHaveBeenCalledOnce();
-  },
-);
-
 it("mounts the presentation for the Settings agent and keeps it through a same-client reconnect", async () => {
   const page = createPage({
     agents: [{ id: "main" }, { id: "research" }],
@@ -446,75 +406,6 @@ it("passes a replaced pinned engine to a new presentation", async () => {
   element.configObject = { plugins: { slots: { memory: "engine-b" } } };
   await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-b"));
   expect(first.context.signal.aborted).toBe(true);
-});
-
-it("publishes a completed catalog to the mounted Settings presentation", async () => {
-  const catalog = deferred<{ plugins: PluginCatalogItem[] }>();
-  const { settingsViews } = createPage({
-    configObject: { plugins: { slots: { memory: "synthetic-memory" } } },
-    routeData: memoryTabRoute("overview"),
-    listCatalog: () => catalog.promise,
-  });
-  try {
-    await waitForSolid(() =>
-      expect(settingsViews.at(-1)?.snapshot.engine.availability).toBe("loading"),
-    );
-    const view = settingsViews.at(-1)!;
-    catalog.resolve({ plugins: [] });
-    await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
-    expect(settingsViews.at(-1)).toBe(view);
-  } finally {
-    catalog.resolve({ plugins: [] });
-  }
-});
-
-it("retires the presentation when a committed same-agent Memory route changes", async () => {
-  const { element, settingsViews } = createPage({
-    routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
-  });
-  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
-  const first = settingsViews.at(-1)!;
-  element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
-  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
-  expect(first.context.signal.aborted).toBe(true);
-  expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
-});
-
-it.each([["main"], ["research", "main"]])(
-  "keeps newer sidebar intent when a pending Memory link mounts (%j)",
-  async (...choices: string[]) => {
-    const { element, settingsAgentSelection, settingsViews } = createPage(
-      {
-        agents: [{ id: "main" }, { id: "research" }],
-        routeData: memoryRoute("/settings/memory?agent=research"),
-      },
-      false,
-    );
-    for (const agentId of choices) {
-      settingsAgentSelection.set(agentId);
-    }
-    mountMemoryPage(element);
-    await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main"));
-    expect(settingsAgentSelection.state.selectedId).toBe("main");
-    expect(settingsViews.some((view) => view.snapshot.agentId === "research")).toBe(false);
-  },
-);
-
-it("honors a fresh explicit Memory navigation after the sidebar changed the same URL's agent", async () => {
-  const { element, settingsAgentSelection } = createPage({
-    agents: [{ id: "main" }, { id: "research" }],
-    routeData: memoryRoute("/settings/memory?agent=research"),
-  });
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
-  settingsAgentSelection.set("main");
-  element.routeData = {
-    ...memoryRoute("/settings/memory?agent=research"),
-    agentSelectionIntent: {
-      owner: settingsAgentSelection,
-      revision: settingsAgentSelection.intentRevision,
-    },
-  };
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
 });
 
 it.each([

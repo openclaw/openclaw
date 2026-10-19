@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 // Controller for the Memory destination page. The URL owns the active tab;
 // this element projects Settings agent selection into Overview status and
 // consumes the global configuration controllers used by Settings.
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -19,9 +19,8 @@ import {
 } from "../../lib/plugins/index.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { ControlUiSettingsPresentation } from "../../plugins/control-ui-settings-view.solid.tsx";
 import {
   resolveConfiguredDreaming,
@@ -33,7 +32,6 @@ import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
 import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
 import { CuratedSettingsPanel } from "./curated-settings.tsx";
 import {
-  canonicalMemoryRouteLocation,
   memoryTabForRoute,
   resolveMemoryEngineSelection,
   selectedEngineId,
@@ -89,6 +87,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const gateway = projectGateway(application.gateway);
   const agentSelection = projectAgentSelection(application.settingsAgentSelection);
   const runtime = projectRuntimeConfig(application.runtimeConfig);
+  const agents = projectAgents(application.agents);
   const dreamingConfigOwner = createMemo(
     () => resolveConfiguredDreaming(currentConfigObject(runtime.read().state)).pluginId,
   );
@@ -110,14 +109,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   let settingsEpoch = 0;
   const settingsListeners = new Set<() => void>();
-  function publishSettings() {
+  const [settingsRevision, setSettingsRevision] = createSignal(0, { ownedWrite: true });
+  function retireSettingsReads() {
+    settingsEpoch += 1;
+    setSettingsRevision(settingsEpoch);
     for (const notify of settingsListeners) {
       notify();
     }
-  }
-  function retireSettingsReads() {
-    settingsEpoch += 1;
-    publishSettings();
   }
 
   const [support, setSupport] = createSignal<DreamingConfigPathSupport>("unknown");
@@ -136,44 +134,10 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   const addonNoticeOperations = new Map<string, object>();
 
-  let normalizedLocation = "";
   let active = true;
-
-  function syncRouteAgent() {
-    const routeAgentId = new URLSearchParams(props.routeData?.search).get("agent")?.trim();
-    const intent = props.routeData?.agentSelectionIntent;
-    const selection = application.settingsAgentSelection;
-    if (
-      routeAgentId &&
-      intent?.owner === selection &&
-      intent.revision === selection.intentRevision
-    ) {
-      selection.set(normalizeAgentId(routeAgentId));
-    }
-  }
 
   function activeTab(routeData = props.routeData): MemoryTab {
     return memoryTabForRoute(routeData ?? {}, application?.basePath ?? "") ?? "overview";
-  }
-
-  function syncCanonicalLocation() {
-    const routeData = props.routeData;
-    if (!routeData) {
-      return;
-    }
-    const canonical = canonicalMemoryRouteLocation(routeData, application.basePath);
-    if (!canonical) {
-      normalizedLocation = "";
-      return;
-    }
-    const source = `${routeData.pathname}${routeData.search}${routeData.hash}`;
-    if (normalizedLocation === source) {
-      return;
-    }
-    // One source location gets one replace. Route-data updates clear the guard
-    // once the canonical path arrives, so returning to an old link still works.
-    normalizedLocation = source;
-    application.replace("memory", canonical);
   }
 
   function syncGateway(snapshot: ApplicationGatewaySnapshot) {
@@ -208,13 +172,11 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       setCatalog({
         kind: "unavailable",
       });
-      onSettled(publishSettings);
       return;
     }
     setCatalog({
       kind: "loading",
     });
-    onSettled(publishSettings);
     setAddonNotices(
       (current) =>
         new Map([...current].filter(([, notice]) => notice.bootId && notice.bootId === bootId)),
@@ -256,7 +218,6 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       return;
     }
     setCatalog(nextCatalog);
-    onSettled(publishSettings);
   }
 
   function engineState(selection: MemoryEngineSelection): MemoryPluginState {
@@ -493,15 +454,6 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       pathname: pathForMemoryTab(tab, application.basePath),
     });
   }
-  // Synchronize the URL's selected agent and canonical route with their owners.
-  createEffect(
-    () => props.routeData,
-    () => {
-      syncRouteAgent();
-      syncCanonicalLocation();
-      publishSettings();
-    },
-  );
   onSettled(() => {
     const unsubscribe = [
       // Retire pending reads on every connection transition, even within one render.
@@ -509,7 +461,6 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       // Config receipts retire obsolete support probes before their results can settle.
       runtime.subscribe(() => syncSupport(application.runtimeConfig)),
     ];
-    syncRouteAgent();
     syncGateway(gateway.read().snapshot);
     return () => {
       unsubscribe.forEach((stop) => stop());
@@ -526,7 +477,12 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const currentEngineState = () => engineState(engineSelection());
   const agentId = () => agentSelection.read().state.selectedId;
   function readSettingsSnapshot(): ControlUiSettingsSnapshot {
-    // Read authority directly from each live owner.
+    // Track the projections, but read authority directly from each live owner.
+    agentSelection.read();
+    gateway.read();
+    runtime.read();
+    agents.read();
+    settingsRevision();
     const selection = resolveMemoryEngineSelection(
       currentConfigObject(application.runtimeConfig.state) ?? {},
     );
@@ -559,7 +515,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   function subscribeSettings(listener: () => void) {
     settingsListeners.add(listener);
     // The plugin bridge must retire its request scope synchronously, before a batched render.
-    const stops = [agentSelection, gateway, runtime, application.agents, i18n].map((source) =>
+    const stops = [agentSelection, gateway, runtime, agents, i18n].map((source) =>
       source.subscribe(listener),
     );
     return () => {

@@ -70,8 +70,8 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
+import { canonicalMemoryRouteLocation } from "./memory-schema.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
-import type { SecurityOverview } from "./security.tsx";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
@@ -82,37 +82,6 @@ import type { ConfigProps, ConfigViewState } from "./view-types.ts";
 registerEnglishCatalog(registerSettingsEnglish);
 
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
-
-export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
-  const gateway = asConfigRecord(root.gateway);
-  const auth = asConfigRecord(gateway?.auth);
-  const tools = asConfigRecord(root.tools);
-  const exec = asConfigRecord(tools?.exec) ?? {};
-  const browser = asConfigRecord(root.browser);
-  let gatewayAuth = "unknown";
-  if (auth) {
-    const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
-    gatewayAuth = mode
-      ? mode
-      : auth.password
-        ? "password"
-        : auth.token
-          ? "token"
-          : auth.trustedProxy
-            ? "trusted-proxy"
-            : "none";
-  }
-  const profile = tools?.profile;
-  const security = exec.security;
-  return {
-    gatewayAuth,
-    execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
-    browserEnabled: browser?.enabled !== false,
-    browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
-    toolProfile: typeof profile === "string" ? profile.trim() : "",
-    toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
-  };
-}
 
 /** Coordinates page-local drafts and requests; config and preference writes stay with their owners. */
 export function createConfigPage(
@@ -178,6 +147,7 @@ export function createConfigPage(
   let poll: ReturnType<typeof setInterval> | undefined;
   let countdown: ReturnType<typeof setInterval> | undefined;
   let routeInitialized = false;
+  let normalizedMemoryLocation = "";
   let targetBlockId: string | null = null;
   let scrollFrame: number | null = null;
 
@@ -213,6 +183,31 @@ export function createConfigPage(
     abortRequests();
     pageId = nextPageId;
     routeData = nextRouteData;
+    if (pageId !== "memory") {
+      normalizedMemoryLocation = "";
+    } else if (routeData) {
+      const routeAgentId = new URLSearchParams(routeData.search).get("agent")?.trim();
+      const intent = routeData.agentSelectionIntent;
+      const agentSelection = context.settingsAgentSelection;
+      if (
+        routeAgentId &&
+        intent?.owner === agentSelection &&
+        intent.revision === agentSelection.intentRevision
+      ) {
+        agentSelection.set(routeAgentId);
+      }
+      const canonical = canonicalMemoryRouteLocation(routeData, context.basePath);
+      if (!canonical) {
+        normalizedMemoryLocation = "";
+      } else {
+        const source = `${routeData.pathname}${routeData.search}${routeData.hash}`;
+        // Retained Settings data can repeat while the canonical replacement loads.
+        if (normalizedMemoryLocation !== source) {
+          normalizedMemoryLocation = source;
+          context.replace("memory", canonical);
+        }
+      }
+    }
     const selection = routeData
       ? normalizeConfigSelection(pageId, routeData.section, null)
       : configSelectionFromSearch(pageId, globalThis.location?.search ?? "");
