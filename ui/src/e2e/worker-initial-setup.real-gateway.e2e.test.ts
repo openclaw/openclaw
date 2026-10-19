@@ -5,6 +5,7 @@ import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-proto
 import { installSessionPlacementAdmissionProvider } from "../../../src/agents/session-placement-admission.js";
 import { SessionManager } from "../../../src/agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../../src/agents/test-helpers/agent-message-fixtures.js";
+import { createEmbeddedAgentRunnerOpenAiConfig } from "../../../src/agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createSessionsSendTool } from "../../../src/agents/tools/sessions-send-tool.js";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import {
@@ -36,6 +37,7 @@ import { getFreePort } from "../../../src/test-utils/ports.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Initial setup custody with a real Gateway",
@@ -50,16 +52,7 @@ suite.define(() => {
     const state = await createOpenClawTestState({
       label: "initial-setup-custody",
       layout: "home",
-      env: {
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        VITEST: "1",
-      },
+      env: { ...deviceGatewayEnv, OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
     });
     let gateway: GatewayServer | undefined;
     let uninstall: (() => void) | undefined;
@@ -68,7 +61,19 @@ suite.define(() => {
     try {
       const workspace = state.path("workspace");
       await mkdir(workspace, { recursive: true });
+      const { models } = createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]);
+      const provider = models!.providers!.openai!;
+      Object.assign(provider, {
+        apiKey: "synthetic-fixture-key",
+        baseUrl: "http://127.0.0.1:9/v1",
+      });
+      Object.assign(provider.models[0]!, {
+        name: "Synthetic worker model",
+        contextWindow: 128000,
+        maxTokens: 4096,
+      });
       const config: OpenClawConfig = {
+        models,
         plugins: { enabled: false },
         tools: { sessions: { visibility: "all" } },
         agents: {
@@ -78,26 +83,6 @@ suite.define(() => {
             models: { "openai/gpt-4.1": { agentRuntime: { id: "openclaw" } } },
           },
           entries: { main: { name: "Setup proof", workspace } },
-        },
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              apiKey: "synthetic-fixture-key",
-              baseUrl: "http://127.0.0.1:9/v1",
-              models: [
-                {
-                  id: "gpt-4.1",
-                  name: "Synthetic worker model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
         },
         gateway: {
           auth: { mode: "none" },
@@ -257,11 +242,10 @@ suite.define(() => {
             expect((await listSessionPendingInputs(scope)).items).toHaveLength(1);
             await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
             await capture("01-held-during-setup.png");
-            const tool = createSessionsSendTool({
+            const sent = await createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,
-            });
-            const sent = await tool.execute("setup-send", {
+            }).execute("setup-send", {
               sessionKey,
               message: "Tool input held for setup",
               timeoutSeconds: 0,
@@ -275,23 +259,19 @@ suite.define(() => {
             await dispatchOperation;
             const outcomes = await evaluateControlUiContext(
               page,
-              async (context, runIds) => {
-                const client = context.gateway.snapshot.client!;
-                return await Promise.all(
+              (context, runIds) =>
+                Promise.all(
                   runIds.map((runId) =>
-                    client.request(
+                    context.gateway.snapshot.client!.request(
                       "agent.wait",
                       { runId, timeoutMs: 30_000 },
                       { timeoutMs: 30_000 },
                     ),
                   ),
-                );
-              },
+                ),
               heldInputs.map((input) => input.runId),
             );
-            for (const outcome of outcomes) {
-              expect(outcome).toMatchObject({ status: "ok" });
-            }
+            expect(outcomes).toMatchObject([{ status: "ok" }, { status: "ok" }]);
             expect(launched).toHaveLength(2);
             expect(new Set(launched).size).toBe(2);
             expect(new Set(launched)).toEqual(new Set(heldInputs.map((input) => input.runId)));

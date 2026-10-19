@@ -176,13 +176,22 @@ suite.define(() => {
             ...(imported ? { importedFrom: "claude-cli" } : { seq: olderMessages.length + 1 }),
           },
         };
-        const currentRow = {
-          key: sessionKey,
-          sessionId: "warm-reload-session",
+        const sessionRow = (
+          id: string,
+          label: string,
+          updatedAt = timestamp,
+          owner = "profile-a",
+        ) => ({
+          key: `agent:main:${id}`,
+          sessionId: `${id}-session`,
           kind: "direct" as const,
-          label: "Warm reload conversation",
-          owner: { actor: { type: "human" as const, id: "profile-a" } },
-          updatedAt: timestamp,
+          label,
+          owner: { actor: { type: "human" as const, id: owner } },
+          updatedAt,
+        });
+        const currentRow = {
+          ...sessionRow("warm-reload", "Warm reload conversation"),
+          key: sessionKey,
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
@@ -200,16 +209,7 @@ suite.define(() => {
                 : {}),
             },
           ],
-          sessions: [
-            currentRow,
-            {
-              ...currentRow,
-              key: "agent:main:cached-only",
-              sessionId: "cached-only-session",
-              label: "Cached only session",
-              updatedAt: timestamp - 1,
-            },
-          ],
+          sessions: [currentRow, sessionRow("cached-only", "Cached only session", timestamp - 1)],
           methodResponses: {
             "sessions.list": {
               cases: [
@@ -385,16 +385,12 @@ suite.define(() => {
           defaults: { model: null, modelProvider: null, contextTokens: null },
           sessions: [
             { ...currentRow, label: "Live reload conversation", updatedAt: timestamp + 1 },
-            {
-              ...currentRow,
-              key: "agent:main:live-only",
-              sessionId: "live-only-session",
-              label: "Live only session",
-              owner: {
-                actor: { type: "human", id: profile === "different" ? "profile-b" : "profile-a" },
-              },
-              updatedAt: timestamp,
-            },
+            sessionRow(
+              "live-only",
+              "Live only session",
+              timestamp,
+              profile === "different" ? "profile-b" : "profile-a",
+            ),
           ],
         });
         await gateway.setMethodResponse("chat.startup", {

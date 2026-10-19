@@ -17,13 +17,10 @@ type VirtualRowPaintSample = {
 
 type VirtualRowPaintProbe = {
   finish: () => boolean;
-  stop: () => VirtualRowPaintResult;
+  stop: () => { pending: boolean; samples: VirtualRowPaintSample[] };
 };
 type PaintGlobal = typeof globalThis & { chatPrependPaintProbe?: VirtualRowPaintProbe };
-export type VirtualRowPaintResult = {
-  pending: boolean;
-  samples: VirtualRowPaintSample[];
-};
+export type VirtualRowPaintResult = ReturnType<VirtualRowPaintProbe["stop"]>;
 
 export async function captureTopVisibleVirtualRow(thread: Locator): Promise<VisibleVirtualRow> {
   return thread.evaluate((element) => {
@@ -34,12 +31,9 @@ export async function captureTopVisibleVirtualRow(thread: Locator): Promise<Visi
       const rect = candidate.getBoundingClientRect();
       return rect.bottom > viewport.top && rect.top < viewport.bottom;
     });
-    if (!row) {
-      throw new Error("expected a visible virtual transcript row");
-    }
-    const index = Number.parseInt(row.dataset.index ?? "", 10);
-    if (!Number.isFinite(index)) {
-      throw new Error("expected the virtual transcript anchor to expose its row index");
+    const index = Number.parseInt(row?.dataset.index ?? "", 10);
+    if (!row || !Number.isFinite(index)) {
+      throw new Error("expected a visible virtual transcript row with a valid index");
     }
     return {
       index,
@@ -74,26 +68,22 @@ export async function startVirtualRowPaintProbe(thread: Locator, anchor: Visible
         viewportTop: rect ? rect.top - viewport.top : null,
       });
     };
-    const schedule = (run: () => void, paint = true) => {
-      const ids = paint ? frames : timers;
+    const schedule = (run: () => void, framesLeft = 2): void => {
+      const ids = framesLeft ? frames : timers;
       const callback = () => {
         ids.delete(id);
-        run();
+        return framesLeft ? schedule(run, framesLeft - 1) : run();
       };
-      const id = paint ? requestAnimationFrame(callback) : window.setTimeout(callback, 0);
+      const id = framesLeft ? requestAnimationFrame(callback) : window.setTimeout(callback, 0);
       ids.add(id);
     };
     const scheduleSample = () => {
       // Each mutation keeps its own two-frame + timer sample; never coalesce jumps.
       pendingSamples += 1;
-      schedule(() =>
-        schedule(() =>
-          schedule(() => {
-            sample();
-            pendingSamples -= 1;
-          }, false),
-        ),
-      );
+      schedule(() => {
+        sample();
+        pendingSamples -= 1;
+      });
     };
     const observer = new MutationObserver(scheduleSample);
     observer.observe(element, {
@@ -130,28 +120,24 @@ export async function startVirtualRowPaintProbe(thread: Locator, anchor: Visible
   }, anchor);
 }
 
-export async function waitForPaintedVirtualRowAnchor(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(() => {
-        const probe = (globalThis as PaintGlobal).chatPrependPaintProbe;
-        if (!probe) {
-          throw new Error("expected an active virtual row paint probe");
-        }
-        return probe.finish();
-      }),
-    )
-    .toBe(true);
-}
-
-export async function stopVirtualRowPaintProbe(thread: Locator): Promise<VirtualRowPaintResult> {
-  return thread.evaluate(() => {
+function accessProbe(thread: Locator, action: "finish"): Promise<boolean>;
+function accessProbe(thread: Locator, action: "stop"): Promise<VirtualRowPaintResult>;
+function accessProbe(thread: Locator, action: "finish" | "stop") {
+  return thread.evaluate((_element, operation) => {
     const probe = (globalThis as PaintGlobal).chatPrependPaintProbe;
     if (!probe) {
       throw new Error("expected an active virtual row paint probe");
     }
-    return probe.stop();
-  });
+    return probe[operation]();
+  }, action);
+}
+
+export async function waitForPaintedVirtualRowAnchor(thread: Locator) {
+  await expect.poll(() => accessProbe(thread, "finish")).toBe(true);
+}
+
+export function stopVirtualRowPaintProbe(thread: Locator) {
+  return accessProbe(thread, "stop");
 }
 
 export function expectPaintedVirtualRowAnchor(
@@ -161,20 +147,15 @@ export function expectPaintedVirtualRowAnchor(
   const evidence = JSON.stringify({ anchor, ...result });
   expect(result.pending, evidence).toBe(false);
   expect(result.samples.length, evidence).toBeGreaterThan(0);
-  expect(
-    result.samples.some(
-      (sample) =>
-        (sample.index !== null && sample.index > anchor.index) ||
-        sample.totalSize > anchor.totalSize,
-    ),
-    evidence,
-  ).toBe(true);
+  const advanced = result.samples.some(
+    (sample) =>
+      (sample.index !== null && sample.index > anchor.index) || sample.totalSize > anchor.totalSize,
+  );
+  expect(advanced, evidence).toBe(true);
   for (const sample of result.samples) {
     expect(sample.intersectsViewport, evidence).toBe(true);
     // Null means the anchor disappeared; Infinity makes that fail the same bound.
-    expect(
-      Math.abs((sample.viewportTop ?? Infinity) - anchor.viewportTop),
-      evidence,
-    ).toBeLessThanOrEqual(2);
+    const offset = Math.abs((sample.viewportTop ?? Infinity) - anchor.viewportTop);
+    expect(offset, evidence).toBeLessThanOrEqual(2);
   }
 }

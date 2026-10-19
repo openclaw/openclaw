@@ -13,6 +13,7 @@ import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const pluginRoot = fileURLToPath(new URL("../../../extensions/x/", import.meta.url));
 const suite = createControlUiE2eSuite({ name: "X native plugin" });
+const desktop = { width: 1280, height: 1000 };
 
 function snapshot(accountId = "primary", enabled = false) {
   return {
@@ -49,7 +50,7 @@ function snapshot(accountId = "primary", enabled = false) {
 suite.define(() => {
   it("builds and mounts X, manages accounts, and retires pending reads with their authority", async () => {
     await suite.withPage(
-      { viewport: { width: 1280, height: 1000 }, locale: "en-US", serviceWorkers: "block" },
+      { viewport: desktop, locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -71,6 +72,12 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}plugin?plugin=x&id=replies`);
         const surface = page.locator(".x-replies");
         const button = (name: string) => surface.getByRole("button", { name, exact: true });
+        const expectMutation = async (method: string, fields: Record<string, unknown>) => {
+          expect((await gateway.waitForRequest(method)).params).toEqual({
+            accountId: "primary",
+            ...fields,
+          });
+        };
         const account = surface.getByRole("combobox", { name: "Bot account" });
         const handle = surface.getByRole("textbox", { name: "Add by X handle" });
         const guestMode = surface.getByRole("switch", { name: "Guest mode" });
@@ -87,10 +94,7 @@ suite.define(() => {
         });
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          for (const viewport of [
-            { width: 1280, height: 1000 },
-            { width: 390, height: 844 },
-          ]) {
+          for (const viewport of [desktop, { width: 390, height: 844 }]) {
             const frame = await takeControlUiScreenshotFrame(
               page,
               surface,
@@ -102,7 +106,7 @@ suite.define(() => {
               frame.png,
             );
           }
-          await page.setViewportSize({ width: 1280, height: 1000 });
+          await page.setViewportSize(desktop);
         }
 
         const added = snapshot();
@@ -116,10 +120,7 @@ suite.define(() => {
         await gateway.setMethodResponse("x.allowlist.add", added);
         await handle.fill("@example_new");
         await button("Add account").click();
-        expect((await gateway.waitForRequest("x.allowlist.add")).params).toEqual({
-          accountId: "primary",
-          username: "@example_new",
-        });
+        await expectMutation("x.allowlist.add", { username: "@example_new" });
         await surface.getByText("@example_new", { exact: true }).waitFor();
         expect(await retainedRow?.evaluate((element) => element.isConnected)).toBe(true);
         await expect.poll(() => handle.inputValue()).toBe("");
@@ -127,18 +128,12 @@ suite.define(() => {
 
         await gateway.setMethodResponse("x.allowlist.remove", snapshot());
         await button("Remove stored entry for @example_new").click();
-        expect((await gateway.waitForRequest("x.allowlist.remove")).params).toEqual({
-          accountId: "primary",
-          userId: "202",
-        });
+        await expectMutation("x.allowlist.remove", { userId: "202" });
         await surface.getByText("@example_new", { exact: true }).waitFor({ state: "detached" });
 
         await gateway.setMethodResponse("x.guests.set", snapshot("primary", true));
         await guestMode.click();
-        expect((await gateway.waitForRequest("x.guests.set")).params).toEqual({
-          accountId: "primary",
-          enabled: true,
-        });
+        await expectMutation("x.guests.set", { enabled: true });
         await expect.poll(() => guestMode.getAttribute("aria-checked")).toBe("true");
 
         await gateway.setMethodResponse("x.allowlist.list", snapshot("secondary"));

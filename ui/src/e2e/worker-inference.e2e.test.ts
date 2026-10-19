@@ -5,6 +5,7 @@ import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  LOCAL_GIT_WORKSPACE_RESPONSES,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -76,7 +77,9 @@ suite.define(() => {
           historyMessages: [],
           deferredMethods: [required ? "sessions.describe" : "sessions.dispatch"],
           methodResponses: {
+            ...LOCAL_GIT_WORKSPACE_RESPONSES,
             "agents.list": {
+              ...LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
               agents: [
                 {
                   id: "main",
@@ -87,20 +90,12 @@ suite.define(() => {
                   workspaceGit: true,
                 },
               ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
               sessionPlacement: required ? { requiredProfile: profile } : {},
             },
             "environments.list": {
               ...(required ? { requiredProfile: "studio-device" } : {}),
               environments: [],
               profiles: [profile],
-            },
-            "worktrees.branches": {
-              repositoryStatus: "git",
-              branches: [{ name: "main", kind: "local" }],
-              defaultBranch: "main",
             },
             "sessions.create": { key: sessionKey },
             "sessions.list": {
