@@ -9,7 +9,7 @@ import type {
 import { ChatAuthorAvatar } from "./chat-author-avatar-view.tsx";
 import "../../../styles/chat/mobile-people.css";
 
-export type ChatMobilePeopleLabels = {
+type ChatMobilePeopleLabels = {
   people: string;
   viewingNow: string;
   creator: string;
