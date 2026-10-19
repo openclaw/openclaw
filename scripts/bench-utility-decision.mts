@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { availableParallelism, cpus, freemem, loadavg, totalmem } from "node:os";
@@ -14,9 +15,11 @@ import {
 } from "./lib/benchmark-harness.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import {
+  isolatedCompletionWorkload,
   narrationWorkload,
   parseUtilityBenchmarkWorkload,
   transportWorkload,
+  withUtilityBenchmarkEnvironment,
   type UtilityBenchmarkWorkload,
 } from "./lib/utility-benchmark-workloads.mts";
 
@@ -113,13 +116,17 @@ function runWorkload<Sample>(
     run: ({ variant, sample }) => ({
       variant,
       sample,
-      result: runBenchmarkWorker({
-        args: [artifacts[variant].entry, String(options.requests)],
-        label: variant,
-        sentinel: `[bench-${definition.name}-result] `,
-        timeoutMs: 120_000,
-        validate: (value) => definition.validate(value, options.requests),
-      }),
+      result: withUtilityBenchmarkEnvironment(definition.name, (env) =>
+        runBenchmarkWorker({
+          args: [artifacts[variant].entry, String(options.requests)],
+          label: variant,
+          sentinel: `[bench-${definition.name}-result] `,
+          timeoutMs: 120_000,
+          spawnWorker: (command, args, settings) =>
+            spawnSync(command, args, { ...settings, env: { ...env, NODE_NO_WARNINGS: "1" } }),
+          validate: (value) => definition.validate(value, options.requests),
+        }),
+      ),
     }),
   });
   const summary = Object.fromEntries(
@@ -164,7 +171,7 @@ function runWorkload<Sample>(
         ]),
       ),
       runs: options.runs,
-      ...(definition.name === "decision-transport" ? { requests: options.requests } : {}),
+      ...(definition.name !== "progress-narration" ? { requests: options.requests } : {}),
       order: "ABAB",
       summary,
       samples,
@@ -210,13 +217,15 @@ await runBenchmarkEntrypoint("bench-utility-decision", () => {
   );
   if (options.help) {
     console.log(
-      "Usage: node scripts/bench-utility-decision.mts --baseline <manifest.json> --candidate <manifest.json> [--workload decision-transport|progress-narration] [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-utility-decision-bench.mts <revision> <workload> first. Narration measures deterministic work counts only; transport measures loopback TCP reuse, not TLS or inference.",
+      "Usage: node scripts/bench-utility-decision.mts --baseline <manifest.json> --candidate <manifest.json> [--workload decision-transport|progress-narration|isolated-completion] [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-utility-decision-bench.mts <revision> <workload> first. Narration measures deterministic work counts; transport and isolated completion use loopback fixtures, not billed inference.",
     );
     return;
   }
   if (options.workload === "decision-transport") {
     runWorkload(transportWorkload, options);
-  } else {
+  } else if (options.workload === "progress-narration") {
     runWorkload(narrationWorkload, options);
+  } else {
+    runWorkload(isolatedCompletionWorkload, options);
   }
 });

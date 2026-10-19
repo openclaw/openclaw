@@ -43,7 +43,7 @@ const runShell = (script: string, env: Record<string, string>) =>
 
 it("isolates the manual benchmark from credentials, caches, publishing, and other modes", () => {
   expect(job.if).toBe(
-    "${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'decision-transport' || inputs.mode == 'progress-narration') }}",
+    "${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'decision-transport' || inputs.mode == 'progress-narration' || inputs.mode == 'isolated-completion') }}",
   );
   expect(job.permissions).toEqual({ contents: "read" });
   expect(job["cache-mode"]).toBe("none");
@@ -59,7 +59,9 @@ it("isolates the manual benchmark from credentials, caches, publishing, and othe
     "seal_release_child_evidence",
   ]) {
     expect(workflow.jobs[name]?.if).toContain("inputs.mode != 'decision-transport'");
-    expect(workflow.jobs[name]?.if).toContain("inputs.mode != 'progress-narration'");
+    expect(workflow.jobs[name]?.if).toContain(
+      "inputs.mode != 'progress-narration' && inputs.mode != 'isolated-completion'",
+    );
   }
   expect(guard.needs?.toSorted()).toEqual(
     Object.keys(workflow.jobs)
@@ -113,6 +115,13 @@ posixIt.each([
     target: "b".repeat(40),
     attempt: "1",
     workload: "progress-narration",
+    status: 0,
+  },
+  {
+    baseline: "a".repeat(40),
+    target: "b".repeat(40),
+    attempt: "1",
+    workload: "isolated-completion",
     status: 0,
   },
   {

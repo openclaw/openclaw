@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { summarizeBenchmarkTimings } from "./benchmark-harness.mts";
 
-export type UtilityBenchmarkWorkload = "decision-transport" | "progress-narration";
+export type UtilityBenchmarkWorkload =
+  | "decision-transport"
+  | "progress-narration"
+  | "isolated-completion";
 
 export function parseUtilityBenchmarkWorkload(value: string): UtilityBenchmarkWorkload {
   assert(
-    value === "decision-transport" || value === "progress-narration",
+    value === "decision-transport" ||
+      value === "progress-narration" ||
+      value === "isolated-completion",
     "Unknown benchmark workload",
   );
   return value;
@@ -21,7 +29,45 @@ export const utilityBenchmarkSources = {
     entry: "scripts/bench-progress-narration-worker.ts",
     fixtures: ["scripts/lib/bench-narration-model.ts"],
   },
+  "isolated-completion": {
+    entry: "scripts/bench-isolated-completion-worker.ts",
+    fixtures: [],
+  },
 } as const;
+
+/** The synchronous worker must have exited before its fresh state is removed. */
+export function withUtilityBenchmarkEnvironment<T>(
+  workload: UtilityBenchmarkWorkload,
+  run: (env: NodeJS.ProcessEnv) => T,
+): T {
+  if (workload !== "isolated-completion") {
+    return run(process.env);
+  }
+  // openclaw-temp-dir: allow process-owned fixture removed after synchronous child exit
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-isolated-bench-")));
+  try {
+    const stateDir = join(root, "state");
+    mkdirSync(join(root, "workspace"));
+    mkdirSync(join(stateDir, "agents", "main", "agent"), { recursive: true });
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of ["PATH", "SystemRoot", "WINDIR", "TMP", "TEMP", "TMPDIR", "TZ"]) {
+      if (process.env[key] !== undefined) {
+        env[key] = process.env[key];
+      }
+    }
+    return run({
+      ...env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: join(stateDir, "openclaw.json"),
+      NODE_NO_WARNINGS: "1",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 function nonNegative(value: unknown): number {
   assert(typeof value === "number" && Number.isFinite(value) && value >= 0);
@@ -159,4 +205,64 @@ export const narrationWorkload = {
       updatesAfterStop: row.updatesAfterStop,
     }));
   },
+};
+
+function parseIsolatedSample(value: unknown, requests: number) {
+  assert(isRecord(value), "Missing isolated completion result");
+  assert.equal(value.workload, "isolated-completion");
+  assert.equal(value.requests, requests);
+  assert.equal(value.socketsAfterPoolClose, 0);
+  assert.equal(value.cleanupFailures, 0);
+  assert.equal(value.inputTokens, requests * 3);
+  assert.equal(value.outputTokens, requests);
+  const timings = (key: string) => {
+    const rows = value[key];
+    assert(Array.isArray(rows) && rows.length === requests);
+    return rows.map(nonNegative);
+  };
+  const observationsMs = timings("observationsMs");
+  const settledMs = timings("settledMs");
+  assert(settledMs.every((duration, index) => duration >= observationsMs[index]!));
+  const connections = nonNegative(value.connections);
+  assert(Number.isInteger(connections) && connections >= 1 && connections <= requests);
+  return {
+    requests,
+    connections,
+    moduleImportMs: nonNegative(value.moduleImportMs),
+    observationsMs,
+    settledMs,
+    dispatchMs: timings("dispatchMs"),
+    cpuMs: nonNegative(value.cpuMs),
+    peakRssBytes: nonNegative(value.peakRssBytes),
+    memoryBefore: memory(value.memoryBefore),
+    memoryAfter: memory(value.memoryAfter),
+    memoryAfterDrain: memory(value.memoryAfterDrain),
+    inputTokens: requests * 3,
+    outputTokens: requests,
+    cleanupFailures: 0,
+    socketsAfterPoolClose: 0,
+  };
+}
+
+export const isolatedCompletionWorkload = {
+  name: "isolated-completion" as const,
+  scope:
+    "real OpenClaw isolated completion with a synthetic loopback model; process-cold, not disk-cold; no billed inference or end-to-end Gateway claims",
+  initialization:
+    "moduleImportMs measures the lazy application graph; first-call timings include ordinary runtime acquisition; CPU includes imports and all calls, not fixture setup or teardown",
+  validate: parseIsolatedSample,
+  summarize: (rows: ReturnType<typeof parseIsolatedSample>[]) => ({
+    moduleImportMs: summarizeBenchmarkTimings(rows.map((row) => row.moduleImportMs)),
+    firstObservationMs: summarizeBenchmarkTimings(rows.map((row) => row.observationsMs[0]!)),
+    firstSettledMs: summarizeBenchmarkTimings(rows.map((row) => row.settledMs[0]!)),
+    warmObservationSampleMedianMs: summarizeBenchmarkTimings(
+      rows.map((row) => summarizeBenchmarkTimings(row.observationsMs.slice(1)).p50),
+    ),
+    warmSettledSampleMedianMs: summarizeBenchmarkTimings(
+      rows.map((row) => summarizeBenchmarkTimings(row.settledMs.slice(1)).p50),
+    ),
+    cpuMs: summarizeBenchmarkTimings(rows.map((row) => row.cpuMs)),
+    peakRssBytes: summarizeBenchmarkTimings(rows.map((row) => row.peakRssBytes)),
+    connectionsPerSample: summarizeBenchmarkTimings(rows.map((row) => row.connections)),
+  }),
 };

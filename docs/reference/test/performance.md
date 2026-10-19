@@ -292,6 +292,46 @@ behavior with synthetic generation, not complete utility inference or delivery.
 
 </Accordion>
 
+<Accordion title="Isolated completion cold and warm paths">
+
+Use paired workflow mode `isolated-completion`. Each sample starts a fresh Node
+process with private empty HOME, state and workspace directories. Only platform
+environment variables are inherited; provider credentials, external auth and
+operator configuration are not. The real `runIsolatedCompletion` path selects
+the built-in OpenClaw runtime and a configured OpenAI-compatible loopback model.
+Plugins are disabled. No model generation or runtime-acquisition code is mocked.
+
+The worker records the application-module import interval separately from the
+first completion and subsequent warm completions. Every completion uses ordinary
+runtime acquisition and the same five-second operation budget. Logical result
+time and physical settlement time are separate: each owning async-work scope must
+be idle before the next call. Dispatch-only callback timings are raw supporting
+evidence, not total latency. The fixture checks one HTTP request per completion,
+the selected runtime, returned text, synthetic usage, and absence of tools.
+
+The default run compares 20 samples of 50 completions per revision in serial ABAB
+order. CPU includes module import and all completions. RSS is sampled every five
+milliseconds and at call boundaries; it is not a retained-memory attribution.
+Client transports and fixture databases close before the worker exits. The parent
+removes the fresh directories only after synchronous child execution returns.
+Build time, fixture setup and final teardown are outside the timing intervals.
+This is process-cold, not disk-cold: operating-system caches are not reset.
+
+Before interpreting results, require equal successful work counts and zero
+retained sockets. A timing improvement needs at least a 10% median reduction with
+no greater than 20% p95 sample-median, CPU or sampled-RSS regression. First-call
+and warm improvements are separate claims. Keep failed deadlines as failures,
+not discarded samples. Historical composite commits cannot establish which
+individual optimization caused a difference; label a current-main comparison
+as a reference rather than an isolated causal experiment.
+
+For manual builds, overlay `scripts/bench-isolated-completion-worker.ts` with the
+shared helpers, pass `isolated-completion` after the source SHA to the builder,
+and pass `--workload isolated-completion` to the driver. No TLS, billed inference,
+Codex runtime, or end-to-end Gateway improvement is measured.
+
+</Accordion>
+
 <Accordion title="Session history (scripts/bench-session-history.ts)">
 
 Measure SQLite history pages and the Gateway's bounded history reader with

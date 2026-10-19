@@ -9,6 +9,7 @@ import { createStateSchemaInlinePlugin } from "./lib/state-schema-inline-plugin.
 import {
   parseUtilityBenchmarkWorkload,
   utilityBenchmarkSources,
+  withUtilityBenchmarkEnvironment,
 } from "./lib/utility-benchmark-workloads.mts";
 
 await runBenchmarkEntrypoint("build-utility-decision-bench", async () => {
@@ -88,11 +89,14 @@ await runBenchmarkEntrypoint("build-utility-decision-bench", async () => {
   if (substitutions !== (workload === "progress-narration" ? 1 : 0)) {
     throw new Error("Benchmark model substitution did not match its declared boundary");
   }
-  const smoke = spawnSync(process.execPath, [path.join(outDir, "worker.mjs"), "2"], {
-    encoding: "utf8",
-    timeout: 30_000,
-    maxBuffer: 2 * 1024 * 1024,
-  });
+  const smoke = withUtilityBenchmarkEnvironment(workload, (env) =>
+    spawnSync(process.execPath, [path.join(outDir, "worker.mjs"), "2"], {
+      env,
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 2 * 1024 * 1024,
+    }),
+  );
   if (smoke.error || smoke.status !== 0) {
     throw new Error(`Compiled worker smoke failed: ${smoke.error?.message ?? smoke.stderr}`);
   }
