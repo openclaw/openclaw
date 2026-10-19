@@ -49,11 +49,10 @@ const context = {
 };
 const options = { apiKey: "synthetic-radius-token" };
 
-function response(events: unknown[], trailing = "") {
+function response(events: readonly unknown[]) {
   const wire =
     ": keepalive\r\n\r\n" +
-    events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join("") +
-    trailing;
+    events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join("");
   const bytes = new TextEncoder().encode(wire);
   return new Response(
     new ReadableStream<Uint8Array>({
@@ -86,6 +85,34 @@ function openResponse(event: unknown) {
   };
 }
 
+const toolStart = (contentIndex = 0, toolName = "lookup") => ({
+  type: "toolcall_start",
+  contentIndex,
+  id: "call-1",
+  toolName,
+});
+const toolEnd = (
+  arguments_: unknown,
+  contentIndex = 0,
+  name = "lookup",
+  thoughtSignature?: string,
+) => ({
+  type: "toolcall_end",
+  contentIndex,
+  toolCall: {
+    type: "toolCall",
+    id: "call-1",
+    name,
+    arguments: arguments_,
+    ...(thoughtSignature === undefined ? {} : { thoughtSignature }),
+  },
+});
+const done = (reason = "stop") => ({ type: "done", reason, usage });
+const run = (extra: Parameters<ReturnType<typeof createRadiusStreamFn>>[2] = {}) =>
+  createRadiusStreamFn()(model, context, { ...options, ...extra });
+const requestBody = () => new Response(fetchMock.mock.calls[0]![1]?.body).json();
+const mockEvents = (events: readonly unknown[]) => fetchMock.mockResolvedValue(response(events));
+
 beforeEach(() => {
   fetchMock.mockReset();
   vi.mocked(parseStreamingJson).mockClear();
@@ -93,13 +120,9 @@ beforeEach(() => {
 
 describe("Radius native message transport", () => {
   it("omits disabled reasoning from Pi requests without changing the output cap", async () => {
-    fetchMock.mockResolvedValue(response([{ type: "done", reason: "stop", usage }]));
-    await createRadiusStreamFn()(model, context, {
-      ...options,
-      reasoning: "off",
-      maxTokens: 1024,
-    }).result();
-    expect(await new Response(fetchMock.mock.calls[0]![1]?.body).json()).toEqual({
+    mockEvents([done()]);
+    await run({ reasoning: "off", maxTokens: 1024 }).result();
+    expect(await requestBody()).toEqual({
       model: model.id,
       context,
       options: { maxTokens: 1024 },
@@ -112,20 +135,14 @@ describe("Radius native message transport", () => {
     const deltas = Array.from({ length: Math.ceil(json.length / 1000) }, (_, index) =>
       json.slice(index * 1000, (index + 1) * 1000),
     );
-    fetchMock.mockResolvedValue(
-      response([
-        { type: "start" },
-        { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "write" },
-        ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta })),
-        {
-          type: "toolcall_end",
-          contentIndex: 0,
-          toolCall: { type: "toolCall", id: "call-1", name: "write", arguments: toolArguments },
-        },
-        { type: "done", reason: "toolUse", usage },
-      ]),
-    );
-    const stream = createRadiusStreamFn()(model, context, options);
+    mockEvents([
+      { type: "start" },
+      toolStart(0, "write"),
+      ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta })),
+      toolEnd(toolArguments, 0, "write"),
+      done("toolUse"),
+    ]);
+    const stream = run();
     const observed: string[] = [];
     for await (const event of stream) {
       if (event.type === "toolcall_delta") {
@@ -150,7 +167,7 @@ describe("Radius native message transport", () => {
     async (delimiter) => {
       const oversized = JSON.stringify({ type: "start", padding: "a".repeat(16 * 1024 * 1024) });
       fetchMock.mockResolvedValue(new Response(`data: ${oversized}${delimiter}`));
-      const result = await createRadiusStreamFn()(model, context, options).result();
+      const result = await run().result();
       expect(result).toMatchObject({
         stopReason: "error",
         errorMessage: "Radius SSE event exceeds 16 MiB",
@@ -159,68 +176,48 @@ describe("Radius native message transport", () => {
   );
 
   it("preserves signed content, authoritative tool calls and usage across fragmented SSE", async () => {
-    fetchMock.mockResolvedValue(
-      response([
-        { type: "start" },
-        { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_delta", contentIndex: 0, delta: "Consider" },
-        {
-          type: "thinking_end",
-          contentIndex: 0,
-          content: "Consider the result",
-          contentSignature: "thinking-signature",
-          redacted: true,
-        },
-        { type: "text_start", contentIndex: 1 },
-        { type: "text_delta", contentIndex: 1, delta: "Héllo" },
-        {
-          type: "text_end",
-          contentIndex: 1,
-          content: "Héllo!",
-          contentSignature: "text-signature",
-        },
-        { type: "toolcall_start", contentIndex: 2, id: "call-1", toolName: "lookup" },
-        { type: "toolcall_delta", contentIndex: 2, delta: '{"city":"Vie' },
-        {
-          type: "toolcall_end",
-          contentIndex: 2,
-          toolCall: {
-            type: "toolCall",
-            id: "call-1",
-            name: "lookup",
-            arguments: { city: "Vienna" },
-            thoughtSignature: "tool-signature",
-          },
-        },
-        { type: "done", reason: "toolUse", usage, responseId: "response-1" },
-      ]),
-    );
-    const stream = createRadiusStreamFn()(model, context, {
-      ...options,
+    mockEvents([
+      { type: "start" },
+      { type: "thinking_start", contentIndex: 0 },
+      { type: "thinking_delta", contentIndex: 0, delta: "Consider" },
+      {
+        type: "thinking_end",
+        contentIndex: 0,
+        content: "Consider the result",
+        contentSignature: "thinking-signature",
+        redacted: true,
+      },
+      { type: "text_start", contentIndex: 1 },
+      { type: "text_delta", contentIndex: 1, delta: "Héllo" },
+      {
+        type: "text_end",
+        contentIndex: 1,
+        content: "Héllo!",
+        contentSignature: "text-signature",
+      },
+      toolStart(2),
+      { type: "toolcall_delta", contentIndex: 2, delta: '{"city":"Vie' },
+      toolEnd({ city: "Vienna" }, 2, "lookup", "tool-signature"),
+      { ...done("toolUse"), responseId: "response-1" },
+    ]);
+    const requestOptions = {
       reasoning: "high",
       maxTokens: 512,
       temperature: 0.2,
       sessionId: "session-1",
       cacheRetention: "long",
       toolChoice: "required",
-    });
+    } as const;
+    const stream = run(requestOptions);
     const events: AssistantMessageEvent[] = [];
     for await (const event of stream) {
       events.push(event);
     }
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "thinking_start",
-      "thinking_delta",
-      "thinking_end",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-      "done",
-    ]);
+    expect(events.map((event) => event.type)).toEqual(
+      "start thinking_start thinking_delta thinking_end text_start text_delta text_end toolcall_start toolcall_delta toolcall_end done".split(
+        " ",
+      ),
+    );
     expect(await stream.result()).toMatchObject({
       stopReason: "toolUse",
       responseId: "response-1",
@@ -247,26 +244,19 @@ describe("Radius native message transport", () => {
     expect(new Headers(request?.headers).get("authorization")).toBe(
       "Bearer synthetic-radius-token",
     );
-    expect(await new Response(request?.body).json()).toEqual({
+    expect(await requestBody()).toEqual({
       model: model.id,
       context,
-      options: {
-        reasoning: "high",
-        maxTokens: 512,
-        temperature: 0.2,
-        sessionId: "session-1",
-        cacheRetention: "long",
-        toolChoice: "required",
-      },
+      options: requestOptions,
     });
   });
 
   it("applies payload replacements and observes response metadata before body events", async () => {
-    fetchMock.mockResolvedValue(response([{ type: "done", reason: "stop", usage }]));
+    mockEvents([done()]);
     const onResponse = vi.fn();
-    const stream = createRadiusStreamFn()(model, context, {
-      ...options,
-      onPayload: () => ({ model: "claude-sonnet-4", context: { messages: [] }, options: {} }),
+    const replacement = { model: "claude-sonnet-4", context: { messages: [] }, options: {} };
+    const stream = run({
+      onPayload: () => replacement,
       onResponse,
     });
     for await (const event of stream) {
@@ -280,28 +270,22 @@ describe("Radius native message transport", () => {
       },
       model,
     );
-    expect(await new Response(fetchMock.mock.calls[0]![1]?.body).json()).toEqual({
-      model: "claude-sonnet-4",
-      context: { messages: [] },
-      options: {},
-    });
+    expect(await requestBody()).toEqual(replacement);
   });
 
   it.each(["error", "aborted"])(
     "preserves server %s terminal state and accounting",
     async (reason) => {
-      fetchMock.mockResolvedValue(
-        response([
-          {
-            type: "error",
-            reason,
-            errorMessage: "Radius stopped generation",
-            usage,
-            responseId: "error-response",
-          },
-        ]),
-      );
-      const result = await createRadiusStreamFn()(model, context, options).result();
+      mockEvents([
+        {
+          type: "error",
+          reason,
+          errorMessage: "Radius stopped generation",
+          usage,
+          responseId: "error-response",
+        },
+      ]);
+      const result = await run().result();
       expect(result).toMatchObject({
         stopReason: reason,
         errorMessage: "Radius stopped generation",
@@ -312,42 +296,24 @@ describe("Radius native message transport", () => {
   );
 
   it.each([
-    {
-      name: "missing terminal",
-      events: [
+    [
+      "missing terminal",
+      [
         { type: "text_start", contentIndex: 0 },
         { type: "text_delta", contentIndex: 0, delta: "partial" },
       ],
-      error: "without a terminal event",
-    },
-    {
-      name: "unfinished tool",
-      events: [
-        { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "lookup" },
-        { type: "done", reason: "toolUse", usage },
-      ],
-      error: "unfinished tool call",
-    },
-    {
-      name: "invalid event",
-      events: [{ type: "text_delta", contentIndex: 0, delta: "orphan" }],
-      error: "content block sequence",
-    },
-    {
-      name: "non-object tool arguments",
-      events: [
-        { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "lookup" },
-        {
-          type: "toolcall_end",
-          contentIndex: 0,
-          toolCall: { type: "toolCall", id: "call-1", name: "lookup", arguments: [] },
-        },
-      ],
-      error: "tool",
-    },
-  ])("fails $name instead of silently completing", async ({ events, error }) => {
-    fetchMock.mockResolvedValue(response(events));
-    const stream = createRadiusStreamFn()(model, context, options);
+      "without a terminal event",
+    ],
+    ["unfinished tool", [toolStart(), done("toolUse")], "unfinished tool call"],
+    [
+      "invalid event",
+      [{ type: "text_delta", contentIndex: 0, delta: "orphan" }],
+      "content block sequence",
+    ],
+    ["non-object tool arguments", [toolStart(), toolEnd([])], "tool"],
+  ] as const)("fails %s instead of silently completing", async (_name, events, error) => {
+    mockEvents(events);
+    const stream = run();
     const terminal: AssistantMessageEvent[] = [];
     for await (const event of stream) {
       if (event.type === "error" || event.type === "done") {
@@ -369,10 +335,7 @@ describe("Radius native message transport", () => {
     const controller = new AbortController();
     const open = openResponse({ type: "start" });
     fetchMock.mockResolvedValue(open.response);
-    const stream = createRadiusStreamFn()(model, context, {
-      ...options,
-      signal: controller.signal,
-    });
+    const stream = run({ signal: controller.signal });
     for await (const event of stream) {
       if (event.type === "start") {
         controller.abort();
@@ -383,9 +346,9 @@ describe("Radius native message transport", () => {
   });
 
   it("releases an open response after terminal completion", async () => {
-    const open = openResponse({ type: "done", reason: "stop", usage });
+    const open = openResponse(done());
     fetchMock.mockResolvedValue(open.response);
-    expect(await createRadiusStreamFn()(model, context, options).result()).toMatchObject({
+    expect(await run().result()).toMatchObject({
       stopReason: "stop",
     });
     await open.cancelled;
@@ -397,10 +360,7 @@ describe("Radius native message transport", () => {
       new Response(JSON.stringify({ error: { message: "Quota exceeded" } }), { status: 429 }),
     );
     const onResponse = vi.fn();
-    const result = await createRadiusStreamFn()(model, context, {
-      ...options,
-      onResponse,
-    }).result();
+    const result = await run({ onResponse }).result();
     expect(result).toMatchObject({
       stopReason: "error",
       errorMessage: expect.stringContaining("429"),
@@ -410,8 +370,7 @@ describe("Radius native message transport", () => {
 
   it("does not dispatch after cancellation during payload preparation", async () => {
     const controller = new AbortController();
-    const result = await createRadiusStreamFn()(model, context, {
-      ...options,
+    const result = await run({
       signal: controller.signal,
       onPayload: async () => {
         controller.abort();

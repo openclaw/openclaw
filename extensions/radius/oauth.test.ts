@@ -1,7 +1,7 @@
-import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginRadiusOAuth, refreshRadiusOAuthCredential } from "./oauth.js";
+import { authContext as context, devicePayload, tokenPayload } from "./test-support.js";
 
 const { guardedFetch, release } = vi.hoisted(() => ({
   guardedFetch: vi.fn(),
@@ -10,11 +10,7 @@ const { guardedFetch, release } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: guardedFetch }));
 
 function requestAt(index: number) {
-  const call = guardedFetch.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected Radius OAuth request ${index}`);
-  }
-  return call[0];
+  return guardedFetch.mock.calls[index]![0];
 }
 
 function reply(payload: unknown, status = 200) {
@@ -25,53 +21,20 @@ function reply(payload: unknown, status = 200) {
 }
 
 function device(overrides: Record<string, unknown> = {}) {
-  reply({
-    device_code: "device-secret",
-    user_code: "ABCD-EFGH",
-    verification_uri: "https://radius.earendil.com/device",
-    expires_in: 120,
-    interval: 1,
-    ...overrides,
-  });
+  reply({ ...devicePayload, ...overrides });
 }
 
 function token(overrides: Record<string, unknown> = {}) {
-  reply({
-    access_token: "access-test",
-    refresh_token: "refresh-test",
-    expires_in: 3600,
-    ...overrides,
-  });
+  reply({ ...tokenPayload, ...overrides });
 }
 
-function context(overrides: Partial<ProviderAuthContext> = {}) {
-  const progress = { update: vi.fn(), stop: vi.fn() };
-  const unexpectedPrompt = async () => {
-    throw new Error("Unexpected prompt");
-  };
-  const ctx: ProviderAuthContext = {
-    config: {},
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    prompter: {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: unexpectedPrompt,
-      multiselect: unexpectedPrompt,
-      text: unexpectedPrompt,
-      confirm: unexpectedPrompt,
-      progress: vi.fn(() => progress),
-    },
-    isRemote: false,
-    openUrl: vi.fn(async () => {}),
-    oauth: {
-      createVpsAwareHandlers: () => {
-        throw new Error("Unexpected callback flow");
-      },
-    },
-    ...overrides,
-  };
-  return { ctx, progress };
+const formAt = (index: number) => Object.fromEntries(requestAt(index).init.body);
+let defaults: ReturnType<typeof context>;
+
+async function rejectLogin(message: string, ms = 1_000, ctx = defaults.ctx) {
+  const rejection = expect(loginRadiusOAuth(ctx)).rejects.toThrow(message);
+  await vi.advanceTimersByTimeAsync(ms);
+  await rejection;
 }
 
 beforeEach(() => {
@@ -79,6 +42,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-09-11T12:00:00Z"));
   guardedFetch.mockReset();
   release.mockClear();
+  defaults = context();
 });
 
 afterEach(() => {
@@ -90,8 +54,7 @@ describe("Radius OAuth", () => {
   it("accepts the fractional polling interval returned by the live Radius service", async () => {
     device({ interval: 0.1 });
     token();
-    const { ctx } = context();
-    const result = loginRadiusOAuth(ctx).then(
+    const result = loginRadiusOAuth(defaults.ctx).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
@@ -107,7 +70,7 @@ describe("Radius OAuth", () => {
     reply({ error: "authorization_pending" }, 400);
     reply({ error: "slow_down" }, 400);
     token();
-    const { ctx, progress } = context();
+    const { ctx, progress } = defaults;
     const result = loginRadiusOAuth(ctx);
 
     await vi.advanceTimersByTimeAsync(0);
@@ -132,12 +95,12 @@ describe("Radius OAuth", () => {
       requireHttps: true,
       policy: { hostnameAllowlist: ["radius.pi.dev"] },
     });
-    expect(Object.fromEntries(requestAt(0).init.body)).toEqual({
+    expect(formAt(0)).toEqual({
       client_id: "pi-gateway",
       scope: "gateway offline_access",
     });
     expect(requestAt(1).url).toBe("https://radius.pi.dev/v1/oauth/token");
-    expect(Object.fromEntries(requestAt(1).init.body)).toEqual({
+    expect(formAt(1)).toEqual({
       client_id: "pi-gateway",
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       device_code: "device-secret",
@@ -153,20 +116,14 @@ describe("Radius OAuth", () => {
   ])("terminates on %s without leaking the server description", async (code, message) => {
     device();
     reply({ error: code, error_description: "secret-response-value" }, 400);
-    const { ctx, progress } = context();
-    const rejection = expect(loginRadiusOAuth(ctx)).rejects.toThrow(message);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await rejection;
+    await rejectLogin(message);
     expect(guardedFetch).toHaveBeenCalledTimes(2);
-    expect(progress.stop).toHaveBeenCalledWith("Radius sign-in stopped");
+    expect(defaults.progress.stop).toHaveBeenCalledWith("Radius sign-in stopped");
   });
 
   it("stops at device expiry before issuing a late poll", async () => {
     device({ expires_in: 2, interval: 5 });
-    const { ctx } = context();
-    const rejection = expect(loginRadiusOAuth(ctx)).rejects.toThrow("expired");
-    await vi.advanceTimersByTimeAsync(2_000);
-    await rejection;
+    await rejectLogin("expired", 2_000);
     expect(guardedFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -223,9 +180,7 @@ describe("Radius OAuth", () => {
           }
         },
       });
-      const rejection = expect(loginRadiusOAuth(ctx)).rejects.toThrow("Login revoked");
-      await vi.advanceTimersByTimeAsync(1_000);
-      await rejection;
+      await rejectLogin("Login revoked", 1_000, ctx);
       expect(send).not.toHaveBeenCalled();
     },
   );
@@ -238,7 +193,7 @@ describe("Radius OAuth", () => {
     { verification_uri: "https://example.com/device" },
   ])("rejects malformed pairing data before browser effects: %j", async (invalid) => {
     device(invalid);
-    const { ctx } = context();
+    const { ctx } = defaults;
     await expect(loginRadiusOAuth(ctx)).rejects.toThrow(/invalid/);
     expect(ctx.openUrl).not.toHaveBeenCalled();
     expect(ctx.prompter.note).not.toHaveBeenCalled();
@@ -263,7 +218,7 @@ describe("Radius OAuth", () => {
         refresh: refreshToken ?? "old-refresh",
         expires: Date.now() + 3_540_000,
       });
-      expect(Object.fromEntries(requestAt(0).init.body)).toEqual({
+      expect(formAt(0)).toEqual({
         client_id: "pi-gateway",
         grant_type: "refresh_token",
         refresh_token: "old-refresh",
@@ -277,10 +232,7 @@ describe("Radius OAuth", () => {
     async (invalid) => {
       device();
       token(invalid);
-      const { ctx } = context();
-      const rejection = expect(loginRadiusOAuth(ctx)).rejects.toThrow("invalid credentials");
-      await vi.advanceTimersByTimeAsync(1_000);
-      await rejection;
+      await rejectLogin("invalid credentials");
       expect(release).toHaveBeenCalledTimes(2);
     },
   );

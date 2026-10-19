@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
-import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import radiusPlugin from "./index.js";
+import { authContext, devicePayload, tokenPayload } from "./test-support.js";
 
 const { fetchGuard, streamFetch, resolveAuth } = vi.hoisted(() => ({
   fetchGuard: vi.fn(),
@@ -53,51 +53,22 @@ it.each([true, false])(
     }
     fetchGuard.mockImplementation(async ({ url }: { url: string }) => {
       const payload = url.endsWith("/oauth/device")
-        ? {
-            device_code: "device-test",
-            user_code: "ABCD-EFGH",
-            verification_uri: "https://radius.earendil.com/device",
-            expires_in: 120,
-            interval: 1,
-          }
+        ? devicePayload
         : url.endsWith("/oauth/token")
-          ? { access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 }
+          ? tokenPayload
           : {
               models: [catalogModel("balanced", "Balanced")],
               baseUrl: "https://radius.pi.dev/v1",
             };
       return { response: Response.json(payload), release: async () => {} };
     });
-    let codeShown!: () => void;
-    const deviceCode = new Promise<void>((resolve) => {
-      codeShown = resolve;
-    });
-    const unexpectedPrompt = async () => {
-      throw new Error("Radius sign-in must not ask for text or selection");
-    };
-    const ctx: ProviderAuthContext = {
+    const { promise: deviceCode, resolve: codeShown } = Promise.withResolvers<void>();
+    const { ctx } = authContext({
       config: { agents: { defaults: { model: { primary: "other/existing" } } } },
       credentialOnly,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      prompter: {
-        intro: async () => {},
-        outro: async () => {},
-        note: async () => {},
-        deviceCode: async () => codeShown(),
-        select: unexpectedPrompt,
-        multiselect: unexpectedPrompt,
-        text: unexpectedPrompt,
-        confirm: unexpectedPrompt,
-        progress: () => ({ update: () => {}, stop: () => {} }),
-      },
       isRemote: true,
-      openUrl: vi.fn(async () => {}),
-      oauth: {
-        createVpsAwareHandlers: () => {
-          throw new Error("Radius sign-in must use its device grant");
-        },
-      },
-    };
+    });
+    ctx.prompter.deviceCode = async () => codeShown();
     vi.useFakeTimers();
     const pending = method.run(ctx);
     await deviceCode;
@@ -147,20 +118,13 @@ it("routes a discovered organization model through the registered native transpo
   const modelsPath = path.join(tempDirs.make("radius-catalog-"), "models.json");
   fs.writeFileSync(modelsPath, JSON.stringify({ providers: { radius: catalog } }));
   const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
-  const model = registry.find("radius", metadata.id);
-  if (!model) {
-    throw new Error("Discovered Radius model is missing from the registry");
-  }
+  const model = registry.find("radius", metadata.id)!;
   expect(model.api).toBe("pi-messages");
-  const streamFn = provider.createStreamFn?.({
+  const streamFn = provider.createStreamFn!({
     model,
     modelId: model.id,
     provider: "radius",
   });
-  expect(streamFn).toBeTypeOf("function");
-  if (!streamFn) {
-    throw new Error("Missing Radius transport");
-  }
   const usage = {
     input: 1,
     output: 1,
@@ -191,21 +155,17 @@ it("routes a discovered organization model through the registered native transpo
     content: [{ type: "text", text: "Connected" }],
     usage,
   });
-  const call = streamFetch.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected a Radius model request");
-  }
-  const [url, request] = call;
+  const [url, request] = streamFetch.mock.calls[0]!;
   expect(url).toBe("https://radius.pi.dev/v1/messages");
   expect(JSON.parse(request.body).model).toBe("organization/custom-model");
 });
 
 it("resolves a cold agent's model from its pinned account without inventing unknown models", async () => {
   const model = catalogModel("organization/cold-model", "Cold model");
-  fetchGuard.mockImplementation(async () => ({
+  fetchGuard.mockResolvedValue({
     response: Response.json({ baseUrl: "https://radius.pi.dev/v1", models: [model] }),
     release: async () => undefined,
-  }));
+  });
   resolveAuth.mockResolvedValue({ apiKey: "test-pinned-key" });
   const provider = await registerSingleProviderPlugin(radiusPlugin);
   const ctx = {
