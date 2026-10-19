@@ -65,6 +65,7 @@ const additionalLintRules: Partial<Record<Group, string[]>> = {
     "eslint/prefer-object-has-own",
     "unicorn/no-instanceof-builtins",
     "unicorn/no-array-sort",
+    "unicorn/no-useless-length-check",
     "typescript/prefer-for-of",
     "typescript/no-unnecessary-type-conversion",
     "typescript/prefer-includes",
