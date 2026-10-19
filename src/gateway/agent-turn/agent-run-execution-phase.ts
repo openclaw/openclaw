@@ -79,7 +79,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
   }
   const run = () =>
     // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
-    runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params));
+    runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params, cleanup.resolve));
   try {
     await runWithSessionControllerCleanup(() =>
       input ? withSessionControllerSource(input, run) : run(),
@@ -95,7 +95,10 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
   }
 }
 
-async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<void> {
+async function executeAgentRun(
+  params: StartAgentRunExecutionParams,
+  acknowledgeCleanup: () => void,
+): Promise<void> {
   const { prepared } = params;
   let deliverFinal: (() => void) | undefined;
   const deferFinal = (...args: Parameters<typeof params.io.emitFinal>) => {
@@ -123,9 +126,17 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
   let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   let dispatched = false;
+  let executionSettled = false;
+  let runtimeDisposed = false;
   try {
-    await using runtimeResources = new AsyncDisposableStack();
-    let preparedModelRuntimeLease = runtimeResources.use(prepared.preparedModelRuntimeLease);
+    await using runtimeResources = {
+      stack: new AsyncDisposableStack(),
+      async [Symbol.asyncDispose]() {
+        await this.stack.disposeAsync();
+        runtimeDisposed = true;
+      },
+    };
+    let preparedModelRuntimeLease = runtimeResources.stack.use(prepared.preparedModelRuntimeLease);
     let replyDispatchRuntime = prepared.replyDispatchRuntime;
     let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
@@ -283,7 +294,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             workspaceDir: entry.spawnedWorkspaceDir,
             cwd: entry.spawnedCwd,
           });
-          preparedModelRuntimeLease = runtimeResources.use(
+          preparedModelRuntimeLease = runtimeResources.stack.use(
             await prepared.acquireWorkspaceModelRuntime(workspaceOverride),
           );
           assertDispatchCurrent();
@@ -688,6 +699,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
     await (prepared.activeGatewayWorkAdmission
       ? prepared.activeGatewayWorkAdmission.run(execute)
       : execute());
+    executionSettled = true;
     deliverFinal?.();
   } finally {
     // Shutdown joins the execution through asynchronous runtime disposal, not just bookkeeping.
@@ -698,6 +710,10 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       if (!dispatched) {
         prepared.followupCompletion?.finishExecution(params.runId);
       }
+    }
+    // A refused final response does not undo completed execution and disposal.
+    if (executionSettled && runtimeDisposed) {
+      acknowledgeCleanup();
     }
   }
 }

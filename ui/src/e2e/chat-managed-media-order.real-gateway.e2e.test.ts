@@ -15,6 +15,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -396,6 +397,19 @@ suite.define(() => {
                 .waitFor({ state: "detached" });
               await bubble.getByText(closing, { exact: true }).waitFor();
               const assertDecoded = async () => {
+                // Run retirement starts a final history read that can replace live image nodes.
+                await page.waitForFunction((expectedSessionKey) => {
+                  const state = document.querySelector<HTMLElement & { state?: ChatState }>(
+                    'openclaw-chat-pane[aria-hidden="false"]',
+                  )?.state;
+                  return (
+                    state?.sessionKey === expectedSessionKey &&
+                    state.chatRunId === null &&
+                    state.chatStream === null &&
+                    !state.chatLoading &&
+                    !state.chatError
+                  );
+                }, sessionKey);
                 await expect.poll(() => bubble.count()).toBe(1);
                 await expect
                   .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())

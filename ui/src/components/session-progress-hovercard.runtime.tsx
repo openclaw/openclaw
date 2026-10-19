@@ -18,7 +18,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import type { AppSidebarElement } from "./app-sidebar.tsx";
+import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
 import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
@@ -50,11 +50,15 @@ type SessionProgressHovercardProps = {
   client: GatewayBrowserClient | null;
   context: ApplicationContext | null;
   gateway: ApplicationGateway | null;
+  lookupSidebarRow: AppSidebarMethods["findSidebarHovercardRowByKey"] | null;
 };
 
 export type SessionProgressHovercardProvider = SolidBridgeElement<SessionProgressHovercardProps>;
 
-function createSessionProgressHovercard(props: SessionProgressHovercardProps, host: HTMLElement) {
+function createSessionProgressHovercard(
+  props: SessionProgressHovercardProps,
+  host: SessionProgressHovercardProvider,
+) {
   const sessionLinkTitler = new SessionLinkTitler(host);
   const applicationContext = createMemo(() => props.context);
   const applicationGateway = createMemo(() => props.gateway);
@@ -286,9 +290,7 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
     if (!target || !session || !sessionKey || !artifactKey || !open) {
       return;
     }
-    const sidebarRow = host
-      .querySelector<AppSidebarElement>("openclaw-app-sidebar")
-      ?.findSidebarHovercardRowByKey(sessionKey);
+    const sidebarRow = host.lookupSidebarRow?.(sessionKey);
     const pullRequests = pullRequestStore?.get(artifactKey);
     const currentProgressCard = progressCards?.get(session);
     if (currentProgressCard !== undefined) {
@@ -598,6 +600,7 @@ export const SessionProgressHovercard = defineSolidBridge<SessionProgressHoverca
       client: { default: null, attribute: false },
       context: { default: null, attribute: false },
       gateway: { default: null, attribute: false },
+      lookupSidebarRow: { default: null, attribute: false },
     },
   },
 );

@@ -1,11 +1,4 @@
-import {
-  For,
-  createEffect,
-  createMemo,
-  createRenderEffect,
-  createUniqueId,
-  onCleanup,
-} from "solid-js";
+import { For, createMemo, createUniqueId, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import {
@@ -21,6 +14,7 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
@@ -334,17 +328,6 @@ function ChatQueueItem(rowProps: {
   const steered = createMemo(() => item().queueMode === "steer" && stateLabel() === null);
   const busy = createMemo(() => item().sendState === "executing-command");
   const editing = createMemo(() => edit()?.editingId === item().id);
-  let editInput: HTMLTextAreaElement | undefined;
-  createRenderEffect(
-    () => (editing() ? (edit()?.editingText ?? item().text) : undefined),
-    (value) => {
-      // Recovery may publish its draft after the editor mounts. Native input already matches.
-      if (editInput && value !== undefined && editInput.value !== value) {
-        editInput.value = value;
-        fitQueueEditInput(editInput);
-      }
-    },
-  );
   const mentionText = createMemo(() =>
     editing() ? (edit()?.editingText ?? item().text) : item().text,
   );
@@ -365,20 +348,6 @@ function ChatQueueItem(rowProps: {
   );
   const segment = createMemo(() => reorder().segments.find((ids) => ids.includes(item().id)) ?? []);
   const moveIndex = createMemo(() => segment().indexOf(item().id));
-  let keyboardMoveHandle: HTMLButtonElement | undefined;
-  createEffect(reorder, () => {
-    const handle = keyboardMoveHandle;
-    keyboardMoveHandle = undefined;
-    // Keyed moves can blur descendants after the handler's microtask. Restore
-    // the retained handle only after this reorder projection commits its DOM.
-    if (
-      handle?.isConnected &&
-      !handle.disabled &&
-      handle.ownerDocument.activeElement === handle.ownerDocument.body
-    ) {
-      handle.focus({ preventScroll: true });
-    }
-  });
   const move = createMemo(() => rowProps.controls.onQueueMove);
   // Queue-level: once any row can move, every row's own state icon becomes the
   // handle so text stays on one x without adding a second grabber column.
@@ -512,10 +481,17 @@ function ChatQueueItem(rowProps: {
             const targetId = segment()[moveIndex() + delta];
             if (targetId) {
               const handle = event.currentTarget;
-              if (handle instanceof HTMLButtonElement) {
-                keyboardMoveHandle = handle;
-              }
               move()?.(item().id, targetId);
+              // Restore only after the keyed move settles, without stealing newer focus.
+              onSettled(() => {
+                if (
+                  handle.isConnected &&
+                  !handle.disabled &&
+                  handle.ownerDocument.activeElement === handle.ownerDocument.body
+                ) {
+                  handle.focus({ preventScroll: true });
+                }
+              });
             }
           }}
         >
@@ -550,10 +526,10 @@ function ChatQueueItem(rowProps: {
         <textarea
           class="chat-queue__edit-input"
           rows="1"
-          ref={(element) => {
-            editInput = element;
-            mountQueueEditInput(element, edit()?.editingText ?? item().text);
-          }}
+          ref={[
+            (element) => mountQueueEditInput(element, edit()?.editingText ?? item().text),
+            liveValue(() => edit()?.editingText ?? item().text, fitQueueEditInput),
+          ]}
           aria-label={t("chat.queue.editQueuedMessage")}
           onBeforeInput={(event) => {
             queueMentionInputs.set(event.currentTarget, {

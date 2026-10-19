@@ -405,11 +405,14 @@ export type ReplyOperationAdmission = {
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
-/** The exact backend facts owned by one reply operation. Embedded attempts extend
+/** Each attach call owns a fresh identity, even when it reuses a backend handle. */
+export type ReplyBackendAttachment = { readonly handle: ReplyBackendHandle };
+
+/** The exact run facts owned by one reply operation. Embedded attempts extend
  * this object in place and the runner's run-id index points back to that record. */
 type SessionControllerRunAttachment = {
   readonly operation: ReplyOperation;
-  backend?: ReplyBackendHandle;
+  backend?: ReplyBackendAttachment;
   projectSessionActive?: boolean;
 };
 
@@ -853,10 +856,7 @@ export type EmbeddedRunRegistration = {
 };
 
 /** The controller's exact attachment for one scoped embedded attempt. */
-export type EmbeddedRunAttachment = EmbeddedRunRegistration & {
-  operation: ReplyOperation;
-  backend?: ReplyBackendHandle;
-};
+export type EmbeddedRunAttachment = EmbeddedRunRegistration & SessionControllerRunAttachment;
 
 /** Unhosted or explicitly detached attempts have no controller operation. */
 export type DetachedEmbeddedRunAttachment = EmbeddedRunRegistration & {

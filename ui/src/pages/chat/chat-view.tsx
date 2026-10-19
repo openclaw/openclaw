@@ -55,10 +55,18 @@ type ChatViewInput = {
   frame: ChatViewFrame;
   presented: boolean;
   application?: ApplicationContext;
+  bindTranscriptViewport: (element: HTMLDivElement) => () => void;
+  getTranscriptElement: () => HTMLDivElement | null;
 };
 
 function ChatTranscript(input: ChatViewInput) {
-  return <ChatThread props={input.frame.threadProps} transcript={input.props.transcript} />;
+  return (
+    <ChatThread
+      props={input.frame.threadProps}
+      transcript={input.props.transcript}
+      bindViewport={input.bindTranscriptViewport}
+    />
+  );
 }
 
 function ChatFooterContent(input: ChatViewInput) {
@@ -162,6 +170,7 @@ function ChatComposerView(input: ChatViewInput) {
   return (
     <ChatComposer
       {...input.props}
+      getTranscriptElement={input.getTranscriptElement}
       progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
       progressCardInitialLoading={
         input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
@@ -180,7 +189,11 @@ function ChatComposerView(input: ChatViewInput) {
 
 function ChatComposerCompanion(input: ChatViewInput) {
   const questionPanel = createComposerQuestionPanel(
-    () => ({ ...input.props, asyncQuestions: input.frame.asyncQuestions }),
+    () => ({
+      ...input.props,
+      asyncQuestions: input.frame.asyncQuestions,
+      getTranscriptElement: input.getTranscriptElement,
+    }),
     getChatComposerState(untrack(() => input.props.paneId)),
   );
   return (
@@ -266,6 +279,17 @@ export function ChatView(input: { props: ChatProps; application?: ApplicationCon
 
 function ChatContent(input: { props: ChatProps }) {
   let root: HTMLElement | undefined;
+  // Composer sizing needs the viewport even before the virtualizer has rows.
+  let transcriptViewport: HTMLDivElement | undefined;
+  const bindTranscriptViewport = (element: HTMLDivElement) => {
+    transcriptViewport = element;
+    return () => {
+      if (transcriptViewport === element) {
+        transcriptViewport = undefined;
+      }
+    };
+  };
+  const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
   const application = useOptionalApplication();
   const gateway = application && projectGateway(application.gateway);
   const skillFileHovercard = createSkillFileHovercard({
@@ -338,6 +362,8 @@ function ChatContent(input: { props: ChatProps }) {
     frame: frame(),
     presented: presented(),
     application,
+    bindTranscriptViewport,
+    getTranscriptElement,
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;

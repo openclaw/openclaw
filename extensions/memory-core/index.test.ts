@@ -403,7 +403,7 @@ describe("memory-core plugin runtime registration", () => {
     }
   });
 
-  it("hides intent from non-owners and prepares owner integer arguments for validation", () => {
+  it("keeps intent definitions stable and prepares integer arguments for validation", () => {
     const warn = vi.fn();
     let intentFactory:
       | ((ctx: { config?: OpenClawConfig; senderIsOwner?: boolean }) => unknown)
@@ -429,10 +429,6 @@ describe("memory-core plugin runtime registration", () => {
       throw new Error("expected standing-intent tool factory");
     }
 
-    expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
-    expect(intentFactory({ config: {} })).toBeNull();
-    expect(warn).not.toHaveBeenCalled();
-
     expect(intentFactory({ senderIsOwner: true })).toBeNull();
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "memory-core: intent tool unavailable: runtime config is unavailable for this turn",
@@ -440,6 +436,13 @@ describe("memory-core plugin runtime registration", () => {
 
     const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as AnyAgentTool;
     expect(ownerTool).toMatchObject({ name: "intent" });
+    for (const senderIsOwner of [false, undefined]) {
+      expect(intentFactory({ config: {}, senderIsOwner })).toMatchObject({
+        name: ownerTool.name,
+        description: ownerTool.description,
+        parameters: ownerTool.parameters,
+      });
+    }
     for (const maxFires of ["3", 3]) {
       const prepared = ownerTool.prepareArguments?.({
         action: "create",

@@ -9,7 +9,7 @@ import {
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 
-export type CdpMessage = { id?: number; method?: string; params?: Record<string, unknown> };
+type CdpMessage = { id?: number; method?: string; params?: Record<string, unknown> };
 export type CdpReply = { result: Record<string, unknown> } | { error: { message: string } };
 type Handler = (message: CdpMessage, path: string) => CdpReply | undefined;
 type Replies = Record<string, CdpReply | Handler>;

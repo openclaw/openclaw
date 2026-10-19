@@ -85,15 +85,15 @@ export function CreationComposer(props: {
     return composer?.canDisplay() ? composer : undefined;
   });
   return (
-    <Show when={visible()}>
+    <Show when={visible()} keyed>
       {(composer) => {
         const prepared = createMemo(() => {
           owner()?.read();
-          return prepareCreationComposer(composer(), props.onOpenImage);
+          return prepareCreationComposer(composer, props.onOpenImage);
         });
         const error = createMemo(() => {
           owner()?.read();
-          return composer().error;
+          return composer.error;
         });
         return (
           <section class="creation-composer" aria-label={t("newSession.followUps")}>

@@ -27,14 +27,14 @@ process.stdin.setEncoding("utf8").on("data", (chunk) => {
   const lines = (buffered + chunk).split("\\n");
   buffered = lines.pop();
   for (const line of lines) {
-    const { id, path } = JSON.parse(line);
+    const { id, path, recursive } = JSON.parse(line);
     if (path === undefined) {
       watches.get(id)?.close();
       watches.delete(id);
       continue;
     }
     try {
-      const watcher = fs.watch(path, { persistent: false }, (event, filename) =>
+      const watcher = fs.watch(path, { persistent: false, recursive }, (event, filename) =>
         send({ id, event, filename }),
       );
       watcher.on("error", () => {
@@ -102,7 +102,11 @@ function startHost(): Host {
   return started;
 }
 
-function watchInHost(directoryPath: string, listener: Listener): DirectoryWatch {
+function watchInHost(
+  directoryPath: string,
+  listener: Listener,
+  recursive: boolean,
+): DirectoryWatch {
   // Match fs.watch's synchronous admission so callers can fall back to an ancestor.
   fs.closeSync(fs.openSync(directoryPath, "r"));
   const current = (host ??= startHost());
@@ -110,7 +114,7 @@ function watchInHost(directoryPath: string, listener: Listener): DirectoryWatch 
   const watch = new EventEmitter();
   watch.on("change", listener);
   current.watches.set(id, watch);
-  current.child.stdin.write(`${JSON.stringify({ id, path: directoryPath })}\n`);
+  current.child.stdin.write(`${JSON.stringify({ id, path: directoryPath, recursive })}\n`);
   return Object.assign(watch, {
     close() {
       watch.removeAllListeners("change");
@@ -130,10 +134,14 @@ function watchInHost(directoryPath: string, listener: Listener): DirectoryWatch 
 }
 
 /** Non-persistent native directory watch whose teardown never waits on FSEvents. */
-export function watchDirectory(directoryPath: string, listener: Listener): DirectoryWatch {
+export function watchDirectory(
+  directoryPath: string,
+  listener: Listener,
+  recursive = false,
+): DirectoryWatch {
   return process.platform === "darwin" && !process.versions.bun
-    ? watchInHost(directoryPath, listener)
-    : fs.watch(directoryPath, { persistent: false }, (event, filename) =>
+    ? watchInHost(directoryPath, listener, recursive)
+    : fs.watch(directoryPath, { persistent: false, recursive }, (event, filename) =>
         listener(event, filename?.toString() ?? undefined),
       );
 }

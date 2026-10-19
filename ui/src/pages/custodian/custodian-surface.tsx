@@ -29,6 +29,8 @@ import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import {
   adjustTextareaHeight,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "../chat/components/chat-composer-dom.ts";
@@ -476,8 +478,20 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
                         placeholder={placeholder()}
                         aria-label={placeholder()}
                         disabled={!store().chatAvailable}
-                        onInput={(event) => store().setInput(event.currentTarget.value)}
-                        onKeyDown={handleKeydown}
+                        onInput={(event) => {
+                          handleTextareaOverflowInteraction(event);
+                          store().setInput(event.currentTarget.value);
+                        }}
+                        onKeyDown={(event) => {
+                          handleTextareaOverflowInteraction(event);
+                          handleKeydown(event);
+                        }}
+                        onBeforeInput={handleTextareaOverflowInteraction}
+                        onCompositionStart={handleTextareaOverflowInteraction}
+                        onBlur={handleTextareaOverflowInteraction}
+                        onWheel={handleTextareaOverflowInteraction}
+                        onPointerDown={handleTextareaOverflowInteraction}
+                        onScroll={handleTextareaOverflowScroll}
                       />
                     }
                   >

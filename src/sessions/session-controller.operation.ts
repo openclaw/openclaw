@@ -565,21 +565,19 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       recordOperationBackendRunId(operation, handle.runId);
-      owner.attachment = {
-        operation,
-        backend: handle,
-        projectSessionActive:
-          owner.attachment?.operation === operation
-            ? owner.attachment.projectSessionActive
-            : undefined,
-      };
+      const backend = { handle };
+      if (owner.attachment?.operation === operation) {
+        owner.attachment.backend = backend;
+      } else {
+        owner.attachment = { operation, backend };
+      }
       notifyBackendReady();
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
     },
     detachBackend(handle) {
-      if (owner.active === operation && owner.attachment?.backend === handle) {
+      if (owner.active === operation && owner.attachment?.backend?.handle === handle) {
         owner.attachment.backend = undefined;
         if (
           !("handle" in owner.attachment) &&

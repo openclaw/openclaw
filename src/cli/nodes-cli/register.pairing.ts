@@ -1,4 +1,3 @@
-// Node pairing commands: list, approve, reject, remove, and rename paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";

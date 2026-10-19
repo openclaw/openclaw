@@ -49,11 +49,11 @@ import {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
+import { createFixture } from "./managed-image-attachments.test-support.js";
 import {
   insertManagedImageRecord,
   listManagedImageRecordEntries,
   type ManagedImageRecord,
-  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
@@ -81,34 +81,15 @@ async function fixture(messageId = "attached") {
   const scope = { agentId, sessionId, sessionKey, storePath };
   // This fixture owns the competing writer; background entry maintenance must not join it.
   expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
-  const attachmentId = randomUUID();
-  const body = Buffer.from("synthetic managed original\n");
-  const mediaRoot = path.join(stateDir, "media");
-  const mediaId = `${attachmentId}.png`;
-  const originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
-  fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-  fs.writeFileSync(originalPath, body);
-  await insertManagedImageRecord(
-    {
-      attachmentId,
-      sessionKey,
-      agentId,
-      messageId,
-      createdAt: timestamp,
-      alt: "Synthetic attachment",
-      original: {
-        mediaRoot,
-        mediaId,
-        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: "image/png",
-        width: 1,
-        height: 1,
-        sizeBytes: body.length,
-        filename: "fixture.png",
-      },
-    },
-    stateDir,
-  );
+  const { attachmentId, originalPath } = await createFixture(stateDir, {
+    attachmentId: randomUUID(),
+    sessionKey,
+    agentId,
+    messageId,
+    createdAt: timestamp,
+    body: Buffer.from("synthetic managed original\n"),
+    filename: "fixture.png",
+  });
   const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
   const block = { type: "image", url, openUrl: url };
   const download = () =>
