@@ -13,7 +13,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Session runtime freshness" });
 
 suite.define(() => {
-  it("keeps an unopened thread's spinner through an older cached list response", async () => {
+  it("keeps a spinner through cached rows and clears it on a newer terminal sample", async () => {
     const artifactDir = createControlUiE2eArtifactDir("session-runtime-freshness");
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const now = Date.now();
@@ -75,6 +75,25 @@ suite.define(() => {
       expect(
         await sidebar.locator(".sidebar-recent-session--active").getAttribute("data-session-key"),
       ).toBe(selected.key);
+      await gateway.emitGatewayEvent("sessions.changed", {
+        agentId: "main",
+        reason: "run-capacity",
+        session: {
+          ...background,
+          updatedAt: background.updatedAt - 1_000,
+          snapshotAt: now + 1_000,
+          status: "done",
+          hasActiveRun: false,
+          activeRunIds: [],
+        },
+        ancestorSessions: [],
+        ts: now + 1_000,
+      });
+      try {
+        await expect.poll(() => spinner.count()).toBe(0);
+      } finally {
+        await page.screenshot({ path: path.join(artifactDir, "after-terminal-sample.png") });
+      }
     });
   });
 });

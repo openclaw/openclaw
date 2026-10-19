@@ -83,6 +83,61 @@ it("orders runtime events and cached list pages by their sampling clock", async 
   }
 });
 
+it("admits a newer terminal session sample when its persisted timestamp moves backward", async () => {
+  const running: GatewaySessionRow = {
+    ...background,
+    updatedAt: 200,
+    snapshotAt: 300,
+    ...activeRun,
+  };
+  const { sessions, ...harness } = setup(async () => sessionsResult([running], 300));
+  await sessions.refresh({ agentId: "main", force: true });
+
+  emitRuntime(harness, {
+    ...running,
+    sessionId: "retired-session",
+    updatedAt: 150,
+    snapshotAt: 500,
+    hasActiveRun: false,
+    activeRunIds: [],
+    status: "done",
+  });
+  expect(sessions.state.result?.sessions[0]).toMatchObject({
+    sessionId: running.sessionId,
+    hasActiveRun: true,
+    status: "running",
+  });
+
+  emitRuntime(harness, {
+    ...running,
+    updatedAt: 150,
+    snapshotAt: 250,
+    hasActiveRun: false,
+    activeRunIds: [],
+    status: "done",
+  });
+  expect(sessions.state.result?.sessions[0]).toMatchObject({
+    hasActiveRun: true,
+    status: "running",
+  });
+
+  emitRuntime(harness, {
+    ...running,
+    updatedAt: 150,
+    snapshotAt: 400,
+    hasActiveRun: false,
+    activeRunIds: [],
+    status: "done",
+  });
+  expect(sessions.state.result?.sessions[0]).toMatchObject({
+    updatedAt: 150,
+    snapshotAt: 400,
+    hasActiveRun: false,
+    activeRunIds: [],
+    status: "done",
+  });
+});
+
 it("keeps fresh child facts when a later root request returns an older cached page", async () => {
   const parent: GatewaySessionRow = {
     key: parentKey,
