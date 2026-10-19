@@ -73,7 +73,7 @@ export type ChatSessionSharingModePresentation = Record<
   { description: string; icon: () => JSX.Element }
 >;
 
-export type ChatSessionSharingPermissionRow = {
+type ChatSessionSharingPermissionRow = {
   identity: SessionSharingIdentity;
   permissionLabel: string;
   selected: boolean;
