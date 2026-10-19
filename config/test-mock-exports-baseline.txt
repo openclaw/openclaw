@@ -1434,7 +1434,6 @@
 ["extensions/xai/video-generation-provider.transport.test.ts","openclaw/plugin-sdk/provider-auth-runtime","eb5c37bf125f5fa367efe98a452d35bf05f27f507d2580cdc66ca9fab4f8a891",1]
 ["extensions/xai/web-search.test.ts","openclaw/plugin-sdk/agent-runtime","121fc863e40d06a3ba24501c7b46a09f6c8818554b916932c0347b0672787d12",1]
 ["extensions/xai/xai-oauth-entry.test.ts","./xai-oauth.js","bb8c94b90686a9bbf4e9417025b3e3051e74dc5f9aa37830ffe030468995de0b",1]
-["extensions/xiaomi/speech-provider.test.ts","openclaw/plugin-sdk/media-runtime","b98ca7cae0c3b4acaf059bb078460cd95a8ab931542dd388f9c05f8aef4b97f2",1]
 ["extensions/zalo/src/api.test.ts","openclaw/plugin-sdk/ssrf-runtime","852c98e99524541dfeb082b21dc730bc5ab551cb2569412934ff47c821333854",1]
 ["extensions/zalo/src/channel.pairing.test.ts","./proxy.js","215b1355a6bcf4c10cee56601e349f46a24ef3829b235aa1343ca718b115e190",1]
 ["extensions/zalo/src/channel.send-handoff.test.ts","openclaw/plugin-sdk/ssrf-runtime","8a74e25af5df544e121b9660a3e588bdb31defaae31414506d9c91bf18a67a97",1]
