@@ -115,7 +115,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       ["busy-session", [-32021, "session in use", "sessionInUse"]],
     ]).get(params.sessionId);
     if (resumed && refusal) {
-      return reject(id, ...refusal);
+      reject(id, ...refusal);
+      return;
     }
     const sessionId = resumed
       ? params.sessionId

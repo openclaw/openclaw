@@ -3,7 +3,8 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { buildFishAudioSpeechProvider } from "./speech-provider.js";
 
 const fetchMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchMock,
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
@@ -84,8 +85,10 @@ it.each([
         '{"text":"[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>","format":"mp3","reference_id":"voice-123","sample_rate":44100,"latency":"normal","prosody":{"speed":1.1},"temperature":0.6,"top_p":0.8,"normalize":false}',
       );
     } else {
-      expect(typeof init?.body).toBe("string");
-      expect(JSON.parse(String(init?.body))).toMatchObject({ format, sample_rate: sampleRate });
+      if (typeof init?.body !== "string") {
+        throw new Error("expected Fish Audio JSON request body");
+      }
+      expect(JSON.parse(init.body)).toMatchObject({ format, sample_rate: sampleRate });
     }
     return new Response(
       new Uint8Array(bytes),

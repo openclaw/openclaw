@@ -574,7 +574,6 @@
 ["extensions/file-transfer/src/workspace-skill-lifecycle.test.ts","./shared/audit.js","ed978cbc28dc1f347f4729829593f6e1a94b1eb28ef47d18cd199f06b170e6ee",1]
 ["extensions/file-transfer/src/workspace-skills.windows.test.ts","./workspace-worker.js","c7faace9c85cddde2062182e39662519e9db46e694410aeb77a7b4694ee78550",1]
 ["extensions/firecrawl/src/firecrawl-tools.test.ts","./firecrawl-client.js","d58828dd57aae5f1ba2d01031644a8d81970c5464dfa07914e3988d772554500",1]
-["extensions/fish-audio-speech/speech-provider.test.ts","openclaw/plugin-sdk/ssrf-runtime","81b4e003cde0c9231cf65d55fbac514e27937e3edef3f6a3254c7e77b4bb7622",1]
 ["extensions/geolocation/index.test.ts","./src/database-store.js","c7f83dbd65e30b949fbb29549da13fe0f7fc2d71f4e7f536af3aa0bbe8dfd595",1]
 ["extensions/geolocation/src/lookup-route.test.ts","openclaw/plugin-sdk/plugin-runtime","7a504b680d878d42aa9cbb23ff77c34971d43f8d9c218a4989e674ec4746ad8d",1]
 ["extensions/github-copilot/auth-reconnect.test.ts","./register.runtime.js","258fa99137884f0b3f59186f44ec9a74091f8db7969b2ae52314147bf05713c4",1]
