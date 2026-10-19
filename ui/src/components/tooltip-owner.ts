@@ -1,3 +1,4 @@
+import { composedAncestors } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { containsComposed } from "./overlay-registry.ts";
@@ -431,25 +432,10 @@ export class TooltipOwner {
     return this.options.requestOpen(false);
   }
 
-  #triggerAncestors() {
-    const ancestors: Node[] = [];
-    let node: Node | null = this.#triggerElement;
-    while (node) {
-      ancestors.push(node);
-      node =
-        node instanceof Element && node.assignedSlot
-          ? node.assignedSlot
-          : node instanceof ShadowRoot
-            ? node.host
-            : node.parentNode;
-    }
-    return ancestors;
-  }
-
   #isPresented() {
     return (
       this.#triggerElement?.isConnected === true &&
-      !this.#triggerAncestors().some(
+      !composedAncestors(this.#triggerElement).some(
         (node) =>
           node instanceof Element &&
           (node.hasAttribute("hidden") ||
@@ -460,7 +446,7 @@ export class TooltipOwner {
   }
 
   #observePresentation() {
-    const ancestors = this.#triggerAncestors();
+    const ancestors = composedAncestors(this.#triggerElement);
     if (
       ancestors.length === this.#presentationAncestors.length &&
       ancestors.every((node, index) => node === this.#presentationAncestors[index])

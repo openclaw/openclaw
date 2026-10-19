@@ -26,11 +26,6 @@ function render(overrides: Partial<Parameters<typeof renderPublicSessionDocument
     ...overrides,
   });
 }
-const script = render().match(/<script>([\s\S]*)<\/script><\/body>/)?.[1];
-if (!script) {
-  throw new Error("rendered public session page has no entry script");
-}
-const entryScript: string = script;
 const dispose: (() => void)[] = [];
 afterEach(() => {
   for (const close of dispose.splice(0)) {
@@ -84,7 +79,7 @@ function fixture(
     );
   fetch.mockResolvedValue(response(200));
   let resized: () => void = () => {};
-  runInNewContext(entryScript, {
+  runInNewContext(document.querySelector("script")!.textContent!, {
     document,
     window,
     fetch,
@@ -104,24 +99,22 @@ function fixture(
       disconnect() {}
     },
   });
-  const visibility = (value: boolean) => {
-    hidden = value;
-    document.dispatchEvent(new dom.window.Event("visibilitychange"));
-  };
   const event = (name: string) => dom.window.dispatchEvent(new dom.window.Event(name));
-  const scroll = (top: number) => {
-    window.scrollY = top;
-    event("scroll");
-  };
   return {
     document,
     window,
     fetch,
     response,
     replaceWith,
-    visibility,
     event,
-    scroll,
+    visibility: (value: boolean) => {
+      hidden = value;
+      document.dispatchEvent(new dom.window.Event("visibilitychange"));
+    },
+    scroll: (top: number) => {
+      window.scrollY = top;
+      event("scroll");
+    },
     resize: (height: number) => {
       rowHeight = height;
       resized();

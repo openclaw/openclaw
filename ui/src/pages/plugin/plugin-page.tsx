@@ -111,12 +111,10 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
             <Show when={view().bundledHost} keyed>
               {(_epoch) =>
                 loaded.render({
-                  get client() {
-                    return projection.read().context.gateway.snapshot.client;
-                  },
-                  get connected() {
-                    return projection.read().context.gateway.snapshot.phase === "connected";
-                  },
+                  initialClient:
+                    context.gateway.snapshot.phase === "connected"
+                      ? context.gateway.snapshot.client
+                      : null,
                 })
               }
             </Show>
