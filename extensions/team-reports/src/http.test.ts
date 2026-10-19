@@ -94,6 +94,12 @@ const summary: SummaryDocument = {
   warnings: ["Model summary unavailable: completion failed"],
 };
 
+const privateHeaders = {
+  "cache-control": "private, no-store",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+
 type HttpResult = { status: number; headers: IncomingHttpHeaders; body: string };
 let directory: string;
 let store: TeamReportsStore;
@@ -101,7 +107,6 @@ let server: Server;
 let port: number;
 let available = true;
 let currentOrgs = ["configured-example"];
-let currentMainKey = "home";
 const getStore = vi.fn(() => (available ? store : undefined));
 const workSessions =
   vi.fn<(offset?: number, limit?: number, profileId?: string) => Promise<WorkSessions>>();
@@ -121,7 +126,6 @@ beforeEach(() => {
   getStore.mockClear();
   workSessions.mockReset().mockResolvedValue({ available: true, sessions: [] });
   currentOrgs = ["configured-example"];
-  currentMainKey = "home";
 });
 
 function fetchPath(
@@ -193,7 +197,7 @@ beforeAll(async () => {
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
     displayTimezone: "UTC",
-    sessionRouting: () => ({ controlUiBasePath: "/control", mainKey: currentMainKey }),
+    sessionRouting: () => ({ controlUiBasePath: "/control", mainKey: "home" }),
     workSessions,
     assetsDir: fileURLToPath(new URL("../assets", import.meta.url)),
     getStore,
@@ -206,7 +210,6 @@ beforeAll(async () => {
         display: "Alice",
         status: "archived",
         archivedAt: "2026-08-22",
-        discordUserId: "1234567890",
       },
       ...avatarPeople,
     ],
@@ -257,19 +260,17 @@ describe("Team Reports HTTP responses", () => {
       ]) {
         for (const method of ["GET", "HEAD"]) {
           const response = await fetchPath(url, method);
-          expect(response.status).toBe(403);
-          expect(response.body).toBe(
-            method === "HEAD" ? "" : "Forbidden: operator.read scope required.\n",
-          );
-          expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+          expect(response).toMatchObject({
+            status: 403,
+            body: method === "HEAD" ? "" : "Forbidden: operator.read scope required.\n",
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          });
           expect(Number(response.headers["content-length"])).toBe(
             Buffer.byteLength("Forbidden: operator.read scope required.\n"),
           );
-          expect(response.headers["cache-control"]).toBe("private, no-store");
+          expect(response.headers).toMatchObject(privateHeaders);
           expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
           expect(response.headers["content-security-policy"]).toMatch(/style-src 'nonce-[^']+'/);
-          expect(response.headers["x-content-type-options"]).toBe("nosniff");
-          expect(response.headers["referrer-policy"]).toBe("no-referrer");
         }
       }
       expect(getStore).not.toHaveBeenCalled();
@@ -285,6 +286,7 @@ describe("Team Reports HTTP responses", () => {
         const response = await page("/reports/day/2026-08-20/", method);
         if (method === "HEAD") {
           expect(response.body).toBe("");
+          expect(Number(response.headers["content-length"])).toBeGreaterThan(0);
         } else {
           expect(response.body).toContain("Alice");
         }
@@ -296,9 +298,7 @@ describe("Team Reports HTTP responses", () => {
     const response = await page("/reports/day/2026-08-20/", "GET", {
       "x-forwarded-proto": "https",
     });
-    expect(response.headers["cache-control"]).toBe("private, no-store");
-    expect(response.headers["x-content-type-options"]).toBe("nosniff");
-    expect(response.headers["referrer-policy"]).toBe("no-referrer");
+    expect(response.headers).toMatchObject(privateHeaders);
     expect(response.headers["x-frame-options"]).toBeUndefined();
     const csp = response.headers["content-security-policy"];
     const nonce = typeof csp === "string" ? /style-src 'nonce-([^']+)'/.exec(csp)?.[1] : undefined;
@@ -339,14 +339,7 @@ describe("Team Reports HTTP responses", () => {
     expect(response.body).toContain("bad&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
     expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
     expect(response.body).toContain('data-initials="&quot;&lt;"');
-  });
-
-  it("uses the GitHub login for an avatar even when the display name is hostile", async () => {
-    const response = await page("/reports/people/safe-login/");
-    expect(response.body).toContain('src="https://avatars.githubusercontent.com/safe-login?s=72"');
-    expect(response.body).toContain('data-initials="&quot;&lt;"');
-    expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
-    expect(response.body).not.toContain(hostileDisplay);
+    expect(response.body).toContain('src="https://avatars.githubusercontent.com/safe-login?s=40"');
   });
 
   it.each([
@@ -368,13 +361,9 @@ describe("Team Reports HTTP responses", () => {
     expect(head.headers["content-length"]).toBe(get.headers["content-length"]);
   });
 
-  it("supports HEAD without a body and rejects writes", async () => {
-    const head = await page("/reports/day/2026-08-20/", "HEAD");
-    expect(head.body).toBe("");
-    expect(Number(head.headers["content-length"])).toBeGreaterThan(0);
+  it("rejects writes", async () => {
     const post = await fetchPath("/reports/day/2026-08-20/", "POST");
-    expect(post.status).toBe(405);
-    expect(post.headers.allow).toBe("GET, HEAD");
+    expect(post).toMatchObject({ status: 405, headers: { allow: "GET, HEAD" } });
   });
 
   it.each([
@@ -439,6 +428,7 @@ describe("Team Reports HTTP responses", () => {
       expect(people.body).toContain("Report Only Person");
       expect(people.body).toContain('href="/reports/people/report-only/"');
       const person = await page("/reports/people/alice-alias/");
+      expect(person.body).toContain('src="https://avatars.githubusercontent.com/alice?s=72"');
       expect(person.body).toContain("Archived on 2026-08-22");
       expect(person.body).toContain('href="/reports/day/2026-08-20/?person=alice"');
     });
