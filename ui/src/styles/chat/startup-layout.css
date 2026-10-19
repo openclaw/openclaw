@@ -403,7 +403,6 @@
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__sharing-trigger,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__layout-trigger {
   min-height: 32px;
   height: 32px;
