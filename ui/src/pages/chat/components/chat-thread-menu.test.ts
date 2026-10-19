@@ -34,7 +34,9 @@ it("keeps failed context-copy feedback visible and retries before dismissing the
   const bubble = group.appendChild(document.createElement("div"));
   bubble.className = "chat-bubble";
   Object.assign(bubble, { messageActions: { copyMarkdown: "Synthetic commentary" } });
-  bubble.oncontextmenu = (event) => handleTranscriptContextMenu(event, { paneId: "copy-feedback" });
+  bubble.addEventListener("contextmenu", (event) =>
+    handleTranscriptContextMenu(event, { paneId: "copy-feedback" }),
+  );
 
   bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   const button = expectDefined(

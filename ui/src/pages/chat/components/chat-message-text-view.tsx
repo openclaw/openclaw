@@ -192,18 +192,23 @@ function DisclosureContent(props: {
   children: JSX.Element;
 }) {
   const presented = useContext(ContentPresentation);
-  const parts = createMemo(() => props.parts, {
-    equals: (before, next) => before[0] === next[0] && before[1] === next[1],
-  });
-  const overflow = messageOverflowRef(
+  const measurementOptions = createMemo(
     () => ({
-      parts: parts(),
+      parts: props.parts,
       expanded: props.expanded,
       forwarded: props.forwarded,
       connected: presented(),
     }),
-    () => props.getNodes(),
+    {
+      equals: (before, next) =>
+        before.parts[0] === next.parts[0] &&
+        before.parts[1] === next.parts[1] &&
+        before.expanded === next.expanded &&
+        before.forwarded === next.forwarded &&
+        before.connected === next.connected,
+    },
   );
+  const overflow = messageOverflowRef(measurementOptions, () => props.getNodes());
   return (
     <div class="chat-message-disclosure__content" ref={overflow}>
       {props.children}
