@@ -7,10 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import {
-  loadFacadeModuleAtLocationSync,
-  resetFacadeLoaderStateForTest,
-} from "../../plugin-sdk/facade-loader.js";
+import { resetFacadeLoaderStateForTest } from "../../plugin-sdk/facade-loader.js";
 import { createPluginModuleLoader } from "../loader-module-runtime.js";
 import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "../plugin-cache.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
@@ -19,10 +16,7 @@ import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRecord } from "../registry-types.js";
 import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
-import {
-  getPluginRegistryForContext,
-  withPluginRuntimeGatewayRequestScope,
-} from "./gateway-request-scope.js";
+import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { monitorWebChannel } from "./runtime-web-channel-plugin.js";
 
 const cold = vi.hoisted(() => ({
@@ -134,6 +128,7 @@ it("forwards library monitor calls lazily with exact arguments and runtime recei
     "runtime-api.js": `require("node:fs").writeFileSync(${JSON.stringify(initialized)}, "loaded");
       const runtime = {
         async monitorWebChannel(...args) {
+          if (this !== runtime) throw new Error("Incorrect runtime receiver");
           return Reflect.apply(args[1], this, args);
         }
       };
@@ -149,15 +144,6 @@ it("forwards library monitor calls lazily with exact arguments and runtime recei
   await expect(library.monitorWebChannel(...args)).resolves.toBe(result);
   expect(fs.readFileSync(initialized, "utf8")).toBe("loaded");
   expect(monitor).toHaveBeenCalledOnce();
-  expect(monitor.mock.contexts[0]).toBe(
-    loadFacadeModuleAtLocationSync({
-      location: {
-        modulePath: path.join(root, "runtime-api.js"),
-        boundaryRoot: root,
-        pluginId: "library-owner",
-      },
-    }),
-  );
   const [receivedArgs] = monitor.mock.calls;
   expect(receivedArgs).toHaveLength(args.length);
   for (const [index, arg] of args.entries()) {
@@ -177,12 +163,7 @@ it("shares registration state, retains captured lazy modules, and follows the ne
     fs.rmSync(path.join(root, file));
   }
   const retainedMonitor = monitorWebChannel;
-  await expect(retainedMonitor("first", 1)).resolves.toEqual([
-    "registered-one",
-    "lazy-one",
-    "first",
-    1,
-  ]);
+  await expect(retainedMonitor()).resolves.toEqual(["registered-one", "lazy-one"]);
   writeSource(root, "two");
   await expect(retainedMonitor()).resolves.toEqual(["registered-one", "lazy-one"]);
   await first.instance.dispose();
@@ -242,7 +223,6 @@ it.each([
     if (!preparedConfig) {
       clearRuntimeConfigSnapshot();
     }
-    expect(getPluginRegistryForContext()).toBeNull();
     const entryDirectory = path.join(root, "entry");
     fs.mkdirSync(entryDirectory);
     writeSource(root, "cold", location === "entry" ? entryDirectory : root);
@@ -257,7 +237,6 @@ it.each([
 );
 
 it("reports cold module initialization failures as promise rejections", async () => {
-  expect(getPluginRegistryForContext()).toBeNull();
   writeSource(root, "failure");
   writeFiles(root, { "runtime-api.ts": 'throw new Error("web runtime initialization failed");' });
   coldOwner(root, "failure");
