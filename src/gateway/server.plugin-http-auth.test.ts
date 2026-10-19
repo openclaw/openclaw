@@ -14,7 +14,6 @@ import {
   expectUnauthorizedResponse,
   expectUnauthorizedVariants,
   sendRequest,
-  withGatewayServer,
 } from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import {
@@ -24,7 +23,7 @@ import {
 } from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
-type ServerOptions = Parameters<typeof withGatewayServer>[0];
+type ServerOptions = Parameters<typeof createTestGatewayServer>[0];
 type RequestOptions = Parameters<typeof sendRequest>[1];
 type Request = (
   path: string,
@@ -39,15 +38,28 @@ function withServer(
   run: (request: Request, server: Parameters<typeof sendRequest>[0]) => Promise<void>,
   overrides: ServerOptions["overrides"] = {},
   resolvedAuth = AUTH_TOKEN,
+  cfg: Parameters<typeof withTempConfig>[0]["cfg"] = { gateway: { trustedProxies: [] } },
 ) {
-  return withGatewayServer({
+  return withTempConfig({
     prefix: "plugin-http-auth-",
-    resolvedAuth,
-    overrides,
-    run: (server) => run(requestFor(server), server),
+    cfg,
+    run: async () => {
+      const server = createTestGatewayServer({ resolvedAuth, overrides });
+      await run(requestFor(server), server);
+    },
   });
 }
-function pluginRoutes(httpRoutes: PluginHttpRouteRegistration[]) {
+function pluginRoutes(
+  routes: [string, PluginHttpRouteRegistration["handler"], Partial<PluginHttpRouteRegistration>][],
+) {
+  const httpRoutes = routes.map(([path, handler, options]) => ({
+    pluginId: path,
+    path,
+    handler,
+    match: "exact" as const,
+    auth: "plugin" as const,
+    ...options,
+  }));
   const registry = createGatewayTestRegistry({ httpRoutes });
   return { registry, handlePluginRequest: createGatewayPluginRequestHandler({ registry, log }) };
 }
@@ -72,27 +84,6 @@ function claimingPlugin(paths?: string[]) {
 }
 const callbackPath = "/api/channels/mattermost/command";
 const profilePath = "/api/channels/nostr/default/profile";
-function withMattermost(
-  path: string,
-  plugin: ReturnType<typeof claimingPlugin>,
-  run: (request: Request) => Promise<void>,
-) {
-  return withTempConfig({
-    cfg: {
-      gateway: { trustedProxies: [] },
-      channels: { mattermost: { commands: { callbackPath: path } } },
-    },
-    run: async () =>
-      run(
-        requestFor(
-          createTestGatewayServer({
-            resolvedAuth: AUTH_TOKEN,
-            overrides: { handlePluginRequest: plugin },
-          }),
-        ),
-      ),
-  });
-}
 
 describe("gateway plugin HTTP auth boundary", () => {
   beforeAll(async () => {
@@ -136,51 +127,41 @@ describe("gateway plugin HTTP auth boundary", () => {
     },
   );
 
-  test.each([
-    {
-      surface: "write-default",
-      header: "operator.read",
-      expected: ["operator.write"],
-      method: "node.invoke",
-    },
-    {
-      surface: "trusted-operator",
-      header: undefined,
-      expected: ["operator.admin", "operator.read", "operator.write"],
-      method: "set-heartbeats",
-    },
-  ] as const)(
-    "preserves $surface runtime authority for shared-secret bearer auth",
-    async ({ surface, header, expected, method }) => {
+  test.each(["write-default", "trusted-operator"] as const)(
+    "preserves %s runtime authority for shared-secret bearer auth",
+    async (surface) => {
+      const trusted = surface === "trusted-operator";
       const scopes: string[][] = [];
       const allowed: boolean[] = [];
       const { handlePluginRequest } = pluginRoutes([
-        {
-          pluginId: "runtime-scope",
-          path: "/secure-hook",
-          auth: "gateway",
-          match: "exact",
-          gatewayRuntimeScopeSurface: surface,
-          handler: async (_req, res) => {
+        [
+          "/secure-hook",
+          async (_req, res) => {
             const observed = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes ?? [];
             scopes.push([...observed]);
-            allowed.push(authorizeOperatorScopesForMethod(method, observed).allowed);
+            allowed.push(
+              authorizeOperatorScopesForMethod(trusted ? "set-heartbeats" : "node.invoke", observed)
+                .allowed,
+            );
             return respond(res, "ok");
           },
-        },
+          { pluginId: "runtime-scope", auth: "gateway", gatewayRuntimeScopeSurface: surface },
+        ],
       ]);
       await withServer(
         async (request) => {
           const response = await request("/secure-hook", {
             authorization: "Bearer test-token",
-            headers: header === undefined ? {} : { "x-openclaw-scopes": header },
+            headers: trusted ? {} : { "x-openclaw-scopes": "operator.read" },
           });
           expectResponse(response, 200, "ok");
         },
         { handlePluginRequest, shouldEnforcePluginGatewayAuth: () => true },
       );
       expect(scopes).toEqual([
-        surface === "trusted-operator" ? expect.arrayContaining([...expected]) : [...expected],
+        trusted
+          ? expect.arrayContaining(["operator.admin", "operator.read", "operator.write"])
+          : ["operator.write"],
       ]);
       expect(allowed).toEqual([true]);
     },
@@ -192,38 +173,42 @@ describe("gateway plugin HTTP auth boundary", () => {
       const plugin = claimingPlugin(
         path === callbackPath ? [callbackPath, profilePath] : [profilePath],
       );
-      await withMattermost(path, plugin, async (request) => {
-        if (path === callbackPath) {
-          expectResponse(await request(callbackPath, { method: "POST" }), 200, "plugin-owned");
-          expectUnauthorizedResponse(await request(profilePath));
-        } else {
-          expectUnauthorizedResponse(await request(profilePath, { method: "POST" }));
-          expect(plugin).not.toHaveBeenCalled();
-        }
-      });
+      await withServer(
+        async (request) => {
+          if (path === callbackPath) {
+            expectResponse(await request(callbackPath, { method: "POST" }), 200, "plugin-owned");
+            expectUnauthorizedResponse(await request(profilePath));
+          } else {
+            expectUnauthorizedResponse(await request(profilePath, { method: "POST" }));
+            expect(plugin).not.toHaveBeenCalled();
+          }
+        },
+        { handlePluginRequest: plugin },
+        AUTH_TOKEN,
+        {
+          gateway: { trustedProxies: [] },
+          channels: { mattermost: { commands: { callbackPath: path } } },
+        },
+      );
     },
   );
 
   test("routes unattributable proxy traffic only to plugin-authenticated webhooks", async () => {
     const ips: Array<string | undefined> = [];
     const { registry, handlePluginRequest } = pluginRoutes([
-      {
-        pluginId: "googlechat",
-        path: "/googlechat",
-        auth: "plugin",
-        match: "exact",
-        handler: async (_req, res) => {
+      [
+        "/googlechat",
+        async (_req, res) => {
           ips.push(getPluginRuntimeGatewayRequestScope()?.client?.clientIp);
           return respond(res, "ok");
         },
-      },
-      {
-        pluginId: "diffs",
-        path: "/plugins/diffs",
-        auth: "plugin",
-        match: "prefix",
-        handler: async (_req, res) => respond(res, "plugin-prefix"),
-      },
+        { pluginId: "googlechat" },
+      ],
+      [
+        "/plugins/diffs",
+        async (_req, res) => respond(res, "plugin-prefix"),
+        { pluginId: "diffs", match: "prefix" },
+      ],
     ]);
     const hooks = vi.fn(async (req: IncomingMessage, res: ServerResponse) =>
       req.url?.startsWith("/plugins/diffs") ? respond(res, "hooks") : false,

@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import * as admittedRuns from "../agents/admitted-run-context.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as runs from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -11,6 +11,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import * as runtimeIdentity from "./agent-runtime-identity-token.js";
+import { createSessionMutationTestClient } from "./server-methods/sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { writeSessionStore } from "./test-helpers.js";
@@ -27,14 +28,7 @@ const metadataSnapshot = createPluginMetadataSnapshotFixture({
   ],
 });
 
-const makeModel = (id: string): ModelDefinitionConfig => ({
-  id,
-  name: id,
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  maxTokens: 1024,
-});
+const makeModel = (id: string) => modelDefinition(id, { reasoning: false, maxTokens: 1024 });
 async function modelConfig(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
   providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>,
@@ -84,14 +78,8 @@ test("new unpinned sessions bind the account for the permitted operator default"
     ),
   );
   const client: GatewayClient = {
+    ...createSessionMutationTestClient(),
     connId: "role-default-account",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
     authenticatedUserProfile: {
       profileId: owner.id,
       displayName: owner.displayName,
@@ -255,18 +243,15 @@ test.each([
     const result = await request;
     const entry = readEntry();
     if (expected === undefined) {
-      const error =
-        mode === "public-spoof"
-          ? { code: "INVALID_REQUEST" }
-          : {
-              ...(mode === "role-denied" ? { code: "FORBIDDEN" } : {}),
-              message: expect.stringContaining(
-                mode === "role-denied"
-                  ? "operator role cannot use this model"
-                  : "model not allowed",
-              ),
-            };
-      expect(result).toMatchObject({ ok: false, error });
+      expect(result.ok).toBe(false);
+      if (mode === "public-spoof" || mode === "role-denied") {
+        expect(result.error?.code).toBe(mode === "public-spoof" ? "INVALID_REQUEST" : "FORBIDDEN");
+      }
+      if (mode !== "public-spoof") {
+        expect(result.error?.message).toContain(
+          mode === "role-denied" ? "operator role cannot use this model" : "model not allowed",
+        );
+      }
       expect(entry).toBeUndefined();
     } else {
       expect(result.ok, JSON.stringify(result.error)).toBe(true);

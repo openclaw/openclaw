@@ -12,12 +12,12 @@ import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as storeWrites from "../shared/store-writer-queue.js";
+import { seedExhaustedRecovery } from "./server.sessions.recovery.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
-  sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
@@ -31,25 +31,7 @@ test.each([false, true])("queues cloud recovery (revoked=%s)", async (revokeAuth
   const sourceKey = "agent:main:dashboard:concurrent-cloud-recovery";
   const sourceSessionId = "concurrent-cloud-recovery-source";
   const source = { agentId: "main", sessionKey: sourceKey, storePath };
-  await writeSessionStore({
-    entries: {
-      [sourceKey]: sessionStoreEntry(sourceSessionId, {
-        status: "failed",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "concurrent-recovery-cycle",
-          revision: 1,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
-        },
-      }),
-    },
-  });
-  await seedSessionTranscript({
-    ...source,
-    sessionId: sourceSessionId,
-    messages: [{ role: "user", content: "recover the interrupted cloud workspace" }],
-  });
+  await seedExhaustedRecovery({ ...source, sessionId: sourceSessionId });
   let placement = {
     sessionId: sourceSessionId,
     sessionKey: sourceKey,

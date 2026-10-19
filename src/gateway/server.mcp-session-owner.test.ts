@@ -36,8 +36,8 @@ import {
   revokeAttachGrant,
   revokeMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
-import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import { closeMcpLoopbackServer } from "./mcp-http.js";
+import * as mcp from "./mcp-http.test-support.js";
 
 installDiscordRegistryHooks();
 
@@ -76,10 +76,9 @@ it("assigns and reads back a created session through admitted non-owner Discord 
     const profile = fixture.admins[0]!.profile;
     setUserProfileRole(profile.id, "member");
     const run = async () => {
-      await ensureMcpLoopbackServer();
-      const runtime = getActiveMcpLoopbackRuntime();
+      const { runtime } = await mcp.startLoopbackServerForTest();
       const gateway = getPluginRuntimeGatewayRequestScope()?.context;
-      if (!runtime || !gateway) {
+      if (!gateway) {
         throw new Error("missing isolated MCP/Gateway fixture");
       }
       fixture.replaceGatewayContext(gateway);
@@ -160,28 +159,18 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         attached: boolean,
         params?: { name: string; arguments: Record<string, unknown> },
       ) => {
-        const response = await fetch("http://127.0.0.1:" + runtime.port + "/mcp", {
-          method: "POST",
+        const response = await mcp.sendRaw({
+          port: runtime.port,
+          token,
           headers: {
-            authorization: "Bearer " + token,
             "content-type": "application/json",
             ...(attached ? {} : { "x-openclaw-cli-capture-key": "assignment-capture" }),
           },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: params ? "tools/call" : "tools/list",
-            ...(params ? { params } : {}),
-          }),
+          body: params
+            ? mcp.mcpToolCallBody(params.name, params.arguments)
+            : JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
         });
-        expect(response.status).toBe(200);
-        return (await response.json()) as {
-          result?: {
-            tools?: Array<{ name: string }>;
-            isError?: boolean;
-            content?: Array<{ type: string; text?: string }>;
-          };
-        };
+        return mcp.readOkMcpPayload(response);
       };
       const assignment = (ownerId = profile.id, key = targetKey) => ({
         name: "sessions",
@@ -200,7 +189,11 @@ it("assigns and reads back a created session through admitted non-owner Discord 
           arguments: { search: targetKey },
         });
         expect(listed).toMatchObject({ result: { isError: false } });
-        expect(JSON.parse(listed.result?.content?.[0]?.text ?? "")).toMatchObject({
+        const listedText = listed.result?.content?.[0]?.text;
+        if (typeof listedText !== "string") {
+          throw new Error("expected sessions_list text response");
+        }
+        expect(JSON.parse(listedText)).toMatchObject({
           sessions: [
             {
               key: targetKey,
