@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
 import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
-import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { makeAssistantMessageFixture as makeAssistant } from "../test-helpers/assistant-message-fixtures.js";
 import {
   renderAssistantRequestFailureCopy,
   renderRecordedAssistantFailureCopy,
@@ -13,10 +13,15 @@ describe("renderAssistantRequestFailureCopy", () => {
   const target = { provider: "openai", model: "test-model" };
   const runFailure =
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
-  const makeAssistant = (fields: Parameters<typeof makeAssistantMessageFixture>[0]) =>
-    makeAssistantMessageFixture({ ...target, ...fields });
   const live = (fields: Parameters<typeof makeAssistant>[0]) =>
     formatUserFacingAssistantErrorText(makeAssistant(fields));
+  const loading = (fields: Parameters<typeof makeAssistant>[0]) =>
+    makeAssistant({
+      errorCode: "model_load_failed",
+      errorMessage: "PRIVATE_DETAIL",
+      errorBody: '{"requestedContextLength":49152}',
+      ...fields,
+    });
   function expectBoth(expected: string, fields: Parameters<typeof makeAssistant>[0]) {
     const assistant = makeAssistant(fields);
     expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
@@ -27,18 +32,22 @@ describe("renderAssistantRequestFailureCopy", () => {
     const message =
       "Codex node execution approval expired before a decision. Retry the action and approve the new request.";
     const errorMessage = message + " | INVALID_REQUEST";
-    expectBoth(`⚠️ ${message}`, {
-      errorMessage,
-      errorCode: "INVALID_REQUEST",
-    });
+    expectBoth(`⚠️ ${message}`, { errorMessage, errorCode: "INVALID_REQUEST" });
     expect(isAuthErrorMessage(errorMessage)).toBe(false);
   });
 
-  it("distinguishes local transcript errors from provider expiry", () => {
-    const errorMessage = "Invalid session transcript entry: model_change PRIVATE_CANARY";
-    expect(live({ errorMessage })).toBe(
+  it.each([
+    [
+      { errorMessage: "Invalid session transcript entry: model_change PRIVATE_CANARY" },
       "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.",
-    );
+    ],
+    [
+      { errorCode: "incomplete_tool_call", errorMessage: "PRIVATE_PROVIDER_DETAIL" },
+      "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
+    ],
+    [{ errorMessage: '{"error":{"message":"database is locked PRIVATE_CANARY"}}' }, runFailure],
+  ])("renders safe live guidance for %j", (fields, expected) => {
+    expect(live(fields)).toBe(expected);
   });
 
   it("gives useful storage guidance without internal details", () => {
@@ -51,9 +60,8 @@ describe("renderAssistantRequestFailureCopy", () => {
 
   it("renders loading facts consistently in live replies and saved history without provider prose", () => {
     const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
-    const assistant = makeAssistantMessageFixture({
+    const assistant = loading({
       model: "local/model",
-      errorCode: "model_load_failed",
       errorMessage: "PRIVATE_PROVIDER_DETAIL",
       errorBody: JSON.stringify({
         requestedContextLength: 49152,
@@ -66,39 +74,22 @@ describe("renderAssistantRequestFailureCopy", () => {
   });
 
   it("bounds, redacts, and escapes loading model labels", () => {
-    const assistant = makeAssistantMessageFixture({
+    const assistant = loading({
       model: `local/[model]\nAuthorization: Bearer sk-test ${"x".repeat(800)}`,
-      errorCode: "model_load_failed",
-      errorMessage: "PRIVATE_DETAIL",
-      errorBody: '{"requestedContextLength":49152}',
     });
     const copy = formatUserFacingAssistantErrorText(assistant);
     expect(renderRecordedAssistantFailureCopy(assistant)).toBe(copy);
     expect(copy).toContain(String.raw`local\/\[model\]`);
-    expect(copy).not.toContain("sk-test");
-    expect(copy).not.toContain("PRIVATE_DETAIL");
-    expect(copy).not.toContain("\n");
+    expect(copy).not.toMatch(/sk-test|PRIVATE_DETAIL|\n/);
     expect(copy.length).toBeLessThan(500);
   });
 
   it("keeps malformed loading facts private", () => {
-    const assistant = makeAssistant({
-      errorCode: "model_load_failed",
+    const assistant = loading({
       errorBody: JSON.stringify({ requestedContextLength: Number.MAX_SAFE_INTEGER + 1 }),
-      errorMessage: "PRIVATE_DETAIL",
     });
     expect(formatUserFacingAssistantErrorText(assistant)).toBe(runFailure);
     expect(renderRecordedAssistantFailureCopy(assistant)).toBeUndefined();
-  });
-
-  it("preserves an incomplete tool-call diagnosis without exposing provider text", () => {
-    const error = live({
-      errorCode: "incomplete_tool_call",
-      errorMessage: "PRIVATE_PROVIDER_DETAIL",
-    });
-    expect(error).toBe(
-      "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
-    );
   });
 
   it("renders bounded guidance for a typed runtime code", () => {
@@ -164,13 +155,15 @@ describe("renderAssistantRequestFailureCopy", () => {
     });
   });
 
-  it("does not display an envelope serialized inside error.message", () => {
-    const errorMessage = JSON.stringify({
+  it.each([
+    JSON.stringify({
       error: {
         type: "invalid_request_error",
         message: JSON.stringify({ input: "PRIVATE_PROMPT" }),
       },
-    });
+    }),
+    '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
+  ])("keeps private payloads out of live and saved replies: %s", (errorMessage) => {
     const assistant = makeAssistant({ errorMessage });
     expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
     expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");

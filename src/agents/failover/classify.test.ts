@@ -11,18 +11,18 @@ import {
 import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 const noPlugin = { providerPlugin: null };
+type Signal = Parameters<typeof classifyFailoverSignal>[0];
+type Options = Parameters<typeof classifyFailoverSignal>[1];
 const classifyWithoutPlugin = (message: string) => classifyFailoverReason(message, noPlugin);
-function expectReason(
-  expected: string,
-  signal: Parameters<typeof classifyFailoverSignal>[0],
-  opts?: Parameters<typeof classifyFailoverSignal>[1],
-) {
+function expectReason(expected: string, signal: Signal, opts?: Options) {
   expect(classifyFailoverSignal(signal, opts)).toEqual({ kind: "reason", reason: expected });
 }
-const validation = {
-  errorType: "invalid_request_error",
-  code: "unknown_parameter",
-};
+const validation = { errorType: "invalid_request_error", code: "unknown_parameter" };
+const validationSignal = (status: number) => ({
+  status,
+  message: `${status} Unknown parameter: 'logprobs'`,
+  ...validation,
+});
 
 describe("failover classification", () => {
   it("preserves authentication status 403", () => {
@@ -53,15 +53,35 @@ describe("failover classification", () => {
     }
   });
 
-  it("classifies HTTP 402 prose rather than URL hints", () => {
-    expectReason(
+  it.each([
+    [
       "rate_limit",
       {
         status: 402,
         message: "Organization spend limit reached. See https://example.invalid/subscription",
       },
       noPlugin,
-    );
+    ],
+    ["server_error", { status: 500, message: "upstream failure" }],
+    ["billing", validationSignal(402)],
+    ["overloaded", validationSignal(529)],
+    ["rate_limit", { code: "rate_limit_exceeded", message: "Request rejected" }, noPlugin],
+    [
+      "rate_limit",
+      { status: 400, code: "rate_limit_exceeded", message: "Request rejected" },
+      {
+        providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "rate_limit" },
+      },
+    ],
+    [
+      "timeout",
+      {
+        message:
+          "504 <!doctype html><html><head><title>504</title></head><body>Cloudflare</body></html>",
+      },
+    ],
+  ] satisfies [string, Signal, Options?][])("HTTP policy: %s for %j", (expected, signal, opts) => {
+    expectReason(expected, signal, opts);
   });
 
   it("does not treat a bare leading number and a URL as payment evidence", () => {
@@ -73,11 +93,7 @@ describe("failover classification", () => {
   });
 
   it("preserves request-validation semantics for HTTP 404", () => {
-    expectReason("format", {
-      status: 404,
-      message: "404 Unknown parameter: 'logprobs'",
-      ...validation,
-    });
+    expectReason("format", validationSignal(404));
     expect(
       classifyFailoverReason(
         '404 {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}',
@@ -103,17 +119,6 @@ describe("failover classification", () => {
   });
 
   it.each([
-    { status: 402, reason: "billing" },
-    { status: 529, reason: "overloaded" },
-  ])("preserves HTTP $status policy for validation-coded errors", ({ status, reason }) => {
-    expectReason(reason, {
-      status,
-      message: `${status} Unknown parameter: 'logprobs'`,
-      ...validation,
-    });
-  });
-
-  it.each([
     {
       status: 400,
       code: "rate_limit_exceeded",
@@ -136,24 +141,6 @@ describe("failover classification", () => {
     });
   });
 
-  it("retains independent throttling evidence", () => {
-    expectReason(
-      "rate_limit",
-      { code: "rate_limit_exceeded", message: "Request rejected" },
-      noPlugin,
-    );
-  });
-
-  it("preserves a prepared provider's HTTP 400 throttling decision", () => {
-    expectReason(
-      "rate_limit",
-      { status: 400, code: "rate_limit_exceeded", message: "Request rejected" },
-      {
-        providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "rate_limit" },
-      },
-    );
-  });
-
   it("classifies the logged-out response as auth only for claude-cli", () => {
     const message = "Not logged in · Please run /login";
     expect(classifyFailoverReason(message, { provider: "claude-cli" })).toBe("auth");
@@ -161,41 +148,26 @@ describe("failover classification", () => {
     expect(classifyFailoverReason(message)).toBeNull();
   });
 
-  it("classifies an untyped 500 as server_error", () => {
-    expectReason("server_error", { status: 500, message: "upstream failure" });
-  });
-
-  it("keeps a CDN HTML error page at a gateway-timeout status as timeout", () => {
-    expectReason("timeout", {
-      message:
-        "504 <!doctype html><html><head><title>504</title></head><body>Cloudflare</body></html>",
-    });
-  });
-
-  it("ignores multi-section billing explanations", () => {
-    expect(
-      isBillingErrorMessage(
-        "## Payments\nHandle insufficient credits.\n## Plans\nUpgrade your plan.",
-      ),
-    ).toBe(false);
-  });
-
-  it("recognizes server status evidence", () => {
-    expect(isServerErrorMessage("status: internal server error")).toBe(true);
+  it.each([
+    [
+      isBillingErrorMessage,
+      "## Payments\nHandle insufficient credits.\n## Plans\nUpgrade your plan.",
+      false,
+    ],
+    [isServerErrorMessage, "status: internal server error", true],
+    [
+      isCloudCodeAssistFormatError,
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
+      false,
+    ],
+  ] as const)("guards message classification with %s: %s", (predicate, message, expected) => {
+    expect(predicate(message)).toBe(expected);
   });
 
   it("keeps server evidence retryable without a raw timeout match", () => {
     const message = "Proxy notice: Status: Internal Server Error; code:500";
     expect(isTimeoutErrorMessage(message)).toBe(false);
     expect(classifyFailoverReason(message)).toBe("timeout");
-  });
-
-  it("does not treat image dimension rejection as a Cloud Code format error", () => {
-    expect(
-      isCloudCodeAssistFormatError(
-        '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
-      ),
-    ).toBe(false);
   });
 
   it("keeps HTTP 429 overload wording in rate-limit backoff and copy", () => {

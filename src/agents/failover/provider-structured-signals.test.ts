@@ -20,6 +20,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
 describe("provider failover hook structured signals", () => {
+  type Fields = Parameters<typeof makeMessage>[0];
   const hook = providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin;
   const rateLimitCopy = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
   const serverCopy = "⚠️ The AI service is having trouble. Please try again in a moment.";
@@ -36,6 +37,18 @@ describe("provider failover hook structured signals", () => {
   function expectReason(reason: string, signal: Parameters<typeof classifyFailoverSignal>[0]) {
     expect(classifyFailoverSignal(signal)).toEqual({ kind: "reason", reason });
   }
+  const hookCall = (errorMessage: string, status?: number) => ({
+    provider: "demo-provider",
+    context: {
+      provider: "demo-provider",
+      status,
+      code: undefined,
+      errorType: undefined,
+      errorMessage,
+    },
+  });
+  const refusal = (errorType: string, errorCode: string, errorMessage: string) =>
+    makeMessage({ provider: "custom-route", errorType, errorCode, errorMessage });
 
   beforeEach(() => {
     hook.mockReset();
@@ -69,7 +82,7 @@ describe("provider failover hook structured signals", () => {
       rateLimitCopy,
       "rate_limit",
     ],
-  ])("presents and observes %s without provider discovery", (errorMessage, copy, expectedKind) => {
+  ])("presents/observes %s without discovery", (errorMessage, copy, expectedKind) => {
     const message = makeMessage({ errorMessage });
     expect(userCopy(message)).toBe(copy);
     expect.soft(hook).not.toHaveBeenCalled();
@@ -84,16 +97,11 @@ describe("provider failover hook structured signals", () => {
   });
 
   it.each(["billing", "rate_limit", "context_overflow", "model_not_found", "format"] as const)(
-    "presents prepared %s policy with the full signal and no rediscovery",
+    "uses prepared %s policy without rediscovery",
     (reason) => {
       const classifyFailoverReason = vi.fn(() => reason);
       const matchesContextOverflowError = vi.fn(() => reason === "context_overflow");
-      const message = makeMessage({
-        provider: "custom-route",
-        errorMessage: "403 fixture refusal",
-        errorCode: "unknown_parameter",
-        errorType: "PROVIDER_TYPE",
-      });
+      const message = refusal("PROVIDER_TYPE", "unknown_parameter", "403 fixture refusal");
       const copies = {
         billing: formatBillingErrorMessage("custom-route", message.model),
         rate_limit: rateLimitCopy,
@@ -149,14 +157,11 @@ describe("provider failover hook structured signals", () => {
       { errorBody: '{"error":{"message":"Request size exceeds model context window"}}' },
       contextCopy,
     ],
-  ] satisfies [Parameters<typeof makeMessage>[0], string][])(
-    "presents structured signal %j without discovery",
-    (fields, copy) => {
-      const message = makeMessage({ errorMessage: "provider refusal", ...fields });
-      expect(userCopy(message)).toBe(copy);
-      expect(hook).not.toHaveBeenCalled();
-    },
-  );
+  ] satisfies [Fields, string][])("presents structured %j without discovery", (fields, copy) => {
+    const message = makeMessage({ errorMessage: "provider refusal", ...fields });
+    expect(userCopy(message)).toBe(copy);
+    expect(hook).not.toHaveBeenCalled();
+  });
 
   it.each([
     [
@@ -167,46 +172,30 @@ describe("provider failover hook structured signals", () => {
     ],
     [{ errorBody: '{"error":{"type":"upstream_error"}}' }, serverCopy],
     [{ errorMessage: undefined, errorType: "upstream_error" }, serverCopy],
-  ] satisfies [Parameters<typeof makeMessage>[0], string][])(
-    "carries structured %j into safe composed copy",
-    (fields, expected) => {
-      const message = makeMessage({
-        errorMessage: privateDetail,
-        ...fields,
-      });
-      const text = userCopy(message);
-      expect(text).toBe(expected);
-      if ("errorMessage" in fields && fields.errorMessage === undefined) {
-        expect(formatAssistantErrorText(message)).toBe(expected);
-      }
-      expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
-      expect(hook).not.toHaveBeenCalled();
-    },
-  );
+  ] satisfies [Fields, string][])("sanitizes structured %j", (fields, expected) => {
+    const message = makeMessage({ errorMessage: privateDetail, ...fields });
+    const text = userCopy(message);
+    expect(text).toBe(expected);
+    if ("errorMessage" in fields && fields.errorMessage === undefined) {
+      expect(formatAssistantErrorText(message)).toBe(expected);
+    }
+    expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
+    expect(hook).not.toHaveBeenCalled();
+  });
 
   it("carries a prepared owner's structured decision into safe composed copy", () => {
     const classifyFailoverReason = vi.fn(
       ({ code, errorType }: { code?: string; errorType?: string }) =>
         code === "OWNER_CODE" && errorType === "OWNER_TYPE" ? ("server_error" as const) : undefined,
     );
-    const message = makeMessage({
-      provider: "custom-route",
-      errorMessage: `403 ${privateDetail}`,
-      errorCode: "OWNER_CODE",
-      errorType: "OWNER_TYPE",
-    });
+    const message = refusal("OWNER_TYPE", "OWNER_CODE", `403 ${privateDetail}`);
     const text = userCopy(message, {
       providerOwner: { id: "prepared-owner", classifyFailoverReason },
     });
     expect(text).toBe(serverCopy);
     expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
     expect(classifyFailoverReason).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "prepared-owner",
-        status: 403,
-        code: "OWNER_CODE",
-        errorType: "OWNER_TYPE",
-      }),
+      expect.objectContaining({ ...signalContext, code: "OWNER_CODE", errorType: "OWNER_TYPE" }),
     );
     expect(hook).not.toHaveBeenCalled();
   });
@@ -222,30 +211,12 @@ describe("provider failover hook structured signals", () => {
       provider: "demo-provider",
       message: "403 concurrency limit breached",
     });
-    expect(hook).toHaveBeenCalledWith({
-      provider: "demo-provider",
-      context: {
-        provider: "demo-provider",
-        errorMessage: "403 concurrency limit breached",
-        status: 403,
-        code: undefined,
-        errorType: undefined,
-      },
-    });
+    expect(hook).toHaveBeenCalledWith(hookCall("403 concurrency limit breached", 403));
     expectReason("billing", {
       provider: "demo-provider",
       message: "429 API key budget limit exceeded",
     });
-    expect(hook).toHaveBeenLastCalledWith({
-      provider: "demo-provider",
-      context: {
-        provider: "demo-provider",
-        errorMessage: "429 API key budget limit exceeded",
-        status: 429,
-        code: undefined,
-        errorType: undefined,
-      },
-    });
+    expect(hook).toHaveBeenLastCalledWith(hookCall("429 API key budget limit exceeded", 429));
   });
 
   it("passes nested provider error types through failover error normalization", () => {
@@ -278,14 +249,8 @@ describe("provider failover hook structured signals", () => {
 
     for (const errorMessage of carriers) {
       expectReason("format", { provider: "anthropic", message: errorMessage });
-      expect(
-        assistantReason(
-          makeMessage({
-            provider: "anthropic",
-            errorMessage,
-          }),
-        ),
-      ).toBe("format");
+      const message = makeMessage({ provider: "anthropic", errorMessage });
+      expect(assistantReason(message)).toBe("format");
       expect(runtimeKind(errorMessage)).toBe("replay_invalid");
     }
   });
@@ -318,32 +283,13 @@ describe("provider failover hook structured signals", () => {
   it("consults message-only hooks without promoting generic SDK type strings", () => {
     hook.mockReturnValue("billing");
 
-    expect(
-      resolveReason({
-        provider: "demo-provider",
-        type: "api_error",
-        message: "unclassified provider failure",
-      }),
-    ).toBe("billing");
-    expect(
-      resolveReason({
-        provider: "demo-provider",
-        message: "unclassified provider failure",
-        detail: { type: "api_error" },
-      }),
-    ).toBe("billing");
+    const message = "unclassified provider failure";
+    for (const fields of [{ type: "api_error" }, { detail: { type: "api_error" } }]) {
+      expect(resolveReason({ provider: "demo-provider", message, ...fields })).toBe("billing");
+    }
     expect(hook).toHaveBeenCalledTimes(2);
     for (const [call] of hook.mock.calls) {
-      expect(call).toEqual({
-        provider: "demo-provider",
-        context: {
-          provider: "demo-provider",
-          status: undefined,
-          code: undefined,
-          errorType: undefined,
-          errorMessage: "unclassified provider failure",
-        },
-      });
+      expect(call).toEqual(hookCall(message));
     }
   });
 
@@ -353,17 +299,11 @@ describe("provider failover hook structured signals", () => {
       context.provider === "openai" && context.code === "server_error" ? "server_error" : undefined,
     );
 
-    expectReason("timeout", {
-      provider: "openai",
-      message: "server_error: provider failed",
-    });
+    const signal = { provider: "openai", message: "server_error: provider failed" };
+    expectReason("timeout", signal);
     expect(hook).not.toHaveBeenCalled();
 
-    expectReason("server_error", {
-      provider: "openai",
-      code: "server_error",
-      message: "server_error: provider failed",
-    });
+    expectReason("server_error", { ...signal, code: "server_error" });
     expect(hook).toHaveBeenCalledTimes(1);
   });
 });
