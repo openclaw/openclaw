@@ -5,7 +5,7 @@ import { manifestNodes } from "./workspace-manifest-comparison.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
-function decodeGitPaths(listed: Buffer): string[] {
+export function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {
     throw new Error(
       "Local sandbox source paths must be UTF-8; rename the invalid Git path before retrying",
@@ -34,7 +34,7 @@ export async function admitLocalWorkspaceSourcePaths(params: {
     { signal: params.signal, beforeRun: params.assertCurrent },
   );
   params.assertCurrent();
-  return JSON.stringify([...new Set(decodeGitPaths(listed))]);
+  return JSON.stringify([...new Set(decodeLocalWorkspaceGitPaths(listed))]);
 }
 
 /** Ignore changes are source edits, not authority to enroll canonical-only bytes. */
@@ -61,7 +61,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
     // Only the host owns this index; the guest has independent Git metadata. A
     // host can deliberately admit a new path with git add, even if it is ignored.
     const admitted = parseLocalWorkspaceSourcePaths(params.admittedPaths);
-    paths = new Set<string>([...admitted, ...decodeGitPaths(listed)]);
+    paths = new Set<string>([...admitted, ...decodeLocalWorkspaceGitPaths(listed)]);
   }
   if (params.baseline) {
     for (const entryPath of manifestNodes(params.baseline).keys()) {

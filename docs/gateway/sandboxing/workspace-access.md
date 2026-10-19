@@ -82,7 +82,10 @@ inputs admitted from the host source or its Git index remain protected even with
 those roots. Guest Git metadata cannot admit generated files as original inputs.
 The same input custody applies during capture, synchronization and recovery without
 changing saved manifest bytes. This build-cache policy does not change native-node
-or SSH workspace synchronization.
+or SSH workspace synchronization. Older archives can lack the original index
+membership of saved files. Exact cache-root paths in the owned archive remain
+restored inputs; new generated paths under the same directories are still excluded.
+An ambiguous older cache file may therefore remain preserved.
 
 If you are a guest, you can ask the agent:
 

@@ -872,6 +872,40 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
   },
 );
 
+it("preserves later inputs from an older archive without admitting new caches", async () => {
+  const { service } = await archiveFixture();
+  const projection = await prepare();
+  const originalAdmission = (await readProjection())!.source_paths_json;
+  const input = ".artifacts/build-cache-inputs/late-original.json";
+  expect(JSON.parse(originalAdmission)).not.toContain(input);
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });
+  await writeText(canonical, input, "host-admitted input\n");
+  await git(canonical, "add", "--force", "--", input);
+  await prepare();
+  await expectText(projection, input, "host-admitted input\n");
+  const removed = await service.remove({ id: owner.worktree.id, reason: "legacy-admission-probe" });
+  expect(removed.removed).toBe(true);
+  expect(await treePaths(removed.snapshotRef!)).toContain(input);
+  // Before this policy, host-index admission did not update source_paths_json.
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    await store.update(store.get()!, { source_paths_json: originalAdmission });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  await service.restore({ id: owner.worktree.id });
+  await prepare();
+  await expectText(projection, input, "host-admitted input\n");
+  const generated = ".artifacts/build-cache-inputs/generated-after-restore.json";
+  await writeText(projection, generated, "new disposable cache\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, generated), 0);
+  }
+  await writeText(projection, input, "restored authored edit\n");
+  await synchronize();
+  await expectText(canonical, input, "restored authored edit\n");
+  await expectMissing(canonical, generated);
+});
+
 it.each(["lifecycle reset", "replacement session"] as const)(
   "preserves pending bytes across a %s without transferring session authority",
   async (change) => {

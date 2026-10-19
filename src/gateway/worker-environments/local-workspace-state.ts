@@ -12,6 +12,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 import {
   admitLocalWorkspaceSourcePaths,
+  decodeLocalWorkspaceGitPaths,
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
@@ -130,14 +131,35 @@ export function projectionOperations(
             })
           : new Set(admitted);
       preparedInputPaths = paths;
-      const retained = [...buildCacheInputPaths(paths)];
+      const retained = buildCacheInputPaths(paths);
+      if (owner.worktree.snapshotRef && selected.baseline_json && selected.baseline_ref) {
+        const baseline = parseWorkerWorkspaceManifest(
+          selected.baseline_json,
+          selected.baseline_ref,
+        );
+        const prior = buildCacheInputPaths(baseline.entries.map((entry) => entry.path));
+        if ([...prior].some((entryPath) => !retained.has(entryPath))) {
+          const archived = await requireGitBuffer(
+            owner.worktree.repoRoot,
+            ["ls-tree", "-r", "-z", "--name-only", owner.worktree.snapshotRef],
+            { signal, beforeRun: assertCurrent },
+          );
+          current();
+          // Older archives lost later index membership. Preserve exact archived inputs,
+          // including ambiguous old caches, without admitting future directory contents.
+          for (const entryPath of buildCacheInputPaths(decodeLocalWorkspaceGitPaths(archived))) {
+            retained.add(entryPath);
+            paths.add(entryPath);
+          }
+        }
+      }
       const known = new Set(admitted);
-      const added = retained.filter((entryPath) => !known.has(entryPath));
-      // Keep host-index admission in its existing owner when later archive recovery has no checkout.
+      const added = [...retained].filter((entryPath) => !known.has(entryPath));
+      // Keep acquired input custody when later recovery no longer has the checkout or archive.
       if (added.length) {
         await update({ source_paths_json: JSON.stringify([...admitted, ...added]) });
       }
-      return retained;
+      return [...retained];
     })());
   const canonicalPaths = async () => {
     const retained = await buildCacheInputs();
@@ -490,6 +512,7 @@ export function projectionOperations(
       await settle();
     },
     restoreSnapshot: async () => {
+      await buildCacheInputs();
       await recover();
       const selected = current();
       if (!selected.pending_ref) {
