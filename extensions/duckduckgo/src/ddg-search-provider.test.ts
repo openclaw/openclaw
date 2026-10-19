@@ -48,6 +48,25 @@ it.each([4.5, 11])("rejects invalid count %s before searching", async (count) =>
   expect(fetch).not.toHaveBeenCalled();
 });
 
+it("falls back to tools.web.search maxResults when count is omitted", async () => {
+  const tool = createDuckDuckGoWebSearchProvider().createTool({
+    config: {},
+    searchConfig: { maxResults: 7, timeoutSeconds: 45, cacheTtlMinutes: 0 },
+  });
+  assert(tool, "Expected tool definition");
+  fetch.mockResolvedValue(
+    htmlResponse(
+      Array.from({ length: 10 }, (_, index) =>
+        resultHtml(`https://example.com/${index}`, `Result ${index}`),
+      ).join(""),
+    ),
+  );
+
+  const payload = await tool.execute({ query: "duckduckgo configured max results" });
+
+  expect(payload).toMatchObject({ count: 7 });
+});
+
 it("rejects an already canceled search without fetching", async () => {
   const tool = createSearchTool();
   const signal = AbortSignal.abort(new Error("DuckDuckGo caller canceled"));

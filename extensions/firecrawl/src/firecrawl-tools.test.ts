@@ -474,6 +474,35 @@ describe("firecrawl tools", () => {
     });
   });
 
+  it.each(["paid", "free"] as const)(
+    "falls back to tools.web.search maxResults and timeoutSeconds for the %s provider",
+    async (kind) => {
+      const provider =
+        kind === "paid"
+          ? createFirecrawlWebSearchProvider()
+          : createFirecrawlFreeWebSearchProvider();
+      const tool = provider.createTool({
+        config: {},
+        searchConfig: { maxResults: 8, timeoutSeconds: 45 },
+      });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+
+      await tool.execute({ query: "openclaw docs" });
+      await tool.execute({ query: "openclaw docs", count: 3 });
+
+      expect(runFirecrawlSearch).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ count: 8, timeoutSeconds: 45 }),
+      );
+      expect(runFirecrawlSearch).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ count: 3, timeoutSeconds: 45 }),
+      );
+    },
+  );
+
   it.each(["paid", "fetch"] as const)("cancels the %s web provider", async (kind) => {
     const provider =
       kind === "paid" ? createFirecrawlWebSearchProvider() : createFirecrawlWebFetchProvider();
