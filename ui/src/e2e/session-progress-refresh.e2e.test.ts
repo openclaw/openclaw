@@ -209,7 +209,7 @@ suite.define(() => {
           !collapsed,
         );
         expect(await originalCard!.evaluate((element) => element.isConnected)).toBe(true);
-        expect(await page.locator(".chat-details:popover-open").isVisible()).toBe(true);
+        expect(await page.locator(".chat-details").isVisible()).toBe(true);
         expect(await transcriptSnapshot(page)).toEqual(initial);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);

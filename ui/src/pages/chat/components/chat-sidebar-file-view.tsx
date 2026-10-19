@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -64,6 +64,14 @@ export function computeFileMatches(content: string, query: string): number[] {
 function FileMarkdown(props: { controls: FileViewControls; onSelect: (event: Event) => void }) {
   let scroll!: HTMLDivElement;
   let article!: HTMLElement;
+  onSettled(() => {
+    const releaseScroll = props.controls.onScrollPortRef?.(scroll);
+    const releaseArticle = props.controls.onScrollPortRef?.(article);
+    return () => {
+      releaseScroll?.();
+      releaseArticle?.();
+    };
+  });
   const markdownRef = createMarkdownRef(() => ({
     incremental: true,
     content: toSanitizedMarkdownHtml(

@@ -1,9 +1,11 @@
 import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SidebarSlotId } from "../sidebar-layout.ts";
 import type {
   SidebarPanelDefinition,
+  RegionProps,
   SidebarRegionCallbacks,
 } from "./chat-sidebar-region-types.ts";
 import "./chat-panel-launcher-mobile.css";
@@ -12,6 +14,7 @@ type LauncherDefinition = Pick<SidebarPanelDefinition, "slot" | "label" | "icon"
 
 export type MobilePanelLauncherProps = {
   definitions: readonly LauncherDefinition[];
+  onScrollPortRef?: RegionProps["onScrollPortRef"];
   /** The host owns native create/select behavior and returning from the launcher. */
   onOpen: SidebarRegionCallbacks["openSlot"];
 };
@@ -71,7 +74,7 @@ export function MobilePanelLauncher(props: MobilePanelLauncherProps) {
     ...available().filter((definition) => definition.slot === "terminal"),
   ]);
   return (
-    <div class="chat-panel-launcher-mobile">
+    <div class="chat-panel-launcher-mobile" ref={[elementRef(props.onScrollPortRef)]}>
       <Show when={quick().length > 0}>
         <section aria-label={t("chat.sidePanel.quickAccess")}>
           <h3>{t("chat.sidePanel.quickAccess")}</h3>

@@ -53,7 +53,8 @@ type ChatPaneLayoutRenderParams = {
   currentAgentId: string;
   board: ResolvedBoardView;
   sidebarLayout: SidebarLayout;
-  sessionWorkspace: ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
+  sessionWorkspace: ReturnType<typeof createChatPaneRails>["sessionWorkspace"] &
+    Pick<ChatProps, "onScrollPortRef">;
   chatProps: ChatProps;
   observerDigest: SessionObserverDigest | null;
   observerRunId: string | null;

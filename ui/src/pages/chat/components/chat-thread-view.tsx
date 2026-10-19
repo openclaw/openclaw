@@ -177,17 +177,20 @@ export function ChatThread(input: {
     return current().session.liveAnnouncementText;
   });
   return (
-    <div class="chat-thread-viewport">
+    <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
       <div
-        ref={(element) => {
-          root = element;
-          releaseViewport = input.bindViewport?.(element);
-          markdownRef(element);
-          prefetchRef(element);
-          stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
-            listen(element, type, historyIntent, { passive: true }),
-          );
-        }}
+        ref={[
+          (element) => {
+            root = element;
+            releaseViewport = input.bindViewport?.(element);
+            markdownRef(element);
+            prefetchRef(element);
+            stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
+              listen(element, type, historyIntent, { passive: true }),
+            );
+          },
+          elementRef(input.props.onScrollPortRef),
+        ]}
         class={[
           "chat-thread",
           {

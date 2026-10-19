@@ -47,7 +47,7 @@
   font-size: 14px;
   line-height: 20px;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-panel-launcher-mobile__quick > .chat-panel-launcher-mobile__option {

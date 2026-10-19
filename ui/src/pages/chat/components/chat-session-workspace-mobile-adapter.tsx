@@ -8,6 +8,7 @@ import {
   SessionWorkspaceMobile,
   type SessionWorkspaceMobileGroup,
   type SessionWorkspaceMobileLocation,
+  type SessionWorkspaceMobileProps,
   type SessionWorkspaceMobileStatus,
 } from "./chat-session-workspace-mobile.tsx";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
@@ -140,7 +141,9 @@ function projectMobileWorkspace(workspace: MobileWorkspaceProjection): {
   return { groups, status };
 }
 
-export function MobileWorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
+export function MobileWorkspaceContents(props: {
+  workspace: SessionWorkspaceProps & Pick<SessionWorkspaceMobileProps, "onScrollPortRef">;
+}) {
   const sessionKey = createMemo(() => props.workspace.sessionKey);
   const attachments = createMemo(() => props.workspace.transcriptAttachments);
   const list = createMemo(() => props.workspace.list);
@@ -253,6 +256,7 @@ export function MobileWorkspaceContents(props: { workspace: SessionWorkspaceProp
       onToggleGroup={(kind) => props.workspace.onToggleMobileGroup?.(kind)}
       onSearchFocus={() => props.workspace.onSearchFocus?.()}
       onScrollElement={onScrollElement}
+      onScrollPortRef={props.workspace.onScrollPortRef}
       onScroll={onScroll}
     />
   );

@@ -483,10 +483,17 @@ suite.define(() => {
         expect(chat.shell.bottom).toBeCloseTo(height - bottom, 0);
         expect(generating.scrollWidth).toBeLessThanOrEqual(width);
         if (mobile) {
-          expect(fresh.composer.left).toBeCloseTo(generating.composer.left, 0);
-          expect(fresh.composer.right).toBeCloseTo(generating.composer.right, 0);
-          expect(chat.composer.left).toBeGreaterThanOrEqual(left + 20);
-          expect(chat.composer.right).toBeLessThanOrEqual(width - right - 20);
+          const usableWidth = width - left - right;
+          for (const [frame, inset] of [
+            [fresh, 20],
+            [generating, 16],
+          ] as const) {
+            const margin = Math.max(inset, (usableWidth - 768) / 2);
+            expect(frame.composer.left).toBeCloseTo(left + margin, 0);
+            expect(frame.composer.right).toBeCloseTo(width - right - margin, 0);
+          }
+          expect(generating.composer.left).toBeCloseTo(chat.composer.left, 0);
+          expect(generating.composer.right).toBeCloseTo(chat.composer.right, 0);
           expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
           expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
           expect(withProgress.details).not.toBeNull();

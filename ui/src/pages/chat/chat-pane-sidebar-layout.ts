@@ -13,7 +13,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import type { SidebarRegionParams } from "./chat-pane-sidebar-view.tsx";
+import type { SidebarRegionParams } from "./components/chat-sidebar-region-types.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";

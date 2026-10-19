@@ -460,6 +460,7 @@ suite.define(() => {
         },
       });
       const openPreview = async (filePath: string) => {
+        await openChatSidePanelType(page, "Files");
         const fileRow = page
           .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
           .filter({ hasText: filePath });
@@ -471,8 +472,6 @@ suite.define(() => {
       };
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await openChatSidePanelType(page, "Files");
-      await page.getByRole("complementary", { name: "Session workspace" }).waitFor();
 
       await openPreview("notes.txt");
       await page.locator(".sidebar-file-view").waitFor({ state: "visible" });

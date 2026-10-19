@@ -79,7 +79,7 @@ async function waitForShellLayout(page: Page): Promise<void> {
 }
 
 async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<void> {
-  const panelControls = page.locator(".chat-pane__actions button:visible");
+  const panelControls = page.locator('[data-region-header="side"] button:visible');
   const panelCount = await panelControls.count();
   expect(panelCount).toBeGreaterThan(0);
 
@@ -89,10 +89,10 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
         [...document.querySelectorAll(selector)]
           .map((element) => element.getBoundingClientRect())
           .filter((box) => box.width > 0 && box.height > 0);
-      const header = document.querySelector(".chat-pane__header")!;
+      const header = document.querySelector('[data-region-header="side"]')!;
       const headerRect = header.getBoundingClientRect();
       const headerStyle = getComputedStyle(header);
-      const panels = visibleRects(".chat-pane__actions button:not([hidden])");
+      const panels = visibleRects('[data-region-header="side"] button:not([hidden])');
       const shells = visibleRects(
         ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-rail, .sidebar-session-toolbar) button:not([hidden])",
       );

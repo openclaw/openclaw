@@ -25,6 +25,7 @@ export class TranscriptLayoutOwner {
   private viewport: HTMLDivElement | null = null;
   private observers: ResizeObserver[] = [];
   private composerFloat: HTMLElement | null = null;
+  private getComposerFloat: (() => HTMLElement | null) | undefined;
   private readonly rangeHeights = new WeakMap<HTMLElement, number>();
 
   constructor(private readonly onClamp: (before: number, after: number) => void) {}
@@ -44,11 +45,15 @@ export class TranscriptLayoutOwner {
     );
   }
 
-  connect(viewport: HTMLDivElement | null): void {
-    if (viewport === this.viewport) {
+  connect(viewport: HTMLDivElement | null, getComposerFloat?: () => HTMLElement | null): void {
+    const sameViewport = viewport === this.viewport;
+    if (!sameViewport) {
+      this.disconnect();
+    }
+    this.getComposerFloat = getComposerFloat;
+    if (sameViewport) {
       return;
     }
-    this.disconnect();
     this.viewport = viewport;
     const slot = viewport?.parentElement;
     if (!viewport || !slot) {
@@ -81,12 +86,7 @@ export class TranscriptLayoutOwner {
     if (!rect.width || !rect.height) {
       return;
     }
-    const floating =
-      slot
-        .closest(".chat-main__conversation-frame")
-        ?.querySelector<HTMLElement>(
-          '.agent-chat__composer-shell[data-mobile-composer="true"] > .agent-chat__composer-float',
-        ) ?? null;
+    const floating = this.getComposerFloat?.() ?? null;
     if (floating !== this.composerFloat) {
       if (this.composerFloat) {
         this.observers[0]?.unobserve(this.composerFloat);
@@ -170,6 +170,7 @@ export class TranscriptLayoutOwner {
     }
     this.observers = [];
     this.composerFloat = null;
+    this.getComposerFloat = undefined;
     this.viewport = null;
   }
 }

@@ -88,6 +88,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   getTranscriptElement?: () => HTMLElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
+  onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
   /** Provisional/deleted previews must not mount session-scoped extension controllers. */
   sessionAdmitted?: boolean;
   connected: boolean;

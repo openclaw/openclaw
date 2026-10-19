@@ -34,6 +34,7 @@ export type ChatDetailSlotProps = {
 };
 
 export type SidebarPanelDefinitionParams = {
+  onScrollPortRef?: ChatProps["onScrollPortRef"];
   presentation?: "desktop" | "mobile";
   panePresentation?: PresentationValue;
   detailPresented?: PresentationValue;

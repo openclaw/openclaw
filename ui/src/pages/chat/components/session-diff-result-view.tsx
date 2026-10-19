@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
@@ -42,6 +42,8 @@ export function createSessionDiffResultViews(
   } = bindings;
   const { File, MobileSummary, DesktopSummary, Summary } = renderers;
   function MobileResultBody(body: { value: DiffValue }) {
+    let viewport!: HTMLDivElement;
+    onSettled(() => props.onScrollPortRef?.(viewport));
     const [edges, setEdges] = createSignal({ atStart: true, atEnd: true });
     const viewportRef = createScrollStateRef((_, state) => setEdges(state), {
       presented: () => props.active !== false,
@@ -54,7 +56,13 @@ export function createSessionDiffResultViews(
         data-at-start={edges().atStart ? "true" : "false"}
         data-at-end={edges().atEnd ? "true" : "false"}
       >
-        <div class="session-diff-mobile__scroll" ref={viewportRef}>
+        <div
+          class="session-diff-mobile__scroll"
+          ref={(element) => {
+            viewport = element;
+            viewportRef(element);
+          }}
+        >
           <Show
             when={
               result().unavailableReason !== "not_git" &&

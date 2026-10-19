@@ -441,11 +441,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
         (this.usesMobileHost
           ? this.isSlotShown(state.sidebarLayout, slot)
           : isSidebarSlotVisible(state.sidebarLayout, slot)));
+    let origin: HTMLElement | null = null;
     if (!closing && this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX) {
-      // The panel is about to replace the view this control is in; the region,
-      // which may not have loaded yet, carries focus across from it.
+      // Desktop moves focus with the narrow region; the mobile dock retains
+      // this same opener for its native Close action.
       const active = this.element.ownerDocument.activeElement;
-      const origin = active instanceof HTMLElement && this.element.contains(active) ? active : null;
+      origin = active instanceof HTMLElement && this.element.contains(active) ? active : null;
       const take = () => {
         if (this.companionIntents.sideFocusOrigin === take) {
           this.companionIntents.sideFocusOrigin = undefined;
@@ -458,7 +459,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       closing ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
     );
     if (!closing) {
-      this.navigateMobileHost({ area: "panels", slot });
+      this.navigateMobileHost({ area: "panels", slot }, origin ?? undefined);
     }
   }
 

@@ -425,6 +425,7 @@ export function renderFilePanelPresentation(context: {
         mode: context.props.embedSandboxMode,
       }),
       presentation: context.props.filePresentation ?? "desktop",
+      onScrollPortRef: context.props.onScrollPortRef,
       back: context.props.fileBack ?? undefined,
       active: context.props.filePresented !== false,
       workspace: context.props.fileWorkspace ?? undefined,
@@ -515,6 +516,7 @@ export function renderFilePanelPresentation(context: {
 }
 
 export const chatDetailPanelProperties = {
+  onScrollPortRef: { default: undefined, attribute: false },
   panelPresentation: { default: undefined, attribute: false },
   panelActive: { default: true, type: Boolean },
   filePresentation: { default: "desktop" },
