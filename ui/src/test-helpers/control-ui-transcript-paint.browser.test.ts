@@ -7,7 +7,9 @@ it("records transcript presentation after opacity reveals nested text, not its e
   try {
     const target = iframe.contentWindow;
     const doc = iframe.contentDocument;
-    if (!target || !doc) throw new Error("Paint probe realm was not created");
+    if (!target || !doc) {
+      throw new Error("Paint probe realm was not created");
+    }
     const script = doc.createElement("script");
     script.textContent = `
       const __name = fn => fn;

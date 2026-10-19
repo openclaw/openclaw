@@ -324,7 +324,9 @@ function installColdLoadProbes(
         "close",
         () => {
           for (const [id, request] of pending) {
-            if (request.socket !== socket) continue;
+            if (request.socket !== socket) {
+              continue;
+            }
             pending.delete(id);
             rpcs.push({
               method: request.method,
@@ -368,11 +370,13 @@ function installColdLoadProbes(
         const liveEvent = eventStream.emitting;
         // A single wire delivers one message task at a time, including concurrent RPC replies.
         nextFrameAt = Math.max(performance.now() + input.latencyMs, nextFrameAt + input.frameGapMs);
-        const request = pending.get(frame.id);
+        const queuedRequest = pending.get(frame.id);
         // Per-method delay models a queued RPC without holding unrelated replies.
         const deliverAt = Math.max(
           nextFrameAt,
-          request ? request.at + (input.methodLatencyMs?.[request.method] ?? 0) : 0,
+          queuedRequest
+            ? queuedRequest.at + (input.methodLatencyMs?.[queuedRequest.method] ?? 0)
+            : 0,
         );
         queued++;
         window.setTimeout(

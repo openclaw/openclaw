@@ -8,7 +8,9 @@ describe("serialized cold-load probes", () => {
     try {
       const target = iframe.contentWindow;
       const doc = iframe.contentDocument;
-      if (!target || !doc) throw new Error("Probe realm was not created");
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
       const script = doc.createElement("script");
       script.textContent = `
         window.WebSocket = class extends EventTarget { send() {} };
