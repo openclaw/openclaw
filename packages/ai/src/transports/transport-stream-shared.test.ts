@@ -200,38 +200,106 @@ it("preserves the lifecycle failure when cancellation throws synchronously", asy
   ).rejects.toBe(callbackError);
   expect(cancelStream).toHaveBeenCalledOnce();
 });
-it("lets the event loop run during simultaneous stream starts without reordering events", async () => {
+it.each([false, true])(
+  "yields simultaneous stream starts without reordering events (held hooks=%s)",
+  async (holdHooks) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const events = Array.from({ length: 80 }, () => [] as string[]);
+    let starts = 0;
+    let startsBeforeTimer = -1;
+    const hooks = Promise.withResolvers<void>();
+    const streams = events.map(async (received) => {
+      const controller = new AbortController();
+      const source = withProviderResponseHook({
+        stream: (async function* () {
+          yield "first";
+          yield "last";
+        })(),
+        signal: controller.signal,
+        abort: (error) => controller.abort(error),
+        hook: holdHooks ? () => hooks.promise : undefined,
+        onReady() {
+          starts++;
+          received.push("start");
+        },
+      });
+      for await (const event of iterateModelStream(source, controller.signal)) {
+        received.push(event);
+      }
+    });
+    try {
+      if (holdHooks) {
+        await vi.runAllTimersAsync();
+      }
+      setTimeout(() => {
+        startsBeforeTimer = starts;
+      }, 0);
+      hooks.resolve();
+      await vi.runAllTimersAsync();
+      await Promise.all(streams);
+      expect(startsBeforeTimer).toBeGreaterThan(0);
+      expect(startsBeforeTimer).toBeLessThan(80);
+      expect(events).toEqual(Array.from({ length: 80 }, () => ["start", "first", "last"]));
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("lets a pair of cheap utility responses finish without an extra loop turn", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const events = Array.from({ length: 80 }, () => [] as string[]);
-  let starts = 0;
-  let startsBeforeTimer = -1;
+  vi.spyOn(Date, "now").mockReturnValue(0);
+  let completed = 0;
+  let completedBeforeTimer = -1;
   setTimeout(() => {
-    startsBeforeTimer = starts;
+    completedBeforeTimer = completed;
   }, 0);
-  const streams = events.map(async (received) => {
+  const streams = Array.from({ length: 2 }, async () => {
     const controller = new AbortController();
-    const source = withProviderResponseHook({
+    const stream = withProviderResponseHook({
       stream: (async function* () {
-        yield "first";
-        yield "last";
+        yield* [1, 2, 3, 4, 5];
       })(),
       signal: controller.signal,
       abort: (error) => controller.abort(error),
-      onReady() {
-        starts++;
-        received.push("start");
-      },
+      onReady() {},
     });
-    for await (const event of iterateModelStream(source, controller.signal)) {
+    const received = [];
+    for await (const event of iterateModelStream(stream, controller.signal)) {
       received.push(event);
+    }
+    expect(received).toEqual([1, 2, 3, 4, 5]);
+    completed++;
+  });
+  try {
+    await vi.runAllTimersAsync();
+    await Promise.all(streams);
+    expect(completedBeforeTimer).toBe(2);
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  }
+});
+
+it("shares the body-event budget across streams without readiness hooks", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let delivered = 0;
+  let deliveredBeforeTimer = -1;
+  setTimeout(() => {
+    deliveredBeforeTimer = delivered;
+  }, 0);
+  const streams = Array.from({ length: 80 }, async () => {
+    for await (const event of iterateModelStream(["body"])) {
+      expect(event).toBe("body");
+      delivered++;
     }
   });
   try {
     await vi.runAllTimersAsync();
     await Promise.all(streams);
-    expect(startsBeforeTimer).toBeGreaterThan(0);
-    expect(startsBeforeTimer).toBeLessThan(80);
-    expect(events).toEqual(Array.from({ length: 80 }, () => ["start", "first", "last"]));
+    expect(deliveredBeforeTimer).toBeGreaterThan(0);
+    expect(deliveredBeforeTimer).toBeLessThan(80);
+    expect(delivered).toBe(80);
   } finally {
     vi.useRealTimers();
   }

@@ -252,8 +252,10 @@ export function transportAbortError(signal?: AbortSignal): Error {
 }
 
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 6;
-const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 8;
-let streamEventsThisTurn = 0;
+const MODEL_STREAM_COOPERATIVE_YIELD_BUDGET = 64;
+// Readiness fans out lifecycle state; body events can share a larger batch.
+const MODEL_STREAM_START_WORK = 8;
+let streamWorkThisTurn = 0;
 let streamTurnStartedAt = 0;
 let nextStreamTurn: Promise<void> | undefined;
 
@@ -263,14 +265,14 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   }
 }
 
-async function waitForModelStreamTurn(signal?: AbortSignal): Promise<void> {
+async function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> {
   throwIfModelStreamAborted(signal);
   // All streams share the main loop. Recheck after waking so a swarm cannot
   // spend a fresh per-stream budget in the same microtask burst.
   for (;;) {
     if (
       !nextStreamTurn ||
-      (streamEventsThisTurn < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
+      (streamWorkThisTurn + work <= MODEL_STREAM_COOPERATIVE_YIELD_BUDGET &&
         Date.now() - streamTurnStartedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
     ) {
       break;
@@ -282,13 +284,13 @@ async function waitForModelStreamTurn(signal?: AbortSignal): Promise<void> {
     streamTurnStartedAt = Date.now();
     nextStreamTurn = new Promise<void>((resolve) => {
       setTimeout(() => {
-        streamEventsThisTurn = 0;
+        streamWorkThisTurn = 0;
         nextStreamTurn = undefined;
         resolve();
       }, 0);
     });
   }
-  streamEventsThisTurn++;
+  streamWorkThisTurn += work;
 }
 
 /** Keep ready provider events from monopolizing the main loop, including ignored events. */
@@ -497,8 +499,9 @@ export function withProviderResponseHook<T = never>(params: {
   return {
     async *[Symbol.asyncIterator]() {
       try {
-        await waitForModelStreamTurn(params.signal);
         await awaitProviderLifecycleCallback(params.hook, params.signal);
+        // Hooks may finish together after waiting through earlier work budgets.
+        await waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;
