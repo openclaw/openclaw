@@ -1,30 +1,48 @@
 import { readFileSync } from "node:fs";
-import type { QaBusStateSnapshot as Snapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
+import path from "node:path";
+import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { Bootstrap, EvidenceEnvelope, RunnerSelection } from "./ui-types.js";
 
-export const httpMock = vi.hoisted(() => ({ getJson: vi.fn(), postJson: vi.fn() }));
-vi.mock("./http.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./http.js")>()),
-  ...httpMock,
-}));
+const httpMock = vi.hoisted(() => {
+  class QaLabHttpError extends Error {
+    constructor(
+      message: string,
+      readonly status: number,
+      readonly payload: unknown,
+    ) {
+      super(message);
+    }
+  }
+  return {
+    getJson: vi.fn(),
+    postJson: vi.fn(),
+    QaLabHttpError,
+  };
+});
+
+vi.mock("./http.js", () => httpMock);
 
 import { createQaLabApp } from "./app.js";
 
-const scenarios: Bootstrap["scenarios"] = (
-  [
-    ["dm-chat-baseline", "DM baseline", "dm", "flow"],
-    ["browser-talk-start-stop", "Browser Talk start-stop", "control-ui", "playwright"],
-  ] as const
-).map(([id, title, surface, kind]) => ({
-  id,
-  title,
-  surface,
-  objective: "test",
-  successCriteria: ["pass"],
-  execution: { kind },
-}));
-const model = "openai/gpt-5.6-luna";
+const scenarios: Bootstrap["scenarios"] = [
+  {
+    id: "dm-chat-baseline",
+    title: "DM baseline",
+    surface: "dm",
+    objective: "test DM",
+    successCriteria: ["reply"],
+    execution: { kind: "flow" },
+  },
+  {
+    id: "browser-talk-start-stop",
+    title: "Browser Talk start-stop",
+    surface: "control-ui",
+    objective: "test browser Talk",
+    successCriteria: ["playwright pass"],
+    execution: { kind: "playwright" },
+  },
+];
 
 export function createBootstrap(
   selection: RunnerSelection,
@@ -73,7 +91,15 @@ export function createBootstrap(
         { id: "all", evidenceMode: "full", channelDriver: "live", categoryIds: [] },
       ],
       status: "ready",
-      real: [{ key: model, name: model, input: "text", preferred: true, provider: "openai" }],
+      real: [
+        {
+          input: "text",
+          key: "openai/gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          preferred: true,
+          provider: "openai",
+        },
+      ],
     },
     scenarios,
   };
@@ -81,32 +107,47 @@ export function createBootstrap(
 
 export async function mountRunner(
   selection: RunnerSelection,
-  snapshot: Snapshot = { conversations: [], cursor: 0, events: [], messages: [], threads: [] },
+  snapshot: QaBusStateSnapshot = {
+    conversations: [],
+    cursor: 0,
+    events: [],
+    messages: [],
+    threads: [],
+  },
   evidence: EvidenceEnvelope["evidence"] = null,
   controlUiUrl: string | null = null,
 ) {
   let bootstrap = createBootstrap(selection, controlUiUrl);
   httpMock.getJson.mockImplementation(async (url: string) => {
+    if (url === "/api/ui-version") {
+      return { version: "test" };
+    }
     if (url.startsWith("/api/evidence?")) {
       return { evidence };
     }
-    const responses: Record<string, unknown> = {
-      "/api/ui-version": { version: "test" },
-      "/api/bootstrap": bootstrap,
-      "/api/state": snapshot,
-      "/api/report": { report: null },
-      "/api/outcomes": { run: null },
-      "/api/capture/sessions": { sessions: [] },
-      "/api/capture/startup-status": {
+    if (url === "/api/bootstrap") {
+      return bootstrap;
+    }
+    if (url === "/api/state") {
+      return snapshot;
+    }
+    if (url === "/api/report") {
+      return { report: null };
+    }
+    if (url === "/api/outcomes") {
+      return { run: null };
+    }
+    if (url === "/api/capture/sessions") {
+      return { sessions: [] };
+    }
+    if (url === "/api/capture/startup-status") {
+      return {
         status: {
           gateway: { label: "Gateway", ok: true, url: "http://127.0.0.1:18789" },
           proxy: { label: "Proxy", ok: true, url: "http://127.0.0.1:7799" },
           qaLab: { label: "QA Lab", ok: true, url: bootstrap.baseUrl },
         },
-      },
-    };
-    if (Object.hasOwn(responses, url)) {
-      return responses[url];
+      };
     }
     throw new Error(`unexpected GET ${url}`);
   });
@@ -124,29 +165,43 @@ export async function mountRunner(
   return root;
 }
 
-beforeEach(() => {
-  vi.useFakeTimers();
-  const styles = document.createElement("style");
-  styles.dataset.qaLabTestStyles = "true";
-  styles.textContent = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
-  document.head.append(styles);
-  httpMock.getJson.mockReset();
-  httpMock.postJson.mockReset();
-  window.localStorage.clear();
-  vi.stubGlobal("localStorage", window.localStorage);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    callback(0);
-    return 1;
+export function setupAppBrowserTests() {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const styles = document.createElement("style");
+    styles.dataset.qaLabTestStyles = "true";
+    styles.textContent = readFileSync(
+      path.join(process.cwd(), "extensions/qa-lab/web/src/styles.css"),
+      "utf8",
+    );
+    document.head.append(styles);
+    httpMock.getJson.mockReset();
+    httpMock.postJson.mockReset();
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      clear: () => storage.clear(),
+      getItem: (key: string) => storage.get(key) ?? null,
+      key: (index: number) => [...storage.keys()][index] ?? null,
+      get length() {
+        return storage.size;
+      },
+      removeItem: (key: string) => storage.delete(key),
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
   });
-  vi.stubGlobal("matchMedia", () => ({ matches: false }));
-});
 
-afterEach(() => {
-  vi.clearAllTimers();
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
-  document.querySelector("style[data-qa-lab-test-styles]")?.remove();
-  window.localStorage.clear();
-});
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.replaceChildren();
+    document.querySelector("style[data-qa-lab-test-styles]")?.remove();
+  });
+}
+
+export { httpMock };

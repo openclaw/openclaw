@@ -297,24 +297,30 @@ it.each([
   }
   const activeStore = await LogbookStore.open(dataDir, workerModuleUrl);
   vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(activeStore);
-  const hold = <Args extends unknown[], Result>(run: (...args: Args) => Promise<Result>) =>
-    block(run.bind(activeStore), entered, release);
   if (kind === "frame-read") {
     await capture(activeStore, day, Date.now(), "synthetic frame payload");
-    vi.spyOn(activeStore, "framePayload").mockImplementation(hold(activeStore.framePayload));
+    vi.spyOn(activeStore, "framePayload").mockImplementation(
+      block(activeStore.framePayload.bind(activeStore), entered, release),
+    );
   }
   if (kind === "capture-write") {
-    vi.spyOn(activeStore, "captureFrame").mockImplementation(hold(activeStore.captureFrame));
+    vi.spyOn(activeStore, "captureFrame").mockImplementation(
+      block(activeStore.captureFrame.bind(activeStore), entered, release),
+    );
   }
   if (kind === "standup-write") {
-    vi.spyOn(activeStore, "saveStandup").mockImplementation(hold(activeStore.saveStandup));
+    vi.spyOn(activeStore, "saveStandup").mockImplementation(
+      block(activeStore.saveStandup.bind(activeStore), entered, release),
+    );
   }
   if (kind === "status-read") {
-    vi.spyOn(activeStore, "latestBatch").mockImplementation(hold(activeStore.latestBatch));
+    vi.spyOn(activeStore, "latestBatch").mockImplementation(
+      block(activeStore.latestBatch.bind(activeStore), entered, release),
+    );
   }
   if (kind === "ask-read") {
     vi.spyOn(activeStore, "observationsInRange").mockImplementation(
-      hold(activeStore.observationsInRange),
+      block(activeStore.observationsInRange.bind(activeStore), entered, release),
     );
   }
   await service.start();

@@ -8,6 +8,7 @@ import {
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "./shared.ts";
 import {
+  createWebRtcTransport,
   dispatchCompletedToolCall,
   dispatchRealtimeEvent,
   FakePeerConnection,
@@ -61,9 +62,8 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = await createOpenAiTransport({
-      addEventListener: vi.fn(() => () => undefined),
-      request,
+    const { transport } = await createWebRtcTransport({
+      client: { addEventListener: vi.fn(() => () => undefined), request },
     });
 
     await transport.start();
@@ -311,7 +311,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
 
   it("silently disposes a provisional OpenAI transport", async () => {
     const onTalkEvent = vi.fn();
-    const transport = await createOpenAiTransport({}, { onTalkEvent });
+    const { transport } = await createWebRtcTransport({ callbacks: { onTalkEvent } });
     await transport.start();
     onTalkEvent.mockClear();
 

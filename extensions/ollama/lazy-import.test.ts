@@ -21,7 +21,11 @@ describe("ollama lazy imports", () => {
 
   it("loads optional runtime owners only on first use", async () => {
     const imports = { memory: 0, node: 0, setup: 0, stream: 0, web: 0, wsl: 0 };
-    function mockRuntime<T>(owner: keyof typeof imports, moduleId: string, load: () => T) {
+    function mockRuntime(
+      owner: keyof typeof imports,
+      moduleId: string,
+      load: () => Record<string, unknown>,
+    ) {
       vi.doMock(moduleId, () => {
         imports[owner] += 1;
         return load();

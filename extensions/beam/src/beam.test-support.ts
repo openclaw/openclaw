@@ -210,7 +210,7 @@ export function beamMirrorTestFixture() {
     } = {},
   ) => {
     const testCatalog = createBeamTestCatalog(catalog);
-    const fetchFn = async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       if (typeof init?.body !== "string") {
         throw new Error("expected Beam JSON request body");
       }
@@ -221,7 +221,7 @@ export function beamMirrorTestFixture() {
         ? new ReadableStream<Uint8Array>({ cancel: response.cancel })
         : "{}";
       return new Response(body, { status: response.status?.(payload) ?? 200 });
-    };
+    });
     return {
       fetchFn: fetchFn as typeof fetch,
       logger,

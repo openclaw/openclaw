@@ -401,7 +401,7 @@ describe("Beam session catalog", () => {
       "0123456789ab00000000000000000000",
       "0123456789abffffffffffffffffffff",
       "fedcba9876543210fedcba9876543210",
-    ];
+    ] as const;
     for (const [index, beamId] of ids.entries()) {
       store.values.set(beamId, {
         ...sampleUpload({ beamId, title: `Beam ${String(index)}` }),

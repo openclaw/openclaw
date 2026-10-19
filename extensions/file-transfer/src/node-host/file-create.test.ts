@@ -11,7 +11,7 @@ import { useFiles } from "./node-host.test-support.js";
 
 const { at, dir: makeDir } = useFiles("file-create-test-");
 const digest = (data: Buffer) => crypto.createHash("sha256").update(data).digest("hex");
-const metadata = (target: string, data = Buffer.from("x")) => ({
+const metadata = (target: string, data: Buffer = Buffer.from("x")) => ({
   path: target,
   sizeBytes: data.length,
   expectedSha256: digest(data),

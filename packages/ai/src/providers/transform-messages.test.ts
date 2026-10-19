@@ -123,7 +123,7 @@ it("replaces unsupported user media in order without exposing video bytes", () =
       ],
       timestamp: 1,
     },
-  ] satisfies ProviderMessage[];
+  ] satisfies [ProviderMessage];
 
   const originalContent = structuredClone(messages[0].content);
   const transformed = transformProviderMessages(messages, model);

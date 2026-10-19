@@ -282,7 +282,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent });
     const start = transport.start();
     const peer = requirePeer();
-    const description = createDeferred<void>();
+    const description = createDeferred();
     const remoteDescription = vi
       .spyOn(peer, "setRemoteDescription")
       .mockReturnValue(description.promise);
