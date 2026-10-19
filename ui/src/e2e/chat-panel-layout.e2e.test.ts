@@ -466,6 +466,7 @@ suite.define(() => {
         await expectPaneHeaderGeometry(page, "left");
         await openChatSidePanelType(page, "Terminal");
         const terminal = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
+        await terminal.locator(".tp-session.is-current").click();
         await terminal.locator(".tp-host canvas").waitFor();
         await expect.poll(() => gateway.getRequests("terminal.open")).toHaveLength(1);
         await layoutAndWait(page, "Expand Terminal", terminal, dashboard);
